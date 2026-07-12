@@ -421,7 +421,7 @@ export function Users() {
             </div>
             <div>
               <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5 block">Email Address</label>
-              <input required className="w-full px-4 py-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#DAA520] font-bold text-[#464646]" value={editingUser.email} onChange={e => setEditingUser({ ...editingUser, email: e.target.value })} />
+              <input disabled className="w-full px-4 py-3 border border-gray-200 rounded-xl outline-none font-bold text-[#464646] bg-gray-50 cursor-not-allowed opacity-70" value={editingUser.email} />
             </div>
             <div>
               <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5 block">System Role</label>

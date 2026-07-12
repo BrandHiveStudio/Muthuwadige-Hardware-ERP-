@@ -41,6 +41,230 @@ const statusColors: Record<string, string> = {
 };
 
 const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) => {
+  const printerConfig = shopSettings?.printer_settings 
+    ? (typeof shopSettings.printer_settings === 'object' 
+        ? shopSettings.printer_settings 
+        : (() => { try { return JSON.parse(shopSettings.printer_settings); } catch(e) { return {}; } })())
+    : {};
+  const paperSize = printerConfig?.paperSize || 'A4';
+
+  if (paperSize === '80mm') {
+    const symbolStr = isSi ? 'රු.' : 'Rs.';
+    const formatNum = (num: number) => num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const title = isSi ? 'මිල ගණන් පත්‍රය' : 'QUOTATION';
+    
+    const items = typeof quote.items === 'string' ? JSON.parse(quote.items) : (quote.items || []);
+    const itemsRows = items.map((i: any) => {
+      let trackingInfo = '';
+      if (i.serialNo || i.batchCode) {
+        const parts: string[] = [];
+        if (i.serialNo) parts.push(`S/N: ${i.serialNo}`);
+        if (i.batchCode) parts.push(`Batch: ${i.batchCode}`);
+        trackingInfo = `<div style="font-size: 8px; font-weight: normal; color: #6b7280; margin-top: 1px;">${parts.join(' | ')}</div>`;
+      }
+      return `
+        <tr style="border-bottom: 1px dashed #e5e7eb;">
+          <td colspan="2" style="padding: 4px 0; font-weight: bold; text-align: left; color: #1f2937; font-size: 11px;">
+            ${i.productName}
+            ${trackingInfo}
+          </td>
+        </tr>
+        <tr style="border-bottom: 1px dashed #e5e7eb;">
+          <td style="padding: 2px 0 6px 0; text-align: left; color: #4b5563; font-size: 10px;">
+            ${i.qty} x ${symbolStr} ${formatNum(i.price)}
+          </td>
+          <td style="padding: 2px 0 6px 0; text-align: right; color: #1f2937; font-weight: bold; font-size: 11px;">
+            ${symbolStr} ${formatNum(i.total)}
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Quotation - ${quote.quote_no}</title>
+          <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Sinhala:wght@400;600;700;800&display=swap" rel="stylesheet">
+          <style>
+            body {
+              font-family: 'Inter', 'Noto Sans Sinhala', sans-serif;
+              margin: 0;
+              padding: 10px;
+              background: #ffffff;
+              color: #1f2937;
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+            }
+            .receipt-container {
+              max-width: 80mm;
+              margin: 0 auto;
+              box-sizing: border-box;
+            }
+            .header {
+              text-align: center;
+              border-bottom: 2px dashed #4b5563;
+              padding-bottom: 10px;
+              margin-bottom: 10px;
+            }
+            .header h1 {
+              font-size: 14px;
+              margin: 0 0 4px 0;
+              font-weight: 800;
+              color: #111827;
+              text-transform: uppercase;
+            }
+            .header p {
+              font-size: 9px;
+              margin: 2px 0;
+              color: #4b5563;
+            }
+            .title-badge {
+              text-align: center;
+              font-size: 11px;
+              font-weight: 800;
+              text-transform: uppercase;
+              margin: 8px 0;
+              letter-spacing: 1px;
+              border: 1px solid #1f2937;
+              padding: 3px;
+              background: #f9fafb;
+            }
+            .meta-table {
+              width: 100%;
+              font-size: 9px;
+              margin-bottom: 8px;
+              border-collapse: collapse;
+            }
+            .meta-table td {
+              padding: 2px 0;
+              color: #4b5563;
+            }
+            .meta-table td.value {
+              text-align: right;
+              font-weight: 700;
+              color: #1f2937;
+            }
+            .items-table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-bottom: 10px;
+            }
+            .items-table th {
+              border-bottom: 1px solid #1f2937;
+              padding: 4px 0;
+              font-size: 9px;
+              font-weight: 800;
+              text-align: left;
+              color: #1f2937;
+            }
+            .summary-table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-top: 5px;
+              border-top: 2px dashed #4b5563;
+              padding-top: 5px;
+            }
+            .summary-table td {
+              padding: 3px 0;
+              font-size: 9px;
+              color: #4b5563;
+            }
+            .summary-table td.value {
+              text-align: right;
+              font-weight: 700;
+              color: #1f2937;
+            }
+            .summary-table tr.total-row td {
+              font-size: 12px;
+              font-weight: 800;
+              color: #111827;
+              border-top: 1px dashed #4b5563;
+              padding-top: 6px;
+            }
+            .footer {
+              text-align: center;
+              margin-top: 15px;
+              border-top: 1px dashed #4b5563;
+              padding-top: 10px;
+              font-size: 9px;
+              color: #6b7280;
+            }
+            .footer p {
+              margin: 2px 0;
+            }
+            @media print {
+              body {
+                padding: 0;
+                margin: 0;
+              }
+              .receipt-container {
+                width: 100%;
+                max-width: 100%;
+              }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="receipt-container">
+            <div class="header">
+              <h1>${shopSettings?.shop_name || 'MUTHUWADIGE HARDWARE'}</h1>
+              <p>${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</p>
+              <p>Tel: ${shopSettings?.phone || '077 076 076 7'}</p>
+            </div>
+            
+            <div class="title-badge">${title}</div>
+            
+            <table class="meta-table">
+              <tr>
+                <td>${isSi ? 'මිල ගණන් අංකය:' : 'Quotation No:'}</td>
+                <td class="value">${quote.quote_no}</td>
+              </tr>
+              <tr>
+                <td>${isSi ? 'දිනය:' : 'Date:'}</td>
+                <td class="value">${new Date(quote.created_at).toLocaleDateString()}</td>
+              </tr>
+              <tr>
+                <td>${isSi ? 'පාරිභෝගිකයා:' : 'Customer:'}</td>
+                <td class="value">${quote.customer_name}</td>
+              </tr>
+            </table>
+            
+            <table class="items-table">
+              <thead>
+                <tr>
+                  <th style="text-align: left;">${isSi ? 'විස්තරය' : 'Item Description'}</th>
+                  <th style="text-align: right; width: 80px;">${isSi ? 'එකතුව' : 'Total'}</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${itemsRows}
+              </tbody>
+            </table>
+            
+            <table class="summary-table">
+              <tr class="total-row">
+                <td>${isSi ? 'මුළු එකතුව:' : 'Total Amount:'}</td>
+                <td class="value">${symbolStr} ${formatNum(quote.total)}</td>
+              </tr>
+            </table>
+            
+            <div class="footer">
+              <p>${isSi ? 'මෙම මිල ගණන් දින 30ක් සඳහා වලංගු වේ.' : 'This quotation is valid for 30 days.'}</p>
+              <p style="font-weight: bold; margin-top: 5px;">${isSi ? 'ඔබගේ ව්‍යාපාරයට ස්තූතියි!' : 'Thank you for your business!'}</p>
+            </div>
+          </div>
+          <script>
+            window.onload = function() {
+              window.print();
+            }
+          </script>
+        </body>
+      </html>
+    `;
+  }
+
   const symbolStr = isSi ? 'රු.' : 'Rs.';
   const formatNum = (num: number) => num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   
@@ -355,6 +579,213 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
 };
 
 const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
+  const printerConfig = shopSettings?.printer_settings 
+    ? (typeof shopSettings.printer_settings === 'object' 
+        ? shopSettings.printer_settings 
+        : (() => { try { return JSON.parse(shopSettings.printer_settings); } catch(e) { return {}; } })())
+    : {};
+  const paperSize = printerConfig?.paperSize || 'A4';
+
+  if (paperSize === '80mm') {
+    const title = isSi ? 'බෙදාහැරීම් සටහන' : 'DELIVERY NOTE';
+    
+    const items = typeof dn.items === 'string' ? JSON.parse(dn.items) : (dn.items || []);
+    const itemsRows = items.map((i: any) => {
+      let trackingInfo = '';
+      if (i.serialNo || i.batchCode) {
+        const parts: string[] = [];
+        if (i.serialNo) parts.push(`S/N: ${i.serialNo}`);
+        if (i.batchCode) parts.push(`Batch: ${i.batchCode}`);
+        trackingInfo = `<div style="font-size: 8px; font-weight: normal; color: #6b7280; margin-top: 1px;">${parts.join(' | ')}</div>`;
+      }
+      return `
+        <tr style="border-bottom: 1px dashed #e5e7eb;">
+          <td style="padding: 4px 0; font-weight: bold; text-align: left; color: #1f2937; font-size: 11px;">
+            ${i.productName}
+            ${trackingInfo}
+          </td>
+          <td style="padding: 4px 0; text-align: right; color: #1f2937; font-weight: bold; font-size: 11px; width: 60px;">
+            ${i.qty}
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Delivery Note - ${dn.dn_no}</title>
+          <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Sinhala:wght@400;600;700;800&display=swap" rel="stylesheet">
+          <style>
+            body {
+              font-family: 'Inter', 'Noto Sans Sinhala', sans-serif;
+              margin: 0;
+              padding: 10px;
+              background: #ffffff;
+              color: #1f2937;
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+            }
+            .receipt-container {
+              max-width: 80mm;
+              margin: 0 auto;
+              box-sizing: border-box;
+            }
+            .header {
+              text-align: center;
+              border-bottom: 2px dashed #4b5563;
+              padding-bottom: 10px;
+              margin-bottom: 10px;
+            }
+            .header h1 {
+              font-size: 14px;
+              margin: 0 0 4px 0;
+              font-weight: 800;
+              color: #111827;
+              text-transform: uppercase;
+            }
+            .header p {
+              font-size: 9px;
+              margin: 2px 0;
+              color: #4b5563;
+            }
+            .title-badge {
+              text-align: center;
+              font-size: 11px;
+              font-weight: 800;
+              text-transform: uppercase;
+              margin: 8px 0;
+              letter-spacing: 1px;
+              border: 1px solid #1f2937;
+              padding: 3px;
+              background: #f9fafb;
+            }
+            .meta-table {
+              width: 100%;
+              font-size: 9px;
+              margin-bottom: 8px;
+              border-collapse: collapse;
+            }
+            .meta-table td {
+              padding: 2px 0;
+              color: #4b5563;
+            }
+            .meta-table td.value {
+              text-align: right;
+              font-weight: 700;
+              color: #1f2937;
+            }
+            .items-table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-bottom: 10px;
+            }
+            .items-table th {
+              border-bottom: 1px solid #1f2937;
+              padding: 4px 0;
+              font-size: 9px;
+              font-weight: 800;
+              text-align: left;
+              color: #1f2937;
+            }
+            .footer {
+              text-align: center;
+              margin-top: 25px;
+              border-top: 1px dashed #4b5563;
+              padding-top: 10px;
+              font-size: 9px;
+              color: #6b7280;
+            }
+            .footer p {
+              margin: 2px 0;
+            }
+            .sig-section {
+              margin-top: 20px;
+              padding-top: 20px;
+              border-top: 1px dashed #cccccc;
+              text-align: center;
+            }
+            .sig-line {
+              display: inline-block;
+              width: 150px;
+              border-top: 1px solid #6b7280;
+              margin-top: 25px;
+              font-size: 9px;
+            }
+            @media print {
+              body {
+                padding: 0;
+                margin: 0;
+              }
+              .receipt-container {
+                width: 100%;
+                max-width: 100%;
+              }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="receipt-container">
+            <div class="header">
+              <h1>${shopSettings?.shop_name || 'MUTHUWADIGE HARDWARE'}</h1>
+              <p>${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</p>
+              <p>Tel: ${shopSettings?.phone || '077 076 076 7'}</p>
+            </div>
+            
+            <div class="title-badge">${title}</div>
+            
+            <table class="meta-table">
+              <tr>
+                <td>${isSi ? 'බෙදාහැරීම් අංකය:' : 'Delivery Note No:'}</td>
+                <td class="value">${dn.dn_no}</td>
+              </tr>
+              <tr>
+                <td>${isSi ? 'දිනය:' : 'Date:'}</td>
+                <td class="value">${new Date(dn.created_at).toLocaleDateString()}</td>
+              </tr>
+              <tr>
+                <td>${isSi ? 'යොමු ඉන්වොයිසිය:' : 'Ref Invoice:'}</td>
+                <td class="value">${dn.reference_invoice}</td>
+              </tr>
+              <tr>
+                <td>${isSi ? 'පාරිභෝගිකයා:' : 'Customer:'}</td>
+                <td class="value">${dn.customer_name}</td>
+              </tr>
+            </table>
+            
+            <table class="items-table">
+              <thead>
+                <tr>
+                  <th style="text-align: left;">${isSi ? 'විස්තරය' : 'Item Description'}</th>
+                  <th style="text-align: right; width: 60px;">${isSi ? 'ප්‍රමාණය' : 'Qty'}</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${itemsRows}
+              </tbody>
+            </table>
+            
+            <div class="sig-section">
+              <div class="sig-line">${isSi ? 'ලැබූ අයගේ අත්සන' : 'Received By (Signature)'}</div>
+            </div>
+            
+            <div class="footer">
+              <p>${isSi ? 'කරුණාකර භාණ්ඩ ලැබුණු පසු පරීක්ෂා කර අත්සන් කරන්න.' : 'Please inspect items upon delivery and sign above.'}</p>
+              <p style="font-weight: bold; margin-top: 5px;">${isSi ? 'ඔබගේ ව්‍යාපාරයට ස්තූතියි!' : 'Thank you for your business!'}</p>
+            </div>
+          </div>
+          <script>
+            window.onload = function() {
+              window.print();
+            }
+          </script>
+        </body>
+      </html>
+    `;
+  }
+
   const title = isSi ? 'බෙදාහැරීම් සටහන' : 'DELIVERY NOTE';
   const billTo = isSi ? 'පාරිභෝගිකයා:' : 'DELIVER TO:';
   const dnNoLabel = isSi ? 'බෙදාහැරීම් අංකය:' : 'Delivery Note No:';
@@ -629,6 +1060,250 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
 
 // HTML template for native printing supporting Unicode Sinhala and Inter
 const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) => {
+  const printerConfig = shopSettings?.printer_settings 
+    ? (typeof shopSettings.printer_settings === 'object' 
+        ? shopSettings.printer_settings 
+        : (() => { try { return JSON.parse(shopSettings.printer_settings); } catch(e) { return {}; } })())
+    : {};
+  const paperSize = printerConfig?.paperSize || 'A4';
+
+  if (paperSize === '80mm') {
+    const symbolStr = isSi ? 'රු.' : 'Rs.';
+    const formatNum = (num: number) => num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const isCredit = order.payment_method === 'Credit' || order.status === 'Non Paid';
+    const title = isCredit 
+      ? (isSi ? 'ණය ඉන්වොයිසිය' : 'CREDIT INVOICE')
+      : (isSi ? 'ඉන්වොයිසිය' : 'INVOICE');
+    
+    const itemsRows = (order.items || []).map((i: any) => {
+      let trackingInfo = '';
+      if (i.serialNo || i.batchCode) {
+        const parts: string[] = [];
+        if (i.serialNo) parts.push(`S/N: ${i.serialNo}`);
+        if (i.batchCode) parts.push(`Batch: ${i.batchCode}`);
+        trackingInfo = `<div style="font-size: 8px; font-weight: normal; color: #6b7280; margin-top: 1px;">${parts.join(' | ')}</div>`;
+      }
+      return `
+        <tr style="border-bottom: 1px dashed #e5e7eb;">
+          <td colspan="2" style="padding: 4px 0; font-weight: bold; text-align: left; color: #1f2937; font-size: 11px;">
+            ${i.productName}
+            ${trackingInfo}
+          </td>
+        </tr>
+        <tr style="border-bottom: 1px dashed #e5e7eb;">
+          <td style="padding: 2px 0 6px 0; text-align: left; color: #4b5563; font-size: 10px;">
+            ${i.qty} ${i.unit || ''} x ${symbolStr} ${formatNum(i.price)}
+          </td>
+          <td style="padding: 2px 0 6px 0; text-align: right; color: #1f2937; font-weight: bold; font-size: 11px;">
+            ${symbolStr} ${formatNum(i.total)}
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Invoice - ${order.invoiceNo}</title>
+          <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Sinhala:wght@400;600;700;800&display=swap" rel="stylesheet">
+          <style>
+            body {
+              font-family: 'Inter', 'Noto Sans Sinhala', sans-serif;
+              margin: 0;
+              padding: 10px;
+              background: #ffffff;
+              color: #1f2937;
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+            }
+            .receipt-container {
+              max-width: 80mm;
+              margin: 0 auto;
+              box-sizing: border-box;
+            }
+            .header {
+              text-align: center;
+              border-bottom: 2px dashed #4b5563;
+              padding-bottom: 10px;
+              margin-bottom: 10px;
+            }
+            .header h1 {
+              font-size: 14px;
+              margin: 0 0 4px 0;
+              font-weight: 800;
+              color: #111827;
+              text-transform: uppercase;
+            }
+            .header p {
+              font-size: 9px;
+              margin: 2px 0;
+              color: #4b5563;
+            }
+            .title-badge {
+              text-align: center;
+              font-size: 11px;
+              font-weight: 800;
+              text-transform: uppercase;
+              margin: 8px 0;
+              letter-spacing: 1px;
+              border: 1px solid #1f2937;
+              padding: 3px;
+              background: #f9fafb;
+            }
+            .meta-table {
+              width: 100%;
+              font-size: 9px;
+              margin-bottom: 8px;
+              border-collapse: collapse;
+            }
+            .meta-table td {
+              padding: 2px 0;
+              color: #4b5563;
+            }
+            .meta-table td.value {
+              text-align: right;
+              font-weight: 700;
+              color: #1f2937;
+            }
+            .items-table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-bottom: 10px;
+            }
+            .items-table th {
+              border-bottom: 1px solid #1f2937;
+              padding: 4px 0;
+              font-size: 9px;
+              font-weight: 800;
+              text-align: left;
+              color: #1f2937;
+            }
+            .summary-table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-top: 5px;
+              border-top: 2px dashed #4b5563;
+              padding-top: 5px;
+            }
+            .summary-table td {
+              padding: 3px 0;
+              font-size: 9px;
+              color: #4b5563;
+            }
+            .summary-table td.value {
+              text-align: right;
+              font-weight: 700;
+              color: #1f2937;
+            }
+            .summary-table tr.total-row td {
+              font-size: 12px;
+              font-weight: 800;
+              color: #111827;
+              border-top: 1px dashed #4b5563;
+              padding-top: 6px;
+            }
+            .footer {
+              text-align: center;
+              margin-top: 15px;
+              border-top: 1px dashed #4b5563;
+              padding-top: 10px;
+              font-size: 9px;
+              color: #6b7280;
+            }
+            .footer p {
+              margin: 2px 0;
+            }
+            @media print {
+              body {
+                padding: 0;
+                margin: 0;
+              }
+              .receipt-container {
+                width: 100%;
+                max-width: 100%;
+              }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="receipt-container">
+            <div class="header">
+              <h1>${shopSettings?.shop_name || 'MUTHUWADIGE HARDWARE'}</h1>
+              <p>${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</p>
+              <p>Tel: ${shopSettings?.phone || '077 076 076 7'}</p>
+            </div>
+            
+            <div class="title-badge">${title}</div>
+            
+            <table class="meta-table">
+              <tr>
+                <td>${isSi ? 'ඉන්වොයිස් අංකය:' : 'Invoice No:'}</td>
+                <td class="value">${order.invoiceNo}</td>
+              </tr>
+              <tr>
+                <td>${isSi ? 'දිනය:' : 'Date:'}</td>
+                <td class="value">${formatInvoiceDateTime(order.created_at, order.date)}</td>
+              </tr>
+              <tr>
+                <td>${isSi ? 'පාරිභෝගිකයා:' : 'Customer:'}</td>
+                <td class="value">${order.customerName}</td>
+              </tr>
+              <tr>
+                <td>${isSi ? 'ගෙවීම් ක්‍රමය:' : 'Payment Method:'}</td>
+                <td class="value">${order.payment_method}</td>
+              </tr>
+            </table>
+            
+            <table class="items-table">
+              <thead>
+                <tr>
+                  <th style="text-align: left;">${isSi ? 'විස්තරය' : 'Item Description'}</th>
+                  <th style="text-align: right; width: 80px;">${isSi ? 'එකතුව' : 'Total'}</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${itemsRows}
+              </tbody>
+            </table>
+            
+            <table class="summary-table">
+              <tr>
+                <td>${isSi ? 'උප එකතුව:' : 'Sub Total:'}</td>
+                <td class="value">${symbolStr} ${formatNum(order.subtotal || 0)}</td>
+              </tr>
+              <tr>
+                <td>${isSi ? 'වට්ටම:' : 'Discount:'}</td>
+                <td class="value">-${symbolStr} ${formatNum(order.discount || 0)}</td>
+              </tr>
+              <tr>
+                <td>${isSi ? `බද්ද (${order.tax_rate || 0}%):` : `Tax (${order.tax_rate || 0}%):`}</td>
+                <td class="value">+${symbolStr} ${formatNum(order.tax || 0)}</td>
+              </tr>
+              <tr class="total-row">
+                <td>${isSi ? 'මුළු එකතුව:' : 'Total Amount:'}</td>
+                <td class="value">${symbolStr} ${formatNum(order.total)}</td>
+              </tr>
+            </table>
+            
+            <div class="footer">
+              <p>${isSi ? 'කිසියම් ප්‍රශ්නයක් ඇත්නම් කරුණාකර අප හා සම්බන්ධ වන්න.' : 'For queries, please contact us.'}</p>
+              <p style="font-weight: bold; margin-top: 5px;">${isSi ? 'ඔබගේ ව්‍යාපාරයට ස්තූතියි!' : 'Thank you for your business!'}</p>
+            </div>
+          </div>
+          <script>
+            window.onload = function() {
+              setTimeout(function() {
+                window.print();
+              }, 300);
+            }
+          </script>
+        </body>
+      </html>
+    `;
+  }
+
   const symbolStr = isSi ? 'රු.' : 'Rs.';
   const formatNum = (num: number) => num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   
@@ -1203,23 +1878,20 @@ const getUnitOptions = (product: Product | undefined): UnitOption[] => {
     });
     
     extra.forEach(c => {
-      const uLower = c.unit.toLowerCase();
-      if (uLower === 'bucket' || uLower === 'shovel') {
-        if (isCubeUnit) {
-          const optRate = 1 / (Number(c.kgVal) || 1);
-          const optPrice = c.price !== undefined ? Number(c.price) : product.price / (Number(c.kgVal) || 1);
-          options.push({
-            unit: c.unit,
-            conversionRate: optRate,
-            price: optPrice
-          });
-        } else {
-          options.push({ 
-            unit: c.unit, 
-            conversionRate: Number(c.kgVal) || 1, 
-            price: c.price !== undefined ? Number(c.price) : undefined 
-          });
-        }
+      if (isCubeUnit) {
+        const optRate = 1 / (Number(c.kgVal) || 1);
+        const optPrice = c.price !== undefined ? Number(c.price) : product.price / (Number(c.kgVal) || 1);
+        options.push({
+          unit: c.unit,
+          conversionRate: optRate,
+          price: optPrice
+        });
+      } else {
+        options.push({ 
+          unit: c.unit, 
+          conversionRate: Number(c.kgVal) || 1, 
+          price: c.price !== undefined ? Number(c.price) : undefined 
+        });
       }
     });
   } else {
@@ -1763,7 +2435,8 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
   const filteredProducts = products.filter(
     (p) =>
       (p.name.toLowerCase().includes(productSearch.toLowerCase()) || 
-       p.sku.toLowerCase().includes(productSearch.toLowerCase())) &&
+       (p.sku && p.sku.toLowerCase().includes(productSearch.toLowerCase())) ||
+       (p.barcode && p.barcode.toLowerCase().includes(productSearch.toLowerCase()))) &&
       productSearch.length > 0
   );
 

@@ -258,7 +258,8 @@ export function Inventory() {
         'COST (RS.)': p.costPrice,
         'STOCK': p.stock,
         'MIN': p.minStock,
-        'SUPPLIER': p.supplier || '—'
+        'SUPPLIER': p.supplier || '—',
+        'SUPPLIER NUMBER': p.supplierPhone || '—'
       }));
 
       const ws = XLSX.utils.json_to_sheet(dataToExport);
@@ -274,7 +275,8 @@ export function Inventory() {
         { wch: 15 }, // COST (RS.)
         { wch: 10 }, // STOCK
         { wch: 10 }, // MIN
-        { wch: 25 }  // SUPPLIER
+        { wch: 25 }, // SUPPLIER
+        { wch: 20 }  // SUPPLIER NUMBER
       ];
 
       // Apply gorgeous table formatting (Theme Color Gold: DAA520)
@@ -513,16 +515,6 @@ export function Inventory() {
       setToast({ type: 'error', message: t("Min stock threshold cannot be negative.", "අවම තොග සීමාව සෘණ විය නොහැක.") });
       setTimeout(() => setToast(null), 5000);
       return;
-    }
-
-    if (formData.barcode && formData.barcode.trim() !== '') {
-      const barcodeClean = formData.barcode.trim();
-      const barcodeRegex = /^[A-Za-z0-9]{8,15}$/;
-      if (!barcodeRegex.test(barcodeClean)) {
-        setToast({ type: 'error', message: t("Barcode must be alphanumeric and between 8 to 15 characters.", "තීරු කේතය අකුරු/ඉලක්කම් සහිතව දිග 8 ත් 15 ත් අතර විය යුතුය.") });
-        setTimeout(() => setToast(null), 5000);
-        return;
-      }
     }
 
     if (!formData.supplierPhone || !formData.supplierPhone.trim()) {
@@ -938,6 +930,7 @@ export function Inventory() {
                   <th className="px-6 py-4 text-center">{t('Stock', 'තොගය')}</th>
                   <th className="px-6 py-4 text-center">{t('Min', 'අවම')}</th>
                   <th className="px-6 py-4">{t('Supplier', 'සැපයුම්කරු')}</th>
+                  <th className="px-6 py-4">{t('Supplier Number', 'සැපයුම්කරුගේ අංකය')}</th>
                   <th className="px-6 py-4 text-center">{t('Actions', 'ක්‍රියාකාරකම්')}</th>
                 </tr>
               </thead>
@@ -986,15 +979,16 @@ export function Inventory() {
                                       </div>
                                     ))}
                                   </div>
-                                );
-                              }
-                            } catch(e) {}
-                            return null;
-                          })()}
+                                  );
+                                }
+                              } catch(e) {}
+                              return null;
+                            })()}
                         </div>
                       </td>
                       <td className="px-6 py-4 text-center text-gray-400 font-bold italic">{product.minStock}</td>
                       <td className="px-6 py-4 text-gray-500 font-bold text-xs truncate max-w-[150px]">{product.supplier || '—'}</td>
+                      <td className="px-6 py-4 text-gray-500 font-bold text-xs truncate max-w-[150px]">{product.supplierPhone || '—'}</td>
                       <td className="px-6 py-4">
                         <div className="flex items-center justify-center gap-2">
                           <button onClick={() => openStock(product, 'in')} className="p-2.5 rounded-xl bg-emerald-50 text-emerald-600 hover:bg-emerald-500 hover:text-white border border-emerald-100 transition-all shadow-sm" title="Stock In"><ArrowUpIcon className="w-4 h-4" /></button>

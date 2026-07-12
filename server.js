@@ -108,7 +108,7 @@ const LEGACY_PRODUCT_SKUS = [
 ];
 
 async function ensureSuperAdminProfile() {
-  const existing = await db.get('SELECT * FROM profiles WHERE email = ?', [SUPER_ADMIN.email]);
+  const existing = await db.get('SELECT * FROM profiles WHERE id = ?', [SUPER_ADMIN.id]);
 
   if (!existing) {
     await db.run(
@@ -117,17 +117,15 @@ async function ensureSuperAdminProfile() {
     );
     console.log(`[Startup] Seeded Super Admin profile: ${SUPER_ADMIN.email}`);
   } else if (
-    existing.id !== SUPER_ADMIN.id ||
     existing.name !== SUPER_ADMIN.name ||
     existing.role !== SUPER_ADMIN.role ||
-    existing.avatar !== SUPER_ADMIN.avatar ||
-    existing.password !== SUPER_ADMIN.password
+    existing.avatar !== SUPER_ADMIN.avatar
   ) {
     await db.run(
-      'UPDATE profiles SET id = ?, name = ?, email = ?, role = ?, avatar = ?, password = ? WHERE email = ?',
-      [SUPER_ADMIN.id, SUPER_ADMIN.name, SUPER_ADMIN.email, SUPER_ADMIN.role, SUPER_ADMIN.avatar, SUPER_ADMIN.password, SUPER_ADMIN.email]
+      'UPDATE profiles SET name = ?, role = ?, avatar = ? WHERE id = ?',
+      [SUPER_ADMIN.name, SUPER_ADMIN.role, SUPER_ADMIN.avatar, SUPER_ADMIN.id]
     );
-    console.log(`[Startup] Updated Super Admin profile: ${SUPER_ADMIN.email}`);
+    console.log(`[Startup] Updated Super Admin profile details (excluding email & password): ${existing.email}`);
   }
 }
 
@@ -324,6 +322,8 @@ async function initializeDatabase() {
     filename: DB_FILE,
     driver: sqlite3.Database
   });
+
+  await db.exec("PRAGMA busy_timeout = 10000;");
 
   console.log('✅ Connected to SQLite Database:', DB_FILE);
 
@@ -658,6 +658,12 @@ async function initializeDatabase() {
     await db.exec("ALTER TABLE profiles ADD COLUMN password TEXT DEFAULT '123456'");
   } catch(e) {}
   try {
+    await db.exec("ALTER TABLE profiles ADD COLUMN reset_token TEXT");
+  } catch(e) {}
+  try {
+    await db.exec("ALTER TABLE profiles ADD COLUMN reset_token_expiry TEXT");
+  } catch(e) {}
+  try {
     await db.exec("ALTER TABLE customers ADD COLUMN nic TEXT");
   } catch(e) {}
   try {
@@ -783,6 +789,49 @@ const sendNotificationEmail = async (subject, text) => {
     return { success: true };
   } catch (err) {
     console.error('[Notification Email] Failed to send email:', err);
+    return { success: false, error: err.message };
+  }
+};
+
+const sendResetEmail = async (toEmail, code) => {
+  try {
+    const gmailUser = process.env.GMAIL_USER || 'sanojhardware@gmail.com';
+    const gmailPass = process.env.GMAIL_PASS;
+
+    if (!gmailPass) {
+      console.warn(`[Reset Password Fallback] GMAIL_PASS missing in .env. Code for ${toEmail}: ${code}`);
+      return { success: false, reason: 'GMAIL_PASS missing' };
+    }
+
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user: gmailUser, pass: gmailPass }
+    });
+
+    await transporter.sendMail({
+      from: gmailUser,
+      to: toEmail,
+      subject: 'Muthuwadige Hardware - Password Reset Code',
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; max-width: 500px; margin: 0 auto; border: 1px solid #f3f4f6; border-radius: 16px; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
+          <div style="text-align: center; margin-bottom: 20px;">
+            <h2 style="color: #DAA520; margin: 0; font-size: 22px; font-weight: 800;">Password Reset Request</h2>
+            <p style="color: #6b7280; font-size: 13px; margin-top: 5px;">Muthuwadige Hardware ERP</p>
+          </div>
+          <p style="font-size: 14px; line-height: 1.5; color: #4b5563;">We received a request to reset the password for your staff account. Use the verification code below to complete the reset process:</p>
+          <div style="background-color: #f9fafb; padding: 18px; text-align: center; font-size: 28px; font-weight: 800; letter-spacing: 6px; border-radius: 12px; margin: 25px 0; color: #464646; border: 1px solid #f3f4f6;">
+            ${code}
+          </div>
+          <p style="font-size: 13px; line-height: 1.5; color: #6b7280; text-align: center;">This code will expire in <strong>15 minutes</strong> for security.</p>
+          <p style="font-size: 13px; line-height: 1.5; color: #9ca3af; margin-top: 25px; border-top: 1px solid #f3f4f6; padding-top: 15px;">If you did not make this request, you can safely ignore this email.</p>
+        </div>
+      `
+    });
+
+    console.log(`[Reset Password] Email sent successfully to ${toEmail}`);
+    return { success: true };
+  } catch (err) {
+    console.error('[Reset Password] Failed to send email:', err);
     return { success: false, error: err.message };
   }
 };
@@ -1834,6 +1883,67 @@ app.post('/api/auth/register', async (req, res) => {
       [id, name || 'Staff User', email, role || 'cashier', email.charAt(0).toUpperCase(), password || '123456']
     );
     res.json({ success: true, user: { id, email, role: role || 'cashier', name: name || 'Staff User' } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  try {
+    const profile = await db.get('SELECT * FROM profiles WHERE email = ?', [email]);
+    if (!profile) {
+      return res.status(404).json({ error: 'User with this email address does not exist.' });
+    }
+
+    // Generate random 6-digit code
+    const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiry = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+    await db.run(
+      'UPDATE profiles SET reset_token = ?, reset_token_expiry = ? WHERE id = ?',
+      [resetCode, expiry, profile.id]
+    );
+
+    const emailResult = await sendResetEmail(email, resetCode);
+    if (!emailResult.success && emailResult.reason === 'GMAIL_PASS missing') {
+      console.warn(`[Reset Password Simulation] Reset code for ${email} is ${resetCode}`);
+      return res.json({ success: true, message: 'Reset code generated (simulated in console).' });
+    }
+
+    if (!emailResult.success) {
+      throw new Error(emailResult.error || 'Failed to send password reset email.');
+    }
+
+    res.json({ success: true, message: 'Password reset code has been sent to your email address.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { email, code, newPassword } = req.body;
+  try {
+    const profile = await db.get('SELECT * FROM profiles WHERE email = ?', [email]);
+    if (!profile) {
+      return res.status(404).json({ error: 'User profile not found.' });
+    }
+
+    if (!profile.reset_token || profile.reset_token !== code.trim()) {
+      return res.status(400).json({ error: 'Invalid verification code.' });
+    }
+
+    const expiryDate = new Date(profile.reset_token_expiry);
+    if (isNaN(expiryDate.getTime()) || expiryDate.getTime() < Date.now()) {
+      return res.status(400).json({ error: 'Verification code has expired.' });
+    }
+
+    await db.run(
+      'UPDATE profiles SET password = ?, reset_token = NULL, reset_token_expiry = NULL WHERE id = ?',
+      [newPassword, profile.id]
+    );
+
+    res.json({ success: true, message: 'Password has been updated successfully.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

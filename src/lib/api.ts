@@ -2,9 +2,9 @@ const getDefaultApiUrl = () => {
   if (typeof window !== 'undefined') {
     // If loaded in a web browser pointing to our Express server (e.g. on a phone or client browser)
     // window.location.origin will be 'http://<host-ip>:5001' or similar.
-    // If the protocol is http/https and it is not Vite's dev port (5173), use the current window origin!
+    // If the protocol is http/https and it is not a Vite dev port (starts with 517), use the current window origin!
     const { protocol, port, origin } = window.location;
-    if ((protocol === 'http:' || protocol === 'https:') && port !== '5173') {
+    if ((protocol === 'http:' || protocol === 'https:') && !port.startsWith('517')) {
       return `${origin}/api`;
     }
   }

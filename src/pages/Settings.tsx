@@ -57,7 +57,7 @@ export function Settings() {
   const [selectedBackups, setSelectedBackups] = useState<string[]>([]);
   const [isEmailingBackup, setIsEmailingBackup] = useState(false);
   const [logoPath, setLogoPath] = useState('');
-  const [printerSettings, setPrinterSettings] = useState({ ip: '', port: '9100', type: 'Network' });
+  const [printerSettings, setPrinterSettings] = useState({ ip: '', port: '9100', type: 'Network', paperSize: 'A4' });
   const [branchSettings, setBranchSettings] = useState({ name: '', code: '', address: '' });
   const [isSendingTest, setIsSendingTest] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
@@ -243,7 +243,13 @@ export function Settings() {
       
       if (settingData.printer_settings) {
         try {
-          setPrinterSettings(typeof settingData.printer_settings === 'object' ? settingData.printer_settings : JSON.parse(settingData.printer_settings));
+          const parsed = typeof settingData.printer_settings === 'object' ? settingData.printer_settings : JSON.parse(settingData.printer_settings);
+          setPrinterSettings({
+            ip: parsed.ip || '',
+            port: parsed.port || '9100',
+            type: parsed.type || 'Network',
+            paperSize: parsed.paperSize || 'A4'
+          });
         } catch(e) {}
       }
       if (settingData.branch_settings) {
@@ -865,6 +871,17 @@ export function Settings() {
                     <option value="Network">TCP/IP Network Printer</option>
                     <option value="USB">Local USB Printer</option>
                     <option value="Bluetooth">Bluetooth Printer</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 block">Receipt Paper Size</label>
+                  <select 
+                    value={printerSettings.paperSize || 'A4'} 
+                    onChange={e => setPrinterSettings({ ...printerSettings, paperSize: e.target.value })}
+                    className="w-full px-4 py-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#DAA520] font-bold text-xs text-[#464646] bg-white cursor-pointer"
+                  >
+                    <option value="A4">Standard A4 Page</option>
+                    <option value="80mm">80mm Thermal POS Receipt</option>
                   </select>
                 </div>
               </div>

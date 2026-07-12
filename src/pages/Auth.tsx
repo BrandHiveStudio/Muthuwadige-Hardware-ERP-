@@ -15,7 +15,105 @@ export function Auth({ onLogin }: AuthProps) {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
+  const [authMode, setAuthMode] = useState<'login' | 'forgot' | 'verify'>('login');
+  const [resetEmail, setResetEmail] = useState('');
+  const [verificationCode, setVerificationCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+
   const [shopSettings, setShopSettings] = useState<any>(null);
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccessMessage('');
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(resetEmail.trim())) {
+      setError('Please enter a valid email address.');
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      const res = await fetch(`${API_URL}/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: resetEmail.trim() })
+      });
+      let data;
+      try {
+        data = await res.json();
+      } catch (err) {
+        throw new Error('Server returned an invalid response. Please restart your terminal application (npm run electron-dev) to apply the password reset backend routes.');
+      }
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to send reset code.');
+      }
+      setSuccessMessage(data.message || 'Verification code has been sent to your email.');
+      setAuthMode('verify');
+    } catch (err: any) {
+      setError(err.message || 'Something went wrong.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccessMessage('');
+
+    if (verificationCode.trim().length !== 6) {
+      setError('Please enter the 6-digit verification code.');
+      return;
+    }
+    if (newPassword.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      const res = await fetch(`${API_URL}/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: resetEmail.trim(),
+          code: verificationCode.trim(),
+          newPassword: newPassword
+        })
+      });
+      let data;
+      try {
+        data = await res.json();
+      } catch (err) {
+        throw new Error('Server returned an invalid response. Please restart your terminal application (npm run electron-dev) to apply the password reset backend routes.');
+      }
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to reset password.');
+      }
+      setSuccessMessage(data.message || 'Password has been reset successfully.');
+      setAuthMode('login');
+      setEmail(resetEmail);
+      setPassword('');
+      setResetEmail('');
+      setVerificationCode('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err: any) {
+      setError(err.message || 'Something went wrong.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
   
   const [showConnectionSettings, setShowConnectionSettings] = useState(false);
   const [connectionError, setConnectionError] = useState(false);
@@ -217,10 +315,14 @@ export function Auth({ onLogin }: AuthProps) {
           <div className="bg-white rounded-3xl shadow-2xl border border-gray-100 p-10">
             
             <h1 className="text-3xl font-black text-[#464646] mb-2">
-              Staff Login
+              {authMode === 'login' && 'Staff Login'}
+              {authMode === 'forgot' && 'Reset Password'}
+              {authMode === 'verify' && 'Verify Code'}
             </h1>
             <p className="text-gray-500 mb-8 text-sm font-medium">
-              Enter your credentials to access the ERP
+              {authMode === 'login' && 'Enter your credentials to access the ERP'}
+              {authMode === 'forgot' && "We'll send a 6-digit verification code to your email address"}
+              {authMode === 'verify' && 'Enter the 6-digit verification code and your new password'}
             </p>
 
             {connectionError && (
@@ -242,6 +344,13 @@ export function Auth({ onLogin }: AuthProps) {
               </div>
             )}
 
+            {successMessage && (
+              <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-100 text-emerald-600 rounded-xl px-5 py-4 mb-6 text-sm font-bold animate-in slide-in-from-top-2">
+                <CheckIcon className="w-5 h-5 flex-shrink-0" />
+                {successMessage}
+              </div>
+            )}
+
             {error && (
               <div className="flex items-center gap-3 bg-red-50 border border-red-100 text-red-600 rounded-xl px-5 py-4 mb-6 text-sm font-bold animate-in slide-in-from-top-2">
                 <AlertCircleIcon className="w-5 h-5 flex-shrink-0" />
@@ -249,48 +358,162 @@ export function Auth({ onLogin }: AuthProps) {
               </div>
             )}
 
-            <form onSubmit={handleAuth} className="space-y-5">
-              <div>
-                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Email Address</label>
-                <input
-                  type="email"
-                  placeholder="Enter your email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full px-5 py-3.5 rounded-xl border border-gray-200 focus:ring-2 focus:ring-[#DAA520] outline-none text-sm font-bold text-[#464646] bg-gray-50/50 transition-all"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Password</label>
-                <div className="relative">
+            {authMode === 'login' && (
+              <form onSubmit={handleAuth} className="space-y-5">
+                <div>
+                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Email Address</label>
                   <input
-                    type={showPassword ? 'text' : 'password'}
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full px-5 py-3.5 rounded-xl border border-gray-200 focus:ring-2 focus:ring-[#DAA520] outline-none text-sm font-bold text-[#464646] pr-12 bg-gray-50/50 transition-all"
+                    type="email"
+                    placeholder="Enter your email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full px-5 py-3.5 rounded-xl border border-gray-200 focus:ring-2 focus:ring-[#DAA520] outline-none text-sm font-bold text-[#464646] bg-gray-50/50 transition-all"
                     required
                   />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Password</label>
+                  <div className="relative">
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full px-5 py-3.5 rounded-xl border border-gray-200 focus:ring-2 focus:ring-[#DAA520] outline-none text-sm font-bold text-[#464646] pr-12 bg-gray-50/50 transition-all"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#DAA520] transition-colors"
+                    >
+                      {showPassword ? <EyeOffIcon className="w-5 h-5" /> : <EyeIcon className="w-5 h-5" />}
+                    </button>
+                  </div>
+                  <div className="text-right mt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setError('');
+                        setResetEmail(email);
+                        setAuthMode('forgot');
+                      }}
+                      className="text-xs font-bold text-[#DAA520] hover:underline"
+                    >
+                      Forgot Password?
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="w-full bg-[#DAA520] hover:bg-[#B8860B] text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-[#DAA520]/20 uppercase tracking-widest text-xs mt-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                >
+                  {isLoading ? 'Verifying Credentials...' : 'Secure Login'}
+                </button>
+              </form>
+            )}
+
+            {authMode === 'forgot' && (
+              <form onSubmit={handleForgotPassword} className="space-y-5">
+                <div>
+                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Email Address</label>
+                  <input
+                    type="email"
+                    placeholder="Enter your email address"
+                    value={resetEmail}
+                    onChange={(e) => setResetEmail(e.target.value)}
+                    className="w-full px-5 py-3.5 rounded-xl border border-gray-200 focus:ring-2 focus:ring-[#DAA520] outline-none text-sm font-bold text-[#464646] bg-gray-50/50 transition-all"
+                    required
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="w-full bg-[#DAA520] hover:bg-[#B8860B] text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-[#DAA520]/20 uppercase tracking-widest text-xs mt-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                >
+                  {isLoading ? 'Sending Reset Code...' : 'Send Reset Code'}
+                </button>
+
+                <div className="text-center mt-4">
                   <button
                     type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#DAA520] transition-colors"
+                    onClick={() => {
+                      setError('');
+                      setAuthMode('login');
+                    }}
+                    className="text-xs font-bold text-gray-500 hover:underline"
                   >
-                    {showPassword ? <EyeOffIcon className="w-5 h-5" /> : <EyeIcon className="w-5 h-5" />}
+                    Back to Login
                   </button>
                 </div>
-              </div>
+              </form>
+            )}
 
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full bg-[#DAA520] hover:bg-[#B8860B] text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-[#DAA520]/20 uppercase tracking-widest text-xs mt-2 disabled:opacity-70 disabled:cursor-not-allowed"
-              >
-                {isLoading ? 'Verifying Credentials...' : 'Secure Login'}
-              </button>
-            </form>
+            {authMode === 'verify' && (
+              <form onSubmit={handleResetPassword} className="space-y-5">
+                <div>
+                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Verification Code</label>
+                  <input
+                    type="text"
+                    maxLength={6}
+                    placeholder="Enter 6-digit code"
+                    value={verificationCode}
+                    onChange={(e) => setVerificationCode(e.target.value)}
+                    className="w-full px-5 py-3.5 rounded-xl border border-gray-200 focus:ring-2 focus:ring-[#DAA520] outline-none text-sm font-bold text-[#464646] bg-gray-50/50 transition-all text-center tracking-[0.5em] text-lg font-mono font-black"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">New Password</label>
+                  <input
+                    type="password"
+                    placeholder="••••••••"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full px-5 py-3.5 rounded-xl border border-gray-200 focus:ring-2 focus:ring-[#DAA520] outline-none text-sm font-bold text-[#464646] bg-gray-50/50 transition-all"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Confirm New Password</label>
+                  <input
+                    type="password"
+                    placeholder="••••••••"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="w-full px-5 py-3.5 rounded-xl border border-gray-200 focus:ring-2 focus:ring-[#DAA520] outline-none text-sm font-bold text-[#464646] bg-gray-50/50 transition-all"
+                    required
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="w-full bg-[#DAA520] hover:bg-[#B8860B] text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-[#DAA520]/20 uppercase tracking-widest text-xs mt-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                >
+                  {isLoading ? 'Resetting Password...' : 'Reset Password'}
+                </button>
+
+                <div className="text-center mt-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setError('');
+                      setAuthMode('login');
+                    }}
+                    className="text-xs font-bold text-gray-500 hover:underline"
+                  >
+                    Back to Login
+                  </button>
+                </div>
+              </form>
+            )}
 
             <div className="mt-8 text-center pt-6 border-t border-gray-100 flex flex-col items-center gap-2">
               <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">

@@ -48,6 +48,7 @@ async function getDb() {
       filename: DB_FILE,
       driver: sqlite3.Database
     });
+    await db.exec("PRAGMA busy_timeout = 10000;");
   }
   return db;
 }
