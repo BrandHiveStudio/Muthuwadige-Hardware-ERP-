@@ -78,6 +78,14 @@ app.use('/backups', express.static(backupsDir));
 
 const PORT = 5001;
 
+const isDecimalUnit = (unit) => {
+  if (!unit) return false;
+  const PREDEFINED_UNITS = ['pcs', 'kg', 'g', 'liters', 'ml', 'meters', 'boxes', 'packets', 'rolls', 'bundles'];
+  const decimals = ['kg', 'g', 'liters', 'ml', 'meters'];
+  const name = unit.toLowerCase().trim();
+  return decimals.includes(name) || !PREDEFINED_UNITS.includes(name);
+};
+
 let db;
 
 const SUPER_ADMIN = {
@@ -641,7 +649,24 @@ async function initializeDatabase() {
     )
   `);
 
-  // 16. Create Branches Table
+  // 16. Create Credit Payments Table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS credit_payments (
+      id TEXT PRIMARY KEY,
+      sale_id TEXT NOT NULL,
+      invoice_no TEXT,
+      customer_id TEXT,
+      customer_name TEXT,
+      amount_paid REAL NOT NULL,
+      remaining_balance REAL NOT NULL,
+      payment_method TEXT DEFAULT 'Cash',
+      payment_date TEXT DEFAULT CURRENT_TIMESTAMP,
+      recorded_by TEXT,
+      notes TEXT
+    )
+  `);
+
+  // 17. Create Branches Table
   await db.exec(`
     CREATE TABLE IF NOT EXISTS branches (
       id TEXT PRIMARY KEY,
@@ -701,6 +726,12 @@ async function initializeDatabase() {
   } catch(e) {}
   try {
     await db.exec("ALTER TABLE system_settings ADD COLUMN next_invoice_number TEXT DEFAULT 'INV001'");
+  } catch(e) {}
+  try {
+    await db.exec("ALTER TABLE sales ADD COLUMN transportation_fee REAL DEFAULT 0");
+  } catch(e) {}
+  try {
+    await db.exec("ALTER TABLE bill_holds ADD COLUMN transportation_fee REAL DEFAULT 0");
   } catch(e) {}
 
   await seedInitialData();
@@ -982,18 +1013,31 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
         if (Array.isArray(items)) {
           items.forEach(it => {
             const product = products.find(p => p.id === it.productId || p.id === it.product_id);
-            let cost = product ? Number(product.cost_price || 0) : 0;
-            if (product && (product.unit?.toLowerCase() === 'cube' || product.unit?.toLowerCase() === 'cubes')) {
-              const uLower = (it.unit || '').toLowerCase();
-              if (uLower === 'bucket' || uLower === 'buckets') {
-                cost = cost / 20;
-              } else if (uLower === 'shovel' || uLower === 'shovels') {
-                cost = cost / 1000;
+            let baseCost = product ? Number(product.cost_price || 0) : 0;
+            let convRate = Number(it.conversionRate) || 1;
+            if (product && (!it.conversionRate || convRate === 1) && (it.unit && it.unit.toLowerCase() !== (product.unit || '').toLowerCase())) {
+              const measureDetailsStr = product.measure_details || product.measureDetails;
+              if (measureDetailsStr) {
+                try {
+                  const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
+                  if (parsed && Array.isArray(parsed.conversions)) {
+                    const matchedConv = parsed.conversions.find(c => (c.unit || '').toLowerCase() === it.unit.toLowerCase());
+                    if (matchedConv) {
+                      const rawVal = Number(matchedConv.kgVal) || 1;
+                      if ((product.unit || '').toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
+                        convRate = 1 / rawVal;
+                      } else {
+                        convRate = rawVal;
+                      }
+                    }
+                  }
+                } catch (e) {}
               }
             }
+            const unitCost = convRate > 0 ? baseCost / convRate : baseCost;
             const price = Number(it.price || 0);
             const qty = Number(it.qty || 0);
-            totalSalesProfit += qty * (price - cost);
+            totalSalesProfit += qty * (price - unitCost);
           });
         }
       } catch (err) {
@@ -1051,17 +1095,30 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
         if (Array.isArray(items)) {
           items.forEach(it => {
             const product = products.find(p => p.id === it.productId || p.id === it.product_id);
-            let cost = product ? Number(product.cost_price || 0) : 0;
-            if (product && (product.unit?.toLowerCase() === 'cube' || product.unit?.toLowerCase() === 'cubes')) {
-              const uLower = (it.unit || '').toLowerCase();
-              if (uLower === 'bucket' || uLower === 'buckets') {
-                cost = cost / 20;
-              } else if (uLower === 'shovel' || uLower === 'shovels') {
-                cost = cost / 1000;
+            let baseCost = product ? Number(product.cost_price || 0) : 0;
+            let convRate = Number(it.conversionRate) || 1;
+            if (product && (!it.conversionRate || convRate === 1) && (it.unit && it.unit.toLowerCase() !== (product.unit || '').toLowerCase())) {
+              const measureDetailsStr = product.measure_details || product.measureDetails;
+              if (measureDetailsStr) {
+                try {
+                  const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
+                  if (parsed && Array.isArray(parsed.conversions)) {
+                    const matchedConv = parsed.conversions.find(c => (c.unit || '').toLowerCase() === it.unit.toLowerCase());
+                    if (matchedConv) {
+                      const rawVal = Number(matchedConv.kgVal) || 1;
+                      if ((product.unit || '').toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
+                        convRate = 1 / rawVal;
+                      } else {
+                        convRate = rawVal;
+                      }
+                    }
+                  }
+                } catch (e) {}
               }
             }
+            const unitCost = convRate > 0 ? baseCost / convRate : baseCost;
             const qty = Number(it.qty || 1);
-            totalCostOfSales += qty * cost;
+            totalCostOfSales += qty * unitCost;
           });
         }
       } catch (err) {}
@@ -1394,17 +1451,30 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
             if (Array.isArray(items)) {
               items.forEach(it => {
                 const product = products.find(p => p.id === it.productId || p.id === it.product_id);
-                let cost = product ? Number(product.cost_price || 0) : 0;
-                if (product && (product.unit?.toLowerCase() === 'cube' || product.unit?.toLowerCase() === 'cubes')) {
-                  const uLower = (it.unit || '').toLowerCase();
-                  if (uLower === 'bucket' || uLower === 'buckets') {
-                    cost = cost / 20;
-                  } else if (uLower === 'shovel' || uLower === 'shovels') {
-                    cost = cost / 1000;
+                let baseCost = product ? Number(product.cost_price || 0) : 0;
+                let convRate = Number(it.conversionRate) || 1;
+                if (product && (!it.conversionRate || convRate === 1) && (it.unit && it.unit.toLowerCase() !== (product.unit || '').toLowerCase())) {
+                  const measureDetailsStr = product.measure_details || product.measureDetails;
+                  if (measureDetailsStr) {
+                    try {
+                      const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
+                      if (parsed && Array.isArray(parsed.conversions)) {
+                        const matchedConv = parsed.conversions.find(c => (c.unit || '').toLowerCase() === it.unit.toLowerCase());
+                        if (matchedConv) {
+                          const rawVal = Number(matchedConv.kgVal) || 1;
+                          if ((product.unit || '').toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
+                            convRate = 1 / rawVal;
+                          } else {
+                            convRate = rawVal;
+                          }
+                        }
+                      }
+                    } catch (e) {}
                   }
                 }
+                const unitCost = convRate > 0 ? baseCost / convRate : baseCost;
                 const qty = Number(it.qty || 1);
-                totalCostOfSale += qty * cost;
+                totalCostOfSale += qty * unitCost;
               });
             }
           } catch (e) {}
@@ -2238,7 +2308,8 @@ app.get('/api/sales', async (req, res) => {
       created_at: s.created_at,
       due_date: s.due_date,
       credit_period_days: s.credit_period_days || 0,
-      payment_received: s.payment_received || 0
+      payment_received: s.payment_received || 0,
+      transportation_fee: s.transportation_fee || 0
     }));
     res.json(mapped);
   } catch (err) {
@@ -2289,15 +2360,17 @@ app.post('/api/sales', async (req, res) => {
 
     // 2. Insert Sale Order
     await db.run(
-      'INSERT INTO sales (id, invoice_no, customer_id, customer_name, items, subtotal, discount, tax, tax_rate, total_amount, status, user_id, payment_method, created_at, due_date, credit_period_days, payment_received) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, finalInvoiceNo, s.customer_id, s.customer_name, JSON.stringify(s.items), s.subtotal, s.discount, s.tax, s.tax_rate, s.total_amount, s.status, s.user_id, s.payment_method || 'Cash', created_at, s.due_date || null, s.credit_period_days || 0, s.payment_received || 0]
+      'INSERT INTO sales (id, invoice_no, customer_id, customer_name, items, subtotal, discount, tax, tax_rate, total_amount, status, user_id, payment_method, created_at, due_date, credit_period_days, payment_received, transportation_fee) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, finalInvoiceNo, s.customer_id, s.customer_name, JSON.stringify(s.items), s.subtotal, s.discount, s.tax, s.tax_rate, s.total_amount, s.status, s.user_id, s.payment_method || 'Cash', created_at, s.due_date || null, s.credit_period_days || 0, s.payment_received || 0, s.transportation_fee || 0]
     );
 
     // 3. Decrement Product Stock levels
     for (const item of s.items) {
+      const convRate = Number(item.conversionRate) || 1;
+      const baseQtyDeduction = convRate > 0 ? (Number(item.qty || 0) / convRate) : Number(item.qty || 0);
       await db.run(
         'UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?',
-        [item.qty * (item.conversionRate || 1), item.productId]
+        [baseQtyDeduction, item.productId]
       );
     }
 
@@ -2390,6 +2463,52 @@ app.put('/api/sales/:id', async (req, res) => {
   }
 });
 
+app.get('/api/credit_payments', async (req, res) => {
+  try {
+    const records = await db.all('SELECT * FROM credit_payments ORDER BY payment_date DESC');
+    res.json(records || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/credit_payments/sale/:saleId', async (req, res) => {
+  try {
+    const records = await db.all('SELECT * FROM credit_payments WHERE sale_id = ? ORDER BY payment_date DESC', [req.params.saleId]);
+    res.json(records || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/credit_payments', async (req, res) => {
+  const p = req.body;
+  const id = p.id || 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  const paymentDate = p.payment_date || new Date().toISOString();
+  try {
+    await db.run(
+      'INSERT INTO credit_payments (id, sale_id, invoice_no, customer_id, customer_name, amount_paid, remaining_balance, payment_method, payment_date, recorded_by, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        id,
+        p.sale_id,
+        p.invoice_no,
+        p.customer_id || null,
+        p.customer_name || null,
+        Number(p.amount_paid) || 0,
+        Number(p.remaining_balance) || 0,
+        p.payment_method || 'Cash',
+        paymentDate,
+        p.recorded_by || 'system',
+        p.notes || ''
+      ]
+    );
+
+    res.json({ success: true, id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.delete('/api/sales/:id', async (req, res) => {
   const { id } = req.params;
   try {
@@ -2437,7 +2556,187 @@ app.post('/api/sales/:id/void', async (req, res) => {
       [auditId, user_email || 'System', 'VOID_INVOICE', `Voided invoice ${sale.invoice_no} (Total: Rs. ${sale.total_amount})`]
     );
 
-    await db.run("DELETE FROM transactions WHERE reference = ? AND (description = ? OR description = ?)", [sale.invoice_no, `POS Sale ${sale.invoice_no}`, `POS Credit Payment ${sale.invoice_no}`]);
+    await db.run("DELETE FROM transactions WHERE reference = ? OR reference = ? OR description LIKE ?", [sale.invoice_no, id, `%${sale.invoice_no}%`]);
+    removeRuntimeTransactionsForSale(sale.invoice_no);
+
+    await db.run('COMMIT');
+    res.json({ success: true });
+  } catch (err) {
+    await db.run('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// SALES RETURNS API
+app.get('/api/sales/returns', async (req, res) => {
+  try {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS sales_returns (
+        id TEXT PRIMARY KEY,
+        invoice_no TEXT,
+        returned_items TEXT,
+        return_method TEXT,
+        total_refunded REAL,
+        user_id TEXT,
+        status TEXT DEFAULT 'active',
+        reason TEXT,
+        created_at TEXT
+      )
+    `);
+    const returns = await db.all('SELECT * FROM sales_returns ORDER BY created_at DESC');
+    const mapped = returns.map(r => ({
+      id: r.id,
+      invoiceNo: r.invoice_no,
+      invoice_no: r.invoice_no,
+      returnedItems: safeParseJson(r.returned_items, []),
+      returnMethod: r.return_method || 'Cash Refund',
+      totalRefunded: r.total_refunded || 0,
+      userId: r.user_id,
+      status: r.status || 'active',
+      reason: r.reason || '',
+      created_at: r.created_at
+    }));
+    res.json(mapped);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/sales/returns', async (req, res) => {
+  const { invoiceNo, returnedItems, returnMethod, totalRefunded, userEmail, reason } = req.body;
+  const id = 'sr_' + Date.now();
+  const created_at = new Date().toISOString();
+  try {
+    await db.run('BEGIN TRANSACTION');
+
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS sales_returns (
+        id TEXT PRIMARY KEY,
+        invoice_no TEXT,
+        returned_items TEXT,
+        return_method TEXT,
+        total_refunded REAL,
+        user_id TEXT,
+        status TEXT DEFAULT 'active',
+        reason TEXT,
+        created_at TEXT
+      )
+    `);
+
+    // 1. Save Sales Return record
+    await db.run(
+      'INSERT INTO sales_returns (id, invoice_no, returned_items, return_method, total_refunded, user_id, status, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, invoiceNo, JSON.stringify(returnedItems), returnMethod || 'Cash Refund', totalRefunded, userEmail || 'system', 'active', reason || '', created_at]
+    );
+
+    // 2. Restock returned items
+    for (const item of returnedItems) {
+      await db.run(
+        'UPDATE products SET stock = stock + ? WHERE id = ?',
+        [item.qty * (item.conversionRate || 1), item.productId || item.product_id]
+      );
+    }
+
+    // 3. Log cash refund transaction if applicable
+    if (totalRefunded > 0 && returnMethod === 'Cash Refund') {
+      const txId = 't_' + Date.now();
+      await db.run(
+        'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [txId, 'expense', 'Sales Return', `Sales Return Refund for ${invoiceNo}`, totalRefunded, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+      );
+    }
+
+    // 4. Update sales invoice status if fully or partially returned
+    const sale = await db.get('SELECT * FROM sales WHERE invoice_no = ?', [invoiceNo]);
+    if (sale) {
+      const originalItems = safeParseJson(sale.items, []);
+      // Calculate total return quantities across all returns for this invoice
+      const allReturns = await db.all('SELECT returned_items FROM sales_returns WHERE invoice_no = ? AND status = ?', [invoiceNo, 'active']);
+      let totalReturnedQty = 0;
+      let totalOriginalQty = 0;
+      originalItems.forEach(i => { totalOriginalQty += Number(i.qty || 0); });
+      allReturns.forEach(r => {
+        const rItems = safeParseJson(r.returned_items, []);
+        rItems.forEach(ri => { totalReturnedQty += Number(ri.qty || 0); });
+      });
+
+      let newStatus = sale.status;
+      if (totalReturnedQty >= totalOriginalQty && totalOriginalQty > 0) {
+        newStatus = 'Fully Returned';
+      } else if (totalReturnedQty > 0) {
+        newStatus = 'Partially Returned';
+      }
+      await db.run('UPDATE sales SET status = ? WHERE id = ?', [newStatus, sale.id]);
+    }
+
+    await logAudit(userEmail || 'system', 'SALES_RETURN', `Processed Sales Return for Invoice ${invoiceNo} (Refund: Rs. ${totalRefunded})`);
+
+    await db.run('COMMIT');
+    res.json({ success: true, id, invoice_no: invoiceNo, totalRefunded });
+  } catch (err) {
+    await db.run('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/sales/returns/:id/void', async (req, res) => {
+  const { id } = req.params;
+  const { userEmail, user_email, reason } = req.body;
+  const user = userEmail || user_email || 'system';
+  try {
+    await db.run('BEGIN TRANSACTION');
+
+    const sr = await db.get('SELECT * FROM sales_returns WHERE id = ?', [id]);
+    if (!sr) {
+      await db.run('ROLLBACK');
+      return res.status(404).json({ error: 'Sales Return record not found' });
+    }
+
+    if (sr.status === 'voided') {
+      await db.run('ROLLBACK');
+      return res.status(400).json({ error: 'Sales Return is already voided' });
+    }
+
+    // 1. Mark status as voided
+    await db.run("UPDATE sales_returns SET status = 'voided' WHERE id = ?", [id]);
+
+    // 2. Re-deduct stock levels
+    const items = safeParseJson(sr.returned_items, []);
+    for (const item of items) {
+      await db.run(
+        'UPDATE products SET stock = stock - ? WHERE id = ?',
+        [item.qty * (item.conversionRate || 1), item.productId || item.product_id]
+      );
+    }
+
+    // 3. Reverse financial refund transaction
+    await db.run("DELETE FROM transactions WHERE reference = ? AND category = 'Sales Return'", [sr.invoice_no]);
+
+    // 4. Update sales invoice status
+    const sale = await db.get('SELECT * FROM sales WHERE invoice_no = ?', [sr.invoice_no]);
+    if (sale) {
+      const originalItems = safeParseJson(sale.items, []);
+      const allActiveReturns = await db.all('SELECT returned_items FROM sales_returns WHERE invoice_no = ? AND status = ?', [sr.invoice_no, 'active']);
+      let totalReturnedQty = 0;
+      let totalOriginalQty = 0;
+      originalItems.forEach(i => { totalOriginalQty += Number(i.qty || 0); });
+      allActiveReturns.forEach(r => {
+        const rItems = safeParseJson(r.returned_items, []);
+        rItems.forEach(ri => { totalReturnedQty += Number(ri.qty || 0); });
+      });
+
+      let newStatus = sale.status;
+      if (totalReturnedQty === 0) {
+        newStatus = 'Paid';
+      } else if (totalReturnedQty >= totalOriginalQty && totalOriginalQty > 0) {
+        newStatus = 'Fully Returned';
+      } else {
+        newStatus = 'Partially Returned';
+      }
+      await db.run('UPDATE sales SET status = ? WHERE id = ?', [newStatus, sale.id]);
+    }
+
+    await logAudit(user, 'VOID_SALES_RETURN', `Voided Sales Return ${id} for Invoice ${sr.invoice_no}. Reason: ${reason || 'N/A'}`);
 
     await db.run('COMMIT');
     res.json({ success: true });
@@ -3131,6 +3430,67 @@ app.put('/api/permissions', async (req, res) => {
   }
 });
 
+// SYSTEM DATA RESET ENDPOINT
+app.post('/api/system/reset-data', async (req, res) => {
+  const { mode, user_email, passkey } = req.body;
+  
+  try {
+    const settings = await db.get("SELECT * FROM system_settings WHERE id = 'global'");
+    const validPasskey = settings?.void_passkey || settings?.return_passkey || '1234';
+    if (passkey && passkey.trim() !== validPasskey) {
+      return res.status(401).json({ error: 'Invalid Security Passkey! Reset operation denied.' });
+    }
+
+    await db.run('BEGIN TRANSACTION');
+
+    if (mode === 'full_reset' || mode === 'customer_handoff') {
+      await db.run('DELETE FROM sales');
+      await db.run('DELETE FROM sales_returns');
+      await db.run('DELETE FROM credit_payments');
+      await db.run('DELETE FROM transactions');
+      await db.run('DELETE FROM audit_logs');
+      await db.run('DELETE FROM bill_holds');
+      await db.run('DELETE FROM quotations');
+      await db.run('DELETE FROM delivery_notes');
+      await db.run('DELETE FROM purchase_orders');
+      await db.run('DELETE FROM products');
+      await db.run('DELETE FROM customers');
+      await db.run('DELETE FROM suppliers');
+      await db.run('DELETE FROM employees');
+      await db.run('DELETE FROM backup_logs');
+      await db.run("UPDATE system_settings SET next_invoice_number = 'INV001'");
+    } else if (mode === 'sales_inventory') {
+      await db.run('DELETE FROM sales');
+      await db.run('DELETE FROM sales_returns');
+      await db.run('DELETE FROM credit_payments');
+      await db.run('DELETE FROM transactions');
+      await db.run('DELETE FROM audit_logs');
+      await db.run('DELETE FROM bill_holds');
+      await db.run('DELETE FROM products');
+    } else {
+      await db.run('DELETE FROM sales');
+      await db.run('DELETE FROM sales_returns');
+      await db.run('DELETE FROM credit_payments');
+      await db.run('DELETE FROM transactions');
+      await db.run('DELETE FROM audit_logs');
+      await db.run('DELETE FROM bill_holds');
+      await db.run('UPDATE customers SET current_credit = 0, credit_balance = 0');
+    }
+
+    const auditId = 'al_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    await db.run(
+      'INSERT INTO audit_logs (id, user_email, action, details) VALUES (?, ?, ?, ?)',
+      [auditId, user_email || 'System', 'SYSTEM_RESET', `Performed system data reset (Mode: ${mode || 'transactions_only'})`]
+    );
+
+    await db.run('COMMIT');
+    res.json({ success: true, message: 'System data reset successfully completed.' });
+  } catch (err) {
+    await db.run('ROLLBACK');
+    res.status(500).json({ error: 'Failed to reset data: ' + err.message });
+  }
+});
+
 // AUDIT LOGS API
 app.get('/api/audit_logs', async (req, res) => {
   try {
@@ -3237,11 +3597,11 @@ app.get('/api/bill_holds', async (req, res) => {
 });
 
 app.post('/api/bill_holds', async (req, res) => {
-  const { id, hold_name, customer_id, customer_name, items, subtotal, discount, tax, total_amount } = req.body;
+  const { id, hold_name, customer_id, customer_name, items, subtotal, discount, tax, total_amount, transportation_fee } = req.body;
   const created_at = new Date().toISOString();
   try {
     await db.run(
-      'INSERT INTO bill_holds (id, hold_name, customer_id, customer_name, items, subtotal, discount, tax, total_amount, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO bill_holds (id, hold_name, customer_id, customer_name, items, subtotal, discount, tax, total_amount, transportation_fee, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         id || 'hb_' + Date.now(),
         hold_name,
@@ -3252,6 +3612,7 @@ app.post('/api/bill_holds', async (req, res) => {
         discount,
         tax,
         total_amount,
+        transportation_fee || 0,
         created_at
       ]
     );

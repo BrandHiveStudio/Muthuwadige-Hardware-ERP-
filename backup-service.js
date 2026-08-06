@@ -7,6 +7,13 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import XLSX from 'xlsx-js-style';
 import fs from 'fs';
+const isDecimalUnit = (unit) => {
+  if (!unit) return false;
+  const PREDEFINED_UNITS = ['pcs', 'kg', 'g', 'liters', 'ml', 'meters', 'boxes', 'packets', 'rolls', 'bundles'];
+  const decimals = ['kg', 'g', 'liters', 'ml', 'meters'];
+  const name = unit.toLowerCase().trim();
+  return decimals.includes(name) || !PREDEFINED_UNITS.includes(name);
+};
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
@@ -423,17 +430,30 @@ const performBackup = async (fromDate = null, toDate = null) => {
         if (Array.isArray(items)) {
           items.forEach(it => {
             const product = products.find(p => p.id === it.productId || p.id === it.product_id);
-            let cost = product ? Number(product.cost_price || 0) : 0;
-            if (product && (product.unit?.toLowerCase() === 'cube' || product.unit?.toLowerCase() === 'cubes')) {
-              const uLower = (it.unit || '').toLowerCase();
-              if (uLower === 'bucket' || uLower === 'buckets') {
-                cost = cost / 20;
-              } else if (uLower === 'shovel' || uLower === 'shovels') {
-                cost = cost / 1000;
+            let baseCost = product ? Number(product.cost_price || 0) : 0;
+            let convRate = Number(it.conversionRate) || 1;
+            if (product && (!it.conversionRate || convRate === 1) && (it.unit && it.unit.toLowerCase() !== (product.unit || '').toLowerCase())) {
+              const measureDetailsStr = product.measure_details || product.measureDetails;
+              if (measureDetailsStr) {
+                try {
+                  const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
+                  if (parsed && Array.isArray(parsed.conversions)) {
+                    const matchedConv = parsed.conversions.find(c => (c.unit || '').toLowerCase() === it.unit.toLowerCase());
+                    if (matchedConv) {
+                      const rawVal = Number(matchedConv.kgVal) || 1;
+                      if ((product.unit || '').toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
+                        convRate = 1 / rawVal;
+                      } else {
+                        convRate = rawVal;
+                      }
+                    }
+                  }
+                } catch (e) {}
               }
             }
+            const unitCost = convRate > 0 ? baseCost / convRate : baseCost;
             const qty = Number(it.qty || 1);
-            totalCostOfSales += qty * cost;
+            totalCostOfSales += qty * unitCost;
           });
         }
       } catch (err) {}
@@ -451,18 +471,31 @@ const performBackup = async (fromDate = null, toDate = null) => {
         if (Array.isArray(items)) {
           items.forEach(it => {
             const product = products.find(p => p.id === it.productId || p.id === it.product_id);
-            let cost = product ? Number(product.cost_price || 0) : 0;
-            if (product && (product.unit?.toLowerCase() === 'cube' || product.unit?.toLowerCase() === 'cubes')) {
-              const uLower = (it.unit || '').toLowerCase();
-              if (uLower === 'bucket' || uLower === 'buckets') {
-                cost = cost / 20;
-              } else if (uLower === 'shovel' || uLower === 'shovels') {
-                cost = cost / 1000;
+            let baseCost = product ? Number(product.cost_price || 0) : 0;
+            let convRate = Number(it.conversionRate) || 1;
+            if (product && (!it.conversionRate || convRate === 1) && (it.unit && it.unit.toLowerCase() !== (product.unit || '').toLowerCase())) {
+              const measureDetailsStr = product.measure_details || product.measureDetails;
+              if (measureDetailsStr) {
+                try {
+                  const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
+                  if (parsed && Array.isArray(parsed.conversions)) {
+                    const matchedConv = parsed.conversions.find(c => (c.unit || '').toLowerCase() === it.unit.toLowerCase());
+                    if (matchedConv) {
+                      const rawVal = Number(matchedConv.kgVal) || 1;
+                      if ((product.unit || '').toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
+                        convRate = 1 / rawVal;
+                      } else {
+                        convRate = rawVal;
+                      }
+                    }
+                  }
+                } catch (e) {}
               }
             }
+            const unitCost = convRate > 0 ? baseCost / convRate : baseCost;
             const price = Number(it.price || 0);
             const qty = Number(it.qty || 0);
-            totalSalesProfit += qty * (price - cost);
+            totalSalesProfit += qty * (price - unitCost);
           });
         }
       } catch (err) {
@@ -599,12 +632,23 @@ const performBackup = async (fromDate = null, toDate = null) => {
               items.forEach(it => {
                 const product = products.find(p => p.id === it.productId || p.id === it.product_id);
                 let cost = product ? Number(product.cost_price || 0) : 0;
-                if (product && (product.unit?.toLowerCase() === 'cube' || product.unit?.toLowerCase() === 'cubes')) {
-                  const uLower = (it.unit || '').toLowerCase();
-                  if (uLower === 'bucket' || uLower === 'buckets') {
-                    cost = cost / 20;
-                  } else if (uLower === 'shovel' || uLower === 'shovels') {
-                    cost = cost / 1000;
+                if (product) {
+                  const measureDetailsStr = product.measure_details || product.measureDetails;
+                  if (measureDetailsStr) {
+                    try {
+                      const parsed = JSON.parse(measureDetailsStr);
+                      if (parsed && Array.isArray(parsed.conversions)) {
+                        const matchedConv = parsed.conversions.find(c => c.unit.toLowerCase() === (it.unit || '').toLowerCase());
+                        if (matchedConv) {
+                          const rate = Number(matchedConv.kgVal) || 1;
+                          if (isDecimalUnit(product.unit)) {
+                            cost = cost / rate;
+                          } else {
+                            cost = cost * rate;
+                          }
+                        }
+                      }
+                    } catch (e) {}
                   }
                 }
                 const qty = Number(it.qty || 1);

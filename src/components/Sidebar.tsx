@@ -24,7 +24,7 @@ interface SidebarProps {
   onLogout: () => void;
   isOpen: boolean;
   onClose: () => void;
-  setSalesTab?: (tab: 'new' | 'history' | 'credit' | 'quotes' | 'delivery') => void;
+  setSalesTab?: (tab: 'new' | 'history' | 'credit' | 'credit_history' | 'quotes') => void;
 }
 
 interface NavItem {

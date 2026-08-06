@@ -194,8 +194,9 @@ export function Customers() {
 
   const customerBalances = customers.map(customer => {
     const unpaidSales = allSales.filter(s => {
+      const statusLower = s.status?.toLowerCase();
       const isUnpaid = s.customer_id === customer.id && 
-        (s.status?.toLowerCase() === 'non paid' || s.status?.toLowerCase() === 'non-paid' || s.status?.toLowerCase() === 'pending' || !s.status);
+        (statusLower === 'non paid' || statusLower === 'non-paid' || statusLower === 'pending' || statusLower === 'partially returned' || statusLower === 'fully returned' || !s.status);
       if (!isUnpaid) return false;
 
       // Filter by selected date range
@@ -297,7 +298,35 @@ export function Customers() {
       for (const id of invoicesFullySettled) {
         const sale = sortedUnpaid.find(s => s.id === id);
         const saleTotal = sale ? (sale.total_amount || sale.total || 0) : 0;
+        const alreadyPaid = sale ? (sale.payment_received || 0) : 0;
+        const paidThisTime = Math.max(0, saleTotal - alreadyPaid);
+
         await supabase.from('sales').update({ status: 'Paid', payment_received: saleTotal }).eq('id', id);
+
+        // Record income transaction for Cash Book / Finance / Dashboard
+        await supabase.from('transactions').insert([{
+          id: 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+          type: 'income',
+          category: 'Sales Income (Credit Settlement)',
+          description: `Credit Settlement for Invoice ${sale?.invoice_no || sale?.invoiceNo || id} (${settleCustomer.name})`,
+          amount: paidThisTime,
+          date: new Date().toLocaleDateString('sv-SE'),
+          reference: sale?.invoice_no || sale?.invoiceNo || id
+        }]);
+
+        // Record Credit Payment History log
+        await supabase.from('credit_payments').insert([{
+          id: 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+          sale_id: id,
+          invoice_no: sale?.invoice_no || sale?.invoiceNo || id,
+          customer_id: settleCustomer.id,
+          customer_name: settleCustomer.name,
+          amount_paid: paidThisTime,
+          remaining_balance: 0,
+          payment_method: 'Cash',
+          payment_date: new Date().toISOString(),
+          recorded_by: 'system'
+        }]);
       }
 
       // If there's remaining money and still unpaid invoices, record partial payment on the next invoice
@@ -314,11 +343,61 @@ export function Customers() {
           await supabase.from('sales').update({ status: 'Paid', payment_received: nextTotal }).eq('id', nextInvoice.id);
           settledInvoicesInfo.push({ invoiceNo: nextInvoice.invoice_no || nextInvoice.invoiceNo || nextInvoice.id, amount: remainingOnNext });
           invoicesFullySettled.push(nextInvoice.id);
+
+          await supabase.from('transactions').insert([{
+            id: 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+            type: 'income',
+            category: 'Sales Income (Credit Settlement)',
+            description: `Credit Settlement for Invoice ${nextInvoice.invoice_no || nextInvoice.invoiceNo} (${settleCustomer.name})`,
+            amount: remainingOnNext,
+            date: new Date().toLocaleDateString('sv-SE'),
+            reference: nextInvoice.invoice_no || nextInvoice.invoiceNo
+          }]);
+
+          await supabase.from('credit_payments').insert([{
+            id: 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+            sale_id: nextInvoice.id,
+            invoice_no: nextInvoice.invoice_no || nextInvoice.invoiceNo,
+            customer_id: settleCustomer.id,
+            customer_name: settleCustomer.name,
+            amount_paid: remainingOnNext,
+            remaining_balance: 0,
+            payment_method: 'Cash',
+            payment_date: new Date().toISOString(),
+            recorded_by: 'system'
+          }]);
+
           remainingToPay = remainingToPay - remainingOnNext;
         } else {
-          // Partial payment on this invoice — store partial amount
-          await supabase.from('sales').update({ payment_received: newPaid }).eq('id', nextInvoice.id);
+          // Partial payment on this invoice — store partial amount, status remains Non Paid
+          await supabase.from('sales').update({ status: 'Non Paid', payment_received: newPaid }).eq('id', nextInvoice.id);
           settledInvoicesInfo.push({ invoiceNo: nextInvoice.invoice_no || nextInvoice.invoiceNo || nextInvoice.id, amount: remainingToPay });
+
+          const remainingBal = Math.max(0, nextTotal - newPaid);
+
+          await supabase.from('transactions').insert([{
+            id: 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+            type: 'income',
+            category: 'Sales Income (Partial Credit Settlement)',
+            description: `Partial Credit Payment for Invoice ${nextInvoice.invoice_no || nextInvoice.invoiceNo} (${settleCustomer.name})`,
+            amount: remainingToPay,
+            date: new Date().toLocaleDateString('sv-SE'),
+            reference: nextInvoice.invoice_no || nextInvoice.invoiceNo
+          }]);
+
+          await supabase.from('credit_payments').insert([{
+            id: 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+            sale_id: nextInvoice.id,
+            invoice_no: nextInvoice.invoice_no || nextInvoice.invoiceNo,
+            customer_id: settleCustomer.id,
+            customer_name: settleCustomer.name,
+            amount_paid: remainingToPay,
+            remaining_balance: remainingBal,
+            payment_method: 'Cash',
+            payment_date: new Date().toISOString(),
+            recorded_by: 'system'
+          }]);
+
           remainingToPay = 0;
         }
       }
@@ -464,6 +543,10 @@ export function Customers() {
         <body>
           <div class="receipt-container">
             <div class="header">
+              ${shopSettings?.logo_path ? 
+                `<img src="${shopSettings.logo_path}" alt="Shop Logo" style="max-width: 50px; max-height: 50px; object-fit: contain; display: block; margin: 0 auto 8px auto;" onerror="this.style.display='none';" />` : 
+                `<img src="./images/logo.png" alt="Shop Logo" style="max-width: 50px; max-height: 50px; object-fit: contain; display: block; margin: 0 auto 8px auto;" onerror="this.style.display='none';" />`
+              }
               <h1>${shopName}</h1>
               <p>${shopAddress}</p>
               <p>Contact: ${shopPhone}</p>
@@ -576,7 +659,35 @@ export function Customers() {
       for (const id of selectedInvoiceIds) {
         const sale = selectedSales.find((s: any) => s.id === id);
         const saleTotal = sale ? (sale.total_amount || sale.total || 0) : 0;
+        const alreadyPaid = sale ? (sale.payment_received || 0) : 0;
+        const paidThisTime = Math.max(0, saleTotal - alreadyPaid);
+
         await supabase.from('sales').update({ status: 'Paid', payment_received: saleTotal }).eq('id', id);
+
+        // Record income transaction for Cash Book / Finance / Dashboard
+        await supabase.from('transactions').insert([{
+          id: 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+          type: 'income',
+          category: 'Sales Income (Credit Settlement)',
+          description: `Credit Settlement for Invoice ${sale?.invoice_no || sale?.invoiceNo || id} (${settleCustomer.name})`,
+          amount: paidThisTime,
+          date: new Date().toLocaleDateString('sv-SE'),
+          reference: sale?.invoice_no || sale?.invoiceNo || id
+        }]);
+
+        // Record Credit Payment History log
+        await supabase.from('credit_payments').insert([{
+          id: 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+          sale_id: id,
+          invoice_no: sale?.invoice_no || sale?.invoiceNo || id,
+          customer_id: settleCustomer.id,
+          customer_name: settleCustomer.name,
+          amount_paid: paidThisTime,
+          remaining_balance: 0,
+          payment_method: 'Cash',
+          payment_date: new Date().toISOString(),
+          recorded_by: 'system'
+        }]);
       }
 
       const allUnpaidTotal = settleCustomer.unpaidSales.reduce((sum: number, s: any) => {

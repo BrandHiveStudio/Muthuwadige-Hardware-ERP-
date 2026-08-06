@@ -16,7 +16,8 @@ import {
   AlertTriangleIcon,
   TrendingUpIcon,
   CheckSquareIcon,
-  ArrowRightIcon
+  ArrowRightIcon,
+  HistoryIcon
 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { notify } from '../components/Notifications';
@@ -25,11 +26,11 @@ import { useCurrency } from '../context/CurrencyContext';
 import { API_URL } from '../lib/api'; 
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import type { SaleOrder, SaleItem, Customer, Product, Quotation, DeliveryNote } from '../types';
+import type { SaleOrder, SaleItem, Customer, Product, Quotation, DeliveryNote, SalesReturn } from '../types';
 import { sinhalaFontBase64 } from '../utils/sinhalaFontBase64';
 import html2canvas from 'html2canvas';
 
-type Tab = 'new' | 'history' | 'credit' | 'quotes' | 'delivery';
+type Tab = 'new' | 'history' | 'credit' | 'credit_history' | 'quotes' | 'returns';
 
 const statusColors: Record<string, string> = {
   paid: 'bg-emerald-100 text-emerald-700',
@@ -360,13 +361,13 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
           }
           .logo-container {
             position: absolute;
-            right: 60px;
+            right: 50px;
             top: 0;
-            width: 110px;
-            height: 140px;
-            background: #ffffff;
-            border-bottom-left-radius: 8px;
-            border-bottom-right-radius: 8px;
+            width: 240px;
+            height: 275px;
+            background: #000000;
+            border-bottom-left-radius: 14px;
+            border-bottom-right-radius: 14px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -375,6 +376,14 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
             border-top: none;
             z-index: 100;
             box-sizing: border-box;
+            padding: 6px;
+          }
+          .logo-container img {
+            width: 100%;
+            height: 100%;
+            max-width: 228px;
+            max-height: 263px;
+            object-fit: contain;
           }
           .details-section {
             padding: 50px 40px 30px 40px;
@@ -513,7 +522,7 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
               <p>${shopSettings?.address || '123 Main Road, Colombo'}</p>
               <p>Tel: ${shopSettings?.phone || '+94 77 123 4567'} | Email: ${shopSettings?.email || 'info@mutuwadige.lk'}</p>
             </div>
-            ${shopSettings?.logo_path ? `<div class="logo-container"><img src="${shopSettings.logo_path}" style="max-width: 90px; max-height: 120px; object-fit: contain;" /></div>` : ''}
+            ${shopSettings?.logo_path ? `<div class="logo-container"><img src="${shopSettings.logo_path}" style="width: 100%; height: 100%; max-width: 228px; max-height: 263px; object-fit: contain;" /></div>` : ''}
           </div>
           
           <div class="details-section">
@@ -875,11 +884,11 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
             position: absolute;
             right: 60px;
             top: 0;
-            width: 110px;
-            height: 140px;
-            background: #ffffff;
-            border-bottom-left-radius: 8px;
-            border-bottom-right-radius: 8px;
+            width: 165px;
+            height: 210px;
+            background: #000000;
+            border-bottom-left-radius: 10px;
+            border-bottom-right-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -888,6 +897,12 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
             border-top: none;
             z-index: 100;
             box-sizing: border-box;
+            padding: 10px;
+          }
+          .logo-container img {
+            max-width: 140px;
+            max-height: 185px;
+            object-fit: contain;
           }
           .details-section {
             padding: 50px 40px 30px 40px;
@@ -1002,7 +1017,7 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
               <p>${shopSettings?.address || '123 Main Road, Colombo'}</p>
               <p>Tel: ${shopSettings?.phone || '+94 77 123 4567'} | Email: ${shopSettings?.email || 'info@mutuwadige.lk'}</p>
             </div>
-            ${shopSettings?.logo_path ? `<div class="logo-container"><img src="${shopSettings.logo_path}" style="max-width: 90px; max-height: 120px; object-fit: contain;" /></div>` : ''}
+            ${shopSettings?.logo_path ? `<div class="logo-container"><img src="${shopSettings.logo_path}" style="width: 100%; height: 100%; max-width: 228px; max-height: 263px; object-fit: contain;" /></div>` : ''}
           </div>
           
           <div class="details-section">
@@ -1404,13 +1419,13 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
           }
           .logo-container {
             position: absolute;
-            right: 60px;
+            right: 50px;
             top: 0;
-            width: 110px;
-            height: 140px;
-            background: #ffffff;
-            border-bottom-left-radius: 8px;
-            border-bottom-right-radius: 8px;
+            width: 240px;
+            height: 280px;
+            background: #000000;
+            border-bottom-left-radius: 14px;
+            border-bottom-right-radius: 14px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -1419,14 +1434,17 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
             border-top: none;
             z-index: 100;
             box-sizing: border-box;
+            padding: 6px;
           }
           .logo-container img {
-            max-width: 90px;
-            max-height: 120px;
+            width: 100%;
+            height: 100%;
+            max-width: 228px;
+            max-height: 268px;
             object-fit: contain;
           }
           .invoice-title-wrapper {
-            margin-top: 50px;
+            margin-top: 100px;
             text-align: center;
           }
           .invoice-title {
@@ -1632,6 +1650,8 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
             <div class="bill-to">
               <h2>${billTo}</h2>
               <p>${order.customerName}</p>
+              ${(order.customerPhone || order.customer_phone) ? `<p style="font-size: 11px; color: #4b5563; margin-top: 3px; font-weight: 600;">Tel: ${order.customerPhone || order.customer_phone}</p>` : ''}
+              ${(order.customerAddress || order.customer_address) ? `<p style="font-size: 11px; color: #4b5563; margin-top: 2px;">Address: ${order.customerAddress || order.customer_address}</p>` : ''}
             </div>
             <div class="invoice-details">
               <table>
@@ -1737,7 +1757,7 @@ function ReceiptPreview({ order, isSinhala }: { order: SaleOrder; isSinhala: boo
           <p className="text-[10px] opacity-90 m-0 mt-0.5 font-semibold">Contact: 077 076 076 7</p>
         </div>
         {/* White Protruding Logo Container */}
-        <div className="absolute right-8 top-0 bg-white border border-gray-200 border-t-0 rounded-b-lg w-[85px] h-[115px] flex items-center justify-center shadow-md z-10 p-2">
+        <div className="absolute right-8 top-0 bg-black border border-gray-900 border-t-0 rounded-b-lg w-[102px] h-[138px] flex items-center justify-center shadow-md z-10 p-2">
           <img src="./images/logo.png" alt="Logo" className="max-w-full max-h-full object-contain" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
         </div>
       </div>
@@ -1762,6 +1782,12 @@ function ReceiptPreview({ order, isSinhala }: { order: SaleOrder; isSinhala: boo
         <div>
           <h3 className="text-[#595959] text-[9px] font-black uppercase tracking-wider mb-1">{isSinhala ? 'පාරිභෝගිකයා:' : 'BILL TO:'}</h3>
           <p className="text-[#2c2c2c] font-black text-sm">{order.customerName}</p>
+          {(order.customerPhone || order.customer_phone) && (
+            <p className="text-gray-500 font-bold text-xs mt-0.5">Tel: {order.customerPhone || order.customer_phone}</p>
+          )}
+          {(order.customerAddress || order.customer_address) && (
+            <p className="text-gray-500 font-bold text-xs mt-0.5">Address: {order.customerAddress || order.customer_address}</p>
+          )}
         </div>
         <div className="text-right text-gray-500 font-semibold space-y-1">
           <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'ඉන්වොයිස් අංකය:' : 'Invoice No:'}</span> {order.invoiceNo}</p>
@@ -1833,6 +1859,11 @@ function ReceiptPreview({ order, isSinhala }: { order: SaleOrder; isSinhala: boo
   );
 }
 
+interface SalesProps {
+  userRole?: string;
+  initialTab?: Tab;
+}
+
 interface UnitOption {
   unit: string;
   conversionRate: number;
@@ -1855,67 +1886,51 @@ const unitTranslations: Record<string, string> = {
 const getUnitOptions = (product: Product | undefined): UnitOption[] => {
   if (!product) return [];
   const options: UnitOption[] = [];
-  const predefined = ['pcs', 'kg', 'g', 'liters', 'ml', 'meters', 'boxes', 'packets', 'rolls', 'bundles'];
-  if (!predefined.includes(product.unit)) {
-    let rate = 1;
-    let extra: { unit: string; kgVal: number; price?: number }[] = [];
-    if (product.measureDetails) {
-      try {
-        const parsed = JSON.parse(product.measureDetails);
-        rate = Number(parsed.conversionRate) || 1;
-        extra = parsed.conversions || [];
-      } catch (e) {
-        const parsedRate = parseFloat(product.measureDetails);
-        rate = isNaN(parsedRate) ? 1 : parsedRate;
-      }
-    }
-    
-    const isCubeUnit = product.unit.toLowerCase() === 'cube';
-    options.push({ 
-      unit: product.unit, 
-      conversionRate: isCubeUnit ? 1 : rate, 
-      price: product.price 
-    });
-    
-    extra.forEach(c => {
-      if (isCubeUnit) {
-        const optRate = 1 / (Number(c.kgVal) || 1);
-        const optPrice = c.price !== undefined ? Number(c.price) : product.price / (Number(c.kgVal) || 1);
-        options.push({
-          unit: c.unit,
-          conversionRate: optRate,
-          price: optPrice
-        });
-      } else {
-        options.push({ 
-          unit: c.unit, 
-          conversionRate: Number(c.kgVal) || 1, 
-          price: c.price !== undefined ? Number(c.price) : undefined 
-        });
-      }
-    });
-  } else {
-    options.push({ unit: product.unit, conversionRate: 1, price: product.price });
+
+  // Always add Base Purchase Unit first
+  options.push({
+    unit: product.unit,
+    conversionRate: 1,
+    price: product.price
+  });
+
+  const detailsStr = product.measureDetails || (product as any).measure_details;
+  if (detailsStr) {
+    try {
+      const parsed = typeof detailsStr === 'string' ? JSON.parse(detailsStr) : detailsStr;
+      const extraConversions: { unit: string; kgVal: number; price?: number }[] = parsed?.conversions || [];
+
+      extraConversions.forEach((c) => {
+        if (!c.unit || c.unit.toLowerCase() === product.unit.toLowerCase()) return;
+        const rawVal = Number(c.kgVal) || 1;
+        
+        let convRate = rawVal;
+        if (product.unit.toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
+          convRate = 1 / rawVal;
+        }
+
+        const childPrice = (c.price !== undefined && c.price !== null && Number(c.price) > 0)
+          ? Number(c.price)
+          : (product.price / convRate);
+
+        if (!options.some(o => o.unit.toLowerCase() === c.unit.toLowerCase())) {
+          options.push({
+            unit: c.unit,
+            conversionRate: convRate,
+            price: childPrice
+          });
+        }
+      });
+    } catch (e) {}
   }
+
   return options;
 };
 
-export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
-  const { exchangeRate = 300 } = useCurrency(); 
-  
+
+export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' }: SalesProps) {
+  const [userRole, setUserRole] = useState(initialUserRole);
   const [tab, setTab] = useState<Tab>(initialTab);
-
-  const [userRole, setUserRole] = useState<string>(() => {
-    try {
-      const localUserStr = localStorage.getItem('erp_user');
-      if (localUserStr) {
-        const user = JSON.parse(localUserStr);
-        return user.role || '';
-      }
-    } catch (e) {}
-    return '';
-  });
-
   useEffect(() => {
     const checkUser = async () => {
       try {
@@ -1931,7 +1946,7 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
   }, []);
 
   useEffect(() => {
-    if (userRole === 'cashier' && (tab === 'history' || tab === 'delivery')) {
+    if (userRole === 'cashier' && tab === 'history') {
       setTab('new');
     }
   }, [tab, userRole]);
@@ -1940,7 +1955,7 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
 
   useEffect(() => {
     if (initialTab) {
-      if (userRole === 'cashier' && (initialTab === 'history' || initialTab === 'delivery')) {
+      if (userRole === 'cashier' && initialTab === 'history') {
         setTab('new');
       } else {
         setTab(initialTab);
@@ -1967,9 +1982,26 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
   
   const [isGuest, setIsGuest] = useState(false);
   const [guestName, setGuestName] = useState('Guest Customer');
+  const [guestPhone, setGuestPhone] = useState('');
+  const [guestAddress, setGuestAddress] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   
   const [cartItems, setCartItems] = useState<SaleItem[]>([]);
+  const updateDiscount = (idOrIndex: string | number, val: number | string, type: 'percent' | 'amount' | 'fixed') => {
+    const numVal = typeof val === 'number' ? val : parseFloat(val) || 0;
+    const normType: 'percent' | 'amount' = type === 'fixed' ? 'amount' : type;
+    const updated = [...cartItems];
+    const index = typeof idOrIndex === 'number' ? idOrIndex : updated.findIndex(i => i.productId === idOrIndex);
+    if (index === -1) return;
+    updated[index].discount = numVal;
+    updated[index].discountType = normType;
+    const price = updated[index].price || 0;
+    const qty = updated[index].qty || 1;
+    const baseSubtotal = price * qty;
+    const discountAmt = normType === 'percent' ? (baseSubtotal * numVal) / 100 : numVal;
+    updated[index].total = Math.max(0, baseSubtotal - discountAmt);
+    setCartItems(updated);
+  };
   const [productSearch, setProductSearch] = useState('');
   const [discount, setDiscount] = useState(0);
   const [taxRate, setTaxRate] = useState(0); 
@@ -2010,7 +2042,9 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
   const [creditConversionRate, setCreditConversionRate] = useState<number>(1);
   const [creditQty, setCreditQty] = useState(1);
   const [isCreditLoading, setIsCreditLoading] = useState(false);
-  const [creditCartItems, setCreditCartItems] = useState<SaleItem[]>([]);
+    const [creditCartItems, setCreditCartItems] = useState<SaleItem[]>([]);
+  const [creditTransportationFee, setCreditTransportationFee] = useState<number>(0);
+  const [creditProductSearch, setCreditProductSearch] = useState('');
 
   useEffect(() => {
     if (selectedCreditProduct) {
@@ -2043,12 +2077,91 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
   const [creditPeriodDays, setCreditPeriodDays] = useState(30);
   const [creditTabPeriodDays, setCreditTabPeriodDays] = useState(30);
   const [creditDiscount, setCreditDiscount] = useState(0);
+  const [creditDiscountType, setCreditDiscountType] = useState<'percent' | 'amount'>('amount');
   const [creditTaxRate, setCreditTaxRate] = useState(0);
+
+  // Transportation Fee & Product Selection States
+  const [transportationFee, setTransportationFee] = useState<number>(0);
+  const [selectedIndex, setSelectedIndex] = useState<number>(0);
+
+  // Void Passkey Modal State
+  const [showVoidModal, setShowVoidModal] = useState(false);
+  const [voidPasskeyInput, setVoidPasskeyInput] = useState('');
+  const [targetVoidInvoiceId, setTargetVoidInvoiceId] = useState<string | null>(null);
+  const [targetVoidReturnId, setTargetVoidReturnId] = useState<string | null>(null);
+
+  // Sales Returns State
+  const [salesReturnsList, setSalesReturnsList] = useState<SalesReturn[]>([]);
+  const [returnSearchQuery, setReturnSearchQuery] = useState('');
+  const [targetReturnInvoice, setTargetReturnInvoice] = useState<SaleOrder | null>(null);
+  const [returnQtys, setReturnQtys] = useState<Record<string, number>>({});
+  const [returnMethod, setReturnMethod] = useState<'Cash Refund' | 'Exchange' | 'Credit Note'>('Cash Refund');
+  const [returnReason, setReturnReason] = useState('');
+
+  const fetchSalesReturns = async () => {
+    try {
+      const res = await fetch(`${API_URL}/sales/returns`);
+      if (res.ok) {
+        const data = await res.json();
+        setSalesReturnsList(data || []);
+      }
+    } catch (e) {
+      console.error('Failed to fetch sales returns', e);
+    }
+  };
 
   const calculateDueDate = (days: number) => {
     const d = new Date();
     d.setDate(d.getDate() + days);
     return d.toISOString();
+  };
+
+  const addCreditCartItemDirect = (p: any) => {
+    const itemPrice = p.price !== undefined ? p.price : (p.sellingPrice || 0);
+    const existingIndex = creditCartItems.findIndex(i => i.productId === p.id);
+    if (existingIndex >= 0) {
+      updateCreditQty(existingIndex, creditCartItems[existingIndex].qty + 1);
+    } else {
+      setCreditCartItems([...creditCartItems, {
+        productId: p.id,
+        productName: p.name,
+        qty: 1,
+        price: itemPrice,
+        taxRate: creditTaxRate,
+        total: itemPrice,
+        serialNo: p.serialNo || '',
+        batchCode: p.batchCode || '',
+        unit: p.unit || 'pcs',
+        conversionRate: 1,
+        discount: 0,
+        discountType: 'amount'
+      }]);
+    }
+  };
+
+  const updateCreditQty = (idx: number, qty: number) => {
+    setCreditCartItems(prev => {
+      const updated = [...prev];
+      if (qty <= 0) {
+        updated.splice(idx, 1);
+      } else {
+        const item = updated[idx];
+        const gross = qty * item.price;
+        updated[idx] = { ...item, qty, total: gross };
+      }
+      return updated;
+    });
+  };
+
+  const updateCreditDiscount = (idx: number, discount: number, discountType: 'percent' | 'amount') => {
+    setCreditCartItems(prev => {
+      const updated = [...prev];
+      const item = updated[idx];
+      const gross = item.qty * item.price;
+      const discAmt = discountType === 'percent' ? gross * (discount / 100) : discount;
+      updated[idx] = { ...item, discount, discountType, total: Math.max(0, gross - discAmt) };
+      return updated;
+    });
   };
 
   const addCreditCartItem = () => {
@@ -2061,12 +2174,12 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
     
     // Check if item already in creditCartItems
     const existing = creditCartItems.find(item => item.productId === selectedCreditProduct.id);
-    const existingBaseQty = existing ? existing.qty * (existing.conversionRate || 1) : 0;
-    const addedBaseQty = creditQty * creditConversionRate;
+    const existingBaseQty = existing ? existing.qty / (existing.conversionRate || 1) : 0;
+    const addedBaseQty = creditQty / creditConversionRate;
 
     if (existingBaseQty + addedBaseQty > stockAvailable) {
       const baseStockRemaining = Math.max(0, stockAvailable - existingBaseQty);
-      const stockAvailableInSelectedUnit = baseStockRemaining / creditConversionRate;
+      const stockAvailableInSelectedUnit = baseStockRemaining * creditConversionRate;
       alert(t(
         `Only ${stockAvailableInSelectedUnit.toFixed(2)} ${creditSelectedUnit || selectedCreditProduct.unit}(s) available in stock!`,
         `තොගයේ ඇත්තේ ${stockAvailableInSelectedUnit.toFixed(2)} ${creditSelectedUnit || selectedCreditProduct.unit} ක් පමණි!`
@@ -2075,12 +2188,10 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
     }
     
     const catalogOptions = getUnitOptions(selectedCreditProduct);
-    const primaryOption = catalogOptions[0] || { unit: selectedCreditProduct.unit, conversionRate: 1 };
-    const primaryRate = primaryOption.conversionRate;
     const selectedOpt = catalogOptions.find(o => o.unit === (creditSelectedUnit || selectedCreditProduct.unit));
     const adjustedPrice = (selectedOpt && selectedOpt.price !== undefined)
       ? selectedOpt.price
-      : (selectedCreditProduct.price / primaryRate) * creditConversionRate;
+      : (selectedCreditProduct.price / creditConversionRate);
 
     if (existing) {
       setCreditCartItems(creditCartItems.map(item => 
@@ -2183,20 +2294,27 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
         }
       }
 
-      const creditSubtotal = creditCartItems.reduce((sum, item) => sum + item.total, 0);
-      const creditDiscountAmt = creditSubtotal * (creditDiscount / 100);
-      const creditTaxAmt = (creditSubtotal - creditDiscountAmt) * (creditTaxRate / 100);
-      const creditTotal = creditSubtotal - creditDiscountAmt + creditTaxAmt;
+      const grossCreditSubtotal = creditCartItems.reduce((sum, item) => sum + (item.qty * item.price), 0);
+      const creditTotalDiscount = creditCartItems.reduce((sum, item) => {
+        const gross = item.qty * item.price;
+        const disc = item.discount || 0;
+        const discType = item.discountType || 'amount';
+        const discAmt = discType === 'percent' ? gross * (disc / 100) : disc;
+        return sum + discAmt;
+      }, 0);
+      const creditNetSubtotal = Math.max(0, grossCreditSubtotal - creditTotalDiscount);
+      const creditTaxAmt = applyTax ? creditNetSubtotal * (creditTaxRate / 100) : 0;
+      const creditTotal = creditNetSubtotal + creditTaxAmt + (Number(creditTransportationFee) || 0);
 
       const newOrderData = {
         invoice_no: `INV-${Date.now()}`,
         customer_id: customerId,
         customer_name: finalCustomerName,
         items: creditCartItems,
-        subtotal: creditSubtotal,
-        discount: creditDiscountAmt,
+        subtotal: grossCreditSubtotal,
+        discount: creditTotalDiscount,
         tax: creditTaxAmt,
-        tax_rate: creditTaxRate,
+        tax_rate: applyTax ? creditTaxRate : 0,
         total_amount: creditTotal,
         status: 'Non Paid',
         user_id: user?.id,
@@ -2212,7 +2330,8 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
       for (const item of creditCartItems) {
         const product = products.find(p => p.id === item.productId);
         if (product) {
-          const decr = item.qty * (item.conversionRate || 1);
+          const convRate = item.conversionRate || 1;
+          const decr = convRate > 0 ? (item.qty / convRate) : item.qty;
           await supabase.from('products').update({ stock: Math.max(0, product.stock - decr) }).eq('id', item.productId);
         }
       }
@@ -2226,10 +2345,10 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
         date: new Date().toLocaleDateString(),
         items: creditCartItems,
         created_at: saleRecord.created_at,
-        subtotal: creditSubtotal,
-        discount: creditDiscountAmt,
+        subtotal: grossCreditSubtotal,
+        discount: creditTotalDiscount,
         tax: creditTaxAmt,
-        tax_rate: creditTaxRate,
+        tax_rate: applyTax ? creditTaxRate : 0,
         total: creditTotal,
         status: 'Non Paid',
         due_date: newOrderData.due_date,
@@ -2291,6 +2410,8 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
           ...s,
           invoiceNo: s.invoice_no,
           customerName: s.customerName || s.customer_name || custData?.find((c: any) => c.id === s.customer_id)?.name || 'Guest',
+          customerPhone: s.customerPhone || s.customer_phone || custData?.find((c: any) => c.id === s.customer_id)?.phone || '',
+          customerAddress: s.customerAddress || s.customer_address || custData?.find((c: any) => c.id === s.customer_id)?.address || '',
           date: (() => {
             const d = new Date(s.created_at);
             if (isNaN(d.getTime())) return '';
@@ -2440,6 +2561,14 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
       productSearch.length > 0
   );
 
+  const creditFilteredProducts = products.filter(
+    (p) =>
+      (p.name.toLowerCase().includes(creditProductSearch.toLowerCase()) || 
+       (p.sku && p.sku.toLowerCase().includes(creditProductSearch.toLowerCase())) ||
+       (p.barcode && p.barcode.toLowerCase().includes(creditProductSearch.toLowerCase()))) &&
+      creditProductSearch.length > 0
+  );
+
   const addToCart = (product: Product) => {
     const stockAvailable = Number(product.stock) || 0;
 
@@ -2458,12 +2587,12 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
       const currentCartRate = existing ? (existing.conversionRate || 1) : initialRate;
 
       if (existing) {
-        const existingKg = currentCartQty * currentCartRate;
-        const addedKg = currentCartRate;
+        const existingBaseQty = currentCartQty / currentCartRate;
+        const addedBaseQty = 1 / currentCartRate;
 
-        if (existingKg + addedKg > stockAvailable) {
-          const baseStockRemaining = Math.max(0, stockAvailable - existingKg);
-          const stockAvailableInSelectedUnit = baseStockRemaining / currentCartRate;
+        if (existingBaseQty + addedBaseQty > stockAvailable) {
+          const baseStockRemaining = Math.max(0, stockAvailable - existingBaseQty);
+          const stockAvailableInSelectedUnit = baseStockRemaining * currentCartRate;
           alert(t(
             `Cannot add more. Only ${stockAvailableInSelectedUnit.toFixed(2)} ${existing.unit || product.unit}(s) available in stock!`,
             `වැඩිපුර එකතු කළ නොහැක. තොගයේ ඇත්තේ ${stockAvailableInSelectedUnit.toFixed(2)} ${existing.unit || product.unit} ක් පමණි!`
@@ -2476,7 +2605,7 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
         );
       }
       
-      const initialQty = Math.round(Math.min(1, stockAvailable / initialRate) * 100000) / 100000;
+      const initialQty = 1;
 
       return [...prev, {
         productId: product.id, 
@@ -2500,7 +2629,7 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
     const item = cartItems.find(i => i.productId === productId);
     const conversionRate = item?.conversionRate || 1;
     const baseStock = Number(product.stock) || 0;
-    const stockAvailableInSelectedUnit = Math.round((baseStock / conversionRate) * 100000) / 100000;
+    const stockAvailableInSelectedUnit = Math.round((baseStock * conversionRate) * 100000) / 100000;
     const targetQty = Math.round(Math.max(0, newQty) * 100000) / 100000;
 
     if (targetQty > stockAvailableInSelectedUnit) {
@@ -2518,7 +2647,7 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
   const subtotal = cartItems.reduce((sum, i) => sum + i.total, 0);
   const discountAmt = subtotal * (discount / 100);
   const taxAmt = applyTax ? (subtotal - discountAmt) * (taxRate / 100) : 0;
-  const totalAmountValue = subtotal - discountAmt + taxAmt;
+  const totalAmountValue = subtotal - discountAmt + taxAmt + (Number(transportationFee) || 0);
 
   const processSale = async () => {
     if ((!isGuest && !selectedCustomer) || cartItems.length === 0) {
@@ -2533,10 +2662,18 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
     try {
       const { data: { user } } = await supabase.auth.getUser();
 
+      const finalCustomerName = isGuest 
+        ? (guestName.trim() && guestName.trim() !== 'Guest Customer' ? guestName.trim() : 'Guest Customer')
+        : (selectedCustomer?.name || 'Guest Customer');
+      const finalCustomerPhone = isGuest ? guestPhone.trim() : (selectedCustomer?.phone || '');
+      const finalCustomerAddress = isGuest ? guestAddress.trim() : (selectedCustomer?.address || '');
+
       const newOrderData = {
         invoice_no: `INV-${Date.now()}`,
         customer_id: isGuest ? null : selectedCustomer?.id, 
-        customer_name: isGuest ? guestName : (selectedCustomer?.name || 'Guest Customer'),
+        customer_name: finalCustomerName,
+        customer_phone: finalCustomerPhone,
+        customer_address: finalCustomerAddress,
         items: cartItems,
         subtotal,
         discount: discountAmt,
@@ -2547,7 +2684,8 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
         payment_method: paymentMethod,
         user_id: user?.id,
         due_date: paymentMethod === 'Credit' ? calculateDueDate(creditPeriodDays) : null,
-        credit_period_days: paymentMethod === 'Credit' ? creditPeriodDays : 0
+        credit_period_days: paymentMethod === 'Credit' ? creditPeriodDays : 0,
+        transportation_fee: Number(transportationFee) || 0
       };
 
       const { data: saleRecord, error: saleError } = await supabase.from('sales').insert([newOrderData]).select().single();
@@ -2558,7 +2696,8 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
       for (const item of cartItems) {
         const product = products.find(p => p.id === item.productId);
         if (product) {
-          const decr = item.qty * (item.conversionRate || 1);
+          const convRate = item.conversionRate || 1;
+          const decr = convRate > 0 ? (item.qty / convRate) : item.qty;
           await supabase.from('products').update({ stock: Math.max(0, product.stock - decr) }).eq('id', item.productId);
         }
       }
@@ -2567,7 +2706,11 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
         id: saleRecord.id || `so_${Date.now()}`,
         invoiceNo: saleRecord.invoice_no || saleRecord.invoiceNo || newOrderData.invoice_no,
         customer_id: newOrderData.customer_id || '',
-        customerName: newOrderData.customer_name,
+        customerName: finalCustomerName,
+        customerPhone: finalCustomerPhone,
+        customer_phone: finalCustomerPhone,
+        customerAddress: finalCustomerAddress,
+        customer_address: finalCustomerAddress,
         cashier: user?.email || 'system',
         date: new Date().toLocaleDateString(),
         items: cartItems,
@@ -2588,6 +2731,8 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
       setSelectedCustomer(null);
       setIsGuest(false); 
       setGuestName('Guest Customer');
+      setGuestPhone('');
+      setGuestAddress('');
       setDiscount(0);
       setPaymentMethod('Cash');
       fetchData(); 
@@ -2707,6 +2852,29 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
     }
   };
 
+  const handleVoidSalesReturn = async (returnId: string) => {
+    try {
+      setIsLoading(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      const res = await fetch(`${API_URL}/sales/returns/${returnId}/void`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_email: user?.email || 'system' })
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Failed to void sales return');
+      }
+      alert(t('Sales Return voided successfully!', 'ආපසු භාරගැනීම සාර්ථකව අවලංගු කරන ලදී!'));
+      fetchSalesReturns();
+      fetchData();
+    } catch (err: any) {
+      alert(t('Failed to void return: ', 'අවලංගු කිරීමට නොහැකි විය: ') + err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const normalizeStatus = (status?: string) => (status || '').toLowerCase();
   const filteredOrders = orders.filter((o) => {
     const search = historySearch.toLowerCase();
@@ -2723,10 +2891,15 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
     return matchSearch && matchStatus && matchDate;
   });
 
-  const creditOrders = orders.filter((o) => o.status === 'Non Paid' || o.status === 'Paid');
+  const isCreditOrder = (o: SaleOrder) => 
+    o.payment_method === 'Credit' || 
+    (o as any).is_credit === true || 
+    (o.status === 'Non Paid' && o.payment_method !== 'Cash' && o.payment_method !== 'Card' && o.payment_method !== 'Bank Transfer');
+
+  const creditOrders = orders.filter((o) => isCreditOrder(o));
 
   const filteredCreditOrders = orders.filter(o => {
-    if (o.status !== 'Non Paid' && o.status !== 'Paid') return false;
+    if (!isCreditOrder(o)) return false;
     
     const sDate = o.created_at 
       ? new Date(o.created_at).toLocaleDateString('sv-SE') 
@@ -2760,10 +2933,17 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
   const totalCreditVolume = totalOutstanding + totalCollected;
   const collectionRate = totalCreditVolume > 0 ? (totalCollected / totalCreditVolume) * 100 : 0;
 
-  const creditSubtotal = creditCartItems.reduce((sum, item) => sum + item.total, 0);
-  const creditDiscountAmt = creditSubtotal * (creditDiscount / 100);
-  const creditTaxAmt = (creditSubtotal - creditDiscountAmt) * (creditTaxRate / 100);
-  const creditTotal = creditSubtotal - creditDiscountAmt + creditTaxAmt;
+  const grossCreditSubtotal = creditCartItems.reduce((sum, item) => sum + (item.qty * item.price), 0);
+  const creditTotalDiscount = creditCartItems.reduce((sum, item) => {
+    const gross = item.qty * item.price;
+    const disc = item.discount || 0;
+    const discType = item.discountType || 'amount';
+    const discAmt = discType === 'percent' ? gross * (disc / 100) : disc;
+    return sum + discAmt;
+  }, 0);
+  const creditSubtotal = Math.max(0, grossCreditSubtotal - creditTotalDiscount);
+  const creditTaxAmt = applyTax ? creditSubtotal * (creditTaxRate / 100) : 0;
+  const creditTotal = creditSubtotal + creditTaxAmt + (Number(creditTransportationFee) || 0);
 
   const allFilteredSelected = filteredOrders.length > 0 && filteredOrders.every((order) => selectedHistoryIds.includes(order.id));
 
@@ -2873,7 +3053,6 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
 
   return (
     <div className="p-4 sm:p-6 space-y-4 animate-in fade-in duration-500">
-      
       {/* Header Tabs & Bilingual Switcher */}
       <div className="flex justify-between items-center flex-wrap gap-4 bg-white/95 backdrop-blur-sm p-4 rounded-3xl border border-slate-200/80 shadow-xl shadow-slate-100/30 animate-in fade-in duration-500">
         <div className="flex gap-1.5 bg-slate-100/60 p-1.5 rounded-2xl w-fit border border-slate-200/40 overflow-x-auto max-w-full custom-scrollbar">
@@ -2905,21 +3084,26 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
             {t('Credit', 'ණය')}
           </button>
           <button 
+            onClick={() => setTab('credit_history')} 
+            className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'credit_history' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
+          >
+            <HistoryIcon className="w-4 h-4" />
+            {t('Credit History', 'ණය ඉතිහාසය')}
+          </button>
+          <button 
             onClick={() => setTab('quotes')} 
             className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'quotes' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
           >
             <CheckSquareIcon className="w-4 h-4" />
             {t('Quotations', 'මිල ගණන්')}
           </button>
-          {userRole !== 'cashier' && (
-            <button 
-              onClick={() => setTab('delivery')} 
-              className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'delivery' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
-            >
-              <TrendingUpIcon className="w-4 h-4" />
-              {t('Delivery Notes', 'බෙදාහැරීම් සටහන්')}
-            </button>
-          )}
+          <button 
+            onClick={() => { setTab('returns'); fetchSalesReturns(); }} 
+            className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'returns' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
+          >
+            <ArrowRightIcon className="w-4 h-4 rotate-180 text-amber-500" />
+            {t('Sales Returns', 'ආපසු භාරගැනීම්')}
+          </button>
         </div>
 
         <div className="flex gap-1 bg-slate-100/60 p-1.5 rounded-2xl w-fit border border-slate-200/40">
@@ -2998,14 +3182,37 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
                   </div>
                 </div>
               ) : (
-                <div className="flex gap-2 animate-in slide-in-from-top-2 duration-300">
-                  <input 
-                    type="text" 
-                    value={guestName}
-                    onChange={(e) => setGuestName(e.target.value)}
-                    placeholder={t('Enter Guest Name (Optional)', 'අමුත්තාගේ නම (විකල්ප)')}
-                    className="w-full px-4 py-3.5 bg-slate-50/50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all duration-200 shadow-sm"
-                  />
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 animate-in slide-in-from-top-2 duration-300">
+                  <div>
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1 block">{t('Guest Name (Optional)', 'අමුත්තාගේ නම (විකල්ප)')}</label>
+                    <input 
+                      type="text" 
+                      value={guestName === 'Guest Customer' ? '' : guestName}
+                      onChange={(e) => setGuestName(e.target.value)}
+                      placeholder={t('Enter Guest Name...', 'අමුත්තාගේ නම ඇතුළත් කරන්න...')}
+                      className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all duration-200 shadow-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1 block">{t('Phone Number (Optional)', 'දුරකථන අංකය (විකල්ප)')}</label>
+                    <input 
+                      type="text" 
+                      value={guestPhone}
+                      onChange={(e) => setGuestPhone(e.target.value)}
+                      placeholder={t('Enter Phone Number...', 'දුරකථන අංකය ඇතුළත් කරන්න...')}
+                      className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all duration-200 shadow-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1 block">{t('Address (Optional)', 'ලිපිනය (විකල්ප)')}</label>
+                    <input 
+                      type="text" 
+                      value={guestAddress}
+                      onChange={(e) => setGuestAddress(e.target.value)}
+                      placeholder={t('Enter Address...', 'ලිපිනය ඇතුළත් කරන්න...')}
+                      className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all duration-200 shadow-sm"
+                    />
+                  </div>
                 </div>
               )}
             </div>
@@ -3024,9 +3231,39 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
                   <SearchIcon className="w-5 h-5 text-slate-400" />
                   <input 
                     type="text" 
-                    placeholder={t('Search hardware by name or SKU...', 'නම හෝ SKU මඟින් දෘඩාංග සොයන්න...')} 
+                    placeholder={t('Search hardware by name, SKU or barcode...', 'නම, SKU හෝ බාර්කෝඩ් මඟින් සොයන්න...')} 
                     value={productSearch} 
-                    onChange={(e) => setProductSearch(e.target.value)} 
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setProductSearch(val);
+                      setSelectedIndex(0);
+                      // Auto-add if exact barcode match
+                      if (val.trim()) {
+                        const exactBarcode = products.find(p => p.barcode && p.barcode.trim().toLowerCase() === val.trim().toLowerCase());
+                        if (exactBarcode) {
+                          addToCart(exactBarcode);
+                          setProductSearch('');
+                        }
+                      }
+                    }} 
+                    onKeyDown={(e) => {
+                      if (filteredProducts.length === 0) return;
+                      if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        setSelectedIndex((prev) => (prev + 1) % filteredProducts.length);
+                      } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        setSelectedIndex((prev) => (prev - 1 + filteredProducts.length) % filteredProducts.length);
+                      } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const selected = filteredProducts[selectedIndex] || filteredProducts[0];
+                        if (selected) {
+                          addToCart(selected);
+                          setProductSearch('');
+                          setSelectedIndex(0);
+                        }
+                      }
+                    }}
                     className="bg-transparent text-sm font-bold text-slate-800 outline-none w-full placeholder-slate-400" 
                   />
                   {productSearch && (
@@ -3039,7 +3276,7 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
                 {/* Search Results Dropdown */}
                 {filteredProducts.length > 0 && (
                   <div className="absolute top-full left-0 right-0 mt-2 bg-white/95 backdrop-blur-md border border-slate-200/80 rounded-2xl shadow-2xl z-[100] max-h-64 overflow-y-auto divide-y divide-slate-100/60 animate-in slide-in-from-top-3 duration-300">
-                    {filteredProducts.map((p) => {
+                    {filteredProducts.map((p, index) => {
                       const stockLevel = p.stock;
                       let stockBadge = "bg-emerald-50 text-emerald-600 border border-emerald-100/80";
                       if (stockLevel <= 0) {
@@ -3051,8 +3288,8 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
                       return (
                         <button 
                           key={p.id} 
-                          onClick={() => { addToCart(p); setProductSearch(''); }} 
-                          className="w-full flex items-center justify-between px-5 py-4 hover:bg-slate-50 transition-colors text-left"
+                          onClick={() => { addToCart(p); setProductSearch(''); setSelectedIndex(0); }} 
+                          className={`w-full flex items-center justify-between px-5 py-4 hover:bg-slate-50 transition-colors text-left ${index === selectedIndex ? 'bg-amber-50/80 border-l-4 border-amber-500' : ''}`}
                         >
                           <div className="space-y-1">
                             <p className="text-sm font-black text-slate-800">{p.name}</p>
@@ -3084,6 +3321,7 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
                           <th className="px-5 py-3.5 text-[9px] font-black text-slate-400 uppercase tracking-widest">{t('Product', 'භාණ්ඩය')}</th>
                           <th className="px-4 py-3.5 text-center text-[9px] font-black text-slate-400 uppercase tracking-widest">{t('Quantity', 'ප්‍රමාණය')}</th>
                           <th className="px-4 py-3.5 text-right text-[9px] font-black text-slate-400 uppercase tracking-widest">{t('Price', 'මිල')}</th>
+                          <th className="px-3 py-3.5 text-center text-[9px] font-black text-slate-400 uppercase tracking-widest">{t('Discount', 'වට්ටම්')}</th>
                           <th className="px-4 py-3.5 text-right text-[9px] font-black text-slate-400 uppercase tracking-widest">{t('Total', 'එකතුව')}</th>
                           <th className="w-14 px-4 py-3.5"></th>
                         </tr>
@@ -3093,7 +3331,7 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
                           const prod = products.find(p => p.id === item.productId);
                           const baseStock = prod?.stock || 0;
                           const conversionRate = item.conversionRate || 1;
-                          const maxStockInUnit = Math.round((baseStock / conversionRate) * 100000) / 100000;
+                          const maxStockInUnit = Math.round((baseStock * conversionRate) * 100000) / 100000;
                           return (
                             <tr key={item.productId} className="hover:bg-slate-50/30 transition-colors">
                               <td className="px-5 py-4">
@@ -3110,15 +3348,13 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
                                             const newUnit = e.target.value;
                                             const selectedOpt = opts.find(o => o.unit === newUnit);
                                             if (selectedOpt && prod) {
-                                              const catalogOptions = getUnitOptions(prod);
-                                              const primaryOption = catalogOptions[0] || { unit: prod.unit, conversionRate: 1 };
-                                              const primaryRate = primaryOption.conversionRate;
                                               const newRate = selectedOpt.conversionRate;
                                               const newPrice = selectedOpt.price !== undefined 
                                                 ? selectedOpt.price 
-                                                : (prod.price / primaryRate) * newRate;
+                                                : (prod.price / newRate);
                                               
-                                              const newQty = Math.round(((item.qty * (item.conversionRate || 1)) / newRate) * 100000) / 100000;
+                                              const baseQty = item.qty / (item.conversionRate || 1);
+                                              const newQty = Math.round((baseQty * newRate) * 100000) / 100000;
                                               setCartItems(prev => prev.map(i => 
                                                 i.productId === item.productId 
                                                   ? { 
@@ -3190,6 +3426,26 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
                                 </div>
                               </td>
                               <td className="px-4 py-4 text-right font-bold text-slate-500 text-xs">{symbol} {convert(item.price).toLocaleString()}</td>
+                              <td className="px-3 py-4 text-center">
+                                <div className="inline-flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-xl p-1 shadow-inner">
+                                  <input 
+                                    type="number" 
+                                    min={0} 
+                                    step="any"
+                                    placeholder="0" 
+                                    value={item.discount || ''} 
+                                    onChange={(e) => updateDiscount(item.productId, parseFloat(e.target.value) || 0, item.discountType || 'percent')} 
+                                    className="w-12 text-center bg-transparent border-0 font-bold text-slate-800 outline-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+                                  />
+                                  <button 
+                                    type="button" 
+                                    onClick={() => updateDiscount(item.productId, item.discount || 0, (item.discountType || 'percent') === 'percent' ? 'amount' : 'percent')} 
+                                    className="px-1.5 py-0.5 bg-white border border-slate-200 rounded-lg text-[10px] font-black text-amber-600 hover:bg-slate-100 transition-colors shadow-sm"
+                                  >
+                                    {(item.discountType || 'percent') === 'percent' ? '%' : symbol}
+                                  </button>
+                                </div>
+                              </td>
                               <td className="px-4 py-4 text-right font-black text-slate-800 text-sm">{symbol} {convert(item.total).toLocaleString()}</td>
                               <td className="px-4 py-4 text-center">
                                 <button 
@@ -3246,13 +3502,13 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
 
               <div className="grid grid-cols-1 gap-4 bg-slate-50/50 p-4 rounded-2xl border border-slate-100 shadow-sm">
                 <div>
-                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1 block">{t('Discount (%)', 'වට්ටම් (%)')}</label>
+                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1 block">{t('Transportation Fee (Rs.)', 'ප්‍රවාහන ගාස්තුව (රු.)')}</label>
                   <input 
                     type="number" 
                     min={0} 
-                    max={100} 
-                    value={discount} 
-                    onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)} 
+                    value={transportationFee || ''} 
+                    onChange={(e) => setTransportationFee(parseFloat(e.target.value) || 0)} 
+                    placeholder="0.00"
                     className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm" 
                   />
                 </div>
@@ -3460,6 +3716,7 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
                       <th className="px-6 py-4.5">{t('Invoice', 'ඉන්වොයිසිය')}</th>
                       <th className="px-6 py-4.5">{t('Date', 'දිනය')}</th>
                       <th className="px-6 py-4.5">{t('Customer', 'පාරිභෝගිකයා')}</th>
+                      <th className="px-6 py-4.5 text-center">{t('Sale Type', 'වර්ගය')}</th>
                       <th className="px-6 py-4.5 text-center">{t('Items', 'භාණ්ඩ')}</th>
                       <th className="px-6 py-4.5 text-right">{t('Total', 'එකතුව')}</th>
                       <th className="px-6 py-4.5 text-center">{t('Status', 'තත්ත්වය')}</th>
@@ -3469,40 +3726,64 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
                   <tbody className="divide-y divide-slate-100 bg-white">
                     {filteredOrders.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="text-center py-12 text-slate-400 font-bold text-sm">
+                        <td colSpan={9} className="text-center py-12 text-slate-400 font-bold text-sm">
                           {t('No sales records found.', 'විකිණීම් වාර්තා කිසිවක් හමු නොවීය.')}
                         </td>
                       </tr>
                     ) : (
-                      filteredOrders.map(order => (
-                        <tr key={order.id} className="hover:bg-slate-50/30 transition-all duration-200">
-                          <td className="px-6 py-4">
-                            <label className="inline-flex items-center">
-                              <input
-                                type="checkbox"
-                                checked={selectedHistoryIds.includes(order.id)}
-                                onChange={() => handleToggleSelectOrder(order.id)}
-                                className="form-checkbox text-amber-500 rounded border-slate-300 focus:ring-amber-500 transition-colors"
-                              />
-                            </label>
-                          </td>
-                          <td className="px-6 py-4 font-black text-slate-800 font-mono text-sm">{order.invoiceNo}</td>
-                          <td className="px-6 py-4 text-slate-500 font-bold text-xs">{order.date}</td>
-                          <td className="px-6 py-4 font-black text-slate-800 text-sm">{order.customerName}</td>
-                          <td className="px-6 py-4 text-center">
-                            <span className="bg-slate-100 text-slate-600 px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider border border-slate-200/50">
-                              {order.items?.length || 0} SKU
-                            </span>
-                          </td>
+                      filteredOrders.map(order => {
+                        const isCredit = isCreditOrder(order);
+                        return (
+                          <tr key={order.id} className={`transition-all duration-200 ${isCredit ? 'bg-amber-50/50 hover:bg-amber-50/90 border-l-4 border-l-amber-500' : 'hover:bg-slate-50/30'}`}>
+                            <td className="px-6 py-4">
+                              <label className="inline-flex items-center">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedHistoryIds.includes(order.id)}
+                                  onChange={() => handleToggleSelectOrder(order.id)}
+                                  className="form-checkbox text-amber-500 rounded border-slate-300 focus:ring-amber-500 transition-colors"
+                                />
+                              </label>
+                            </td>
+                            <td className="px-6 py-4 font-black text-slate-800 font-mono text-sm">{order.invoiceNo}</td>
+                            <td className="px-6 py-4 text-slate-500 font-bold text-xs">{order.date}</td>
+                            <td className="px-6 py-4 text-left">
+                              <div className="font-black text-slate-800 text-sm">{order.customerName}</div>
+                              {(order.customerPhone || order.customer_phone) && (
+                                <div className="text-[10px] text-slate-400 font-bold mt-0.5 font-mono">
+                                  📞 {order.customerPhone || order.customer_phone}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              {isCredit ? (
+                                <span className="bg-amber-100 text-amber-900 border border-amber-300 font-black px-2.5 py-1 rounded-xl text-[9px] uppercase tracking-wider shadow-xs inline-flex items-center gap-1">
+                                  {t('Credit', 'ණය')}
+                                </span>
+                              ) : (
+                                <span className="bg-slate-100 text-slate-700 font-bold px-2.5 py-1 rounded-xl text-[9px] uppercase tracking-wider border border-slate-200">
+                                  {t('Normal', 'සාමාන්‍ය')}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              <span className="bg-slate-100 text-slate-600 px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider border border-slate-200/50">
+                                {order.items?.length || 0} SKU
+                              </span>
+                            </td>
                           <td className="px-6 py-4 text-right font-black text-amber-500 font-mono text-sm">{symbol} {convert(order.total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                           <td className="px-6 py-4 text-center">
-                            <span className={`px-2.5 py-1 rounded-xl text-[9px] font-black uppercase tracking-wider ${statusColors[order.status] || 'bg-slate-100 text-slate-500'}`}>
+                            <span className={`px-2.5 py-1 rounded-xl text-[9px] font-black uppercase tracking-wider ${
+                              (order.status as string) === 'cancelled' || (order.status as string) === 'Cancelled' || (order.status as string) === 'voided' || (order.status as string) === 'Voided'
+                                ? 'bg-red-100 text-red-700 border border-red-200 shadow-xs'
+                                : statusColors[order.status] || 'bg-slate-100 text-slate-500'
+                            }`}>
                               {(order.status as string) === 'Paid' || (order.status as string) === 'paid' 
                                 ? t('Paid', 'ගෙවන ලද') 
                                 : (order.status as string) === 'Non Paid' 
                                 ? t('Non Paid', 'නොගෙවූ') 
-                                : (order.status as string) === 'cancelled' || (order.status as string) === 'Cancelled'
-                                ? t('Voided', 'අවලංගුයි')
+                                : (order.status as string) === 'cancelled' || (order.status as string) === 'Cancelled' || (order.status as string) === 'voided' || (order.status as string) === 'Voided'
+                                ? 'VOIDED'
                                 : order.status}
                             </span>
                           </td>
@@ -3538,10 +3819,10 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
                               <PrinterIcon className="w-3.5 h-3.5 text-amber-400" />
                               {t('Print', 'මුද්‍රණය')}
                             </button>
-                            {(order.status as string) !== 'cancelled' && (order.status as string) !== 'Cancelled' ? (
+                            {(order.status as string) !== 'cancelled' && (order.status as string) !== 'Cancelled' && (order.status as string) !== 'voided' && (order.status as string) !== 'Voided' ? (
                               <button
                                 type="button"
-                                onClick={() => handleVoidOrder(order.id)}
+                                onClick={() => { setTargetVoidInvoiceId(order.id); setVoidPasskeyInput(''); setShowVoidModal(true); }}
                                 className="text-[9px] font-black uppercase tracking-widest bg-red-50 hover:bg-red-600 text-red-500 hover:text-white px-3 py-2 rounded-xl transition-all border border-red-200/40 shadow-sm flex items-center gap-1"
                                 title={t('Void', 'අවලංගු')}
                               >
@@ -3552,7 +3833,7 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
                               <button
                                 type="button"
                                 onClick={() => handleDeleteOrder(order.id)}
-                                className="text-[9px] font-black uppercase tracking-widest bg-red-50 hover:bg-red-600 text-red-500 hover:text-white px-3 py-2 rounded-xl transition-all border border-red-200/40 shadow-sm flex items-center gap-1"
+                                className="text-[9px] font-black uppercase tracking-widest bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-xl transition-all shadow-md flex items-center gap-1"
                                 title={t('Delete', 'මකන්න')}
                               >
                                 <Trash2Icon className="w-3.5 h-3.5" />
@@ -3561,8 +3842,9 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
                             )}
                           </td>
                         </tr>
-                      ))
-                    )}
+                      );
+                    })
+                  )}
                   </tbody>
                 </table>
               </div>
@@ -3571,439 +3853,527 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
       )}
 
       {tab === 'credit' && (
-        <div className="space-y-6 animate-in slide-in-from-bottom duration-500">
-          {/* KPI Dashboard Header */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
-            {/* Outstanding Balance Card */}
-            <div className="bg-gradient-to-br from-[#464646] to-[#2c2c2c] text-white p-5 rounded-2xl border border-gray-800 border-l-4 border-l-[#DAA520] shadow-xl relative overflow-hidden group hover:scale-[1.02] transition-all duration-300">
-              <div className="flex justify-between items-start">
-                <div className="space-y-1">
-                  <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block">{t('Total Outstanding Debt', 'මුළු නොගෙවූ ණය ප්‍රමාණය')}</span>
-                  <span className="text-2xl font-black text-[#DAA520] tracking-tight">{symbol} {convert(totalOutstanding).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </div>
-                <div className="bg-white/5 p-3 rounded-xl border border-white/10 group-hover:bg-[#DAA520]/15 transition-colors">
-                  <DollarSignIcon className="w-5 h-5 text-[#DAA520]" />
-                </div>
-              </div>
-              <div className="text-[9px] text-gray-300 font-bold mt-4 uppercase tracking-wider flex items-center gap-1.5 bg-white/5 px-2.5 py-1 rounded-lg w-max">
-                <span className="w-2 h-2 rounded-full bg-[#DAA520] animate-ping"></span>
-                {unpaidCreditOrders.length} {t('Active Debtors', 'ණයගැතියන් ක්‍රියාකාරීයි')}
-              </div>
-            </div>
-
-            {/* Overdue Balance Card */}
-            <div className="bg-gradient-to-br from-[#2c1a1d] to-[#181112] border border-rose-950 text-white p-5 rounded-2xl border-l-4 border-l-rose-600 shadow-xl relative overflow-hidden group hover:scale-[1.02] transition-all duration-300">
-              <div className="flex justify-between items-start">
-                <div className="space-y-1">
-                  <span className="text-[10px] font-black text-rose-400 uppercase tracking-widest block">{t('Total Overdue Debt', 'මුළු කල් ඉකුත් වූ ණය')}</span>
-                  <span className="text-2xl font-black text-rose-500 tracking-tight">{symbol} {convert(totalOverdue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </div>
-                <div className="bg-rose-50/10 p-3 rounded-xl border border-rose-200/10 group-hover:bg-rose-500/20 transition-colors">
-                  <AlertTriangleIcon className="w-5 h-5 text-rose-500" />
-                </div>
-              </div>
-              <div className="text-[9px] text-rose-400 font-black mt-4 uppercase tracking-wider flex items-center gap-1.5 bg-rose-500/10 px-2.5 py-1 rounded-lg w-max border border-rose-500/10">
-                <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse"></span>
-                {overdueCreditOrders.length} {t('Overdue Invoices', 'කල් ඉකුත් වූ ඉන්වොයිසි')}
-              </div>
-            </div>
-
-            {/* Collection Performance Card */}
-            <div className="bg-gradient-to-br from-[#1b2b24] to-[#111c17] border border-emerald-950 text-white p-5 rounded-2xl border-l-4 border-l-emerald-500 shadow-xl relative overflow-hidden group hover:scale-[1.02] transition-all duration-300">
-              <div className="flex justify-between items-start">
-                <div className="space-y-1">
-                  <span className="text-[10px] font-black text-emerald-400 uppercase tracking-widest block">{t('Collection Rate', 'ණය පියවීමේ වේගය')}</span>
-                  <span className="text-2xl font-black text-emerald-500 tracking-tight">{collectionRate.toFixed(1)}%</span>
-                </div>
-                <div className="bg-emerald-500/10 p-3 rounded-xl border border-emerald-500/20 group-hover:bg-emerald-500/20 transition-colors">
-                  <TrendingUpIcon className="w-5 h-5 text-emerald-500" />
-                </div>
-              </div>
-              <div className="text-[9px] text-emerald-400 font-black mt-4 uppercase tracking-wider flex items-center gap-1 bg-emerald-500/10 px-2.5 py-1 rounded-lg w-max border border-emerald-500/10">
-                <span>{symbol} {convert(totalCollected).toLocaleString(undefined, { maximumFractionDigits: 0 })} {t('recovered', 'නැවත එකතු කරන ලදි')}</span>
-              </div>
-            </div>
-
-            {/* Total Credit Volume Card */}
-            <div className="bg-white border border-gray-100 p-5 rounded-2xl border-l-4 border-l-slate-400 shadow-lg relative overflow-hidden group hover:scale-[1.02] transition-all duration-300">
-              <div className="flex justify-between items-start">
-                <div className="space-y-1">
-                  <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest block">{t('Total Credit Ledger', 'සමස්ත ණය පරිමාව')}</span>
-                  <span className="text-2xl font-black text-slate-700 tracking-tight">{symbol} {convert(totalCreditVolume).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </div>
-                <div className="bg-slate-100 p-3 rounded-xl border border-slate-200/60 group-hover:bg-slate-200 transition-colors">
-                  <CheckSquareIcon className="w-5 h-5 text-slate-500" />
-                </div>
-              </div>
-              <div className="text-[9px] text-gray-500 font-bold mt-4 uppercase tracking-wider bg-slate-50 px-2.5 py-1 rounded-lg w-max border border-slate-100">
-                {creditOrders.length} {t('Credit Accounts Created', 'ණය ගිණුම් නිර්මාණය කර ඇත')}
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
-            {/* Left panel: Create Credit Order Form */}
-            <div className="xl:col-span-1 space-y-4">
-              <div className="bg-gradient-to-br from-[#464646] to-[#1c1c1c] text-white rounded-3xl border border-gray-800 shadow-2xl p-6 relative overflow-hidden text-left">
-                <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-[#DAA520] to-[#B8860B]"></div>
-                
-                <h3 className="text-sm font-black text-gray-100 mb-6 flex items-center gap-2.5 uppercase tracking-widest border-b border-gray-800/60 pb-4">
-                  <ReceiptIcon className="w-4 h-4 text-[#DAA520]" /> {t('Create Credit Order', 'නව ණය ඇණවුම')}
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 animate-in fade-in duration-300">
+          <div className="xl:col-span-2 space-y-5">
+            
+            {/* Customer Details Block */}
+            <div className="bg-white rounded-2xl border-l-4 border-l-amber-500 border-y border-r border-slate-100 shadow-xl shadow-slate-100/40 p-6 text-left hover:shadow-2xl hover:shadow-slate-200/40 transition-all duration-300 transform hover:-translate-y-0.5">
+              <div className="flex justify-between items-center mb-5 flex-wrap gap-3">
+                <h3 className="text-sm font-black text-slate-800 flex items-center gap-2.5 uppercase tracking-wider">
+                  <div className="w-8 h-8 bg-amber-50 rounded-xl flex items-center justify-center border border-amber-100/60 shadow-sm">
+                    <UserIcon className="w-4 h-4 text-amber-500" />
+                  </div>
+                  {t('Credit Customer Details', 'ණයගැති පාරිභෝගික විස්තර')}
                 </h3>
+                
+                {/* Modern Segmented Pill Toggle */}
+                <div className="flex bg-slate-100/80 p-1.5 rounded-2xl border border-slate-200/30 shadow-inner">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCreditCustomerType('registered');
+                      setSelectedCreditCustomer(null);
+                      setCreditCustomerName('');
+                      setCreditCustomerPhone('');
+                      setCreditCustomerAddress('');
+                      setCreditCustomerNIC('');
+                    }}
+                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all duration-300 flex items-center gap-1 ${creditCustomerType === 'registered' ? 'bg-slate-900 text-amber-400 shadow-md border border-slate-800' : 'text-slate-400 hover:text-slate-700'}`}
+                  >
+                    {t('Registered', 'ලියාපදිංචි')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCreditCustomerType('guest');
+                      setSelectedCreditCustomer(null);
+                      setCreditCustomerName('');
+                      setCreditCustomerPhone('');
+                      setCreditCustomerAddress('');
+                      setCreditCustomerNIC('');
+                    }}
+                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all duration-300 flex items-center gap-1 ${creditCustomerType === 'guest' ? 'bg-slate-900 text-amber-400 shadow-md border border-slate-800' : 'text-slate-400 hover:text-slate-700'}`}
+                  >
+                    {t('Guest / New', 'නව පාරිභෝගිකයා')}
+                  </button>
+                </div>
+              </div>
 
-                <div className="space-y-5">
-                  {/* Modern Stepper Indicator */}
-                  <div className="relative flex items-center justify-between gap-3 mb-6 bg-black/20 p-1 rounded-2xl border border-gray-800/40">
-                    <button 
-                      onClick={() => setCreditStep('customer')}
-                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300 ${
-                        creditStep === 'customer' 
-                          ? 'bg-[#DAA520] text-gray-900 shadow-md shadow-[#DAA520]/10 font-black' 
-                          : 'text-gray-400 hover:text-white hover:bg-white/5'
-                      }`}
+              {creditCustomerType === 'registered' ? (
+                <div className="space-y-4">
+                  <div className="relative">
+                    <select 
+                      value={selectedCreditCustomer?.id || ''} 
+                      onChange={(e) => {
+                        const c = customers.find((c) => c.id === e.target.value) || null;
+                        setSelectedCreditCustomer(c);
+                        if (c) {
+                          setCreditCustomerName(c.name);
+                          setCreditCustomerPhone(c.phone || '');
+                          setCreditCustomerAddress(c.address || '');
+                          setCreditCustomerNIC(c.nic || '');
+                        } else {
+                          setCreditCustomerName('');
+                          setCreditCustomerPhone('');
+                          setCreditCustomerAddress('');
+                          setCreditCustomerNIC('');
+                        }
+                      }}
+                      className="w-full px-4 py-3.5 bg-slate-50/50 hover:bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 cursor-pointer transition-all duration-200 appearance-none shadow-sm"
                     >
-                      <UserIcon className="w-3.5 h-3.5" /> {t('Customer', 'පාරිභෝගිකයා')}
-                    </button>
-                    <button 
-                      onClick={() => { if(creditCustomerName.trim()) setCreditStep('purchase'); }}
-                      disabled={!creditCustomerName.trim()}
-                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300 ${
-                        creditStep === 'purchase' 
-                          ? 'bg-[#DAA520] text-gray-900 shadow-md shadow-[#DAA520]/10 font-black' 
-                          : 'text-gray-400 hover:text-white hover:bg-white/5 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed'
-                      }`}
-                    >
-                      <ShoppingCartIcon className="w-3.5 h-3.5" /> {t('Items', 'භාණ්ඩ')}
-                    </button>
+                      <option value="">{t('Select a registered customer...', 'ලියාපදිංචි පාරිභෝගිකයෙකු තෝරන්න...')}</option>
+                      {customers.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} — {c.phone}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400">
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </div>
                   </div>
 
-                  {creditStep === 'customer' ? (
-                    <div className="space-y-4 animate-in fade-in duration-300 text-left">
-                      {/* Select Registered Customer */}
-                      <div>
-                        <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 ml-1">{t('Select Registered Customer', 'ලියාපදිංචි පාරිභෝගිකයෙක්')}</label>
-                        <select 
-                          value={selectedCreditCustomer?.id || ''} 
-                          onChange={(e) => {
-                            const cust = customers.find((c) => c.id === e.target.value) || null;
-                            setSelectedCreditCustomer(cust);
-                            if (cust) {
-                              setCreditCustomerName(cust.name);
-                              setCreditCustomerPhone(cust.phone || '');
-                              setCreditCustomerAddress(cust.address || '');
-                              setCreditCustomerNIC(cust.nic || '');
-                            } else {
-                              setCreditCustomerName('');
-                              setCreditCustomerPhone('');
-                              setCreditCustomerAddress('');
-                              setCreditCustomerNIC('');
-                            }
-                          }}
-                          className="w-full px-4 py-3 bg-gray-950/60 border border-gray-800 rounded-xl text-sm font-bold text-gray-200 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors cursor-pointer"
-                        >
-                          <option value="" className="bg-[#2c2c2c]">{t('Choose an existing customer...', 'පවතින පාරිභෝගිකයෙකු තෝරන්න...')}</option>
-                          {customers.map((c) => <option key={c.id} value={c.id} className="bg-[#2c2c2c]">{c.name} — {c.phone}</option>)}
-                        </select>
-                      </div>
-
-                      <div className="relative py-2 flex items-center justify-center">
-                        <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-gray-800/60"></div></div>
-                        <span className="relative px-3 bg-[#1e1e1e] text-[9px] font-bold text-gray-500 uppercase tracking-widest">{t('Or New Customer Details', 'හෝ නව පාරිභෝගික විස්තර')}</span>
-                      </div>
-
-                      <div className="space-y-3.5">
-                        <div>
-                          <label className="block text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1 ml-1">{t('Customer Name *', 'පාරිභෝගික නම *')}</label>
-                          <input 
-                            required
-                            type="text" 
-                            value={creditCustomerName}
-                            onChange={(e) => setCreditCustomerName(e.target.value)}
-                            placeholder={t('Enter full name', 'සම්පූර්ණ නම ඇතුලත් කරන්න')}
-                            className="w-full px-4 py-3 bg-gray-950/60 border border-gray-800 rounded-xl text-sm font-bold text-gray-200 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors placeholder-gray-600"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1 ml-1">{t('Phone Number', 'දුරකථන අංකය')}</label>
-                          <input 
-                            type="text" 
-                            value={creditCustomerPhone}
-                            onChange={(e) => setCreditCustomerPhone(e.target.value)}
-                            placeholder={t('Enter mobile number', 'දුරකථන අංකය ඇතුලත් කරන්න')}
-                            className="w-full px-4 py-3 bg-gray-950/60 border border-gray-800 rounded-xl text-sm font-bold text-gray-200 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors placeholder-gray-600"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1 ml-1">{t('Home Address', 'නිවසේ ලිපිනය')}</label>
-                          <input 
-                            type="text" 
-                            value={creditCustomerAddress}
-                            onChange={(e) => setCreditCustomerAddress(e.target.value)}
-                            placeholder={t('Enter current address', 'ලිපිනය ඇතුලත් කරන්න')}
-                            className="w-full px-4 py-3 bg-gray-950/60 border border-gray-800 rounded-xl text-sm font-bold text-gray-200 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors placeholder-gray-600"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1 ml-1">{t('NIC / Identity Number', 'ජාතික හැඳුනුම්පත් අංකය (NIC)')}</label>
-                          <input 
-                            type="text" 
-                            value={creditCustomerNIC}
-                            onChange={(e) => setCreditCustomerNIC(e.target.value)}
-                            placeholder={t('Enter NIC number', 'NIC අංකය ඇතුලත් කරන්න')}
-                            className="w-full px-4 py-3 bg-gray-950/60 border border-gray-800 rounded-xl text-sm font-bold text-gray-200 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors placeholder-gray-600"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="flex gap-2.5 pt-4 border-t border-gray-800/60 mt-4">
-                        <button 
-                          type="button"
-                          onClick={() => {
-                            setSelectedCreditCustomer(null);
-                            setCreditCustomerName('');
-                            setCreditCustomerPhone('');
-                            setCreditCustomerAddress('');
-                            setCreditCustomerNIC('');
-                          }}
-                          className="flex-1 py-3 bg-gray-950/60 hover:bg-gray-900 border border-gray-800 text-gray-400 hover:text-gray-200 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-200"
-                        >
-                          {t('Clear', 'හිස් කරන්න')}
-                        </button>
-                        <button 
-                          type="button"
-                          onClick={() => setCreditStep('purchase')}
-                          disabled={!creditCustomerName.trim()}
-                          className="flex-[2] py-3 bg-gradient-to-r from-[#DAA520] to-[#B8860B] hover:brightness-110 disabled:from-gray-800 disabled:to-gray-800 disabled:text-gray-600 disabled:opacity-50 text-gray-950 font-black rounded-xl text-[10px] uppercase tracking-widest transition-all shadow-lg shadow-[#DAA520]/10 flex items-center justify-center gap-1.5"
-                        >
-                          {t('Next Step', 'මීළඟ පියවර')} <ArrowRightIcon className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-4 animate-in fade-in duration-300 text-left">
-                      {/* Customer Info Summary Card */}
-                      <div className="bg-black/25 border border-gray-800/80 rounded-2xl p-4 space-y-2.5 relative shadow-inner text-left">
-                        <div className="flex justify-between items-center">
-                          <h4 className="text-[9px] font-black text-gray-400 uppercase tracking-widest">{t('Recipient Customer', 'ණයගැති පාරිභෝගිකයා')}</h4>
-                          <button 
-                            type="button"
-                            onClick={() => setCreditStep('customer')}
-                            className="text-[9px] uppercase font-black text-[#DAA520] hover:text-[#B8860B] transition-colors flex items-center gap-0.5"
-                          >
-                            {t('Edit Info', 'සංස්කරණය')}
-                          </button>
-                        </div>
-                        <div className="border-t border-gray-800/40 my-1"></div>
-                        <p className="text-sm font-black text-[#DAA520]">{creditCustomerName}</p>
-                        <div className="grid grid-cols-1 gap-1 text-[10px] text-gray-400 font-bold">
-                          {creditCustomerPhone && <span>📱 {creditCustomerPhone}</span>}
-                          {creditCustomerNIC && <span>🪪 NIC: {creditCustomerNIC}</span>}
-                          {creditCustomerAddress && <span className="truncate">🏠 {creditCustomerAddress}</span>}
-                        </div>
-                      </div>
-
-                      {/* Product Selection */}
-                      <div>
-                        <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 ml-1">{t('Select Product', 'භාණ්ඩය තෝරන්න')}</label>
-                        <select 
-                          value={selectedCreditProduct?.id || ''} 
-                          onChange={(e) => setSelectedCreditProduct(products.find((p) => p.id === e.target.value) || null)} 
-                          className="w-full px-4 py-3 bg-gray-950/60 border border-gray-800 rounded-xl text-sm font-bold text-gray-200 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors cursor-pointer"
-                        >
-                          <option value="" className="bg-[#2c2c2c]">{t('Choose a product...', 'භාණ්ඩයක් තෝරන්න...')}</option>
-                          {products.map((p) => (
-                            <option key={p.id} value={p.id} disabled={p.stock <= 0} className="bg-[#2c2c2c]">
-                              {p.name} ({p.sku}) — {symbol} {p.price.toLocaleString()} [{p.stock} {t('left', 'ඉතිරිව ඇත')}]
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* Custom Unit Selection dropdown when a product with custom units is selected */}
-                      {selectedCreditProduct && (() => {
-                        const opts = getUnitOptions(selectedCreditProduct);
-                        if (opts.length > 1) {
-                          return (
-                            <div>
-                              <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 ml-1">
-                                {t('Select Unit', 'මිනුම් ඒකකය තෝරන්න')}
-                              </label>
-                              <select
-                                value={creditSelectedUnit || selectedCreditProduct.unit}
-                                onChange={(e) => {
-                                  const selectedOpt = opts.find(o => o.unit === e.target.value);
-                                  if (selectedOpt) {
-                                    setCreditSelectedUnit(selectedOpt.unit);
-                                    setCreditConversionRate(selectedOpt.conversionRate);
-                                    const limit = selectedCreditProduct ? Math.round((selectedCreditProduct.stock / selectedOpt.conversionRate) * 100000) / 100000 : 9999;
-                                    setCreditQty(prev => Math.max(0, Math.min(limit, prev)));
-                                  }
-                                }}
-                                className="w-full px-4 py-3 bg-gray-950/60 border border-gray-800 rounded-xl text-sm font-bold text-gray-200 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors cursor-pointer"
-                              >
-                                {opts.map(o => {
-                                  const primaryOption = opts[0] || { conversionRate: 1 };
-                                  const primaryRate = primaryOption.conversionRate;
-                                  const calculatedPrice = o.price !== undefined 
-                                    ? o.price 
-                                    : selectedCreditProduct 
-                                      ? (selectedCreditProduct.price / primaryRate) * o.conversionRate 
-                                      : 0;
-                                  return (
-                                    <option key={o.unit} value={o.unit} className="bg-[#2c2c2c]">
-                                      {o.unit} – {symbol} {calculatedPrice.toLocaleString()}
-                                    </option>
-                                  );
-                                })}
-                              </select>
-                            </div>
-                          );
-                        }
-                        return null;
-                      })()}
-
-                      {/* Quantity & Add */}
-                      <div className="flex gap-3 items-end">
-                        <div className="flex-1">
-                          <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 ml-1">{t('Quantity', 'ප්‍රමාණය')}</label>
-                          <input 
-                            type="number" 
-                            min={0.01} 
-                            step="any"
-                            max={selectedCreditProduct ? Math.round((selectedCreditProduct.stock / creditConversionRate) * 100000) / 100000 : 9999}
-                            value={creditQty === 0 ? '' : creditQty} 
-                            onChange={(e) => {
-                              const val = e.target.value === '' ? 0 : parseFloat(e.target.value) || 0;
-                              const limit = selectedCreditProduct ? Math.round((selectedCreditProduct.stock / creditConversionRate) * 100000) / 100000 : 9999;
-                              setCreditQty(Math.round(Math.max(0, Math.min(limit, val)) * 100000) / 100000);
-                            }} 
-                            className="w-full px-4 py-3 bg-gray-950/60 border border-gray-800 rounded-xl font-bold text-gray-200 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors" 
-                          />
-                        </div>
-                        <button 
-                          type="button"
-                          onClick={addCreditCartItem}
-                          disabled={!selectedCreditProduct}
-                          className="px-5 py-3.5 bg-gray-950/60 hover:bg-[#DAA520] hover:text-gray-950 border border-gray-800 hover:border-transparent text-[#DAA520] rounded-xl text-xs font-black uppercase tracking-widest transition-all duration-200"
-                        >
-                          {t('Add', 'එකතු කරන්න')}
-                        </button>
-                      </div>
-
-                      {/* Cart Items List */}
-                      {creditCartItems.length > 0 && (
-                        <div className="border-t border-gray-800/60 pt-4 space-y-3.5">
-                          <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('Credit Cart Items', 'ණය කරත්ත භාණ්ඩ')} ({creditCartItems.length})</p>
-                          <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                            {creditCartItems.map((item, idx) => (
-                              <div key={idx} className="flex justify-between items-center bg-black/15 border border-gray-800/40 p-3 rounded-xl hover:bg-black/25 transition-colors">
-                                <div className="text-left flex-1 min-w-0 mr-3">
-                                  <p className="text-xs font-black text-gray-200 truncate">{item.productName}</p>
-                                  <p className="text-[9px] text-gray-500 font-bold mt-0.5">{item.qty} {item.unit || ''} x {symbol} {item.price.toLocaleString()}</p>
-                                </div>
-                                <div className="flex items-center gap-3">
-                                  <span className="text-xs font-black text-[#DAA520] whitespace-nowrap">{symbol} {item.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                                  <button 
-                                    type="button" 
-                                    onClick={() => setCreditCartItems(creditCartItems.filter((_, i) => i !== idx))} 
-                                    className="text-red-400/80 hover:text-red-500 transition-colors p-1"
-                                  >
-                                    <Trash2Icon className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-
-                          {/* Total box breakdown */}
-                          <div className="bg-black/20 border border-gray-800 rounded-2xl p-4 text-xs space-y-2 text-gray-300 shadow-inner">
-                            <div className="flex justify-between">
-                              <span>{t('Subtotal', 'උප එකතුව')}:</span>
-                              <span className="font-bold">{symbol} {creditSubtotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                            </div>
-                            {creditDiscount > 0 && (
-                              <div className="flex justify-between text-red-400">
-                                <span>{t('Discount', 'වට්ටම')} ({creditDiscount}%):</span>
-                                <span>-{symbol} {creditDiscountAmt.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                              </div>
-                            )}
-                            {creditTaxRate > 0 && (
-                              <div className="flex justify-between text-gray-400">
-                                <span>{t('Tax', 'බදු')} ({creditTaxRate}%):</span>
-                                <span>{symbol} {creditTaxAmt.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                              </div>
-                            )}
-                            <div className="border-t border-gray-800/60 my-1"></div>
-                            <div className="flex justify-between font-black text-sm text-gray-200">
-                              <span className="text-gray-400">{t('Total Owed', 'මුළු ණය එකතුව')}:</span>
-                              <span className="text-[#DAA520] tracking-tight">{symbol} {creditTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                      
-                      <div className="grid grid-cols-2 gap-3.5 pt-2">
-                        <div>
-                          <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 ml-1">{t('Discount (%)', 'වට්ටම් (%)')}</label>
-                          <input 
-                            type="number" 
-                            min={0}
-                            value={creditDiscount}
-                            onChange={(e) => setCreditDiscount(parseFloat(e.target.value) || 0)}
-                            className="w-full px-4 py-3 bg-gray-950/60 border border-gray-800 rounded-xl font-bold text-gray-200 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors" 
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 ml-1">{t('Tax Rate (%)', 'බදු අනුපාතය (%)')}</label>
-                          <input 
-                            type="number" 
-                            min={0}
-                            value={creditTaxRate}
-                            onChange={(e) => setCreditTaxRate(parseFloat(e.target.value) || 0)}
-                            className="w-full px-4 py-3 bg-gray-950/60 border border-gray-800 rounded-xl font-bold text-gray-200 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors" 
-                          />
-                        </div>
-                      </div>
-
-                      <div className="pt-2">
-                        <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 ml-1">{t('Payment Term (Days)', 'ණය වාර ගෙවීම් කාලය (දින)')}</label>
-                        <input 
-                          type="number" 
-                          min={1}
-                          value={creditTabPeriodDays}
-                          onChange={(e) => setCreditTabPeriodDays(parseInt(e.target.value) || 30)}
-                          className="w-full px-4 py-3 bg-gray-950/60 border border-gray-800 rounded-xl font-bold text-gray-200 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors" 
-                        />
-                      </div>
-
-                      <div className="flex gap-2.5 pt-4 border-t border-gray-800/60 mt-2">
-                        <button
-                          type="button"
-                          onClick={() => { setCreditStep('customer'); setCreditCartItems([]); }}
-                          className="flex-1 py-3 bg-gray-950/60 hover:bg-gray-900 border border-gray-800 text-gray-400 hover:text-gray-200 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
-                        >
-                          {t('Back', 'ආපසු')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={processCreditSale}
-                          disabled={creditCartItems.length === 0}
-                          className="flex-2 py-3 bg-gradient-to-r from-[#DAA520] to-[#B8860B] hover:brightness-110 disabled:from-gray-800 disabled:to-gray-800 disabled:text-gray-600 disabled:opacity-50 text-gray-950 font-black rounded-xl text-[10px] uppercase tracking-widest transition-all shadow-lg shadow-[#DAA520]/10"
-                        >
-                          {t('Create Credit Order', 'ණය ඇණවුම සාදන්න')}
-                        </button>
-                      </div>
+                  {selectedCreditCustomer && (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-amber-50/50 border border-amber-200/60 rounded-xl p-3.5 text-xs font-bold text-slate-700">
+                      <div><span className="text-slate-400 block text-[9px] uppercase tracking-wider">{t('Phone', 'දුරකථනය')}</span>{selectedCreditCustomer.phone || 'N/A'}</div>
+                      <div><span className="text-slate-400 block text-[9px] uppercase tracking-wider">{t('NIC', 'ජා.හැ. අංකය')}</span>{selectedCreditCustomer.nic || 'N/A'}</div>
+                      <div><span className="text-slate-400 block text-[9px] uppercase tracking-wider">{t('Address', 'ලිපිනය')}</span>{selectedCreditCustomer.address || 'N/A'}</div>
                     </div>
                   )}
                 </div>
-              </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 animate-in slide-in-from-top-2 duration-300">
+                  <input 
+                    type="text" 
+                    value={creditCustomerName} 
+                    onChange={(e) => setCreditCustomerName(e.target.value)} 
+                    placeholder={t('Customer Name *', 'පාරිභෝගිකයාගේ නම *')} 
+                    className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm"
+                  />
+                  <input 
+                    type="text" 
+                    value={creditCustomerPhone} 
+                    onChange={(e) => setCreditCustomerPhone(e.target.value)} 
+                    placeholder={t('Phone Number', 'දුරකථන අංකය')} 
+                    className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm"
+                  />
+                  <input 
+                    type="text" 
+                    value={creditCustomerNIC} 
+                    onChange={(e) => setCreditCustomerNIC(e.target.value)} 
+                    placeholder={t('NIC Number', 'ජා.හැ. අංකය')} 
+                    className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm"
+                  />
+                  <input 
+                    type="text" 
+                    value={creditCustomerAddress} 
+                    onChange={(e) => setCreditCustomerAddress(e.target.value)} 
+                    placeholder={t('Address', 'ලිපිනය')} 
+                    className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm"
+                  />
+                </div>
+              )}
             </div>
 
-            {/* Right Panel: Credit Orders Table */}
+            {/* Inventory Search & Items */}
+            <div className="bg-white rounded-2xl border-l-4 border-l-amber-500 border-y border-r border-slate-100 shadow-xl shadow-slate-100/40 p-6 text-left hover:shadow-2xl hover:shadow-slate-200/40 transition-all duration-300 transform hover:-translate-y-0.5">
+              <h3 className="text-sm font-black text-slate-800 mb-5 flex items-center gap-2.5 uppercase tracking-wider">
+                <div className="w-8 h-8 bg-amber-50 rounded-xl flex items-center justify-center border border-amber-100/60 shadow-sm">
+                  <ShoppingCartIcon className="w-4 h-4 text-amber-500" />
+                </div>
+                {t('Inventory Search & Items', 'තොග සෙවීම සහ භාණ්ඩ')}
+              </h3>
+              
+              <div className="relative">
+                <div className="flex items-center gap-3 bg-slate-50/50 hover:bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus-within:border-amber-500 focus-within:ring-1 focus-within:ring-amber-500 transition-all duration-200 shadow-inner">
+                  <SearchIcon className="w-5 h-5 text-slate-400" />
+                  <input 
+                    type="text" 
+                    placeholder={t('Search hardware by name, SKU or barcode...', 'නම, SKU හෝ බාර්කෝඩ් මඟින් සොයන්න...')} 
+                    value={creditProductSearch} 
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setCreditProductSearch(val);
+                      setSelectedIndex(0);
+                      if (val.trim()) {
+                        const exactBarcode = products.find(p => p.barcode && p.barcode.trim().toLowerCase() === val.trim().toLowerCase());
+                        if (exactBarcode) {
+                          addCreditCartItemDirect(exactBarcode);
+                          setCreditProductSearch('');
+                        }
+                      }
+                    }} 
+                    onKeyDown={(e) => {
+                      if (creditFilteredProducts.length === 0) return;
+                      if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        setSelectedIndex((prev) => (prev + 1) % creditFilteredProducts.length);
+                      } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        setSelectedIndex((prev) => (prev - 1 + creditFilteredProducts.length) % creditFilteredProducts.length);
+                      } else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const selected = creditFilteredProducts[selectedIndex] || creditFilteredProducts[0];
+                        if (selected) {
+                          addCreditCartItemDirect(selected);
+                          setCreditProductSearch('');
+                          setSelectedIndex(0);
+                        }
+                      }
+                    }}
+                    className="bg-transparent text-sm font-bold text-slate-800 outline-none w-full placeholder-slate-400" 
+                  />
+                  {creditProductSearch && (
+                    <button type="button" onClick={() => setCreditProductSearch('')} className="p-1 hover:bg-slate-200 rounded-full text-slate-400 transition-colors">
+                      <XIcon className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+                
+                {/* Search Results Dropdown */}
+                {creditProductSearch && creditFilteredProducts.length > 0 && (
+                  <div className="absolute top-full left-0 right-0 mt-2 bg-white/95 backdrop-blur-md border border-slate-200/80 rounded-2xl shadow-2xl z-[100] max-h-64 overflow-y-auto divide-y divide-slate-100/60 animate-in slide-in-from-top-3 duration-300">
+                    {creditFilteredProducts.map((p, index) => {
+                      const stockLevel = p.stock;
+                      let stockBadge = "bg-emerald-50 text-emerald-600 border border-emerald-100/80";
+                      if (stockLevel <= 0) {
+                        stockBadge = "bg-rose-50 text-rose-600 border border-rose-100/80";
+                      } else if (stockLevel <= 10) {
+                        stockBadge = "bg-amber-50 text-amber-600 border border-amber-100/80";
+                      }
+
+                      return (
+                        <button 
+                          key={p.id} 
+                          onClick={() => { addCreditCartItemDirect(p); setCreditProductSearch(''); setSelectedIndex(0); }} 
+                          className={`w-full flex items-center justify-between px-5 py-4 hover:bg-slate-50 transition-colors text-left ${index === selectedIndex ? 'bg-amber-50/80 border-l-4 border-amber-500' : ''}`}
+                        >
+                          <div className="space-y-1">
+                            <p className="text-sm font-black text-slate-800">{p.name}</p>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[9px] font-mono text-slate-400 uppercase tracking-wider">SKU: {p.sku || 'N/A'}</span>
+                              <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg ${stockBadge}`}>
+                                {t('Stock', 'තොගය')}: {p.stock} {p.unit}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-sm font-black text-amber-500">{symbol} {convert(p.price).toLocaleString()}</span>
+                            <span className="block text-[8px] text-slate-400 font-bold mt-0.5">{t('Click to add', 'එකතු කිරීමට ක්ලික් කරන්න')}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              
+              {/* Cart Items Table */}
+              {creditCartItems.length > 0 && (
+                <div className="mt-6 overflow-hidden rounded-2xl border border-slate-100 shadow-md">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-100">
+                          <th className="px-5 py-3.5 text-[9px] font-black text-slate-400 uppercase tracking-widest">{t('Product', 'භාණ්ඩය')}</th>
+                          <th className="px-4 py-3.5 text-center text-[9px] font-black text-slate-400 uppercase tracking-widest">{t('Quantity', 'ප්‍රමාණය')}</th>
+                          <th className="px-4 py-3.5 text-right text-[9px] font-black text-slate-400 uppercase tracking-widest">{t('Price', 'මිල')}</th>
+                          <th className="px-3 py-3.5 text-center text-[9px] font-black text-slate-400 uppercase tracking-widest">{t('Discount', 'වට්ටම්')}</th>
+                          <th className="px-4 py-3.5 text-right text-[9px] font-black text-slate-400 uppercase tracking-widest">{t('Total', 'එකතුව')}</th>
+                          <th className="w-14 px-4 py-3.5"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {creditCartItems.map((item, itemIdx) => {
+                          const prod = products.find(p => p.id === item.productId);
+                          const baseStock = prod?.stock || 0;
+                          const conversionRate = item.conversionRate || 1;
+                          const maxStockInUnit = Math.round((baseStock * conversionRate) * 100000) / 100000;
+                          const rowTotal = item.total !== undefined ? item.total : (item.qty * item.price);
+                          return (
+                            <tr key={item.productId} className="hover:bg-slate-50/30 transition-colors">
+                              <td className="px-5 py-4">
+                                <p className="font-black text-slate-800 text-sm">{item.productName}</p>
+                                <div className="flex items-center gap-2 mt-1">
+                                  <span className="text-[9px] font-mono text-slate-400">ID: {item.productId.slice(-6).toUpperCase()}</span>
+                                  {(() => {
+                                    const opts = getUnitOptions(prod);
+                                    if (opts.length > 1) {
+                                      return (
+                                        <select
+                                          value={item.unit || prod?.unit || ''}
+                                          onChange={(e) => {
+                                            const newUnit = e.target.value;
+                                            const selectedOpt = opts.find(o => o.unit === newUnit);
+                                            if (selectedOpt && prod) {
+                                              const newRate = selectedOpt.conversionRate;
+                                              const newPrice = selectedOpt.price !== undefined 
+                                                ? selectedOpt.price 
+                                                : (prod.price / newRate);
+                                              
+                                              const baseQty = item.qty / (item.conversionRate || 1);
+                                              const newQty = Math.round((baseQty * newRate) * 100000) / 100000;
+                                              setCreditCartItems(prev => prev.map(i => 
+                                                i.productId === item.productId 
+                                                  ? { 
+                                                      ...i, 
+                                                      unit: newUnit, 
+                                                      conversionRate: newRate, 
+                                                      qty: newQty,
+                                                      price: newPrice, 
+                                                      total: newQty * newPrice 
+                                                    } 
+                                                  : i
+                                              ));
+                                            }
+                                          }}
+                                          className="text-[9px] bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5 font-bold text-slate-600 focus:outline-none focus:border-amber-500 cursor-pointer"
+                                        >
+                                          {opts.map(o => {
+                                             const primaryOption = opts[0] || { conversionRate: 1 };
+                                             const primaryRate = primaryOption.conversionRate;
+                                             const calculatedPrice = o.price !== undefined 
+                                               ? o.price 
+                                               : prod 
+                                                 ? (prod.price / primaryRate) * o.conversionRate 
+                                                 : 0;
+                                             return (
+                                               <option key={o.unit} value={o.unit}>
+                                                 {o.unit} – {symbol} {calculatedPrice.toLocaleString()}
+                                               </option>
+                                             );
+                                           })}
+                                        </select>
+                                      );
+                                    } else {
+                                      return (
+                                        <span className="text-[9px] bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded font-black uppercase tracking-wider">
+                                          {t(item.unit || prod?.unit || 'pcs', unitTranslations[item.unit || prod?.unit || 'pcs'] || item.unit || prod?.unit || 'pcs')}
+                                        </span>
+                                      );
+                                    }
+                                  })()}
+                                </div>
+                              </td>
+                              <td className="px-4 py-4 text-center">
+                                {/* Counter Buttons */}
+                                <div className="inline-flex items-center bg-slate-50 border border-slate-200 rounded-xl p-1 shadow-inner">
+                                  <button
+                                    type="button"
+                                    onClick={() => updateCreditQty(itemIdx, Math.max(1, item.qty - 1))}
+                                    className="w-7 h-7 bg-white hover:bg-slate-100 active:scale-95 text-slate-600 rounded-lg flex items-center justify-center font-black transition-all border border-slate-200 shadow-sm"
+                                  >
+                                    -
+                                  </button>
+                                  <input 
+                                    type="number" 
+                                    min={0.01} 
+                                    step="any"
+                                    max={maxStockInUnit} 
+                                    value={item.qty === 0 ? '' : item.qty} 
+                                    onChange={(e) => updateCreditQty(itemIdx, e.target.value === '' ? 0 : Math.min(maxStockInUnit, parseFloat(e.target.value) || 0))} 
+                                    className="w-12 text-center bg-transparent border-0 font-bold text-slate-800 outline-none select-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => updateCreditQty(itemIdx, Math.min(maxStockInUnit, item.qty + 1))}
+                                    className="w-7 h-7 bg-white hover:bg-slate-100 active:scale-95 text-slate-600 rounded-lg flex items-center justify-center font-black transition-all border border-slate-200 shadow-sm"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </td>
+                              <td className="px-4 py-4 text-right font-bold text-slate-500 text-xs">{symbol} {convert(item.price).toLocaleString()}</td>
+                              <td className="px-3 py-4 text-center">
+                                <div className="inline-flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-xl p-1 shadow-inner">
+                                  <input 
+                                    type="number" 
+                                    min={0} 
+                                    step="any"
+                                    placeholder="" 
+                                    value={item.discount || ''} 
+                                    onChange={(e) => updateCreditDiscount(itemIdx, parseFloat(e.target.value) || 0, item.discountType || 'amount')} 
+                                    className="w-12 text-center bg-transparent border-0 font-bold text-slate-800 outline-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+                                  />
+                                  <button 
+                                    type="button" 
+                                    onClick={() => updateCreditDiscount(itemIdx, item.discount || 0, (item.discountType || 'amount') === 'percent' ? 'amount' : 'percent')} 
+                                    className="px-1.5 py-0.5 bg-white border border-slate-200 rounded-lg text-[10px] font-black text-amber-600 hover:bg-slate-100 transition-colors shadow-sm"
+                                  >
+                                    {(item.discountType || 'amount') === 'percent' ? '%' : symbol}
+                                  </button>
+                                </div>
+                              </td>
+                              <td className="px-4 py-4 text-right font-black text-slate-800 text-sm">{symbol} {convert(rowTotal).toLocaleString()}</td>
+                              <td className="px-4 py-4 text-center">
+                                <button 
+                                  onClick={() => setCreditCartItems((prev) => prev.filter((i) => i.productId !== item.productId))} 
+                                  className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all duration-200"
+                                  title={t('Remove item', 'භාණ්ඩය ඉවත් කරන්න')}
+                                >
+                                  <Trash2Icon className="w-4 h-4" />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Credit Order Summary Sidebar */}
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-200/50 p-6 h-fit sticky top-6 text-left hover:shadow-2xl hover:shadow-slate-200/60 transition-all duration-300">
+            <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-4">
+              <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                <span className="w-1.5 h-4 bg-amber-500 rounded-full"></span>
+                {t('Credit Order Summary', 'ණය ඇණවුම් සාරාංශය')}
+              </h3>
+            </div>
+            
+            <div className="space-y-4 mb-6">
+              
+              {/* Optional Tax Toggle */}
+              <div className="flex items-center gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200/40 shadow-inner">
+                <input 
+                  type="checkbox" 
+                  id="applyCreditTaxToggle"
+                  checked={applyTax} 
+                  onChange={(e) => setApplyTax(e.target.checked)} 
+                  className="w-4 h-4 text-amber-500 border-slate-300 rounded focus:ring-amber-500 cursor-pointer transition-colors"
+                />
+                <label htmlFor="applyCreditTaxToggle" className="text-xs font-black text-slate-500 cursor-pointer select-none">
+                  {t(`Apply Tax (${creditTaxRate}%)`, `බදු එකතු කරන්න (${creditTaxRate}%)`)}
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 bg-slate-50/50 p-4 rounded-2xl border border-slate-100 shadow-sm">
+                <div>
+                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1 block">{t('Payment Term (Days)', 'ණය වාර ගෙවීම් කාලය (දින)')}</label>
+                  <input 
+                    type="number" 
+                    min={1} 
+                    value={creditTabPeriodDays} 
+                    onChange={(e) => setCreditTabPeriodDays(parseInt(e.target.value) || 30)} 
+                    className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm" 
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1 block">{t('Transportation Fee (Rs.)', 'ප්‍රවාහන ගාස්තුව (රු.)')}</label>
+                  <input 
+                    type="number" 
+                    min={0} 
+                    value={creditTransportationFee || ''} 
+                    onChange={(e) => setCreditTransportationFee(parseFloat(e.target.value) || 0)} 
+                    placeholder="0.00"
+                    className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm" 
+                  />
+                </div>
+
+                {applyTax && (
+                  <div className="animate-in slide-in-from-top-3 duration-350">
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1 block">{t('Tax Rate (%)', 'බදු අනුපාතය (%)')}</label>
+                    <input 
+                      type="number" 
+                      min={0} 
+                      value={creditTaxRate} 
+                      onChange={(e) => setCreditTaxRate(parseFloat(e.target.value) || 0)} 
+                      className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm" 
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Price Calculation Details Block */}
+              <div className="bg-slate-50 border border-slate-200/50 rounded-2xl p-4.5 space-y-3.5 shadow-inner">
+                <div className="flex justify-between text-xs font-black text-slate-400 uppercase tracking-widest">
+                  <span>{t('Gross Subtotal', 'මුළු උප එකතුව')}</span>
+                  <span className="text-slate-700 font-mono">{symbol} {convert(grossCreditSubtotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+                {creditTotalDiscount > 0 && (
+                  <div className="flex justify-between text-xs font-black text-emerald-600 uppercase tracking-widest">
+                    <span>{t('Total Discount', 'මුළු වට්ටම')}</span>
+                    <span className="font-mono">-{symbol} {convert(creditTotalDiscount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-xs font-black text-slate-400 uppercase tracking-widest pt-1 border-t border-slate-200/60">
+                  <span>{t('Net Subtotal', 'ශුද්ධ උප එකතුව')}</span>
+                  <span className="text-slate-700 font-mono">{symbol} {convert(creditSubtotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+                {applyTax && (
+                  <div className="flex justify-between text-xs font-black text-slate-400 uppercase tracking-widest">
+                    <span>{t('Total Tax', 'මුළු බද්ද')} ({creditTaxRate}%)</span>
+                    <span className="text-slate-700 font-mono">+{symbol} {convert(creditTaxAmt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                {creditTransportationFee > 0 && (
+                  <div className="flex justify-between text-xs font-black text-slate-400 uppercase tracking-widest">
+                    <span>{t('Transport Fee', 'ප්‍රවාහන ගාස්තුව')}</span>
+                    <span className="text-slate-700 font-mono">+{symbol} {convert(creditTransportationFee).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex justify-between items-center mt-2 shadow-md">
+                  <span className="uppercase tracking-widest text-xs font-black text-slate-400">{t('Total Owed', 'මුළු ණය එකතුව')}</span>
+                  <span className="text-xl font-black text-amber-400 font-mono">{symbol} {convert(creditTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+              </div>
+            </div>
+            
+            <div className="space-y-3">
+              <button 
+                onClick={processCreditSale} 
+                disabled={!creditCustomerName.trim() || creditCartItems.length === 0 || isCreditLoading} 
+                className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:brightness-110 active:scale-[0.99] disabled:from-slate-100 disabled:to-slate-100 disabled:text-slate-300 disabled:shadow-none text-slate-950 font-black py-4 rounded-2xl shadow-lg shadow-amber-500/15 transition-all flex items-center justify-center gap-2.5 uppercase tracking-widest text-xs border border-amber-400/20 cursor-pointer"
+              >
+                {isCreditLoading ? <Loader2Icon className="animate-spin" /> : <DollarSignIcon className="w-5 h-5 text-slate-950" />}
+                {t('Create Credit Order', 'ණය ඇණවුම සාදන්න')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === 'credit_history' && (
+        <div className="animate-in fade-in duration-300">
+          {/* Right Panel: Credit Orders Table */}
             <div className="xl:col-span-3 space-y-4">
+              <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-sm flex flex-wrap gap-4 items-end">
+                <div className="flex-1 min-w-[150px]">
+                  <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 ml-1">{t('From Date', 'සිට දිනය')}</label>
+                  <input
+                    type="date"
+                    value={creditHistoryFromDate}
+                    onChange={(e) => setCreditHistoryFromDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold text-gray-700 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors"
+                  />
+                </div>
+                <div className="flex-1 min-w-[150px]">
+                  <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 ml-1">{t('To Date', 'දක්වා දිනය')}</label>
+                  <input
+                    type="date"
+                    value={creditHistoryToDate}
+                    onChange={(e) => setCreditHistoryToDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold text-gray-700 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreditHistoryFromDate('');
+                    setCreditHistoryToDate('');
+                  }}
+                  className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
+                >
+                  {t('Clear Filters', 'පෙරහන් ඉවත් කරන්න')}
+                </button>
+              </div>
               {selectedCreditIds.length > 0 && (
                 <div className="bg-red-50 border border-red-100 rounded-2xl p-4 flex flex-col sm:flex-row justify-between items-center gap-4 animate-in slide-in-from-top-5 duration-300">
                   <div className="flex items-center gap-2.5 text-red-800 font-bold text-sm">
@@ -4048,14 +4418,26 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {orders.filter(o => o.status === 'Non Paid' || o.status === 'Paid').length === 0 ? (
+                    {orders.filter(o => {
+                        const isCredit = o.status === 'Non Paid' || o.status === 'Paid';
+                        if (!isCredit) return false;
+                        if (creditHistoryFromDate && new Date(o.date) < new Date(creditHistoryFromDate)) return false;
+                        if (creditHistoryToDate && new Date(o.date) > new Date(creditHistoryToDate + 'T23:59:59')) return false;
+                        return true;
+                      }).length === 0 ? (
                       <tr>
                         <td colSpan={6} className="text-center py-10 text-gray-400 font-bold">
                           {t('No credit orders found.', 'ණය ඇණවුම් කිසිවක් හමු නොවීය.')}
                         </td>
                       </tr>
                     ) : (
-                      orders.filter(o => o.status === 'Non Paid' || o.status === 'Paid').map(order => {
+                      orders.filter(o => {
+                        const isCredit = o.status === 'Non Paid' || o.status === 'Paid';
+                        if (!isCredit) return false;
+                        if (creditHistoryFromDate && new Date(o.date) < new Date(creditHistoryFromDate)) return false;
+                        if (creditHistoryToDate && new Date(o.date) > new Date(creditHistoryToDate + 'T23:59:59')) return false;
+                        return true;
+                      }).map(order => {
                         const productDesc = order.items && order.items.length > 0
                           ? order.items.map((it: any) => `${it.productName || it.name} (x${it.qty})`).join(', ')
                           : '—';
@@ -4160,7 +4542,6 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
             </div>
           </div>
         </div>
-      </div>
       )}
 
       {/* Interactive Receipt Preview Modal */}
@@ -4626,262 +5007,330 @@ export function Sales({ initialTab = 'new' }: { initialTab?: Tab }) {
         </div>
       )}
 
-      {tab === 'delivery' && (
-        <div className="space-y-4 animate-in slide-in-from-bottom duration-500 text-left">
-          {/* Header Actions */}
-          <div className="flex justify-between items-center bg-white p-5 rounded-2xl border border-slate-100 shadow-xl shadow-slate-100/40 flex-wrap gap-4 animate-in fade-in duration-300">
-            <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
+
+
+      {/* Sales Return Tab View */}
+      {tab === 'returns' && (
+        <div className="space-y-6 animate-in fade-in duration-300">
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-100/40 p-6">
+            <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2 mb-6">
               <span className="w-1.5 h-4 bg-amber-500 rounded-full"></span>
-              {t('Delivery Notes', 'බෙදාහැරීම් සටහන්')}
+              {t('Process Sales Return', 'විකුණුම් ආපසු භාරගැනීම')}
             </h3>
-            <button
-              onClick={() => {
-                setIsCreatingDN(!isCreatingDN);
-                setSelectedInvoiceForDN(null);
-              }}
-              className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-amber-400 border border-slate-800 rounded-xl text-xs font-black uppercase tracking-wider transition-all shadow-lg shadow-slate-900/10 flex items-center gap-2"
-            >
-              <PlusIcon className="w-4 h-4 text-amber-400" />
-              {isCreatingDN ? t('View Delivery Notes', 'බෙදාහැරීම් සටහන් බලාගන්න') : t('Create Delivery Note', 'නව බෙදාහැරීම් සටහනක්')}
-            </button>
-          </div>
 
-          {isCreatingDN ? (
-            <div className="max-w-2xl mx-auto bg-white rounded-2xl border-l-4 border-l-amber-500 border-y border-r border-slate-100 shadow-xl shadow-slate-100/40 p-6 space-y-6 hover:shadow-2xl hover:shadow-slate-200/40 transition-all duration-300 transform hover:-translate-y-0.5">
-              <h4 className="text-sm font-black text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-3 flex items-center gap-2">
-                <ReceiptIcon className="w-4 h-4 text-amber-500" />
-                {t('Select Reference Invoice', 'යොමු ඉන්වොයිසිය තෝරන්න')}
-              </h4>
+            {/* Search Invoice */}
+            <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-2xl p-2 mb-6">
+              <SearchIcon className="w-5 h-5 text-slate-400 ml-2" />
+              <input
+                type="text"
+                placeholder={t('Enter Bill / Invoice Number or Customer Name...', 'ඉන්වොයිස් අංකය හෝ පාරිභෝගික නම ඇතුළත් කරන්න...')}
+                value={returnSearchQuery}
+                onChange={(e) => setReturnSearchQuery(e.target.value)}
+                className="bg-transparent text-sm font-bold text-slate-800 outline-none w-full placeholder-slate-400 py-1"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const q = returnSearchQuery.trim().toLowerCase();
+                  if (!q) return alert(t('Please enter an invoice number or customer name.', 'කරුණාකර ඉන්වොයිස් අංකයක් හෝ නමක් ඇතුළත් කරන්න.'));
+                  const found = orders.find(o => 
+                    o.invoiceNo.toLowerCase().includes(q) || 
+                    (o.customerName && o.customerName.toLowerCase().includes(q))
+                  );
+                  if (!found) return alert(t('Invoice not found!', 'ඉන්වොයිසිය හමු නොවීය!'));
+                  setTargetReturnInvoice(found);
+                  const initialQtys: Record<string, number> = {};
+                  (found.items || []).forEach((item: any) => { initialQtys[item.productId] = 0; });
+                  setReturnQtys(initialQtys);
+                }}
+                className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-amber-400 font-black rounded-xl text-xs uppercase tracking-wider transition-all shadow-md"
+              >
+                {t('Search Invoice', 'සොයන්න')}
+              </button>
+            </div>
 
-              <div>
-                <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">{t('Select Invoice', 'ඉන්වොයිසිය තෝරන්න')}</label>
-                <div className="relative">
-                  <select
-                    className="w-full px-4 py-3.5 bg-slate-50/50 hover:bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 cursor-pointer appearance-none transition-all shadow-sm"
-                    value={selectedInvoiceForDN?.id || ''}
-                    onChange={(e) => {
-                      const invoice = orders.find(o => o.id === e.target.value) || null;
-                      setSelectedInvoiceForDN(invoice);
-                    }}
+            {/* Selected Invoice Return Details */}
+            {targetReturnInvoice && (
+              <div className="bg-slate-50/60 rounded-2xl border border-slate-200/80 p-5 space-y-5 animate-in slide-in-from-top-3 duration-300">
+                <div className="flex justify-between items-center flex-wrap gap-2 border-b border-slate-200/60 pb-3">
+                  <div>
+                    <h4 className="text-base font-black text-slate-800">
+                      {t('Invoice:', 'ඉන්වොයිසිය:')} <span className="font-mono text-amber-600">{targetReturnInvoice.invoiceNo}</span>
+                    </h4>
+                    <p className="text-xs font-bold text-slate-500">
+                      {t('Customer:', 'පාරිභෝගිකයා:')} {targetReturnInvoice.customerName} | {t('Date:', 'දිනය:')} {targetReturnInvoice.date}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTargetReturnInvoice(null)}
+                    className="text-xs font-bold text-slate-400 hover:text-slate-600 underline"
                   >
-                    <option value="">-- {t('Select Paid Sales Invoice', 'ගෙවන ලද විකුණුම් ඉන්වොයිසිය තෝරන්න')} --</option>
-                    {orders
-                      .filter(o => o.status === 'Paid' || o.status === 'paid' || o.status === 'pending')
-                      .map(o => (
-                        <option key={o.id} value={o.id}>
-                          {o.invoiceNo} - {o.customerName} - {symbol} {o.total.toLocaleString()}
-                        </option>
-                      ))}
-                  </select>
-                  <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400">
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </div>
+                    {t('Clear / Change Invoice', 'වෙනත් ඉන්වොයිසියක්')}
+                  </button>
                 </div>
-              </div>
 
-              {selectedInvoiceForDN && (
-                <div className="space-y-4 animate-in fade-in duration-300">
-                  <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl text-xs font-bold text-slate-800 border border-slate-200/50 shadow-inner">
-                    <div>
-                      <span className="text-slate-400 block mb-1 text-[9px] uppercase tracking-wider">{t('Customer Name', 'පාරිභෝගිකයාගේ නම')}</span>
-                      <span className="font-black text-sm">{selectedInvoiceForDN.customerName}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400 block mb-1 text-[9px] uppercase tracking-wider">{t('Invoice Date', 'ඉන්වොයිස් දිනය')}</span>
-                      <span className="font-black text-sm">{new Date(selectedInvoiceForDN.created_at || '').toLocaleDateString()}</span>
-                    </div>
-                  </div>
-
-                  <div className="border border-slate-100 rounded-2xl overflow-hidden shadow-md">
-                    <table className="w-full text-xs text-left border-collapse">
-                      <thead className="bg-slate-50 border-b border-slate-100 uppercase font-black text-slate-400 tracking-widest text-[9px]">
-                        <tr>
-                          <th className="px-4 py-3">{t('Item Description', 'භාණ්ඩ විස්තරය')}</th>
-                          <th className="px-4 py-3 text-center">{t('Qty to Deliver', 'බෙදාහැරිය යුතු ප්‍රමාණය')}</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 bg-white">
-                        {selectedInvoiceForDN.items.map((item, idx) => (
-                          <tr key={idx} className="hover:bg-slate-50/20 transition-colors">
-                            <td className="px-4 py-3.5 font-bold text-slate-800">
-                              <div className="font-black text-slate-800 text-sm">{item.productName}</div>
-                              {(item.serialNo || item.batchCode) && (
-                                <div className="text-[9px] font-mono text-slate-400 mt-1">
-                                  {item.serialNo && `S/N: ${item.serialNo}`} {item.batchCode && `Batch: ${item.batchCode}`}
-                                </div>
-                              )}
+                {/* Items to Return Table */}
+                <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                  <table className="w-full text-sm text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100/80 border-b border-slate-200 text-[10px] font-black text-slate-500 tracking-widest uppercase">
+                        <th className="px-4 py-3">{t('Item', 'භාණ්ඩය')}</th>
+                        <th className="px-4 py-3 text-center">{t('Purchased Qty', 'මිලදී ගත් ප්‍රමාණය')}</th>
+                        <th className="px-4 py-3 text-right">{t('Unit Price', 'ඒකක මිල')}</th>
+                        <th className="px-4 py-3 text-center w-36">{t('Return Qty', 'ආපසු ප්‍රමාණය')}</th>
+                        <th className="px-4 py-3 text-right">{t('Refund Amount', 'ආපසු මුදල')}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {targetReturnInvoice.items.map((item: any) => {
+                        const maxReturn = item.qty;
+                        const currReturn = returnQtys[item.productId] || 0;
+                        const itemRefund = currReturn * item.price;
+                        return (
+                          <tr key={item.productId} className="hover:bg-slate-50/50">
+                            <td className="px-4 py-3 font-black text-slate-800 text-xs">{item.productName}</td>
+                            <td className="px-4 py-3 text-center font-bold text-slate-600 text-xs">{item.qty} {item.unit || ''}</td>
+                            <td className="px-4 py-3 text-right font-bold text-slate-600 text-xs">{symbol} {convert(item.price).toLocaleString()}</td>
+                            <td className="px-4 py-3 text-center">
+                              <input
+                                type="number"
+                                min={0}
+                                max={maxReturn}
+                                value={currReturn || ''}
+                                onChange={(e) => {
+                                  const val = Math.min(maxReturn, Math.max(0, parseFloat(e.target.value) || 0));
+                                  setReturnQtys(prev => ({ ...prev, [item.productId]: val }));
+                                }}
+                                className="w-20 px-2 py-1 text-center bg-white border border-slate-300 rounded-lg font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
+                              />
                             </td>
-                            <td className="px-4 py-3.5 text-center font-black text-slate-700 text-sm">
-                              {item.qty}
-                            </td>
+                            <td className="px-4 py-3 text-right font-black text-emerald-600 text-xs">{symbol} {convert(itemRefund).toLocaleString()}</td>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
 
-                  <div className="pt-4 flex justify-end">
+                {/* Return Settings & Submit */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 block">{t('Return Method', 'ආපසු ගෙවීමේ ක්‍රමය')}</label>
+                    <select
+                      value={returnMethod}
+                      onChange={(e) => setReturnMethod(e.target.value as any)}
+                      className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
+                    >
+                      <option value="Cash Refund">Cash Refund / මුදල් ආපසු</option>
+                      <option value="Exchange">Exchange / භාණ්ඩ හුවමාරුව</option>
+                      <option value="Credit Note">Credit Note / ණය සටහන</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 block">{t('Reason (Optional)', 'හේතුව')}</label>
+                    <input
+                      type="text"
+                      placeholder={t('Damaged, Wrong item, etc.', 'හානි වී ඇත, වෙනත්...')}
+                      value={returnReason}
+                      onChange={(e) => setReturnReason(e.target.value)}
+                      className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
+                    />
+                  </div>
+                  <div className="flex items-end">
                     <button
+                      type="button"
                       onClick={async () => {
-                        const dnNo = `DN-${Date.now().toString().slice(-6)}`;
-                        const newDN = {
-                          dn_no: dnNo,
-                          customer_name: selectedInvoiceForDN.customerName,
-                          items: JSON.stringify(selectedInvoiceForDN.items),
-                          reference_invoice: selectedInvoiceForDN.invoiceNo || selectedInvoiceForDN.id,
-                        };
+                        const itemsToReturn = targetReturnInvoice.items
+                          .filter((item: any) => (returnQtys[item.productId] || 0) > 0)
+                          .map((item: any) => ({
+                            ...item,
+                            qty: returnQtys[item.productId]
+                          }));
+
+                        if (itemsToReturn.length === 0) {
+                          return alert(t('Please select at least 1 item quantity to return.', 'කරුණාකර ආපසු බාරදීමට අවම වශයෙන් එක් භාණ්ඩයකවත් ප්‍රමාණයක් ඇතුළත් කරන්න.'));
+                        }
+
+                        const totalRefunded = itemsToReturn.reduce((sum: number, i: any) => sum + (i.qty * i.price), 0);
 
                         try {
                           setIsLoading(true);
-                          const { data, error } = await supabase.from('delivery_notes').insert([newDN]);
-                          if (error) throw error;
-                          
-                          // Print Delivery Note natively using a hidden iframe
-                          const htmlContent = generateDNPrintHTML({ ...newDN, created_at: new Date().toISOString() }, isSinhala, shopSettings);
-                          const iframe = document.createElement('iframe');
-                          iframe.style.position = 'fixed';
-                          iframe.style.right = '0';
-                          iframe.style.bottom = '0';
-                          iframe.style.width = '0';
-                          iframe.style.height = '0';
-                          iframe.style.border = '0';
-                          document.body.appendChild(iframe);
+                          const { data: { user } } = await supabase.auth.getUser();
+                          const res = await fetch(`${API_URL}/sales/returns`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              invoiceNo: targetReturnInvoice.invoiceNo,
+                              returnedItems: itemsToReturn,
+                              returnMethod,
+                              totalRefunded,
+                              userEmail: user?.email || 'system',
+                              reason: returnReason
+                            })
+                          });
 
-                          const doc = iframe.contentWindow?.document || iframe.contentDocument;
-                          if (doc) {
-                            doc.open();
-                            doc.write(htmlContent);
-                            doc.close();
-                          }
+                          const result = await res.json();
+                          if (!res.ok) throw new Error(result.error || 'Failed to process sales return');
 
-                          setTimeout(() => {
-                            iframe.contentWindow?.focus();
-                            iframe.contentWindow?.print();
-                            setTimeout(() => {
-                              document.body.removeChild(iframe);
-                            }, 1000);
-                          }, 300);
-
-                          // Reset
-                          setSelectedInvoiceForDN(null);
-                          setIsCreatingDN(false);
+                          alert(t('Sales Return processed successfully!', 'විකුණුම් ආපසු භාරගැනීම සාර්ථකයි!'));
+                          setTargetReturnInvoice(null);
+                          setReturnQtys({});
+                          setReturnReason('');
+                          fetchSalesReturns();
                           fetchData();
                         } catch (err: any) {
-                          alert(t('Failed to save delivery note: ', 'බෙදාහැරීම් සටහන සුරැකීමට අපොහොසත් විය: ') + err.message);
+                          alert(t('Failed to process return: ', 'ආපසු භාරගැනීම අසමත් විය: ') + err.message);
                         } finally {
                           setIsLoading(false);
                         }
                       }}
-                      className="px-6 py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:brightness-110 active:scale-[0.99] text-slate-950 font-black rounded-xl uppercase tracking-widest text-[10px] transition-all shadow-md shadow-amber-500/10 border border-amber-400/20"
+                      className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-xs uppercase tracking-wider transition-all shadow-md flex items-center justify-center gap-2"
                     >
-                      {t('Save & Print Delivery Note', 'සුරකින්න සහ මුද්‍රණය කරන්න')}
+                      <CheckCircleIcon className="w-4 h-4" />
+                      {t('Confirm & Process Return', 'ආපසු භාරගැනීම තහවුරු කරන්න')}
                     </button>
                   </div>
                 </div>
-              )}
-            </div>
-          ) : (
-            /* Delivery Notes History View */
-            <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-100/40 overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm text-left border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-black text-slate-400 tracking-widest uppercase">
-                      <th className="px-6 py-4.5">{t('Date', 'දිනය')}</th>
-                      <th className="px-6 py-4.5">{t('Delivery Note No', 'බෙදාහැරීම් අංකය')}</th>
-                      <th className="px-6 py-4.5">{t('Customer', 'පාරිභෝගිකයා')}</th>
-                      <th className="px-6 py-4.5">{t('Ref Invoice', 'යොමු ඉන්වොයිසිය')}</th>
-                      <th className="px-6 py-4.5 text-center">{t('Actions', 'ක්‍රියාකාරකම්')}</th>
+              </div>
+            )}
+          </div>
+
+          {/* Sales Return History */}
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-100/40 p-6">
+            <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2 mb-6">
+              <span className="w-1.5 h-4 bg-amber-500 rounded-full"></span>
+              {t('Sales Return History', 'ආපසු භාරගැනීම් ඉතිහාසය')}
+            </h3>
+
+            <div className="overflow-x-auto rounded-2xl border border-slate-100">
+              <table className="w-full text-sm text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-black text-slate-400 tracking-widest uppercase">
+                    <th className="px-6 py-4">{t('Date', 'දිනය')}</th>
+                    <th className="px-6 py-4">{t('Invoice No', 'ඉන්වොයිස් අංකය')}</th>
+                    <th className="px-6 py-4">{t('Return Method', 'ක්‍රමය')}</th>
+                    <th className="px-6 py-4 text-right">{t('Total Refunded', 'මුළු ආපසු මුදල')}</th>
+                    <th className="px-6 py-4 text-center">{t('Status', 'තත්ත්වය')}</th>
+                    <th className="px-6 py-4 text-center">{t('Actions', 'ක්‍රියාකාරකම්')}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {salesReturnsList.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-slate-400 font-bold text-sm">
+                        {t('No sales returns recorded yet.', 'තවමත් ආපසු භාරගැනීම් කිසිවක් නොමැත.')}
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
-                    {deliveryNotes.length === 0 ? (
-                      <tr>
-                        <td colSpan={5} className="py-12 text-center text-slate-400 font-bold text-sm">
-                          {t('No delivery notes found.', 'බෙදාහැරීම් සටහන් කිසිවක් හමු නොවීය.')}
+                  ) : (
+                    salesReturnsList.map((sr) => (
+                      <tr key={sr.id} className="hover:bg-slate-50/50">
+                        <td className="px-6 py-4 font-bold text-slate-500 text-xs">
+                          {new Date(sr.created_at).toLocaleDateString()}
+                        </td>
+                        <td className="px-6 py-4 font-black text-slate-800 font-mono text-sm">
+                          {sr.invoiceNo || sr.invoice_no}
+                        </td>
+                        <td className="px-6 py-4 font-bold text-slate-600 text-xs">
+                          {sr.returnMethod}
+                        </td>
+                        <td className="px-6 py-4 text-right font-black text-emerald-600 text-sm">
+                          {symbol} {convert(sr.totalRefunded).toLocaleString()}
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full ${sr.status === 'voided' ? 'bg-slate-100 text-slate-500' : 'bg-emerald-100 text-emerald-700'}`}>
+                            {sr.status === 'voided' ? 'VOIDED' : 'ACTIVE'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-center flex items-center justify-center gap-2">
+                          {sr.status !== 'voided' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setTargetVoidReturnId(sr.id);
+                                setTargetVoidInvoiceId(null);
+                                setVoidPasskeyInput('');
+                                setShowVoidModal(true);
+                              }}
+                              className="px-3 py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-xs font-bold transition-colors"
+                            >
+                              {t('Void Return', 'අවලංගු කරන්න')}
+                            </button>
+                          )}
                         </td>
                       </tr>
-                    ) : (
-                      deliveryNotes.map((dn) => (
-                        <tr key={dn.id} className="hover:bg-slate-50/30 transition-all duration-200">
-                          <td className="px-6 py-4 font-bold text-slate-500 text-xs">
-                            {new Date(dn.created_at).toLocaleDateString()}
-                          </td>
-                          <td className="px-6 py-4 font-black text-slate-800 font-mono text-sm">
-                            {dn.dn_no}
-                          </td>
-                          <td className="px-6 py-4 font-black text-slate-800 text-sm">
-                            {dn.customer_name}
-                          </td>
-                          <td className="px-6 py-4 font-mono text-slate-600 text-xs">
-                            {dn.reference_invoice}
-                          </td>
-                          <td className="px-6 py-4 text-center flex items-center justify-center gap-2">
-                            <button
-                              onClick={() => {
-                                const htmlContent = generateDNPrintHTML(dn, isSinhala, shopSettings);
-                                const iframe = document.createElement('iframe');
-                                iframe.style.position = 'fixed';
-                                iframe.style.right = '0';
-                                iframe.style.bottom = '0';
-                                iframe.style.width = '0';
-                                iframe.style.height = '0';
-                                iframe.style.border = '0';
-                                document.body.appendChild(iframe);
-
-                                const doc = iframe.contentWindow?.document || iframe.contentDocument;
-                                if (doc) {
-                                  doc.open();
-                                  doc.write(htmlContent);
-                                  doc.close();
-                                }
-
-                                setTimeout(() => {
-                                  iframe.contentWindow?.focus();
-                                  iframe.contentWindow?.print();
-                                  setTimeout(() => {
-                                    document.body.removeChild(iframe);
-                                  }, 1000);
-                                }, 300);
-                              }}
-                              className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl border border-slate-200/50 shadow-sm transition-colors"
-                              title={t('Print Delivery Note', 'බෙදාහැරීමේ සටහන මුද්‍රණය')}
-                            >
-                              <PrinterIcon className="w-4 h-4 text-amber-500" />
-                            </button>
-                            <button
-                              onClick={async () => {
-                                if (window.confirm(t('Are you sure you want to delete this delivery note?', 'මෙම බෙදාහැරීම් සටහන මැකීමට ඔබට විශ්වාසද?'))) {
-                                  try {
-                                    setIsLoading(true);
-                                    const { error } = await supabase.from('delivery_notes').delete().eq('id', dn.id);
-                                    if (error) throw error;
-                                    fetchData();
-                                  } catch (err: any) {
-                                    alert(t('Failed to delete delivery note: ', 'බෙදාහැරීම් සටහන මැකීමට අපොහොසත් විය: ') + err.message);
-                                  } finally {
-                                    setIsLoading(false);
-                                  }
-                                }
-                              }}
-                              className="p-2 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl border border-red-200/50 shadow-sm transition-colors"
-                              title={t('Delete Delivery Note', 'බෙදාහැරීමේ සටහන මකන්න')}
-                            >
-                              <Trash2Icon className="w-4 h-4" />
-                            </button>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
-          )}
+          </div>
         </div>
       )}
+
+      {/* Centralized Void Passkey Confirmation Modal */}
+      {showVoidModal && (
+        <Modal 
+          isOpen={showVoidModal} 
+          onClose={() => {
+            setShowVoidModal(false);
+            setTargetVoidInvoiceId(null);
+            setTargetVoidReturnId(null);
+          }} 
+          title={targetVoidReturnId ? t('Confirm Void Sales Return', 'ආපසු භාරගැනීම අවලංගු කිරීම') : t('Confirm Void Invoice', 'ඉන්වොයිසිය අවලංගු කිරීම')}
+        >
+          <div className="space-y-4 p-2">
+            <p className="text-xs font-bold text-slate-600">
+              {targetVoidReturnId 
+                ? t('Enter Security Passkey to void sales return and reverse inventory & financials:', 'ආපසු භාරගැනීම අවලංගු කිරීමට මුරපදය ඇතුළත් කරන්න:')
+                : t('Enter Security Passkey to void invoice and reverse inventory & financials:', 'ඉන්වොයිසිය අවලංගු කිරීමට මුරපදය ඇතුළත් කරන්න:')}
+            </p>
+            <input
+              type="password"
+              placeholder={t('Enter Passkey...', 'මුරපදය ඇතුළත් කරන්න...')}
+              value={voidPasskeyInput}
+              onChange={(e) => setVoidPasskeyInput(e.target.value)}
+              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-sm outline-none focus:border-amber-500"
+            />
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowVoidModal(false);
+                  setTargetVoidInvoiceId(null);
+                  setTargetVoidReturnId(null);
+                }}
+                className="px-4 py-2 bg-slate-100 text-slate-600 font-bold rounded-xl text-xs uppercase"
+              >
+                {t('Cancel', 'අවලංගු කරන්න')}
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const configuredPasskey = shopSettings?.void_passkey || shopSettings?.return_passkey || '1234';
+                  if (voidPasskeyInput.trim() !== configuredPasskey) {
+                    return alert(t('Invalid Passkey! Access Denied.', 'වලංගු නොවන මුරපදයකි! අවලංගු කිරීමට නොහැක.'));
+                  }
+                  setShowVoidModal(false);
+                  if (targetVoidInvoiceId) {
+                    await handleVoidOrder(targetVoidInvoiceId);
+                    setTargetVoidInvoiceId(null);
+                  } else if (targetVoidReturnId) {
+                    await handleVoidSalesReturn(targetVoidReturnId);
+                    setTargetVoidReturnId(null);
+                  }
+                }}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-xs uppercase shadow-md"
+              >
+                {t('Confirm Void', 'අවලංගු කිරීම තහවුරු කරන්න')}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
     </div>
   );
 }
+
+export default Sales;

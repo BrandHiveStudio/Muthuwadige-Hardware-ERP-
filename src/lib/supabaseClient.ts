@@ -34,6 +34,10 @@ const fetchTable = async (table: string, type?: string, filter?: { col: string; 
       data = await api.profiles.getAll();
     } else if (table === 'system_settings') {
       data = await api.settings.get();
+    } else if (table === 'sales_returns') {
+      data = await api.sales.returns.getAll();
+    } else if (table === 'credit_notes') {
+      data = await api.creditNotes.getAll();
     } else {
       const res = await fetch(`${API_URL}/${table}`);
       if (res.ok) data = await res.json();
@@ -74,6 +78,8 @@ const insertTable = async (table: string, payload: any) => {
       result = await api.employees.save(payload);
     } else if (table === 'transactions') {
       result = await api.transactions.save(payload);
+    } else if (table === 'sales_returns') {
+      result = await api.sales.returns.process(payload);
     } else {
       const res = await fetch(`${API_URL}/${table}`, {
         method: 'POST',
@@ -225,16 +231,19 @@ export const supabase: any = {
           order: (col?: string, opts?: any) => {
             return {
               single: () => fetchTable(table, 'single'),
+              maybeSingle: () => fetchTable(table, 'single'),
               then: (onfulfilled: any) => fetchTable(table).then(onfulfilled)
             };
           },
           eq: (col: string, val: any) => {
             return {
               single: () => fetchTable(table, 'single', { col, val }),
+              maybeSingle: () => fetchTable(table, 'single', { col, val }),
               then: (onfulfilled: any) => fetchTable(table, 'filter', { col, val }).then(onfulfilled)
             };
           },
           single: () => fetchTable(table, 'single'),
+          maybeSingle: () => fetchTable(table, 'single'),
           then: (onfulfilled: any) => fetchTable(table).then(onfulfilled)
         };
         return selectChain;
@@ -245,6 +254,7 @@ export const supabase: any = {
           select: () => {
             return {
               single: () => insertTable(table, records[0]),
+              maybeSingle: () => insertTable(table, records[0]),
               then: (onfulfilled: any) => insertTable(table, records[0]).then(onfulfilled)
             };
           },

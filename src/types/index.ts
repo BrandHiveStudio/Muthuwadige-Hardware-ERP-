@@ -52,6 +52,8 @@ export interface SaleItem {
   batchCode?: string;
   unit?: string;
   conversionRate?: number;
+  discount?: number;
+  discountType?: 'percent' | 'amount';
 }
 
 export interface SaleOrder {
@@ -60,12 +62,13 @@ export interface SaleOrder {
   invoice_no?: string;
   customer_id: string;
   customerName: string;
+  customer_name?: string;
   items: SaleItem[];
   subtotal: number;
   discount: number;
   tax: number;
   total: number;
-  status: 'paid' | 'pending' | 'cancelled' | 'Paid' | 'Non Paid';
+  status: string;
   date: string;
   cashier: string;
   total_amount?: number;
@@ -75,6 +78,11 @@ export interface SaleOrder {
   due_date?: string;
   credit_period_days?: number;
   payment_received?: number;
+  transportation_fee?: number;
+  customer_phone?: string;
+  customerPhone?: string;
+  customer_address?: string;
+  customerAddress?: string;
 }
 
 export interface PurchaseItem {
@@ -161,5 +169,29 @@ export interface DeliveryNote {
   customer_name: string;
   items: string; // JSON string representation of SaleItem[]
   reference_invoice: string;
+  created_at: string;
+}
+
+export interface SalesReturn {
+  id: string;
+  invoiceNo: string;
+  invoice_no?: string;
+  returnedItems: SaleItem[];
+  returnMethod: 'Cash Refund' | 'Exchange' | 'Credit Note';
+  totalRefunded: number;
+  userId?: string;
+  status?: string;
+  reason?: string;
+  created_at: string;
+}
+
+export interface CreditNote {
+  id: string;
+  code: string;
+  customer_id?: string;
+  customer_name?: string;
+  value: number;
+  status: 'active' | 'redeemed' | 'expired';
+  redeemed_invoice?: string;
   created_at: string;
 }

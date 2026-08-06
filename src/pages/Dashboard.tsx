@@ -39,6 +39,34 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   // Hardcode symbol to Rs.
   const symbol = 'Rs.';
 
+  const getItemUnitCost = (product: any, itemUnit?: string, itemConvRate?: number): number => {
+    if (!product) return 0;
+    const baseCost = Number(product.cost_price !== undefined ? product.cost_price : product.costPrice !== undefined ? product.costPrice : 0);
+    let conversionRate = Number(itemConvRate) || 1;
+
+    if ((!itemConvRate || conversionRate === 1) && itemUnit && (product.unit && itemUnit.toLowerCase() !== product.unit.toLowerCase())) {
+      const measureDetailsStr = product.measure_details || product.measureDetails;
+      if (measureDetailsStr) {
+        try {
+          const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
+          if (parsed && Array.isArray(parsed.conversions)) {
+            const matchedConv = parsed.conversions.find((c: any) => (c.unit || '').toLowerCase() === itemUnit.toLowerCase());
+            if (matchedConv) {
+              const rawVal = Number(matchedConv.kgVal) || 1;
+              if ((product.unit || '').toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
+                conversionRate = 1 / rawVal;
+              } else {
+                conversionRate = rawVal;
+              }
+            }
+          }
+        } catch (e) {}
+      }
+    }
+
+    return conversionRate > 0 ? baseCost / conversionRate : baseCost;
+  };
+
   const getInitialSalesTrend = () => {
     const trend: any[] = [];
     const now = new Date();
@@ -184,12 +212,23 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     Paid: 'bg-emerald-50 text-emerald-700 border border-emerald-200/50', 
     pending: 'bg-amber-50 text-amber-700 border border-amber-200/50', 
     'Non Paid': 'bg-red-50 text-red-700 border border-red-200/50', 
-    cancelled: 'bg-rose-50 text-rose-700 border border-rose-200/50' 
+    cancelled: 'bg-rose-50 text-rose-700 border border-rose-200/50',
+    Cancelled: 'bg-rose-50 text-rose-700 border border-rose-200/50',
+    Voided: 'bg-rose-50 text-rose-700 border border-rose-200/50',
+    voided: 'bg-rose-50 text-rose-700 border border-rose-200/50'
   };
 
   // --- DATA FETCHING ---
   useEffect(() => {
     fetchDashboardStats();
+
+    const handleRefresh = () => {
+      fetchDashboardStats();
+    };
+    window.addEventListener('refresh-dashboard', handleRefresh);
+    return () => {
+      window.removeEventListener('refresh-dashboard', handleRefresh);
+    };
   }, []);
 
   const fetchDashboardStats = async () => {
@@ -211,15 +250,36 @@ export function Dashboard({ onNavigate }: DashboardProps) {
 
       // 1. Fetch all sales for dynamic charts and metrics
       const { data: allSales } = await supabase.from('sales').select('*');
+      const { data: allReturns } = await supabase.from('sales_returns').select('*');
 
       // Today's Sales (calculated locally from allSales)
       const salesToday = allSales ? allSales.filter((s: any) => {
         if (!s.created_at) return false;
         const saleDateStr = new Date(s.created_at).toLocaleDateString('sv-SE');
-        return saleDateStr === today && s.status !== 'cancelled';
+        return saleDateStr === today && s.status !== 'cancelled' && s.status !== 'Voided' && s.status !== 'voided';
       }) : [];
 
-      const todayRevenue = salesToday.reduce((acc, curr) => acc + (curr.total_amount || curr.total || 0), 0);
+      // Calculate return adjustments for today's revenue
+      let todayReturnsAdjustment = 0;
+      if (allReturns && allReturns.length > 0) {
+        allReturns.forEach((ret: any) => {
+          if (ret.status === 'voided' || ret.status === 'Voided') return;
+          if (!ret.created_at) return;
+          const retDateStr = new Date(ret.created_at).toLocaleDateString('sv-SE');
+          if (retDateStr === today) {
+            const method = ret.returnMethod || ret.return_method;
+            const refund = Number(ret.totalRefunded !== undefined ? ret.totalRefunded : (ret.total_refunded || 0));
+            const exTotal = Number(ret.exchangeTotal !== undefined ? ret.exchangeTotal : (ret.exchange_total || 0));
+            if (method === 'Exchange') {
+              todayReturnsAdjustment += (exTotal - refund);
+            } else {
+              todayReturnsAdjustment -= refund;
+            }
+          }
+        });
+      }
+
+      const todayRevenue = salesToday.reduce((acc, curr) => acc + (curr.total_amount || curr.total || 0), 0) + todayReturnsAdjustment;
       const todayOrders = salesToday.length;
 
       // 2. Fetch Customers
@@ -257,7 +317,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
 
       if (allSales && allSales.length > 0) {
         allSales.forEach((sale: any) => {
-          if (sale.status === 'cancelled') return;
+           if (sale.status === 'cancelled' || sale.status === 'Voided' || sale.status === 'voided') return;
           const saleDate = new Date(sale.created_at || sale.date);
           if (isNaN(saleDate.getTime())) return;
           
@@ -270,6 +330,36 @@ export function Dashboard({ onNavigate }: DashboardProps) {
           );
           if (matchingMonth) {
             matchingMonth.revenue += saleAmount;
+          }
+        });
+      }
+      
+      // Reconcile dynamic trend with returns for Net Sales
+      if (allReturns && allReturns.length > 0) {
+        allReturns.forEach((ret: any) => {
+          if (ret.status === 'voided' || ret.status === 'Voided') return;
+          const retDate = new Date(ret.created_at);
+          if (isNaN(retDate.getTime())) return;
+
+          const retMonth = retDate.getMonth();
+          const retYear = retDate.getFullYear();
+          
+          const method = ret.returnMethod || ret.return_method;
+          const refund = Number(ret.totalRefunded !== undefined ? ret.totalRefunded : (ret.total_refunded || 0));
+          const exTotal = Number(ret.exchangeTotal !== undefined ? ret.exchangeTotal : (ret.exchange_total || 0));
+          
+          let adjustment = 0;
+          if (method === 'Exchange') {
+            adjustment = exTotal - refund;
+          } else {
+            adjustment = -refund;
+          }
+
+          const matchingMonth = dynamicTrend.find(
+            (m) => m.monthNum === retMonth && m.year === retYear
+          );
+          if (matchingMonth) {
+            matchingMonth.revenue += adjustment;
           }
         });
       }
@@ -305,7 +395,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       const categoryTotals: Record<string, number> = {};
       if (allSales && allSales.length > 0) {
         allSales.forEach((sale: any) => {
-          if (sale.status === 'cancelled') return;
+           if (sale.status === 'cancelled' || sale.status === 'Voided' || sale.status === 'voided') return;
           let items: any[] = [];
           try {
             items = typeof sale.items === 'string' ? JSON.parse(sale.items) : sale.items || [];
@@ -332,7 +422,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       }
 
       // Calculate today's profit: Today's Revenue - Today's Item Cost
-      const todayRevenueVal = salesToday.reduce((acc, curr) => acc + (curr.total_amount || curr.total || 0), 0);
+      const todayRevenueVal = salesToday.reduce((acc, curr) => acc + (curr.total_amount || curr.total || 0), 0) + todayReturnsAdjustment;
       const todayItemCostVal = salesToday.reduce((totalCost, o) => {
         let items: any[] = [];
         try {
@@ -343,7 +433,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         if (Array.isArray(items)) {
           saleCost = items.reduce((sum, it) => {
             const product = products?.find(p => p.id === it.productId);
-            const cost = product ? Number(product.cost_price !== undefined ? product.cost_price : product.costPrice !== undefined ? product.costPrice : 0) : 0;
+            const cost = getItemUnitCost(product, it.unit, it.conversionRate);
             const qty = Number(it.qty || 0);
             return sum + (qty * cost);
           }, 0);
@@ -352,13 +442,13 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       }, 0);
       setTodayProfit(todayRevenueVal - todayItemCostVal);
 
-      // Calculate Cash Drawable Balance: Total Revenue - Non-Paid Credit Orders
+      // Calculate Cash Drawable Balance: Total Revenue - Non-Paid Credit Orders - Cash Refunds
       let totalRevenueVal = 0;
       let nonPaidCreditVal = 0;
       if (allSales && allSales.length > 0) {
         allSales.forEach((sale: any) => {
           const statusLower = (sale.status || '').toLowerCase();
-          if (statusLower !== 'cancelled') {
+          if (statusLower !== 'cancelled' && statusLower !== 'voided') {
             const amt = Number(sale.total_amount || sale.total || 0);
             totalRevenueVal += amt;
             if (statusLower === 'non paid' || statusLower === 'non-paid') {
@@ -367,7 +457,28 @@ export function Dashboard({ onNavigate }: DashboardProps) {
           }
         });
       }
-      setCashBalance(totalRevenueVal - nonPaidCreditVal);
+
+      let totalRefundsVal = 0;
+      if (allReturns && allReturns.length > 0) {
+        allReturns.forEach((ret: any) => {
+          if (ret.status === 'voided' || ret.status === 'Voided') return;
+          const method = ret.returnMethod || ret.return_method;
+          if (method === 'Cash Refund') {
+            totalRefundsVal += Number(ret.totalRefunded !== undefined ? ret.totalRefunded : (ret.total_refunded || 0));
+          } else if (method === 'Exchange') {
+            const rawItems = ret.returnedItems || ret.returned_items;
+            const items = typeof rawItems === 'string' ? JSON.parse(rawItems) : (rawItems || []);
+            const rawExchangeItems = ret.exchangeItems || ret.exchange_items;
+            const exItems = typeof rawExchangeItems === 'string' ? JSON.parse(rawExchangeItems) : (rawExchangeItems || []);
+            const returnVal = items.reduce((s: number, i: any) => s + (i.price * i.qty), 0);
+            const exchangeVal = exItems.reduce((s: number, i: any) => s + (i.price * i.qty), 0);
+            const balanceDiff = returnVal - exchangeVal;
+            totalRefundsVal += balanceDiff;
+          }
+        });
+      }
+
+      setCashBalance(totalRevenueVal - nonPaidCreditVal - totalRefundsVal);
 
       // Fetch pending Purchase Orders for supplier alerts
       const { data: poData } = await supabase.from('purchase_orders').select('*');

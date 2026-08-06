@@ -1,6 +1,6 @@
 {
   "name": "magic-patterns-vite-template",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "main": "electron-main.js",
   "private": true,
   "type": "module",

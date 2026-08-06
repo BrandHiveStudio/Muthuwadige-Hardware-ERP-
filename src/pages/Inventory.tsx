@@ -60,6 +60,25 @@ const unitTranslations: Record<string, string> = {
   cube: 'කියුබ්'
 };
 
+const isDecimalUnit = (unit: string | undefined): boolean => {
+  if (!unit) return false;
+  const PREDEFINED_UNITS = ['pcs', 'kg', 'g', 'liters', 'ml', 'meters', 'boxes', 'packets', 'rolls', 'bundles'];
+  const decimals = ['kg', 'g', 'liters', 'ml', 'meters'];
+  const name = unit.toLowerCase().trim();
+  return decimals.includes(name) || !PREDEFINED_UNITS.includes(name);
+};
+
+const getProductConversions = (product: any) => {
+  if (!product || !product.measureDetails) return [];
+  try {
+    const parsed = JSON.parse(product.measureDetails);
+    if (parsed && Array.isArray(parsed.conversions)) {
+      return parsed.conversions;
+    }
+  } catch (e) {}
+  return [];
+};
+
 const emptyProduct: Omit<Product, 'id'> = {
   name: '',
   sku: '',
@@ -168,16 +187,15 @@ export function Inventory() {
           let rawCost = row["COST (RS.)"] !== undefined ? row["COST (RS.)"] : (row["Cost Price"] !== undefined ? row["Cost Price"] : (row.Cost !== undefined ? row.Cost : (row.cost !== undefined ? row.cost : (row.costPrice !== undefined ? row.costPrice : 0))));
           const costPrice = parseFloat(rawCost) || 0;
           
+          const unit = (row.UNIT || row.Unit || row.unit || 'pcs').toString().trim();
           let rawStock = row.STOCK !== undefined ? row.STOCK : (row.Stock !== undefined ? row.Stock : (row.stock !== undefined ? row.stock : (row.Qty !== undefined ? row.Qty : (row.Quantity !== undefined ? row.Quantity : 0))));
-          const stock = parseInt(rawStock) || 0;
+          const stock = isDecimalUnit(unit) ? parseFloat(rawStock) || 0 : parseInt(rawStock) || 0;
           
           let rawMin = row.MIN !== undefined ? row.MIN : (row.Min !== undefined ? row.Min : (row.min !== undefined ? row.min : (row["Min Stock"] !== undefined ? row["Min Stock"] : (row["Stock Alert"] !== undefined ? row["Stock Alert"] : (row.minStock !== undefined ? row.minStock : 5)))));
           const minStock = parseInt(rawMin) || 5;
           
           let supplierVal = (row.SUPPLIER || row.Supplier || row.supplier || row.Vendor || '').toString().trim();
           const supplier = (supplierVal === '—' || supplierVal === '-') ? '' : supplierVal;
-          
-          const unit = (row.UNIT || row.Unit || row.unit || 'pcs').toString().trim();
           const barcode = (row.BARCODE || row.Barcode || row.barcode || '').toString().trim();
           let expiryDateVal = (row["EXPIRY DATE"] || row["Expiry Date"] || row.expiryDate || row.expiry_date || '').toString().trim();
 
@@ -537,7 +555,7 @@ export function Inventory() {
     }
 
     let serializedDetails = '';
-    if (!PREDEFINED_UNITS.includes(formData.unit)) {
+    if (customConversionsList.length > 0 || customConversionRate > 0 || !PREDEFINED_UNITS.includes(formData.unit)) {
       serializedDetails = JSON.stringify({
         conversionRate: customConversionRate || 1,
         conversions: customConversionsList
@@ -967,23 +985,21 @@ export function Inventory() {
                           <span className="text-gray-400 text-[9px] uppercase font-black tracking-widest">
                             {t(product.unit, unitTranslations[product.unit] || product.unit)}
                           </span>
-                          {product.unit?.toLowerCase() === 'cube' && (() => {
-                            try {
-                              const parsed = JSON.parse(product.measureDetails || '{}');
-                              if (parsed.conversions && Array.isArray(parsed.conversions) && parsed.conversions.length > 0) {
-                                return (
-                                  <div className="text-[8px] text-[#DAA520] font-black mt-1 text-center leading-tight max-w-[125px]">
-                                    {parsed.conversions.map((c: any, i: number) => (
-                                      <div key={i} className="whitespace-nowrap">
-                                        = {(product.stock * c.kgVal).toLocaleString(undefined, { maximumFractionDigits: 2 })} {c.unit}
-                                      </div>
-                                    ))}
-                                  </div>
-                                  );
-                                }
-                              } catch(e) {}
-                              return null;
-                            })()}
+                          {(() => {
+                            const conversions = getProductConversions(product);
+                            if (conversions.length > 0) {
+                              return (
+                                <div className="text-[8px] text-[#DAA520] font-black mt-1 text-center leading-tight max-w-[125px]">
+                                  {conversions.map((c: any, i: number) => (
+                                    <div key={i} className="whitespace-nowrap">
+                                      = {(product.stock * c.kgVal).toLocaleString(undefined, { maximumFractionDigits: 2 })} {c.unit}
+                                    </div>
+                                  ))}
+                                </div>
+                              );
+                            }
+                            return null;
+                          })()}
                         </div>
                       </td>
                       <td className="px-6 py-4 text-center text-gray-400 font-bold italic">{product.minStock}</td>
@@ -1058,8 +1074,14 @@ export function Inventory() {
           {/* Initial Stock Field */}
           <div>
             <label className="block text-[10px] font-black text-gray-400 uppercase mb-1.5 tracking-widest">{t('Current Stock Quantity', 'ආරම්භක තොග ප්‍රමාණය')}</label>
-            <input type="number" value={formData.stock === 0 ? '' : formData.stock} onChange={(e) => setFormData({ ...formData, stock: parseInt(e.target.value) || 0 })} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm font-bold text-[#464646] outline-none focus:ring-2 focus:ring-[#DAA520]" />
-            {formData.unit?.toLowerCase() === 'cube' && customConversionsList.length > 0 && (
+            <input 
+              type="number" 
+              step={isDecimalUnit(formData.unit) ? 'any' : '1'} 
+              value={formData.stock === 0 ? '' : formData.stock} 
+              onChange={(e) => setFormData({ ...formData, stock: isDecimalUnit(formData.unit) ? parseFloat(e.target.value) || 0 : parseInt(e.target.value) || 0 })} 
+              className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm font-bold text-[#464646] outline-none focus:ring-2 focus:ring-[#DAA520]" 
+            />
+            {customConversionsList.length > 0 && (
               <p className="text-[10px] text-[#DAA520] font-black mt-1.5">
                 {t('Equivalent Stock:', 'සමාන තොගය:')} {customConversionsList.map(c => `${((formData.stock || 0) * c.kgVal).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${c.unit}`).join(' / ')}
               </p>
@@ -1123,30 +1145,23 @@ export function Inventory() {
                   <span className="w-1.5 h-3 bg-amber-500 rounded-full"></span>
                   {t('Additional Conversions for this Product (e.g. Bucket, Shovel)', 'මෙම භාණ්ඩය සඳහා වෙනත් මිනුම් ඒකක (උදා. බාල්දි, හැඳි)')}
                 </h4>
-                {formData.unit?.toLowerCase() === 'cube' && (
-                  <div className="text-[10px] text-amber-800 bg-amber-50/50 border border-amber-200/50 rounded-xl p-3.5 leading-relaxed font-bold">
-                    💡 <strong>{t('Cube Conversion Guide & Examples:', 'කියුබ් පරිවර්තන මාර්ගෝපදේශය සහ උදාහරණ:')}</strong>
-                    <div className="mt-1 font-semibold text-slate-600 space-y-1">
-                      <div className="text-amber-900 bg-amber-100/40 px-2.5 py-1.5 rounded-xl border border-amber-200/25">
-                        <strong>{t('Conversion Examples:', 'පරිවර්තන උදාහරණ:')}</strong>
-                        <div className="mt-0.5 ml-1 font-bold text-amber-950">• 1 Cube = 20 Buckets</div>
-                        <div className="ml-1 font-bold text-amber-950">• 1 Cube = 1000 Shovels</div>
-                      </div>
-                      <div className="mt-1.5">• 1 Cube = {t('how many Buckets', 'බාල්දි කීයද')} (e.g. {t('enter "Bucket" as Unit Name and "20" as Units per Cube', '"Bucket" සහ "20" ඇතුළත් කරන්න')})</div>
-                      <div>• 1 Cube = {t('how many Shovels', 'සවල කීයද')} (e.g. {t('enter "Shovel" as Unit Name and "1000" as Units per Cube', '"Shovel" සහ "1000" ඇතුළත් කරන්න')})</div>
+                <div className="text-[10px] text-amber-800 bg-amber-50/50 border border-amber-200/50 rounded-xl p-3.5 leading-relaxed font-bold">
+                  💡 <strong>{t(`${formData.unit || 'Base Unit'} Conversion Guide & Examples:`, `${formData.unit || 'ඒකකය'} පරිවර්තන මාර්ගෝපදේශය සහ උදාහරණ:`)}</strong>
+                  <div className="mt-1 font-semibold text-slate-600 space-y-1">
+                    <div className="text-amber-900 bg-amber-100/40 px-2.5 py-1.5 rounded-xl border border-amber-200/25">
+                      <strong>{t('Conversion Examples:', 'පරිවර්තන උදාහරණ:')}</strong>
+                      <div className="mt-0.5 ml-1 font-bold text-amber-950">• 1 {formData.unit || 'Box'} = 24 Bottles</div>
+                      <div className="ml-1 font-bold text-amber-950">• 1 {formData.unit || 'Cube'} = 250 Buckets</div>
                     </div>
+                    <div className="mt-1.5">• 1 {formData.unit || 'Base Unit'} = {t('how many sub-units', 'උප ඒකක කීයද')} (e.g. {t(`enter "Bucket" as Unit Name and "250" as Units per ${formData.unit || 'Base Unit'}`, `ඒකකයේ නම "Bucket" සහ අගය "250" ලෙස ඇතුළත් කරන්න`)} )</div>
                   </div>
-                )}
+                </div>
                 {customConversionsList.length > 0 && (
                   <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
                     {customConversionsList.map((conv, idx) => (
                       <div key={idx} className="flex justify-between items-center bg-white border border-slate-200 p-2.5 rounded-xl text-xs font-bold text-[#464646]">
                         <span>
-                          {formData.unit.toLowerCase() === 'cube' ? (
-                            `1 ${formData.unit} = ${conv.kgVal} ${conv.unit}(s)`
-                          ) : (
-                            `1 ${conv.unit} = ${conv.kgVal} kg`
-                          )}
+                          1 {formData.unit || 'Base Unit'} = {conv.kgVal} {conv.unit}(s)
                           {conv.price !== undefined ? ` (${symbol} ${conv.price.toLocaleString()})` : ''}
                         </span>
                         <button 
@@ -1167,13 +1182,13 @@ export function Inventory() {
                       type="text" 
                       value={newConversionUnit} 
                       onChange={(e) => setNewConversionUnit(e.target.value)} 
-                      placeholder="e.g. Bucket, Shovel" 
+                      placeholder="e.g. Bottle, Bucket, Shovel" 
                       className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-xs font-bold text-[#464646] outline-none focus:ring-1 focus:ring-[#DAA520]" 
                     />
                   </div>
-                  <div className="w-24">
+                  <div className="w-28">
                     <label className="block text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">
-                      {formData.unit.toLowerCase() === 'cube' ? t('Units per Cube', 'කියුබ් එකකට ඇති ඒකක ගණන') : t('Weight (kg)', 'බර (කි.ග්‍රෑ.)')}
+                      {t(`Units per 1 ${formData.unit || 'Base'}`, `1 ${formData.unit || 'ඒකකය'} කට ඇති ගණන`)}
                     </label>
                     <input 
                       type="number" 
@@ -1181,7 +1196,7 @@ export function Inventory() {
                       step="any"
                       value={newConversionKg} 
                       onChange={(e) => setNewConversionKg(e.target.value)} 
-                      placeholder="e.g. 20" 
+                      placeholder="e.g. 250" 
                       className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-xs font-bold text-[#464646] outline-none focus:ring-1 focus:ring-[#DAA520]" 
                     />
                   </div>
@@ -1296,17 +1311,16 @@ export function Inventory() {
           <div className="bg-gray-50 rounded-2xl p-5 text-center border border-gray-100 shadow-inner">
             <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">{t('Available Now', 'දැන් ලබාගත හැක')}</p>
             <p className="text-3xl font-black text-[#464646]">{stockProduct?.stock} <span className="text-sm text-gray-400 uppercase tracking-widest">{t(stockProduct?.unit || '', unitTranslations[stockProduct?.unit || ''] || stockProduct?.unit || '')}</span></p>
-            {stockProduct?.unit?.toLowerCase() === 'cube' && (() => {
-              try {
-                const parsed = JSON.parse(stockProduct.measureDetails || '{}');
-                if (parsed.conversions && Array.isArray(parsed.conversions) && parsed.conversions.length > 0) {
-                  return (
-                    <p className="text-[10px] text-amber-600 font-bold mt-1.5">
-                      (= {parsed.conversions.map((c: any) => `${(stockProduct.stock * c.kgVal).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${c.unit}`).join(' / ')})
-                    </p>
-                  );
-                }
-              } catch(e) {}
+            {(() => {
+              if (!stockProduct) return null;
+              const conversions = getProductConversions(stockProduct);
+              if (conversions.length > 0) {
+                return (
+                  <p className="text-[10px] text-amber-600 font-bold mt-1.5">
+                    (= {conversions.map((c: any) => `${(stockProduct.stock * c.kgVal).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${c.unit}`).join(' / ')})
+                  </p>
+                );
+              }
               return null;
             })()}
           </div>
@@ -1335,18 +1349,25 @@ export function Inventory() {
 
           <div className="text-left">
             <label className="block text-[10px] font-black text-gray-400 uppercase mb-1.5 tracking-widest">{t('Quantity', 'ප්‍රමාණය')}</label>
-            <input type="number" min={1} autoFocus value={stockQty} onChange={(e) => setStockQty(parseInt(e.target.value) || 0)} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm font-bold text-[#464646] outline-none focus:ring-2 focus:ring-[#DAA520]" />
-            {stockProduct?.unit?.toLowerCase() === 'cube' && stockQty > 0 && (() => {
-              try {
-                const parsed = JSON.parse(stockProduct.measureDetails || '{}');
-                if (parsed.conversions && Array.isArray(parsed.conversions) && parsed.conversions.length > 0) {
-                  return (
-                    <p className="text-[10px] text-amber-600 font-bold mt-1.5">
-                      {t('Equivalent adjust quantity:', 'පරිවර්තනය වන ප්‍රමාණය:')} {parsed.conversions.map((c: any) => `${(stockQty * c.kgVal).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${c.unit}`).join(' / ')}
-                    </p>
-                  );
-                }
-              } catch(e) {}
+            <input 
+              type="number" 
+              min={isDecimalUnit(stockProduct?.unit) ? 0.01 : 1} 
+              step={isDecimalUnit(stockProduct?.unit) ? 'any' : '1'} 
+              autoFocus 
+              value={stockQty} 
+              onChange={(e) => setStockQty(isDecimalUnit(stockProduct?.unit) ? parseFloat(e.target.value) || 0 : parseInt(e.target.value) || 0)} 
+              className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm font-bold text-[#464646] outline-none focus:ring-2 focus:ring-[#DAA520]" 
+            />
+            {(() => {
+              if (!stockProduct) return null;
+              const conversions = getProductConversions(stockProduct);
+              if (conversions.length > 0 && stockQty > 0) {
+                return (
+                  <p className="text-[10px] text-amber-600 font-bold mt-1.5">
+                    {t('Equivalent adjust quantity:', 'පරිවර්තනය වන ප්‍රමාණය:')} {conversions.map((c: any) => `${(stockQty * c.kgVal).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${c.unit}`).join(' / ')}
+                  </p>
+                );
+              }
               return null;
             })()}
           </div>

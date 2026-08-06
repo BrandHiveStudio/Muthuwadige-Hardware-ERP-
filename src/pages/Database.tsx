@@ -11,7 +11,7 @@ import {
   SearchIcon
 } from 'lucide-react';
 
-type DbTab = 'products' | 'customers' | 'profiles' | 'purchase_orders' | 'sales';
+type DbTab = 'products' | 'customers' | 'profiles' | 'purchase_orders' | 'sales' | 'system_settings';
 
 export function Database() {
   const [dbTab, setDbTab] = useState<DbTab>('products');
@@ -23,7 +23,11 @@ export function Database() {
     setDbLoading(true);
     try {
       const { data } = await supabase.from(dbTab).select('*');
-      setDbData(data || []);
+      if (dbTab === 'system_settings') {
+        setDbData(data ? (Array.isArray(data) ? data : [data]) : []);
+      } else {
+        setDbData(data || []);
+      }
     } catch (e) {
       console.error('Failed to fetch database table for Database page:', e);
       setDbData([]);
@@ -46,7 +50,8 @@ export function Database() {
             { id: 'customers', label: 'customers', icon: <UsersIcon className="w-4 h-4" /> },
             { id: 'profiles', label: 'profiles', icon: <ShieldIcon className="w-4 h-4" /> },
             { id: 'purchase_orders', label: 'purchase_orders', icon: <TruckIcon className="w-4 h-4" /> },
-            { id: 'sales', label: 'sales', icon: <ShoppingCartIcon className="w-4 h-4" /> }
+            { id: 'sales', label: 'sales', icon: <ShoppingCartIcon className="w-4 h-4" /> },
+            { id: 'system_settings', label: 'system_settings', icon: <DatabaseIcon className="w-4 h-4" /> }
           ].map(item => (
             <button
               key={item.id}
@@ -169,6 +174,21 @@ export function Database() {
                       <th className="px-5 py-4 text-center">created_at</th>
                     </tr>
                   )}
+                  {dbTab === 'system_settings' && (
+                    <tr>
+                      <th className="px-5 py-4">id</th>
+                      <th className="px-5 py-4">shop_name</th>
+                      <th className="px-5 py-4">address</th>
+                      <th className="px-5 py-4">phone</th>
+                      <th className="px-5 py-4">email</th>
+                      <th className="px-5 py-4">currency</th>
+                      <th className="px-5 py-4 text-center">tax_rate</th>
+                      <th className="px-5 py-4">backup_email</th>
+                      <th className="px-5 py-4 text-center">backup_enabled</th>
+                      <th className="px-5 py-4">next_invoice_number</th>
+                      <th className="px-5 py-4">return_passkey</th>
+                    </tr>
+                  )}
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {dbData
@@ -246,6 +266,23 @@ export function Database() {
                               <span className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider ${row.status === 'paid' || row.status === 'Paid' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{row.status}</span>
                             </td>
                             <td className="px-5 py-3 text-center text-gray-500 font-bold">{(row.created_at || '').split('T')[0] || row.date}</td>
+                          </>
+                        )}
+                        {dbTab === 'system_settings' && (
+                          <>
+                            <td className="px-5 py-3 font-mono font-bold text-gray-400">{row.id}</td>
+                            <td className="px-5 py-3 font-black text-slate-800">{row.shop_name || row.shopName}</td>
+                            <td className="px-5 py-3 font-bold text-gray-600">{row.address}</td>
+                            <td className="px-5 py-3 text-gray-600">{row.phone}</td>
+                            <td className="px-5 py-3 text-gray-500">{row.email}</td>
+                            <td className="px-5 py-3 font-bold text-[#DAA520]">{row.currency}</td>
+                            <td className="px-5 py-3 text-center font-bold text-slate-500">{row.tax_rate || row.taxRate}%</td>
+                            <td className="px-5 py-3 text-gray-600">{row.backup_email || row.backupEmail}</td>
+                            <td className="px-5 py-3 text-center">
+                              <span className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider ${row.backup_enabled === 1 || row.backup_enabled === true ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>{row.backup_enabled === 1 || row.backup_enabled === true ? 'Enabled' : 'Disabled'}</span>
+                            </td>
+                            <td className="px-5 py-3 font-bold text-slate-600">{row.next_invoice_number || row.nextInvoiceNumber}</td>
+                            <td className="px-5 py-3 font-mono font-bold text-emerald-600 select-all cursor-pointer">{row.return_passkey || row.returnPasskey}</td>
                           </>
                         )}
                       </tr>

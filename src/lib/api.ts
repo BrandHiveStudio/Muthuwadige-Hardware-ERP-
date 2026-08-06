@@ -234,6 +234,25 @@ export const api = {
       const res = await fetch(`${API_URL}/sales/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to delete sale from database');
       return res.json();
+    },
+    returns: {
+      getAll: async () => {
+        const res = await fetch(`${API_URL}/sales/returns`);
+        if (!res.ok) throw new Error('Failed to fetch sales returns history');
+        return res.json();
+      },
+      process: async (data: any) => {
+        const res = await fetch(`${API_URL}/sales/returns`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Failed to process sales return');
+        }
+        return res.json();
+      }
     }
   },
 
@@ -417,6 +436,26 @@ export const api = {
     delete: async (id: string) => {
       const res = await fetch(`${API_URL}/delivery_notes/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to delete delivery note');
+      return res.json();
+    }
+  },
+
+  creditNotes: {
+    getAll: async () => {
+      const res = await fetch(`${API_URL}/credit-notes`);
+      if (!res.ok) throw new Error('Failed to fetch credit notes');
+      return res.json();
+    },
+    redeem: async (code: string, invoiceNo: string) => {
+      const res = await fetch(`${API_URL}/credit-notes/redeem`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, invoiceNo })
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to redeem credit note');
+      }
       return res.json();
     }
   }

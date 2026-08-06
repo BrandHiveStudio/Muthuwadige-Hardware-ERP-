@@ -27,7 +27,7 @@ export function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [currentPage, setCurrentPage] = useState<PageName>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [salesTab, setSalesTab] = useState<'new' | 'history' | 'credit' | 'quotes' | 'delivery'>('new');
+  const [salesTab, setSalesTab] = useState<'new' | 'history' | 'credit' | 'credit_history' | 'quotes'>('new');
   const [notifications, setNotifications] = useState<any[]>([]);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
 

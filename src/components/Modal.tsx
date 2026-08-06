@@ -44,7 +44,7 @@ export function Modal({
         aria-hidden="true" />
 
       <div
-        className={`relative bg-white rounded-2xl shadow-2xl w-full ${sizeClasses[size]} max-h-[90vh] flex flex-col`}>
+        className={`relative z-10 bg-white rounded-2xl shadow-2xl w-full ${sizeClasses[size]} max-h-[90vh] flex flex-col`}>
 
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
           <h2 id="modal-title" className="text-lg font-semibold text-slate-900">

@@ -40,6 +40,7 @@ export function Settings() {
   const [threshold, setThreshold] = useState(10);
   const [settingsId, setSettingsId] = useState<string>('global');
   const [nextInvoiceNumber, setNextInvoiceNumber] = useState('INV001');
+  const [returnPasskey, setReturnPasskey] = useState('1234');
   const [saved, setSaved] = useState(false);
 
   // User Forms State
@@ -57,7 +58,7 @@ export function Settings() {
   const [selectedBackups, setSelectedBackups] = useState<string[]>([]);
   const [isEmailingBackup, setIsEmailingBackup] = useState(false);
   const [logoPath, setLogoPath] = useState('');
-  const [printerSettings, setPrinterSettings] = useState({ ip: '', port: '9100', type: 'Network', paperSize: 'A4' });
+  const [printerSettings, setPrinterSettings] = useState({ ip: '', port: '9100', type: 'Network', paperSize: '80mm' });
   const [branchSettings, setBranchSettings] = useState({ name: '', code: '', address: '' });
   const [isSendingTest, setIsSendingTest] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
@@ -240,6 +241,7 @@ export function Settings() {
       setBackupEmail(settingData.backup_email || '');
       setBackupEnabled(settingData.backup_enabled === true || settingData.backup_enabled === 1 || false);
       setLogoPath(settingData.logo_path || '');
+      setReturnPasskey(settingData.return_passkey || '1234');
       
       if (settingData.printer_settings) {
         try {
@@ -248,7 +250,7 @@ export function Settings() {
             ip: parsed.ip || '',
             port: parsed.port || '9100',
             type: parsed.type || 'Network',
-            paperSize: parsed.paperSize || 'A4'
+            paperSize: parsed.paperSize || '80mm'
           });
         } catch(e) {}
       }
@@ -532,7 +534,9 @@ export function Settings() {
       logo_path: logoPath,
       printer_settings: printerSettings,
       branch_settings: branchSettings,
-      next_invoice_number: nextInvoiceNumber.trim()
+      next_invoice_number: nextInvoiceNumber.trim(),
+      return_passkey: returnPasskey.trim(),
+      void_passkey: returnPasskey.trim()
     };
 
     const { error } = await supabase.from('system_settings').upsert([payload], {
@@ -830,6 +834,17 @@ export function Settings() {
                 />
                 <p className="text-[10px] text-gray-400 mt-1.5 font-bold">This is the starting invoice number. Subsequent numbers will increment automatically (e.g. INV001 ➜ INV002 ➜ INV003).</p>
               </div>
+              <div className="text-left">
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2.5 block">Centralized Void Security Passkey</label>
+                <input 
+                  type="password" 
+                  value={returnPasskey} 
+                  onChange={e => setReturnPasskey(e.target.value)} 
+                  className="w-full px-5 py-3.5 border border-gray-200 rounded-2xl outline-none focus:ring-4 focus:ring-[#DAA520]/15 focus:border-[#DAA520] font-bold text-[#464646] transition-all duration-300 shadow-sm" 
+                  placeholder="e.g. 1234"
+                />
+                <p className="text-[10px] text-gray-400 mt-1.5 font-bold">This single centralized passkey is required to authorize both Sales Void and Sales Return Void operations.</p>
+              </div>
             </div>
             
             {/* Printer & Branch Configuration */}
@@ -876,7 +891,7 @@ export function Settings() {
                 <div>
                   <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 block">Receipt Paper Size</label>
                   <select 
-                    value={printerSettings.paperSize || 'A4'} 
+                    value={printerSettings.paperSize || '80mm'} 
                     onChange={e => setPrinterSettings({ ...printerSettings, paperSize: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#DAA520] font-bold text-xs text-[#464646] bg-white cursor-pointer"
                   >
@@ -1109,6 +1124,8 @@ export function Settings() {
                         <th className="px-5 py-4 text-center">tax_rate</th>
                         <th className="px-5 py-4">backup_email</th>
                         <th className="px-5 py-4 text-center">backup_enabled</th>
+                        <th className="px-5 py-4">next_invoice_number</th>
+                        <th className="px-5 py-4">return_passkey</th>
                       </tr>
                     )}
                     {dbTab === 'transactions' && (
@@ -1233,6 +1250,8 @@ export function Settings() {
                               <td className="px-5 py-3 text-center">
                                 <span className={`px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider ${row.backup_enabled === 1 || row.backup_enabled === true ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-500'}`}>{row.backup_enabled === 1 || row.backup_enabled === true ? 'Enabled' : 'Disabled'}</span>
                               </td>
+                              <td className="px-5 py-3 font-bold text-slate-600">{row.next_invoice_number || row.nextInvoiceNumber}</td>
+                              <td className="px-5 py-3 font-mono font-bold text-emerald-600 select-all cursor-pointer">{row.return_passkey || row.returnPasskey}</td>
                             </>
                           )}
                           {dbTab === 'transactions' && (

@@ -35,6 +35,13 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { supabase } from '../lib/supabaseClient';
 import { useCurrency } from '../context/CurrencyContext';
+const isDecimalUnit = (unit: string | undefined): boolean => {
+  if (!unit) return false;
+  const PREDEFINED_UNITS = ['pcs', 'kg', 'g', 'liters', 'ml', 'meters', 'boxes', 'packets', 'rolls', 'bundles'];
+  const decimals = ['kg', 'g', 'liters', 'ml', 'meters'];
+  const name = unit.toLowerCase().trim();
+  return decimals.includes(name) || !PREDEFINED_UNITS.includes(name);
+};
 
 const getLocalDateString = (d: Date = new Date()) => {
   const year = d.getFullYear();
@@ -66,6 +73,34 @@ const safeGetDateString = (dateVal: any): string => {
     }
     return '';
   }
+};
+
+const getItemUnitCost = (product: any, itemUnit?: string, itemConvRate?: number): number => {
+  if (!product) return 0;
+  const baseCost = Number(product.cost_price !== undefined ? product.cost_price : product.costPrice !== undefined ? product.costPrice : 0);
+  let conversionRate = Number(itemConvRate) || 1;
+
+  if ((!itemConvRate || conversionRate === 1) && itemUnit && (product.unit && itemUnit.toLowerCase() !== product.unit.toLowerCase())) {
+    const measureDetailsStr = product.measure_details || product.measureDetails;
+    if (measureDetailsStr) {
+      try {
+        const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
+        if (parsed && Array.isArray(parsed.conversions)) {
+          const matchedConv = parsed.conversions.find((c: any) => (c.unit || '').toLowerCase() === itemUnit.toLowerCase());
+          if (matchedConv) {
+            const rawVal = Number(matchedConv.kgVal) || 1;
+            if ((product.unit || '').toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
+              conversionRate = 1 / rawVal;
+            } else {
+              conversionRate = rawVal;
+            }
+          }
+        }
+      } catch (e) {}
+    }
+  }
+
+  return conversionRate > 0 ? baseCost / conversionRate : baseCost;
 };
 
 type Tab = 'sales' | 'inventory' | 'financial';
@@ -331,15 +366,7 @@ export function Reports() {
         if (Array.isArray(items)) {
           items.forEach(it => {
             const product = products.find(p => p.id === it.productId);
-            let cost = product ? Number(product.cost_price !== undefined ? product.cost_price : product.costPrice !== undefined ? product.costPrice : 0) : 0;
-            if (product && (product.unit?.toLowerCase() === 'cube' || product.unit?.toLowerCase() === 'cubes')) {
-              const uLower = (it.unit || '').toLowerCase();
-              if (uLower === 'bucket' || uLower === 'buckets') {
-                cost = cost / 20;
-              } else if (uLower === 'shovel' || uLower === 'shovels') {
-                cost = cost / 1000;
-              }
-            }
+            const cost = getItemUnitCost(product, it.unit, it.conversionRate);
             const qty = Number(it.qty || 0);
             totalItemCost += qty * cost;
           });
@@ -425,15 +452,7 @@ export function Reports() {
         if (Array.isArray(items)) {
           saleProfit = items.reduce((sum, it) => {
             const product = products.find(p => p.id === it.productId);
-            let cost = product ? Number(product.cost_price !== undefined ? product.cost_price : product.costPrice !== undefined ? product.costPrice : 0) : 0;
-            if (product && (product.unit?.toLowerCase() === 'cube' || product.unit?.toLowerCase() === 'cubes')) {
-              const uLower = (it.unit || '').toLowerCase();
-              if (uLower === 'bucket' || uLower === 'buckets') {
-                cost = cost / 20;
-              } else if (uLower === 'shovel' || uLower === 'shovels') {
-                cost = cost / 1000;
-              }
-            }
+            const cost = getItemUnitCost(product, it.unit, it.conversionRate);
             const price = Number(it.price || 0);
             const qty = Number(it.qty || 0);
             return sum + (qty * (price - cost));
@@ -582,15 +601,7 @@ export function Reports() {
             doc.setTextColor(80, 80, 80);
             saleProfit = items.reduce((sum, it) => {
               const product = products.find(p => p.id === it.productId);
-              let cost = product ? Number(product.cost_price !== undefined ? product.cost_price : product.costPrice !== undefined ? product.costPrice : 0) : 0;
-              if (product && (product.unit?.toLowerCase() === 'cube' || product.unit?.toLowerCase() === 'cubes')) {
-                const uLower = (it.unit || '').toLowerCase();
-                if (uLower === 'bucket' || uLower === 'buckets') {
-                  cost = cost / 20;
-                } else if (uLower === 'shovel' || uLower === 'shovels') {
-                  cost = cost / 1000;
-                }
-              }
+              const cost = getItemUnitCost(product, it.unit, it.conversionRate);
               const price = Number(it.price || 0);
               const qty = Number(it.qty || 0);
               return sum + (qty * (price - cost));
