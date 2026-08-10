@@ -402,6 +402,11 @@ export const api = {
       if (!res.ok) throw new Error('Failed to fetch quotations');
       return res.json();
     },
+    getNextNumber: async () => {
+      const res = await fetch(`${API_URL}/quotations/next-number`);
+      if (!res.ok) throw new Error('Failed to fetch next quotation number');
+      return res.json();
+    },
     save: async (data: any) => {
       const res = await fetch(`${API_URL}/quotations`, {
         method: 'POST',
@@ -442,20 +447,59 @@ export const api = {
 
   creditNotes: {
     getAll: async () => {
-      const res = await fetch(`${API_URL}/credit-notes`);
+      try {
+        const res = await fetch(`${API_URL}/credit-notes`);
+        if (res.ok) return res.json();
+      } catch (e) {}
+      const res = await fetch(`${API_URL}/sales/credit-notes`);
       if (!res.ok) throw new Error('Failed to fetch credit notes');
       return res.json();
     },
-    redeem: async (code: string, invoiceNo: string) => {
+    redeem: async (code: string, amountApplied: number, invoiceNo?: string) => {
       const res = await fetch(`${API_URL}/credit-notes/redeem`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, invoiceNo })
+        body: JSON.stringify({ code, amountApplied, invoiceNo })
       });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || 'Failed to redeem credit note');
       }
+      return res.json();
+    },
+    getUsageHistory: async (code?: string) => {
+      const url = code ? `${API_URL}/credit-notes/${code}/usage` : `${API_URL}/credit-notes/usage`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Failed to fetch credit note usage history');
+      return res.json();
+    },
+    refundCash: async (code: string, reason?: string, userEmail?: string) => {
+      const res = await fetch(`${API_URL}/credit-notes/refund-cash`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, reason, userEmail })
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to process cash refund for credit note');
+      }
+      return res.json();
+    }
+  },
+
+  stockAdjustments: {
+    getAll: async () => {
+      const res = await fetch(`${API_URL}/stock_adjustments`);
+      if (!res.ok) throw new Error('Failed to fetch stock adjustments');
+      return res.json();
+    },
+    create: async (data: any) => {
+      const res = await fetch(`${API_URL}/stock_adjustments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (!res.ok) throw new Error('Failed to save stock adjustment');
       return res.json();
     }
   }

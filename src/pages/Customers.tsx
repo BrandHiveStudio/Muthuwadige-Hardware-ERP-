@@ -185,6 +185,8 @@ export function Customers() {
   const [isSettling, setIsSettling] = useState(false);
   const [paymentReceipt, setPaymentReceipt] = useState<{
     customerName: string;
+    customerPhone?: string;
+    customerAddress?: string;
     amountPaid: number;
     invoicesFullySettled: number;
     remainingBalance: number;
@@ -408,6 +410,8 @@ export function Customers() {
       // Show payment receipt (values stored in base currency, UI converts for display)
       setPaymentReceipt({
         customerName: settleCustomer.name,
+        customerPhone: settleCustomer.phone || '',
+        customerAddress: settleCustomer.address || '',
         amountPaid: amt,
         invoicesFullySettled: invoicesFullySettled.length,
         remainingBalance: newOutstandingBalance,
@@ -446,76 +450,97 @@ export function Customers() {
           <title>Credit Settle Receipt - ${receipt.customerName}</title>
           <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Sinhala:wght@400;600;700;800&display=swap" rel="stylesheet">
           <style>
-            body {
-              font-family: 'Inter', 'Noto Sans Sinhala', sans-serif;
+            @page {
               margin: 0;
-              padding: 20px;
-              color: #4b5563;
+              size: 80mm auto;
+            }
+            html, body {
+              font-family: 'Inter', 'Noto Sans Sinhala', sans-serif;
+              margin: 0 !important;
+              padding: 0 !important;
+              color: #1f2937;
               background: #ffffff;
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
             }
             .receipt-container {
               max-width: 80mm;
+              width: 100%;
               margin: 0 auto;
-              border: 1px solid #e5e7eb;
-              padding: 15px;
-              border-radius: 8px;
+              padding: 0 4mm;
               box-sizing: border-box;
             }
             .header {
               text-align: center;
-              border-bottom: 2px dashed #e5e7eb;
-              padding-bottom: 15px;
-              margin-bottom: 15px;
+              border-bottom: 2px dashed #4b5563;
+              padding-bottom: 8px;
+              margin-bottom: 8px;
             }
-            .header h1 {
-              font-size: 16px;
-              margin: 0;
-              color: #2c2c2c;
+            .shop-logo-img {
+              width: 2in;
+              height: 2in;
+              object-fit: contain;
+              display: block;
+              margin: 0 auto 6px auto;
+              image-rendering: -webkit-optimize-contrast;
+            }
+            .shop-address {
+              font-size: 14px;
               font-weight: 800;
+              color: #111827;
+              margin: 2px 0;
+              text-align: center;
+              line-height: 1.3;
             }
-            .header p {
-              font-size: 10px;
-              margin: 4px 0 0 0;
-              color: #6b7280;
+            .shop-phone {
+              font-size: 14px;
+              font-weight: 800;
+              color: #111827;
+              margin: 2px 0 4px 0;
+              text-align: center;
+              line-height: 1.3;
             }
             .title {
               text-align: center;
-              font-size: 12px;
+              font-size: 13px;
               font-weight: 800;
               text-transform: uppercase;
-              margin: 10px 0;
+              margin: 8px 0;
               letter-spacing: 1px;
               color: #059669;
+              border: 1px solid #059669;
+              padding: 4px;
+              background: #f0fdf4;
             }
             .details-table {
               width: 100%;
               border-collapse: collapse;
-              font-size: 11px;
-              margin-bottom: 15px;
+              font-size: 12px;
+              margin-bottom: 10px;
             }
             .details-table td {
-              padding: 4px 0;
+              padding: 3px 0;
             }
             .invoice-table {
               width: 100%;
               border-collapse: collapse;
-              font-size: 11px;
-              margin-bottom: 15px;
+              font-size: 12px;
+              margin-bottom: 12px;
             }
             .invoice-table th {
-              border-bottom: 1px solid #4b5563;
-              padding: 8px;
+              border-bottom: 1.5px solid #4b5563;
+              padding: 6px;
               text-align: left;
               font-weight: 800;
-              color: #374151;
+              color: #111827;
             }
             .summary-box {
               background: #f9fafb;
-              border: 1px solid #f3f4f6;
+              border: 1px solid #e5e7eb;
               border-radius: 6px;
-              padding: 8px;
-              font-size: 11px;
-              margin-bottom: 15px;
+              padding: 10px;
+              font-size: 13px;
+              margin-bottom: 10px;
             }
             .summary-row {
               display: flex;
@@ -524,53 +549,87 @@ export function Customers() {
             }
             .summary-row.total {
               font-weight: 800;
-              border-top: 1px solid #e5e7eb;
-              padding-top: 6px;
-              margin-top: 4px;
-              font-size: 12px;
+              border-top: 1.5px dashed #4b5563;
+              padding-top: 8px;
+              margin-top: 6px;
+              font-size: 15px;
               color: #111827;
+            }
+            .seal-divider {
+              border-bottom: 2px dashed #4b5563;
+              margin-top: 6px;
+            }
+            .seal-space {
+              height: 4cm;
+              min-height: 4cm;
             }
             .footer {
               text-align: center;
-              font-size: 9px;
-              color: #9ca3af;
-              margin-top: 20px;
-              border-top: 1px dashed #e5e7eb;
-              padding-top: 10px;
+              font-size: 12px;
+              color: #4b5563;
+              margin-top: 5px;
+              border-top: 1px dashed #4b5563;
+              padding-top: 8px;
+            }
+            .footer p {
+              margin: 2px 0;
+            }
+            @media print {
+              @page {
+                margin: 0;
+              }
+              html, body {
+                padding: 0 !important;
+                margin: 0 !important;
+              }
+              .receipt-container {
+                width: 100%;
+                max-width: 100%;
+                padding: 0 4mm !important;
+                box-sizing: border-box;
+              }
             }
           </style>
         </head>
         <body>
           <div class="receipt-container">
             <div class="header">
-              ${shopSettings?.logo_path ? 
-                `<img src="${shopSettings.logo_path}" alt="Shop Logo" style="max-width: 50px; max-height: 50px; object-fit: contain; display: block; margin: 0 auto 8px auto;" onerror="this.style.display='none';" />` : 
-                `<img src="./images/logo.png" alt="Shop Logo" style="max-width: 50px; max-height: 50px; object-fit: contain; display: block; margin: 0 auto 8px auto;" onerror="this.style.display='none';" />`
-              }
-              <h1>${shopName}</h1>
-              <p>${shopAddress}</p>
-              <p>Contact: ${shopPhone}</p>
+              <img class="shop-logo-img" src="${shopSettings?.logo_path || './images/logo.png'}" alt="Shop Logo" onerror="this.style.display='none';" />
+              <div class="shop-address">${shopAddress}</div>
+              <div class="shop-phone">Contact: ${shopPhone}</div>
             </div>
             
             <div class="title">${t('PAYMENT RECEIPT', 'ගෙවීම් රිසිට්පත')}</div>
             
             <table class="details-table">
               <tr>
-                <td style="font-weight: bold; color: #6b7280; text-align: left;">${t('Customer:', 'පාරිභෝගිකයා:')}</td>
-                <td style="text-align: right; font-weight: bold; color: #111827;">${receipt.customerName}</td>
+                <td style="font-weight: bold; color: #4b5563; text-align: left;">${t('Customer:', 'පාරිභෝගිකයා:')}</td>
+                <td style="text-align: right; font-weight: bold; color: #111827; font-size: 13px;">${receipt.customerName || 'Guest Customer'}</td>
               </tr>
+              ${receipt.customerPhone ? `
               <tr>
-                <td style="font-weight: bold; color: #6b7280; text-align: left;">${t('Date:', 'දිනය:')}</td>
-                <td style="text-align: right; color: #111827;">${new Date().toLocaleDateString()}</td>
+                <td style="font-weight: bold; color: #4b5563; text-align: left;">${t('Tel:', 'දුරකථන අංකය:')}</td>
+                <td style="text-align: right; color: #111827; font-size: 12px;">${receipt.customerPhone}</td>
+              </tr>
+              ` : ''}
+              ${receipt.customerAddress ? `
+              <tr>
+                <td style="font-weight: bold; color: #4b5563; text-align: left;">${t('Address:', 'ලිපිනය:')}</td>
+                <td style="text-align: right; color: #111827; font-size: 12px;">${receipt.customerAddress}</td>
+              </tr>
+              ` : ''}
+              <tr>
+                <td style="font-weight: bold; color: #4b5563; text-align: left;">${t('Date:', 'දිනය:')}</td>
+                <td style="text-align: right; color: #111827; font-size: 13px;">${new Date().toLocaleDateString()}</td>
               </tr>
             </table>
 
-            <div style="font-size: 10px; font-weight: bold; margin-bottom: 6px; color: #374151; text-align: left;">${t('Settled Invoices', 'පියවූ ඉන්වොයිසි')}</div>
+            <div style="font-size: 12px; font-weight: bold; margin-bottom: 6px; color: #111827; text-align: left;">${t('Settled Invoices', 'පියවූ ඉන්වොයිසි')}</div>
             <table class="invoice-table">
               <thead>
                 <tr style="background: #f3f4f6;">
-                  <th style="padding: 8px; text-align: left;">${t('Invoice No', 'ඉන්වොයිස් අංකය')}</th>
-                  <th style="padding: 8px; text-align: right;">${t('Amount Settle', 'පියවූ මුදල')}</th>
+                  <th style="padding: 6px; text-align: left;">${t('Invoice No', 'ඉන්වොයිස් අංකය')}</th>
+                  <th style="padding: 6px; text-align: right;">${t('Amount Settle', 'පියවූ මුදල')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -593,9 +652,11 @@ export function Customers() {
               </div>
             </div>
 
+            <div class="seal-divider"></div>
+            <div class="seal-space"></div>
+
             <div class="footer">
-              <p>${t('Thank you for your business!', 'ඔබගේ ගනුදෙනුවට ස්තූතියි!')}</p>
-              <p>Muthuwadige Hardware</p>
+              <p style="font-weight: bold;">${t('Thank you for your business!', 'ඔබගේ ගනුදෙනුවට ස්තූතියි!')}</p>
             </div>
           </div>
           <script>
@@ -699,6 +760,8 @@ export function Customers() {
 
       setPaymentReceipt({
         customerName: settleCustomer.name,
+        customerPhone: settleCustomer.phone || '',
+        customerAddress: settleCustomer.address || '',
         amountPaid: totalPaid,
         invoicesFullySettled: selectedInvoiceIds.length,
         remainingBalance,

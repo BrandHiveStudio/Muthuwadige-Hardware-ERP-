@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabaseClient';
+import { api, API_URL } from '../lib/api';
 import type { Product } from '../types';
 
 const categories = [
@@ -765,18 +766,28 @@ export function Inventory() {
 
       if (stockError) throw stockError;
 
-      // 2. Log in stock_adjustments
+      // 2. Log in stock_adjustments (SQLite REST API + Supabase)
+      const adjustmentRecord = {
+        id: 'sa_' + Date.now(),
+        product_id: stockProduct.id,
+        product_name: stockProduct.name,
+        old_qty: stockProduct.stock,
+        new_qty: newQty,
+        reason: reasonNotes.trim() || actionType,
+        type: actionType,
+        user_email: userEmail,
+        created_at: new Date().toISOString()
+      };
+
+      try {
+        await api.stockAdjustments.create(adjustmentRecord);
+      } catch (e) {
+        console.warn("Local SQLite stock adjustment log notice:", e);
+      }
+
       const { error: adjustError } = await supabase
         .from('stock_adjustments')
-        .insert([{
-          product_id: stockProduct.id,
-          product_name: stockProduct.name,
-          old_qty: stockProduct.stock,
-          new_qty: newQty,
-          reason: reasonNotes.trim() || actionType,
-          type: actionType,
-          user_email: userEmail
-        }]);
+        .insert([adjustmentRecord]);
 
       if (adjustError) throw adjustError;
 

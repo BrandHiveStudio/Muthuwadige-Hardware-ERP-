@@ -619,8 +619,18 @@ async function initializeDatabase() {
       id TEXT PRIMARY KEY,
       quote_no TEXT UNIQUE,
       customer_name TEXT,
+      customer_phone TEXT,
+      customer_address TEXT,
+      validity_period TEXT DEFAULT '30 Days',
       items TEXT,
-      total REAL,
+      subtotal REAL DEFAULT 0,
+      discount_type TEXT DEFAULT 'amount',
+      discount_value REAL DEFAULT 0,
+      discount_amount REAL DEFAULT 0,
+      transportation_fee REAL DEFAULT 0,
+      tax_amount REAL DEFAULT 0,
+      total REAL DEFAULT 0,
+      status TEXT DEFAULT 'Active',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -733,6 +743,80 @@ async function initializeDatabase() {
   try {
     await db.exec("ALTER TABLE bill_holds ADD COLUMN transportation_fee REAL DEFAULT 0");
   } catch(e) {}
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN return_no TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN customer_name TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN customer_phone TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN exchange_items TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN return_amount REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN exchange_amount REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN balance_amount REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN customer_paid REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN change_given REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN credit_note_no TEXT"); } catch(e) {}
+
+  try { await db.exec("ALTER TABLE sales ADD COLUMN credit_note_applied REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales ADD COLUMN credit_note_code TEXT"); } catch(e) {}
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS credit_notes (
+      id TEXT PRIMARY KEY,
+      credit_note_no TEXT UNIQUE,
+      invoice_no TEXT,
+      customer_id TEXT,
+      customer_name TEXT,
+      customer_phone TEXT,
+      items TEXT,
+      amount REAL,
+      balance_remaining REAL,
+      status TEXT DEFAULT 'active',
+      reason TEXT,
+      user_id TEXT,
+      created_at TEXT
+    )
+  `);
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS credit_note_usage (
+      id TEXT PRIMARY KEY,
+      credit_note_no TEXT,
+      invoice_no TEXT,
+      customer_id TEXT,
+      customer_name TEXT,
+      customer_phone TEXT,
+      amount_applied REAL,
+      previous_balance REAL,
+      remaining_balance REAL,
+      action TEXT DEFAULT 'applied',
+      user_email TEXT,
+      created_at TEXT
+    )
+  `);
+
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN credit_note_no TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN code TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN invoice_no TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN customer_id TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN customer_name TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN customer_phone TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN items TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN amount REAL"); } catch(e) {}
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN value REAL"); } catch(e) {}
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN balance_remaining REAL"); } catch(e) {}
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN status TEXT DEFAULT 'active'"); } catch(e) {}
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN reason TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN user_id TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN created_at TEXT"); } catch(e) {}
+
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN customer_phone TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN customer_address TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN validity_period TEXT DEFAULT '30 Days'"); } catch(e) {}
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN subtotal REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN discount_type TEXT DEFAULT 'amount'"); } catch(e) {}
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN discount_value REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN discount_amount REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN transportation_fee REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN tax_amount REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN status TEXT DEFAULT 'Active'"); } catch(e) {}
 
   await seedInitialData();
 }
@@ -1783,10 +1867,11 @@ Summary of Business & Financial Performance:
 💰 Total Net Sales Profit:   ${settings[0]?.currency || "Rs."} ${totalSalesProfit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
 📦 Total Inventory Asset Value: ${settings[0]?.currency || "Rs."} ${totalInventoryValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
 🛒 Total Orders Processed:   ${totalSalesCount}
+🔧 Stock Adjustments Recorded: ${stockAdjustments.length} logs
 🤝 Loyalty Registered Customers: ${totalCustomersCount}
 👔 Active Staff Members (Employees): ${activeEmployeesCount}
 
-💡 Tip: Use the Excel tabs in the attached spreadsheet file to explore each database table in detail.`,
+💡 Tip: Use the Excel tabs in the attached spreadsheet file to explore each database table in detail (including Inventory Stock, Stock Adjustments, Sales & Invoices, Accounting Ledger, etc.).`,
       attachments: [{ filename: fileName, path: filePath }]
     });
 
@@ -2309,7 +2394,12 @@ app.get('/api/sales', async (req, res) => {
       due_date: s.due_date,
       credit_period_days: s.credit_period_days || 0,
       payment_received: s.payment_received || 0,
-      transportation_fee: s.transportation_fee || 0
+      transportation_fee: Number(s.transportation_fee || 0),
+      transportationFee: Number(s.transportation_fee || 0),
+      credit_note_applied: Number(s.credit_note_applied || 0),
+      creditNoteApplied: Number(s.credit_note_applied || 0),
+      credit_note_code: s.credit_note_code || '',
+      creditNoteCode: s.credit_note_code || ''
     }));
     res.json(mapped);
   } catch (err) {
@@ -2341,6 +2431,10 @@ app.post('/api/sales', async (req, res) => {
   const s = req.body;
   const id = 'so_' + Date.now();
   const created_at = new Date().toISOString();
+  const creditNoteApplied = Number(s.credit_note_applied || s.creditNoteApplied || 0);
+  const creditNoteCode = s.credit_note_code || s.creditNoteCode || '';
+  const transportationFeeVal = Number(s.transportation_fee !== undefined ? s.transportation_fee : (s.transportationFee || 0));
+
   try {
     // 1. Start SQLite Transaction
     await db.run('BEGIN TRANSACTION');
@@ -2360,8 +2454,8 @@ app.post('/api/sales', async (req, res) => {
 
     // 2. Insert Sale Order
     await db.run(
-      'INSERT INTO sales (id, invoice_no, customer_id, customer_name, items, subtotal, discount, tax, tax_rate, total_amount, status, user_id, payment_method, created_at, due_date, credit_period_days, payment_received, transportation_fee) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, finalInvoiceNo, s.customer_id, s.customer_name, JSON.stringify(s.items), s.subtotal, s.discount, s.tax, s.tax_rate, s.total_amount, s.status, s.user_id, s.payment_method || 'Cash', created_at, s.due_date || null, s.credit_period_days || 0, s.payment_received || 0, s.transportation_fee || 0]
+      'INSERT INTO sales (id, invoice_no, customer_id, customer_name, items, subtotal, discount, tax, tax_rate, total_amount, status, user_id, payment_method, created_at, due_date, credit_period_days, payment_received, transportation_fee, credit_note_applied, credit_note_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, finalInvoiceNo, s.customer_id, s.customer_name, JSON.stringify(s.items), s.subtotal, s.discount, s.tax, s.tax_rate, s.total_amount, s.status, s.user_id, s.payment_method || 'Cash', created_at, s.due_date || null, s.credit_period_days || 0, s.payment_received || 0, transportationFeeVal, creditNoteApplied, creditNoteCode]
     );
 
     // 3. Decrement Product Stock levels
@@ -2383,6 +2477,85 @@ app.post('/api/sales', async (req, res) => {
       );
     }
 
+    // 5. Handle Credit Note Balance Deduction if Credit Note Applied > 0
+    if (creditNoteApplied > 0) {
+      if (!creditNoteCode && !s.customer_id && !s.customer_name) {
+        throw new Error('Credit Note code or customer must be specified to apply credit.');
+      }
+
+      let cn = null;
+      if (creditNoteCode) {
+        cn = await db.get(
+          "SELECT * FROM credit_notes WHERE (credit_note_no = ? OR code = ? OR id = ?)",
+          [creditNoteCode, creditNoteCode, creditNoteCode]
+        );
+      }
+
+      if (!cn && (s.customer_id || s.customer_name)) {
+        cn = await db.get(
+          "SELECT * FROM credit_notes WHERE (customer_id = ? OR customer_name = ?) AND balance_remaining > 0 AND status NOT IN ('Fully Used', 'used', 'voided') ORDER BY created_at ASC",
+          [s.customer_id || '', s.customer_name || '']
+        );
+      }
+
+      if (!cn) {
+        throw new Error(`Credit Note ${creditNoteCode || ''} not found or has 0 available balance.`);
+      }
+
+      const cnOriginalVal = Number(cn.amount !== undefined ? cn.amount : (cn.value || 0));
+      const prevBal = Number(cn.balance_remaining !== undefined ? cn.balance_remaining : cnOriginalVal);
+
+      const cnStatus = (cn.status || '').toLowerCase();
+      if (cnStatus === 'fully used' || cnStatus === 'used' || cnStatus === 'voided' || prevBal <= 0) {
+        throw new Error(`Credit Note ${cn.credit_note_no || creditNoteCode} is fully used or voided.`);
+      }
+
+      if (creditNoteApplied > prevBal) {
+        throw new Error(`Credit Note balance is only Rs. ${prevBal.toLocaleString()}. Cannot apply Rs. ${creditNoteApplied.toLocaleString()}.`);
+      }
+
+      const deductAmt = creditNoteApplied;
+      const remBal = Math.max(0, prevBal - deductAmt);
+
+      let newStatus = 'Active';
+      if (remBal <= 0.001) {
+        newStatus = 'Fully Used';
+      } else if (remBal < cnOriginalVal) {
+        newStatus = 'Partially Used';
+      }
+
+      // Update Credit Note Balance & Status
+      await db.run(
+        "UPDATE credit_notes SET balance_remaining = ?, status = ? WHERE id = ?",
+        [remBal, newStatus, cn.id]
+      );
+
+      // Record Detailed Credit Note Usage Log
+      const usageId = 'cnu_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      await db.run(
+        `INSERT INTO credit_note_usage (
+          id, credit_note_no, invoice_no, customer_id, customer_name, customer_phone,
+          amount_applied, previous_balance, remaining_balance, action, user_email, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          usageId,
+          cn.credit_note_no || cn.code || creditNoteCode,
+          finalInvoiceNo,
+          cn.customer_id || s.customer_id || '',
+          cn.customer_name || s.customer_name || 'Guest Customer',
+          cn.customer_phone || s.customer_phone || '',
+          deductAmt,
+          prevBal,
+          remBal,
+          'applied',
+          s.user_email || s.user_id || 'system',
+          created_at
+        ]
+      );
+
+      await logAudit(s.user_email || 'system', 'CREDIT_NOTE_APPLIED', `Applied Rs. ${deductAmt} from Credit Note ${cn.credit_note_no || creditNoteCode} to Invoice ${finalInvoiceNo}`);
+    }
+
     if (s.payment_method !== 'Credit' && s.status !== 'Non Paid') {
       replaceRuntimeTransactionByDescription(`POS Sale ${finalInvoiceNo}`, {
         type: 'income',
@@ -2394,7 +2567,7 @@ app.post('/api/sales', async (req, res) => {
       });
     }
 
-    // 5. Commit Transaction
+    // 6. Commit Transaction
     await db.run('COMMIT');
 
     // Trigger low stock checks asynchronously in the background
@@ -2573,10 +2746,20 @@ app.get('/api/sales/returns', async (req, res) => {
     await db.exec(`
       CREATE TABLE IF NOT EXISTS sales_returns (
         id TEXT PRIMARY KEY,
+        return_no TEXT,
         invoice_no TEXT,
+        customer_name TEXT,
+        customer_phone TEXT,
         returned_items TEXT,
+        exchange_items TEXT,
         return_method TEXT,
-        total_refunded REAL,
+        return_amount REAL DEFAULT 0,
+        exchange_amount REAL DEFAULT 0,
+        balance_amount REAL DEFAULT 0,
+        total_refunded REAL DEFAULT 0,
+        customer_paid REAL DEFAULT 0,
+        change_given REAL DEFAULT 0,
+        credit_note_no TEXT,
         user_id TEXT,
         status TEXT DEFAULT 'active',
         reason TEXT,
@@ -2586,11 +2769,23 @@ app.get('/api/sales/returns', async (req, res) => {
     const returns = await db.all('SELECT * FROM sales_returns ORDER BY created_at DESC');
     const mapped = returns.map(r => ({
       id: r.id,
+      returnNo: r.return_no || r.id,
+      return_no: r.return_no || r.id,
       invoiceNo: r.invoice_no,
       invoice_no: r.invoice_no,
+      customerName: r.customer_name || 'Guest Customer',
+      customer_name: r.customer_name || 'Guest Customer',
+      customerPhone: r.customer_phone || '',
       returnedItems: safeParseJson(r.returned_items, []),
+      exchangeItems: safeParseJson(r.exchange_items, []),
       returnMethod: r.return_method || 'Cash Refund',
-      totalRefunded: r.total_refunded || 0,
+      returnAmount: Number(r.return_amount || 0),
+      exchangeAmount: Number(r.exchange_amount || 0),
+      balanceAmount: Number(r.balance_amount || 0),
+      totalRefunded: Number(r.total_refunded || 0),
+      customerPaid: Number(r.customer_paid || 0),
+      changeGiven: Number(r.change_given || 0),
+      creditNoteNo: r.credit_note_no || '',
       userId: r.user_id,
       status: r.status || 'active',
       reason: r.reason || '',
@@ -2603,19 +2798,49 @@ app.get('/api/sales/returns', async (req, res) => {
 });
 
 app.post('/api/sales/returns', async (req, res) => {
-  const { invoiceNo, returnedItems, returnMethod, totalRefunded, userEmail, reason } = req.body;
-  const id = 'sr_' + Date.now();
+  const { 
+    invoiceNo, 
+    returnedItems = [], 
+    exchangeItems = [], 
+    returnMethod = 'Cash Refund', 
+    returnAmount = 0,
+    exchangeAmount = 0,
+    balanceAmount = 0,
+    totalRefunded = 0, 
+    customerPaid = 0,
+    changeGiven = 0,
+    creditNoteNo = '',
+    customerName = '',
+    customerPhone = '',
+    userEmail = 'system', 
+    reason = '' 
+  } = req.body;
+
+  const timestamp = Date.now();
+  const id = 'sr_' + timestamp;
+  const return_no = 'RET-' + String(timestamp).slice(-6);
   const created_at = new Date().toISOString();
+
   try {
     await db.run('BEGIN TRANSACTION');
 
     await db.exec(`
       CREATE TABLE IF NOT EXISTS sales_returns (
         id TEXT PRIMARY KEY,
+        return_no TEXT,
         invoice_no TEXT,
+        customer_name TEXT,
+        customer_phone TEXT,
         returned_items TEXT,
+        exchange_items TEXT,
         return_method TEXT,
-        total_refunded REAL,
+        return_amount REAL DEFAULT 0,
+        exchange_amount REAL DEFAULT 0,
+        balance_amount REAL DEFAULT 0,
+        total_refunded REAL DEFAULT 0,
+        customer_paid REAL DEFAULT 0,
+        change_given REAL DEFAULT 0,
+        credit_note_no TEXT,
         user_id TEXT,
         status TEXT DEFAULT 'active',
         reason TEXT,
@@ -2623,58 +2848,179 @@ app.post('/api/sales/returns', async (req, res) => {
       )
     `);
 
-    // 1. Save Sales Return record
+    // 1. Verify original invoice & remaining returnable quantities
+    const sale = await db.get('SELECT * FROM sales WHERE invoice_no = ?', [invoiceNo]);
+    if (!sale) {
+      await db.run('ROLLBACK');
+      return res.status(404).json({ error: `Invoice ${invoiceNo} not found.` });
+    }
+
+    const originalItems = safeParseJson(sale.items, []);
+    const activeReturns = await db.all('SELECT returned_items FROM sales_returns WHERE invoice_no = ? AND status = ?', [invoiceNo, 'active']);
+    
+    // Map cumulative returned quantities per productId
+    const alreadyReturnedMap = {};
+    activeReturns.forEach(r => {
+      const rItems = safeParseJson(r.returned_items, []);
+      rItems.forEach(ri => {
+        const pId = ri.productId || ri.product_id;
+        alreadyReturnedMap[pId] = (alreadyReturnedMap[pId] || 0) + Number(ri.qty || 0);
+      });
+    });
+
+    // Validate that current return qtys do not exceed remaining returnable qty
+    for (const item of returnedItems) {
+      const pId = item.productId || item.product_id;
+      const origItem = originalItems.find(i => (i.productId || i.id || i.product_id) === pId);
+      if (!origItem) {
+        await db.run('ROLLBACK');
+        return res.status(400).json({ error: `Product ${item.productName || pId} was not in the original invoice.` });
+      }
+      const origQty = Number(origItem.qty || 0);
+      const alreadyReturnedQty = alreadyReturnedMap[pId] || 0;
+      const remainingQty = origQty - alreadyReturnedQty;
+      if (Number(item.qty || 0) > remainingQty + 0.0001) {
+        await db.run('ROLLBACK');
+        return res.status(400).json({ 
+          error: `Cannot return ${item.qty} of ${item.productName}. Maximum remaining returnable quantity is ${remainingQty}.` 
+        });
+      }
+    }
+
+    const resolvedCustName = customerName || sale.customer_name || sale.customerName || 'Guest Customer';
+    const resolvedCustPhone = customerPhone || sale.customer_phone || sale.customerPhone || '';
+
+    // Calculate actual returnAmount if 0
+    const calcReturnAmount = returnAmount || returnedItems.reduce((acc, i) => acc + (Number(i.qty || 0) * Number(i.price || 0)), 0);
+    const calcExchangeAmount = exchangeAmount || exchangeItems.reduce((acc, i) => acc + (Number(i.qty || 0) * Number(i.price || 0)), 0);
+
+    let finalCreditNoteNo = creditNoteNo;
+    if (returnMethod === 'Credit Note' && !finalCreditNoteNo) {
+      finalCreditNoteNo = 'CN-' + String(timestamp).slice(-6);
+    }
+
+    // 2. Save Sales Return record
     await db.run(
-      'INSERT INTO sales_returns (id, invoice_no, returned_items, return_method, total_refunded, user_id, status, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, invoiceNo, JSON.stringify(returnedItems), returnMethod || 'Cash Refund', totalRefunded, userEmail || 'system', 'active', reason || '', created_at]
+      `INSERT INTO sales_returns (
+        id, return_no, invoice_no, customer_name, customer_phone, 
+        returned_items, exchange_items, return_method, return_amount, exchange_amount, 
+        balance_amount, total_refunded, customer_paid, change_given, credit_note_no, 
+        user_id, status, reason, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id, return_no, invoiceNo, resolvedCustName, resolvedCustPhone,
+        JSON.stringify(returnedItems), JSON.stringify(exchangeItems), returnMethod, calcReturnAmount, calcExchangeAmount,
+        balanceAmount, totalRefunded, customerPaid, changeGiven, finalCreditNoteNo,
+        userEmail || 'system', 'active', reason || '', created_at
+      ]
     );
 
-    // 2. Restock returned items
+    // 3. Restock returned items
     for (const item of returnedItems) {
       await db.run(
         'UPDATE products SET stock = stock + ? WHERE id = ?',
-        [item.qty * (item.conversionRate || 1), item.productId || item.product_id]
+        [Number(item.qty || 0) * (Number(item.conversionRate) || 1), item.productId || item.product_id]
       );
     }
 
-    // 3. Log cash refund transaction if applicable
-    if (totalRefunded > 0 && returnMethod === 'Cash Refund') {
+    // 4. Handle Exchange items stock deduction
+    if (returnMethod === 'Exchange' && exchangeItems.length > 0) {
+      for (const exItem of exchangeItems) {
+        await db.run(
+          'UPDATE products SET stock = stock - ? WHERE id = ?',
+          [Number(exItem.qty || 0) * (Number(exItem.conversionRate) || 1), exItem.productId || exItem.product_id]
+        );
+      }
+    }
+
+    // 5. Handle Credit Note creation if returnMethod === 'Credit Note'
+    if (returnMethod === 'Credit Note') {
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS credit_notes (
+          id TEXT PRIMARY KEY,
+          credit_note_no TEXT UNIQUE,
+          invoice_no TEXT,
+          customer_id TEXT,
+          customer_name TEXT,
+          customer_phone TEXT,
+          items TEXT,
+          amount REAL,
+          balance_remaining REAL,
+          status TEXT DEFAULT 'active',
+          reason TEXT,
+          user_id TEXT,
+          created_at TEXT
+        )
+      `);
+      const cnId = 'cn_' + timestamp;
+      await db.run(
+        `INSERT INTO credit_notes (
+          id, credit_note_no, code, invoice_no, customer_id, customer_name, customer_phone, 
+          items, amount, value, balance_remaining, status, reason, user_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          cnId, finalCreditNoteNo, finalCreditNoteNo, invoiceNo, sale.customer_id || '', resolvedCustName, resolvedCustPhone,
+          JSON.stringify(returnedItems), calcReturnAmount, calcReturnAmount, calcReturnAmount, 'active', reason || 'Sales Return Credit Note', userEmail || 'system', created_at
+        ]
+      );
+    }
+
+    // 6. Log financial transactions
+    if (returnMethod === 'Cash Refund' && totalRefunded > 0) {
       const txId = 't_' + Date.now();
       await db.run(
         'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         [txId, 'expense', 'Sales Return', `Sales Return Refund for ${invoiceNo}`, totalRefunded, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
       );
-    }
-
-    // 4. Update sales invoice status if fully or partially returned
-    const sale = await db.get('SELECT * FROM sales WHERE invoice_no = ?', [invoiceNo]);
-    if (sale) {
-      const originalItems = safeParseJson(sale.items, []);
-      // Calculate total return quantities across all returns for this invoice
-      const allReturns = await db.all('SELECT returned_items FROM sales_returns WHERE invoice_no = ? AND status = ?', [invoiceNo, 'active']);
-      let totalReturnedQty = 0;
-      let totalOriginalQty = 0;
-      originalItems.forEach(i => { totalOriginalQty += Number(i.qty || 0); });
-      allReturns.forEach(r => {
-        const rItems = safeParseJson(r.returned_items, []);
-        rItems.forEach(ri => { totalReturnedQty += Number(ri.qty || 0); });
-      });
-
-      let newStatus = sale.status;
-      if (totalReturnedQty >= totalOriginalQty && totalOriginalQty > 0) {
-        newStatus = 'Fully Returned';
-      } else if (totalReturnedQty > 0) {
-        newStatus = 'Partially Returned';
+    } else if (returnMethod === 'Exchange') {
+      if (customerPaid > 0) {
+        const txId = 't_' + Date.now();
+        await db.run(
+          'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [txId, 'income', 'Exchange Payment', `Exchange Balance Payment for ${invoiceNo}`, customerPaid - changeGiven, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+        );
+      } else if (totalRefunded > 0) {
+        const txId = 't_' + Date.now();
+        await db.run(
+          'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [txId, 'expense', 'Exchange Refund', `Exchange Balance Refund for ${invoiceNo}`, totalRefunded, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+        );
       }
-      await db.run('UPDATE sales SET status = ? WHERE id = ?', [newStatus, sale.id]);
     }
 
-    await logAudit(userEmail || 'system', 'SALES_RETURN', `Processed Sales Return for Invoice ${invoiceNo} (Refund: Rs. ${totalRefunded})`);
+    // 7. Update sales invoice status (Partially Returned / Fully Returned)
+    const updatedActiveReturns = await db.all('SELECT returned_items FROM sales_returns WHERE invoice_no = ? AND status = ?', [invoiceNo, 'active']);
+    let totalReturnedQty = 0;
+    let totalOriginalQty = 0;
+    originalItems.forEach(i => { totalOriginalQty += Number(i.qty || 0); });
+    updatedActiveReturns.forEach(r => {
+      const rItems = safeParseJson(r.returned_items, []);
+      rItems.forEach(ri => { totalReturnedQty += Number(ri.qty || 0); });
+    });
+
+    let newStatus = sale.status;
+    if (totalReturnedQty >= totalOriginalQty && totalOriginalQty > 0) {
+      newStatus = 'Fully Returned';
+    } else if (totalReturnedQty > 0) {
+      newStatus = 'Partially Returned';
+    }
+    await db.run('UPDATE sales SET status = ? WHERE id = ?', [newStatus, sale.id]);
+
+    await logAudit(userEmail || 'system', 'SALES_RETURN', `Processed ${returnMethod} (Return No: ${return_no}) for Invoice ${invoiceNo} (Amount: Rs. ${calcReturnAmount})`);
 
     await db.run('COMMIT');
-    res.json({ success: true, id, invoice_no: invoiceNo, totalRefunded });
+    res.json({ 
+      success: true, 
+      id, 
+      returnNo: return_no, 
+      return_no,
+      invoice_no: invoiceNo, 
+      totalRefunded,
+      creditNoteNo: finalCreditNoteNo
+    });
   } catch (err) {
-    await db.run('ROLLBACK');
+    try { await db.run('ROLLBACK'); } catch (e) {}
+    console.error('Error processing sales return:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -2700,19 +3046,33 @@ app.post('/api/sales/returns/:id/void', async (req, res) => {
     // 1. Mark status as voided
     await db.run("UPDATE sales_returns SET status = 'voided' WHERE id = ?", [id]);
 
-    // 2. Re-deduct stock levels
-    const items = safeParseJson(sr.returned_items, []);
-    for (const item of items) {
+    // 2. Re-deduct stock for returned items
+    const returnedItems = safeParseJson(sr.returned_items, []);
+    for (const item of returnedItems) {
       await db.run(
         'UPDATE products SET stock = stock - ? WHERE id = ?',
-        [item.qty * (item.conversionRate || 1), item.productId || item.product_id]
+        [Number(item.qty || 0) * (Number(item.conversionRate) || 1), item.productId || item.product_id]
       );
     }
 
-    // 3. Reverse financial refund transaction
-    await db.run("DELETE FROM transactions WHERE reference = ? AND category = 'Sales Return'", [sr.invoice_no]);
+    // 3. Re-add stock for exchange items if applicable
+    const exchangeItems = safeParseJson(sr.exchange_items, []);
+    for (const item of exchangeItems) {
+      await db.run(
+        'UPDATE products SET stock = stock + ? WHERE id = ?',
+        [Number(item.qty || 0) * (Number(item.conversionRate) || 1), item.productId || item.product_id]
+      );
+    }
 
-    // 4. Update sales invoice status
+    // 4. Void associated Credit Note if applicable
+    if (sr.credit_note_no) {
+      await db.run("UPDATE credit_notes SET status = 'voided' WHERE credit_note_no = ?", [sr.credit_note_no]);
+    }
+
+    // 5. Reverse financial refund transaction
+    await db.run("DELETE FROM transactions WHERE reference = ? AND (category = 'Sales Return' OR category = 'Exchange Payment' OR category = 'Exchange Refund')", [sr.invoice_no]);
+
+    // 6. Update sales invoice status
     const sale = await db.get('SELECT * FROM sales WHERE invoice_no = ?', [sr.invoice_no]);
     if (sale) {
       const originalItems = safeParseJson(sale.items, []);
@@ -2742,6 +3102,277 @@ app.post('/api/sales/returns/:id/void', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     await db.run('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// CREDIT NOTES API
+const handleGetCreditNotes = async (req, res) => {
+  try {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS credit_notes (
+        id TEXT PRIMARY KEY,
+        credit_note_no TEXT UNIQUE,
+        invoice_no TEXT,
+        customer_id TEXT,
+        customer_name TEXT,
+        customer_phone TEXT,
+        items TEXT,
+        amount REAL,
+        balance_remaining REAL,
+        status TEXT DEFAULT 'active',
+        reason TEXT,
+        user_id TEXT,
+        created_at TEXT
+      )
+    `);
+    const notes = await db.all('SELECT * FROM credit_notes ORDER BY created_at DESC');
+    const mapped = notes.map(cn => ({
+      id: cn.id,
+      creditNoteNo: cn.credit_note_no || cn.code || cn.id,
+      credit_note_no: cn.credit_note_no || cn.code || cn.id,
+      code: cn.code || cn.credit_note_no || cn.id,
+      invoiceNo: cn.invoice_no || '',
+      invoice_no: cn.invoice_no || '',
+      customerId: cn.customer_id || '',
+      customerName: cn.customer_name || 'Guest Customer',
+      customer_name: cn.customer_name || 'Guest Customer',
+      customerPhone: cn.customer_phone || '',
+      items: safeParseJson(cn.items, []),
+      amount: Number(cn.amount || cn.value || 0),
+      value: Number(cn.amount || cn.value || 0),
+      balanceRemaining: Number(cn.balance_remaining !== undefined ? cn.balance_remaining : (cn.amount || cn.value || 0)),
+      balance_remaining: Number(cn.balance_remaining !== undefined ? cn.balance_remaining : (cn.amount || cn.value || 0)),
+      status: cn.status || 'active',
+      reason: cn.reason || '',
+      userId: cn.user_id || 'system',
+      created_at: cn.created_at
+    }));
+    res.json(mapped);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+app.get('/api/sales/credit-notes', handleGetCreditNotes);
+app.get('/api/credit-notes', handleGetCreditNotes);
+
+app.post('/api/credit-notes/redeem', async (req, res) => {
+  const { code, creditNoteNo, amountApplied = 0, invoiceNo = 'MANUAL_REDEEM', userEmail = 'system' } = req.body;
+  const targetCode = code || creditNoteNo;
+  try {
+    const cn = await db.get(
+      "SELECT * FROM credit_notes WHERE (credit_note_no = ? OR code = ?) AND status NOT IN ('Fully Used', 'used', 'voided') AND balance_remaining > 0",
+      [targetCode, targetCode]
+    );
+
+    if (!cn) {
+      return res.status(404).json({ error: `Active Credit Note ${targetCode} not found or fully used.` });
+    }
+
+    const cnOriginalVal = Number(cn.amount || cn.value || 0);
+    const prevBal = Number(cn.balance_remaining !== undefined ? cn.balance_remaining : cnOriginalVal);
+    const redeemAmt = amountApplied > 0 ? Math.min(prevBal, Number(amountApplied)) : prevBal;
+    const newBal = Math.max(0, prevBal - redeemAmt);
+    let newStatus = 'Active';
+    if (newBal <= 0.001) {
+      newStatus = 'Fully Used';
+    } else if (newBal < (cnOriginalVal > 0 ? cnOriginalVal : prevBal)) {
+      newStatus = 'Partially Used';
+    }
+
+    await db.run(
+      "UPDATE credit_notes SET balance_remaining = ?, status = ? WHERE id = ?",
+      [newBal, newStatus, cn.id]
+    );
+
+    const usageId = 'cnu_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    const created_at = new Date().toISOString();
+    await db.run(
+      `INSERT INTO credit_note_usage (
+        id, credit_note_no, invoice_no, customer_id, customer_name, customer_phone,
+        amount_applied, previous_balance, remaining_balance, action, user_email, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        usageId,
+        cn.credit_note_no || cn.code || targetCode,
+        invoiceNo,
+        cn.customer_id || '',
+        cn.customer_name || 'Guest Customer',
+        cn.customer_phone || '',
+        redeemAmt,
+        prevBal,
+        newBal,
+        'applied',
+        userEmail,
+        created_at
+      ]
+    );
+
+    res.json({
+      success: true,
+      redeemedAmount: redeemAmt,
+      remainingBalance: newBal,
+      status: newStatus
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET Credit Note Usage History
+app.get('/api/credit-notes/usage', async (req, res) => {
+  try {
+    const logs = await db.all('SELECT * FROM credit_note_usage ORDER BY created_at DESC');
+    res.json(logs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/credit-notes/:code/usage', async (req, res) => {
+  const { code } = req.params;
+  try {
+    const logs = await db.all('SELECT * FROM credit_note_usage WHERE credit_note_no = ? OR credit_note_no = ? ORDER BY created_at DESC', [code, code]);
+    res.json(logs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Separate Authorized Action: Cash Refund of Credit Note
+app.post('/api/credit-notes/refund-cash', async (req, res) => {
+  const { code, reason = 'Authorized Cash Refund of Credit Note', userEmail = 'system' } = req.body;
+  if (!code) return res.status(400).json({ error: 'Credit Note code is required' });
+
+  try {
+    await db.run('BEGIN TRANSACTION');
+    const cn = await db.get(
+      "SELECT * FROM credit_notes WHERE (credit_note_no = ? OR code = ?) AND balance_remaining > 0 AND status NOT IN ('Fully Used', 'used', 'voided')",
+      [code, code]
+    );
+
+    if (!cn) {
+      await db.run('ROLLBACK');
+      return res.status(404).json({ error: `Active Credit Note ${code} not found or balance is 0.` });
+    }
+
+    const prevBal = Number(cn.balance_remaining !== undefined ? cn.balance_remaining : (cn.amount || cn.value || 0));
+    if (prevBal <= 0) {
+      await db.run('ROLLBACK');
+      return res.status(400).json({ error: 'Credit Note balance is 0' });
+    }
+
+    // 1. Set Credit Note balance to 0 and status to Fully Used
+    await db.run("UPDATE credit_notes SET balance_remaining = 0, status = 'Fully Used' WHERE id = ?", [cn.id]);
+
+    // 2. Log expense transaction in accounting ledger
+    const txId = 't_' + Date.now();
+    const created_at = new Date().toISOString();
+    await db.run(
+      'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [txId, 'expense', 'Credit Note Cash Refund', `Authorized Cash Refund of Credit Note ${cn.credit_note_no || code}`, prevBal, new Date().toLocaleDateString('sv-SE'), cn.credit_note_no || code, userEmail]
+    );
+
+    // 3. Log usage history
+    const usageId = 'cnu_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    await db.run(
+      `INSERT INTO credit_note_usage (
+        id, credit_note_no, invoice_no, customer_id, customer_name, customer_phone,
+        amount_applied, previous_balance, remaining_balance, action, user_email, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        usageId,
+        cn.credit_note_no || cn.code || code,
+        'CASH_REFUND',
+        cn.customer_id || '',
+        cn.customer_name || 'Guest Customer',
+        cn.customer_phone || '',
+        prevBal,
+        prevBal,
+        0,
+        'cash_refund',
+        userEmail,
+        created_at
+      ]
+    );
+
+    await logAudit(userEmail, 'CREDIT_NOTE_CASH_REFUND', `Refunded Rs. ${prevBal} cash for Credit Note ${cn.credit_note_no || code}`);
+
+    await db.run('COMMIT');
+    res.json({ success: true, message: `Successfully refunded Rs. ${prevBal} cash for Credit Note ${cn.credit_note_no || code}`, refundedAmount: prevBal });
+  } catch (err) {
+    try { await db.run('ROLLBACK'); } catch(e) {}
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/sales/credit-notes', async (req, res) => {
+  const { 
+    invoiceNo = '', 
+    customerId = '', 
+    customerName = '', 
+    customerPhone = '', 
+    items = [], 
+    amount = 0, 
+    reason = '', 
+    userEmail = 'system' 
+  } = req.body;
+
+  const timestamp = Date.now();
+  const id = 'cn_' + timestamp;
+  const credit_note_no = 'CN-' + String(timestamp).slice(-6);
+  const created_at = new Date().toISOString();
+
+  try {
+    await db.run('BEGIN TRANSACTION');
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS credit_notes (
+        id TEXT PRIMARY KEY,
+        credit_note_no TEXT UNIQUE,
+        invoice_no TEXT,
+        customer_id TEXT,
+        customer_name TEXT,
+        customer_phone TEXT,
+        items TEXT,
+        amount REAL,
+        balance_remaining REAL,
+        status TEXT DEFAULT 'active',
+        reason TEXT,
+        user_id TEXT,
+        created_at TEXT
+      )
+    `);
+
+    await db.run(
+      `INSERT INTO credit_notes (
+        id, credit_note_no, code, invoice_no, customer_id, customer_name, customer_phone, 
+        items, amount, value, balance_remaining, status, reason, user_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id, credit_note_no, credit_note_no, invoiceNo, customerId, customerName || 'Guest Customer', customerPhone,
+        JSON.stringify(items), amount, amount, amount, 'Active', reason || 'Direct Credit Note', userEmail || 'system', created_at
+      ]
+    );
+
+    await logAudit(userEmail || 'system', 'CREATE_CREDIT_NOTE', `Created Credit Note ${credit_note_no} for ${customerName || 'Customer'} (Amount: Rs. ${amount})`);
+    await db.run('COMMIT');
+    res.json({ success: true, id, creditNoteNo: credit_note_no, credit_note_no, amount });
+  } catch (err) {
+    await db.run('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/sales/credit-notes/:id/void', async (req, res) => {
+  const { id } = req.params;
+  const { userEmail } = req.body;
+  try {
+    await db.run("UPDATE credit_notes SET status = 'voided' WHERE id = ? OR credit_note_no = ?", [id, id]);
+    await logAudit(userEmail || 'system', 'VOID_CREDIT_NOTE', `Voided Credit Note ${id}`);
+    res.json({ success: true });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -3526,16 +4157,99 @@ app.get('/api/quotations', async (req, res) => {
   }
 });
 
+app.get('/api/quotations/next-number', async (req, res) => {
+  try {
+    const rows = await db.all('SELECT quote_no FROM quotations');
+    let maxNum = 0;
+    let prefix = 'Q-';
+    
+    rows.forEach(r => {
+      if (r.quote_no) {
+        const match = r.quote_no.match(/^(.*?)(\d+)$/);
+        if (match) {
+          prefix = match[1] || 'Q-';
+          const num = parseInt(match[2], 10);
+          if (!isNaN(num) && num > maxNum) {
+            maxNum = num;
+          }
+        }
+      }
+    });
+
+    const nextNum = maxNum + 1;
+    const formattedNum = `${prefix}${String(nextNum).padStart(4, '0')}`;
+    res.json({ nextNumber: formattedNum });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/quotations', async (req, res) => {
-  const { quote_no, customer_name, items, total } = req.body;
+  const {
+    quote_no,
+    customer_name,
+    customer_phone,
+    customer_address,
+    validity_period,
+    items,
+    subtotal,
+    discount_type,
+    discount_value,
+    discount_amount,
+    transportation_fee,
+    tax_amount,
+    total,
+    status
+  } = req.body;
+
   const id = 'q_' + Date.now();
   const created_at = new Date().toISOString();
+
+  let finalQuoteNo = quote_no;
+  if (!finalQuoteNo) {
+    const rows = await db.all('SELECT quote_no FROM quotations');
+    let maxNum = 0;
+    let prefix = 'Q-';
+    rows.forEach(r => {
+      if (r.quote_no) {
+        const match = r.quote_no.match(/^(.*?)(\d+)$/);
+        if (match) {
+          prefix = match[1] || 'Q-';
+          const num = parseInt(match[2], 10);
+          if (!isNaN(num) && num > maxNum) maxNum = num;
+        }
+      }
+    });
+    finalQuoteNo = `${prefix}${String(maxNum + 1).padStart(4, '0')}`;
+  }
+
   try {
     await db.run(
-      'INSERT INTO quotations (id, quote_no, customer_name, items, total, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [id, quote_no, customer_name, typeof items === 'string' ? items : JSON.stringify(items), total, created_at]
+      `INSERT INTO quotations (
+        id, quote_no, customer_name, customer_phone, customer_address,
+        validity_period, items, subtotal, discount_type, discount_value,
+        discount_amount, transportation_fee, tax_amount, total, status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        finalQuoteNo,
+        customer_name || 'Guest Customer',
+        customer_phone || '',
+        customer_address || '',
+        validity_period || '30 Days',
+        typeof items === 'string' ? items : JSON.stringify(items || []),
+        Number(subtotal || 0),
+        discount_type || 'amount',
+        Number(discount_value || 0),
+        Number(discount_amount || 0),
+        Number(transportation_fee || 0),
+        Number(tax_amount || 0),
+        Number(total || 0),
+        status || 'Active',
+        created_at
+      ]
     );
-    res.json({ success: true, id });
+    res.json({ success: true, id, quote_no: finalQuoteNo });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -3581,6 +4295,32 @@ app.delete('/api/delivery_notes/:id', async (req, res) => {
   try {
     await db.run('DELETE FROM delivery_notes WHERE id = ?', [id]);
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// STOCK ADJUSTMENTS API
+app.get('/api/stock_adjustments', async (req, res) => {
+  try {
+    const data = await db.all('SELECT * FROM stock_adjustments ORDER BY created_at DESC');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/stock_adjustments', async (req, res) => {
+  const { id, product_id, product_name, old_qty, new_qty, reason, type, user_email, created_at } = req.body;
+  const adjId = id || 'sa_' + Date.now();
+  const timestamp = created_at || new Date().toISOString();
+  try {
+    await db.run(
+      `INSERT INTO stock_adjustments (id, product_id, product_name, old_qty, new_qty, reason, type, user_email, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [adjId, product_id, product_name, old_qty || 0, new_qty || 0, reason || '', type || 'Adjustment', user_email || '', timestamp]
+    );
+    res.json({ success: true, id: adjId });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   SearchIcon,
   PlusIcon,
@@ -23,11 +23,24 @@ import { Modal } from '../components/Modal';
 import { notify } from '../components/Notifications';
 import { supabase } from '../lib/supabaseClient';
 import { useCurrency } from '../context/CurrencyContext';
-import { API_URL } from '../lib/api'; 
+import { api, API_URL } from '../lib/api'; 
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import type { SaleOrder, SaleItem, Customer, Product, Quotation, DeliveryNote, SalesReturn } from '../types';
+import type { SaleOrder, SaleItem, Customer, Product, Quotation, DeliveryNote, SalesReturn, CreditNote, CreditNoteUsage } from '../types';
 import { sinhalaFontBase64 } from '../utils/sinhalaFontBase64';
+
+const safeParseJson = (data: any, fallback: any = []) => {
+  if (data === null || data === undefined) return fallback;
+  if (typeof data === 'object') return data;
+  if (typeof data === 'string') {
+    try {
+      return JSON.parse(data);
+    } catch (e) {
+      return fallback;
+    }
+  }
+  return fallback;
+};
 import html2canvas from 'html2canvas';
 
 type Tab = 'new' | 'history' | 'credit' | 'credit_history' | 'quotes' | 'returns';
@@ -47,7 +60,7 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
         ? shopSettings.printer_settings 
         : (() => { try { return JSON.parse(shopSettings.printer_settings); } catch(e) { return {}; } })())
     : {};
-  const paperSize = printerConfig?.paperSize || 'A4';
+  const paperSize = printerConfig?.paperSize || '80mm';
 
   if (paperSize === '80mm') {
     const symbolStr = isSi ? 'රු.' : 'Rs.';
@@ -61,20 +74,20 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
         const parts: string[] = [];
         if (i.serialNo) parts.push(`S/N: ${i.serialNo}`);
         if (i.batchCode) parts.push(`Batch: ${i.batchCode}`);
-        trackingInfo = `<div style="font-size: 8px; font-weight: normal; color: #6b7280; margin-top: 1px;">${parts.join(' | ')}</div>`;
+        trackingInfo = `<div style="font-size: 10px; font-weight: normal; color: #6b7280; margin-top: 1px;">${parts.join(' | ')}</div>`;
       }
       return `
         <tr style="border-bottom: 1px dashed #e5e7eb;">
-          <td colspan="2" style="padding: 4px 0; font-weight: bold; text-align: left; color: #1f2937; font-size: 11px;">
+          <td colspan="2" style="padding: 5px 0 2px 0; font-weight: bold; text-align: left; color: #1f2937; font-size: 13px;">
             ${i.productName}
             ${trackingInfo}
           </td>
         </tr>
         <tr style="border-bottom: 1px dashed #e5e7eb;">
-          <td style="padding: 2px 0 6px 0; text-align: left; color: #4b5563; font-size: 10px;">
+          <td style="padding: 2px 0 6px 0; text-align: left; color: #374151; font-size: 12px;">
             ${i.qty} x ${symbolStr} ${formatNum(i.price)}
           </td>
-          <td style="padding: 2px 0 6px 0; text-align: right; color: #1f2937; font-weight: bold; font-size: 11px;">
+          <td style="padding: 2px 0 6px 0; text-align: right; color: #1f2937; font-weight: bold; font-size: 13px;">
             ${symbolStr} ${formatNum(i.total)}
           </td>
         </tr>
@@ -89,10 +102,14 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
           <title>Quotation - ${quote.quote_no}</title>
           <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Sinhala:wght@400;600;700;800&display=swap" rel="stylesheet">
           <style>
-            body {
-              font-family: 'Inter', 'Noto Sans Sinhala', sans-serif;
+            @page {
               margin: 0;
-              padding: 10px;
+              size: 80mm auto;
+            }
+            html, body {
+              font-family: 'Inter', 'Noto Sans Sinhala', sans-serif;
+              margin: 0 !important;
+              padding: 0 !important;
               background: #ffffff;
               color: #1f2937;
               -webkit-print-color-adjust: exact;
@@ -100,41 +117,55 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
             }
             .receipt-container {
               max-width: 80mm;
+              width: 100%;
               margin: 0 auto;
+              padding: 0 4mm;
               box-sizing: border-box;
             }
             .header {
               text-align: center;
               border-bottom: 2px dashed #4b5563;
-              padding-bottom: 10px;
-              margin-bottom: 10px;
+              padding-bottom: 8px;
+              margin-bottom: 8px;
             }
-            .header h1 {
+            .shop-logo-img {
+              width: 2in;
+              height: 2in;
+              object-fit: contain;
+              display: block;
+              margin: 0 auto 6px auto;
+              image-rendering: -webkit-optimize-contrast;
+            }
+            .shop-address {
               font-size: 14px;
-              margin: 0 0 4px 0;
               font-weight: 800;
               color: #111827;
-              text-transform: uppercase;
-            }
-            .header p {
-              font-size: 9px;
               margin: 2px 0;
-              color: #4b5563;
+              text-align: center;
+              line-height: 1.3;
+            }
+            .shop-phone {
+              font-size: 14px;
+              font-weight: 800;
+              color: #111827;
+              margin: 2px 0 4px 0;
+              text-align: center;
+              line-height: 1.3;
             }
             .title-badge {
               text-align: center;
-              font-size: 11px;
+              font-size: 13px;
               font-weight: 800;
               text-transform: uppercase;
               margin: 8px 0;
               letter-spacing: 1px;
               border: 1px solid #1f2937;
-              padding: 3px;
+              padding: 4px;
               background: #f9fafb;
             }
             .meta-table {
               width: 100%;
-              font-size: 9px;
+              font-size: 12px;
               margin-bottom: 8px;
               border-collapse: collapse;
             }
@@ -146,6 +177,7 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
               text-align: right;
               font-weight: 700;
               color: #1f2937;
+              font-size: 13px;
             }
             .items-table {
               width: 100%;
@@ -153,9 +185,9 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
               margin-bottom: 10px;
             }
             .items-table th {
-              border-bottom: 1px solid #1f2937;
-              padding: 4px 0;
-              font-size: 9px;
+              border-bottom: 1.5px solid #1f2937;
+              padding: 5px 0;
+              font-size: 13px;
               font-weight: 800;
               text-align: left;
               color: #1f2937;
@@ -168,8 +200,8 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
               padding-top: 5px;
             }
             .summary-table td {
-              padding: 3px 0;
-              font-size: 9px;
+              padding: 4px 0;
+              font-size: 13px;
               color: #4b5563;
             }
             .summary-table td.value {
@@ -178,31 +210,44 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
               color: #1f2937;
             }
             .summary-table tr.total-row td {
-              font-size: 12px;
+              font-size: 16px;
               font-weight: 800;
               color: #111827;
               border-top: 1px dashed #4b5563;
               padding-top: 6px;
             }
+            .seal-divider {
+              border-bottom: 2px dashed #4b5563;
+              margin-top: 6px;
+            }
+            .seal-space {
+              height: 4cm;
+              min-height: 4cm;
+            }
             .footer {
               text-align: center;
-              margin-top: 15px;
+              margin-top: 5px;
               border-top: 1px dashed #4b5563;
-              padding-top: 10px;
-              font-size: 9px;
-              color: #6b7280;
+              padding-top: 8px;
+              font-size: 12px;
+              color: #4b5563;
             }
             .footer p {
               margin: 2px 0;
             }
             @media print {
-              body {
-                padding: 0;
+              @page {
                 margin: 0;
+              }
+              html, body {
+                padding: 0 !important;
+                margin: 0 !important;
               }
               .receipt-container {
                 width: 100%;
                 max-width: 100%;
+                padding: 0 4mm !important;
+                box-sizing: border-box;
               }
             }
           </style>
@@ -210,9 +255,9 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
         <body>
           <div class="receipt-container">
             <div class="header">
-              <h1>${shopSettings?.shop_name || 'MUTHUWADIGE HARDWARE'}</h1>
-              <p>${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</p>
-              <p>Tel: ${shopSettings?.phone || '077 076 076 7'}</p>
+              <img class="shop-logo-img" src="${shopSettings?.logo_path || './images/logo.png'}" alt="Shop Logo" onerror="this.style.display='none';" />
+              <div class="shop-address">${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</div>
+              <div class="shop-phone">Tel: ${shopSettings?.phone || '077 076 076 7'}</div>
             </div>
             
             <div class="title-badge">${title}</div>
@@ -228,8 +273,20 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
               </tr>
               <tr>
                 <td>${isSi ? 'පාරිභෝගිකයා:' : 'Customer:'}</td>
-                <td class="value">${quote.customer_name}</td>
+                <td class="value">${quote.customer_name || quote.customerName || (isSi ? 'පාරිභෝගිකයා' : 'Guest Customer')}</td>
               </tr>
+              ${(quote.customer_phone || quote.customerPhone || quote.phone) ? `
+              <tr>
+                <td>${isSi ? 'දුරකථන අංකය:' : 'Tel:'}</td>
+                <td class="value">${quote.customer_phone || quote.customerPhone || quote.phone}</td>
+              </tr>
+              ` : ''}
+              ${(quote.customer_address || quote.customerAddress || quote.address) ? `
+              <tr>
+                <td>${isSi ? 'ලිපිනය:' : 'Address:'}</td>
+                <td class="value">${quote.customer_address || quote.customerAddress || quote.address}</td>
+              </tr>
+              ` : ''}
             </table>
             
             <table class="items-table">
@@ -250,6 +307,9 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
                 <td class="value">${symbolStr} ${formatNum(quote.total)}</td>
               </tr>
             </table>
+            
+            <div class="seal-divider"></div>
+            <div class="seal-space"></div>
             
             <div class="footer">
               <p>${isSi ? 'මෙම මිල ගණන් දින 30ක් සඳහා වලංගු වේ.' : 'This quotation is valid for 30 days.'}</p>
@@ -363,7 +423,7 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
             position: absolute;
             right: 50px;
             top: 0;
-            width: 240px;
+            width: 320px;
             height: 275px;
             background: #000000;
             border-bottom-left-radius: 14px;
@@ -376,14 +436,15 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
             border-top: none;
             z-index: 100;
             box-sizing: border-box;
-            padding: 6px;
+            padding: 2px;
           }
           .logo-container img {
             width: 100%;
             height: 100%;
-            max-width: 228px;
-            max-height: 263px;
+            max-width: 316px;
+            max-height: 271px;
             object-fit: contain;
+            transform: scale(1.15);
           }
           .details-section {
             padding: 50px 40px 30px 40px;
@@ -593,7 +654,7 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
         ? shopSettings.printer_settings 
         : (() => { try { return JSON.parse(shopSettings.printer_settings); } catch(e) { return {}; } })())
     : {};
-  const paperSize = printerConfig?.paperSize || 'A4';
+  const paperSize = printerConfig?.paperSize || '80mm';
 
   if (paperSize === '80mm') {
     const title = isSi ? 'බෙදාහැරීම් සටහන' : 'DELIVERY NOTE';
@@ -605,15 +666,15 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
         const parts: string[] = [];
         if (i.serialNo) parts.push(`S/N: ${i.serialNo}`);
         if (i.batchCode) parts.push(`Batch: ${i.batchCode}`);
-        trackingInfo = `<div style="font-size: 8px; font-weight: normal; color: #6b7280; margin-top: 1px;">${parts.join(' | ')}</div>`;
+        trackingInfo = `<div style="font-size: 10px; font-weight: normal; color: #6b7280; margin-top: 1px;">${parts.join(' | ')}</div>`;
       }
       return `
         <tr style="border-bottom: 1px dashed #e5e7eb;">
-          <td style="padding: 4px 0; font-weight: bold; text-align: left; color: #1f2937; font-size: 11px;">
+          <td style="padding: 5px 0 2px 0; font-weight: bold; text-align: left; color: #1f2937; font-size: 13px;">
             ${i.productName}
             ${trackingInfo}
           </td>
-          <td style="padding: 4px 0; text-align: right; color: #1f2937; font-weight: bold; font-size: 11px; width: 60px;">
+          <td style="padding: 5px 0 2px 0; text-align: right; color: #1f2937; font-weight: bold; font-size: 13px; width: 60px;">
             ${i.qty}
           </td>
         </tr>
@@ -628,10 +689,14 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
           <title>Delivery Note - ${dn.dn_no}</title>
           <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Sinhala:wght@400;600;700;800&display=swap" rel="stylesheet">
           <style>
-            body {
-              font-family: 'Inter', 'Noto Sans Sinhala', sans-serif;
+            @page {
               margin: 0;
-              padding: 10px;
+              size: 80mm auto;
+            }
+            html, body {
+              font-family: 'Inter', 'Noto Sans Sinhala', sans-serif;
+              margin: 0 !important;
+              padding: 0 !important;
               background: #ffffff;
               color: #1f2937;
               -webkit-print-color-adjust: exact;
@@ -639,41 +704,55 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
             }
             .receipt-container {
               max-width: 80mm;
+              width: 100%;
               margin: 0 auto;
+              padding: 0 4mm;
               box-sizing: border-box;
             }
             .header {
               text-align: center;
               border-bottom: 2px dashed #4b5563;
-              padding-bottom: 10px;
-              margin-bottom: 10px;
+              padding-bottom: 8px;
+              margin-bottom: 8px;
             }
-            .header h1 {
+            .shop-logo-img {
+              width: 2in;
+              height: 2in;
+              object-fit: contain;
+              display: block;
+              margin: 0 auto 6px auto;
+              image-rendering: -webkit-optimize-contrast;
+            }
+            .shop-address {
               font-size: 14px;
-              margin: 0 0 4px 0;
               font-weight: 800;
               color: #111827;
-              text-transform: uppercase;
-            }
-            .header p {
-              font-size: 9px;
               margin: 2px 0;
-              color: #4b5563;
+              text-align: center;
+              line-height: 1.3;
+            }
+            .shop-phone {
+              font-size: 14px;
+              font-weight: 800;
+              color: #111827;
+              margin: 2px 0 4px 0;
+              text-align: center;
+              line-height: 1.3;
             }
             .title-badge {
               text-align: center;
-              font-size: 11px;
+              font-size: 13px;
               font-weight: 800;
               text-transform: uppercase;
               margin: 8px 0;
               letter-spacing: 1px;
               border: 1px solid #1f2937;
-              padding: 3px;
+              padding: 4px;
               background: #f9fafb;
             }
             .meta-table {
               width: 100%;
-              font-size: 9px;
+              font-size: 12px;
               margin-bottom: 8px;
               border-collapse: collapse;
             }
@@ -685,6 +764,7 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
               text-align: right;
               font-weight: 700;
               color: #1f2937;
+              font-size: 13px;
             }
             .items-table {
               width: 100%;
@@ -692,27 +772,35 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
               margin-bottom: 10px;
             }
             .items-table th {
-              border-bottom: 1px solid #1f2937;
-              padding: 4px 0;
-              font-size: 9px;
+              border-bottom: 1.5px solid #1f2937;
+              padding: 5px 0;
+              font-size: 13px;
               font-weight: 800;
               text-align: left;
               color: #1f2937;
             }
+            .seal-divider {
+              border-bottom: 2px dashed #4b5563;
+              margin-top: 6px;
+            }
+            .seal-space {
+              height: 4cm;
+              min-height: 4cm;
+            }
             .footer {
               text-align: center;
-              margin-top: 25px;
+              margin-top: 5px;
               border-top: 1px dashed #4b5563;
-              padding-top: 10px;
-              font-size: 9px;
-              color: #6b7280;
+              padding-top: 8px;
+              font-size: 12px;
+              color: #4b5563;
             }
             .footer p {
               margin: 2px 0;
             }
             .sig-section {
-              margin-top: 20px;
-              padding-top: 20px;
+              margin-top: 15px;
+              padding-top: 15px;
               border-top: 1px dashed #cccccc;
               text-align: center;
             }
@@ -720,17 +808,22 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
               display: inline-block;
               width: 150px;
               border-top: 1px solid #6b7280;
-              margin-top: 25px;
-              font-size: 9px;
+              margin-top: 20px;
+              font-size: 11px;
             }
             @media print {
-              body {
-                padding: 0;
+              @page {
                 margin: 0;
+              }
+              html, body {
+                padding: 0 !important;
+                margin: 0 !important;
               }
               .receipt-container {
                 width: 100%;
                 max-width: 100%;
+                padding: 0 4mm !important;
+                box-sizing: border-box;
               }
             }
           </style>
@@ -738,9 +831,9 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
         <body>
           <div class="receipt-container">
             <div class="header">
-              <h1>${shopSettings?.shop_name || 'MUTHUWADIGE HARDWARE'}</h1>
-              <p>${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</p>
-              <p>Tel: ${shopSettings?.phone || '077 076 076 7'}</p>
+              <img class="shop-logo-img" src="${shopSettings?.logo_path || './images/logo.png'}" alt="Shop Logo" onerror="this.style.display='none';" />
+              <div class="shop-address">${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</div>
+              <div class="shop-phone">Tel: ${shopSettings?.phone || '077 076 076 7'}</div>
             </div>
             
             <div class="title-badge">${title}</div>
@@ -760,8 +853,20 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
               </tr>
               <tr>
                 <td>${isSi ? 'පාරිභෝගිකයා:' : 'Customer:'}</td>
-                <td class="value">${dn.customer_name}</td>
+                <td class="value">${dn.customer_name || dn.customerName || (isSi ? 'පාරිභෝගිකයා' : 'Guest Customer')}</td>
               </tr>
+              ${(dn.customer_phone || dn.customerPhone || dn.phone) ? `
+              <tr>
+                <td>${isSi ? 'දුරකථන අංකය:' : 'Tel:'}</td>
+                <td class="value">${dn.customer_phone || dn.customerPhone || dn.phone}</td>
+              </tr>
+              ` : ''}
+              ${(dn.customer_address || dn.customerAddress || dn.address) ? `
+              <tr>
+                <td>${isSi ? 'ලිපිනය:' : 'Address:'}</td>
+                <td class="value">${dn.customer_address || dn.customerAddress || dn.address}</td>
+              </tr>
+              ` : ''}
             </table>
             
             <table class="items-table">
@@ -779,6 +884,9 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
             <div class="sig-section">
               <div class="sig-line">${isSi ? 'ලැබූ අයගේ අත්සන' : 'Received By (Signature)'}</div>
             </div>
+            
+            <div class="seal-divider"></div>
+            <div class="seal-space"></div>
             
             <div class="footer">
               <p>${isSi ? 'කරුණාකර භාණ්ඩ ලැබුණු පසු පරීක්ෂා කර අත්සන් කරන්න.' : 'Please inspect items upon delivery and sign above.'}</p>
@@ -884,7 +992,7 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
             position: absolute;
             right: 60px;
             top: 0;
-            width: 165px;
+            width: 250px;
             height: 210px;
             background: #000000;
             border-bottom-left-radius: 10px;
@@ -897,12 +1005,15 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
             border-top: none;
             z-index: 100;
             box-sizing: border-box;
-            padding: 10px;
+            padding: 2px;
           }
           .logo-container img {
-            max-width: 140px;
-            max-height: 185px;
+            width: 100%;
+            height: 100%;
+            max-width: 246px;
+            max-height: 206px;
             object-fit: contain;
+            transform: scale(1.15);
           }
           .details-section {
             padding: 50px 40px 30px 40px;
@@ -1080,7 +1191,7 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
         ? shopSettings.printer_settings 
         : (() => { try { return JSON.parse(shopSettings.printer_settings); } catch(e) { return {}; } })())
     : {};
-  const paperSize = printerConfig?.paperSize || 'A4';
+  const paperSize = printerConfig?.paperSize || '80mm';
 
   if (paperSize === '80mm') {
     const symbolStr = isSi ? 'රු.' : 'Rs.';
@@ -1089,27 +1200,42 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
     const title = isCredit 
       ? (isSi ? 'ණය ඉන්වොයිසිය' : 'CREDIT INVOICE')
       : (isSi ? 'ඉන්වොයිසිය' : 'INVOICE');
+
+    const matchedCust = (shopSettings?.customers || []).find((c: any) => 
+      (order.customer_id && c.id === order.customer_id) || 
+      (order.customerName && c.name && c.name.toLowerCase() === order.customerName.toLowerCase()) ||
+      (order.customer_name && c.name && c.name.toLowerCase() === order.customer_name.toLowerCase())
+    );
+
+    const customerName = order.customerName || order.customer_name || matchedCust?.name || (isSi ? 'පාරිභෝගිකයා (Guest)' : 'Guest Customer');
+    const custPhone = order.customerPhone || order.customer_phone || matchedCust?.phone || '';
+    const custAddress = order.customerAddress || order.customer_address || matchedCust?.address || '';
     
-    const itemsRows = (order.items || []).map((i: any) => {
+    const orderItemsList = Array.isArray(order.items) 
+      ? order.items 
+      : (typeof order.items === 'string' 
+          ? (() => { try { return JSON.parse(order.items); } catch(e) { return []; } })() 
+          : []);
+    const itemsRows = orderItemsList.map((i: any) => {
       let trackingInfo = '';
       if (i.serialNo || i.batchCode) {
         const parts: string[] = [];
         if (i.serialNo) parts.push(`S/N: ${i.serialNo}`);
         if (i.batchCode) parts.push(`Batch: ${i.batchCode}`);
-        trackingInfo = `<div style="font-size: 8px; font-weight: normal; color: #6b7280; margin-top: 1px;">${parts.join(' | ')}</div>`;
+        trackingInfo = `<div style="font-size: 10px; font-weight: normal; color: #6b7280; margin-top: 1px;">${parts.join(' | ')}</div>`;
       }
       return `
         <tr style="border-bottom: 1px dashed #e5e7eb;">
-          <td colspan="2" style="padding: 4px 0; font-weight: bold; text-align: left; color: #1f2937; font-size: 11px;">
+          <td colspan="2" style="padding: 5px 0 2px 0; font-weight: bold; text-align: left; color: #1f2937; font-size: 13px;">
             ${i.productName}
             ${trackingInfo}
           </td>
         </tr>
         <tr style="border-bottom: 1px dashed #e5e7eb;">
-          <td style="padding: 2px 0 6px 0; text-align: left; color: #4b5563; font-size: 10px;">
+          <td style="padding: 2px 0 6px 0; text-align: left; color: #374151; font-size: 12px;">
             ${i.qty} ${i.unit || ''} x ${symbolStr} ${formatNum(i.price)}
           </td>
-          <td style="padding: 2px 0 6px 0; text-align: right; color: #1f2937; font-weight: bold; font-size: 11px;">
+          <td style="padding: 2px 0 6px 0; text-align: right; color: #1f2937; font-weight: bold; font-size: 13px;">
             ${symbolStr} ${formatNum(i.total)}
           </td>
         </tr>
@@ -1124,10 +1250,14 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
           <title>Invoice - ${order.invoiceNo}</title>
           <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Sinhala:wght@400;600;700;800&display=swap" rel="stylesheet">
           <style>
-            body {
-              font-family: 'Inter', 'Noto Sans Sinhala', sans-serif;
+            @page {
               margin: 0;
-              padding: 10px;
+              size: 80mm auto;
+            }
+            html, body {
+              font-family: 'Inter', 'Noto Sans Sinhala', sans-serif;
+              margin: 0 !important;
+              padding: 0 !important;
               background: #ffffff;
               color: #1f2937;
               -webkit-print-color-adjust: exact;
@@ -1135,41 +1265,55 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
             }
             .receipt-container {
               max-width: 80mm;
+              width: 100%;
               margin: 0 auto;
+              padding: 0 4mm 0 2mm;
               box-sizing: border-box;
             }
             .header {
               text-align: center;
               border-bottom: 2px dashed #4b5563;
-              padding-bottom: 10px;
-              margin-bottom: 10px;
+              padding-bottom: 8px;
+              margin-bottom: 8px;
             }
-            .header h1 {
+            .shop-logo-img {
+              width: 2in;
+              height: 2in;
+              object-fit: contain;
+              display: block;
+              margin: 0 auto 6px auto;
+              image-rendering: -webkit-optimize-contrast;
+            }
+            .shop-address {
               font-size: 14px;
-              margin: 0 0 4px 0;
               font-weight: 800;
               color: #111827;
-              text-transform: uppercase;
-            }
-            .header p {
-              font-size: 9px;
               margin: 2px 0;
-              color: #4b5563;
+              text-align: center;
+              line-height: 1.3;
+            }
+            .shop-phone {
+              font-size: 14px;
+              font-weight: 800;
+              color: #111827;
+              margin: 2px 0 4px 0;
+              text-align: center;
+              line-height: 1.3;
             }
             .title-badge {
               text-align: center;
-              font-size: 11px;
+              font-size: 13px;
               font-weight: 800;
               text-transform: uppercase;
               margin: 8px 0;
               letter-spacing: 1px;
               border: 1px solid #1f2937;
-              padding: 3px;
+              padding: 4px;
               background: #f9fafb;
             }
             .meta-table {
               width: 100%;
-              font-size: 9px;
+              font-size: 12px;
               margin-bottom: 8px;
               border-collapse: collapse;
             }
@@ -1181,6 +1325,8 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               text-align: right;
               font-weight: 700;
               color: #1f2937;
+              font-size: 13px;
+              padding-right: 4px;
             }
             .items-table {
               width: 100%;
@@ -1188,9 +1334,9 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               margin-bottom: 10px;
             }
             .items-table th {
-              border-bottom: 1px solid #1f2937;
-              padding: 4px 0;
-              font-size: 9px;
+              border-bottom: 1.5px solid #1f2937;
+              padding: 5px 0;
+              font-size: 13px;
               font-weight: 800;
               text-align: left;
               color: #1f2937;
@@ -1203,41 +1349,55 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               padding-top: 5px;
             }
             .summary-table td {
-              padding: 3px 0;
-              font-size: 9px;
+              padding: 4px 0;
+              font-size: 13px;
               color: #4b5563;
             }
             .summary-table td.value {
               text-align: right;
               font-weight: 700;
               color: #1f2937;
+              padding-right: 4px;
             }
             .summary-table tr.total-row td {
-              font-size: 12px;
+              font-size: 16px;
               font-weight: 800;
               color: #111827;
               border-top: 1px dashed #4b5563;
               padding-top: 6px;
             }
+            .seal-divider {
+              border-bottom: 2px dashed #4b5563;
+              margin-top: 6px;
+            }
+            .seal-space {
+              height: 4cm;
+              min-height: 4cm;
+            }
             .footer {
               text-align: center;
-              margin-top: 15px;
+              margin-top: 5px;
               border-top: 1px dashed #4b5563;
-              padding-top: 10px;
-              font-size: 9px;
-              color: #6b7280;
+              padding-top: 8px;
+              font-size: 12px;
+              color: #4b5563;
             }
             .footer p {
               margin: 2px 0;
             }
             @media print {
-              body {
-                padding: 0;
+              @page {
                 margin: 0;
+              }
+              html, body {
+                padding: 0 !important;
+                margin: 0 !important;
               }
               .receipt-container {
                 width: 100%;
                 max-width: 100%;
+                padding: 0 6mm 0 2mm !important;
+                box-sizing: border-box;
               }
             }
           </style>
@@ -1245,9 +1405,9 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
         <body>
           <div class="receipt-container">
             <div class="header">
-              <h1>${shopSettings?.shop_name || 'MUTHUWADIGE HARDWARE'}</h1>
-              <p>${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</p>
-              <p>Tel: ${shopSettings?.phone || '077 076 076 7'}</p>
+              <img class="shop-logo-img" src="${shopSettings?.logo_path || './images/logo.png'}" alt="Shop Logo" onerror="this.style.display='none';" />
+              <div class="shop-address">${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</div>
+              <div class="shop-phone">Tel: ${shopSettings?.phone || '077 076 076 7'}</div>
             </div>
             
             <div class="title-badge">${title}</div>
@@ -1262,20 +1422,32 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
                 <td class="value">${formatInvoiceDateTime(order.created_at, order.date)}</td>
               </tr>
               <tr>
-                <td>${isSi ? 'පාරිභෝගිකයා:' : 'Customer:'}</td>
-                <td class="value">${order.customerName}</td>
+                <td>${isSi ? 'ගෙවීම් ක්‍රමය:' : 'Payment Method:'}</td>
+                <td class="value">${order.payment_method || 'Cash'}</td>
               </tr>
               <tr>
-                <td>${isSi ? 'ගෙවීම් ක්‍රමය:' : 'Payment Method:'}</td>
-                <td class="value">${order.payment_method}</td>
+                <td>${isSi ? 'පාරිභෝගිකයා:' : 'Customer:'}</td>
+                <td class="value">${customerName}</td>
               </tr>
+              ${custPhone ? `
+              <tr>
+                <td>${isSi ? 'දුරකථන අංකය:' : 'Tel:'}</td>
+                <td class="value">${custPhone}</td>
+              </tr>
+              ` : ''}
+              ${custAddress ? `
+              <tr>
+                <td>${isSi ? 'ලිපිනය:' : 'Address:'}</td>
+                <td class="value">${custAddress}</td>
+              </tr>
+              ` : ''}
             </table>
             
             <table class="items-table">
               <thead>
                 <tr>
                   <th style="text-align: left;">${isSi ? 'විස්තරය' : 'Item Description'}</th>
-                  <th style="text-align: right; width: 80px;">${isSi ? 'එකතුව' : 'Total'}</th>
+                  <th style="text-align: right; width: 80px; padding-right: 4px;">${isSi ? 'එකතුව' : 'Total'}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1288,19 +1460,38 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
                 <td>${isSi ? 'උප එකතුව:' : 'Sub Total:'}</td>
                 <td class="value">${symbolStr} ${formatNum(order.subtotal || 0)}</td>
               </tr>
+              ${Number(order.discount || 0) > 0 ? `
               <tr>
                 <td>${isSi ? 'වට්ටම:' : 'Discount:'}</td>
                 <td class="value">-${symbolStr} ${formatNum(order.discount || 0)}</td>
               </tr>
+              ` : ''}
+              ${Number(order.transportation_fee || order.transportationFee || 0) > 0 ? `
+              <tr>
+                <td>${isSi ? 'ප්‍රවාහන ගාස්තුව:' : 'Transportation Fee:'}</td>
+                <td class="value">+${symbolStr} ${formatNum(order.transportation_fee || order.transportationFee || 0)}</td>
+              </tr>
+              ` : ''}
+              ${Number(order.tax || 0) > 0 ? `
               <tr>
                 <td>${isSi ? `බද්ද (${order.tax_rate || 0}%):` : `Tax (${order.tax_rate || 0}%):`}</td>
                 <td class="value">+${symbolStr} ${formatNum(order.tax || 0)}</td>
               </tr>
+              ` : ''}
+              ${Number(order.credit_note_applied || order.creditNoteApplied || 0) > 0 ? `
+              <tr>
+                <td>${isSi ? 'ණය සටහන:' : 'Credit Note Applied:'}</td>
+                <td class="value">-${symbolStr} ${formatNum(order.credit_note_applied || order.creditNoteApplied || 0)}</td>
+              </tr>
+              ` : ''}
               <tr class="total-row">
                 <td>${isSi ? 'මුළු එකතුව:' : 'Total Amount:'}</td>
-                <td class="value">${symbolStr} ${formatNum(order.total)}</td>
+                <td class="value">${symbolStr} ${formatNum(order.total_amount !== undefined ? order.total_amount : order.total)}</td>
               </tr>
             </table>
+            
+            <div class="seal-divider"></div>
+            <div class="seal-space"></div>
             
             <div class="footer">
               <p>${isSi ? 'කිසියම් ප්‍රශ්නයක් ඇත්නම් කරුණාකර අප හා සම්බන්ධ වන්න.' : 'For queries, please contact us.'}</p>
@@ -1345,7 +1536,12 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
   const noteLine2 = isSi ? 'ඔබගේ ව්‍යාපාරයට ස්තූතියි!' : 'Thank you for your business!';
   const signeeLabel = isSi ? 'බලයලත් අත්සන' : 'Authorized Signee';
 
-  const itemsRows = (order.items || []).map((i: any) => {
+  const orderItemsList = Array.isArray(order.items) 
+    ? order.items 
+    : (typeof order.items === 'string' 
+        ? (() => { try { return JSON.parse(order.items); } catch(e) { return []; } })() 
+        : []);
+  const itemsRows = orderItemsList.map((i: any) => {
     let trackingInfo = '';
     if (i.serialNo || i.batchCode) {
       const parts: string[] = [];
@@ -1421,7 +1617,7 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
             position: absolute;
             right: 50px;
             top: 0;
-            width: 240px;
+            width: 320px;
             height: 280px;
             background: #000000;
             border-bottom-left-radius: 14px;
@@ -1434,14 +1630,15 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
             border-top: none;
             z-index: 100;
             box-sizing: border-box;
-            padding: 6px;
+            padding: 2px;
           }
           .logo-container img {
             width: 100%;
             height: 100%;
-            max-width: 228px;
-            max-height: 268px;
+            max-width: 316px;
+            max-height: 276px;
             object-fit: contain;
+            transform: scale(1.15);
           }
           .invoice-title-wrapper {
             margin-top: 100px;
@@ -1474,7 +1671,7 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
           .meta-section {
             display: flex;
             justify-content: space-between;
-            margin: 30px 40px 20px 40px;
+            margin: 30px 50px 20px 40px;
           }
           .bill-to h2 {
             font-size: 11px;
@@ -1511,9 +1708,10 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
             font-weight: 400;
             color: #4b5563;
             text-align: right;
+            padding-right: 8px;
           }
           .table-section {
-            margin: 20px 40px;
+            margin: 20px 50px 20px 40px;
           }
           .invoice-table {
             width: 100%;
@@ -1531,12 +1729,12 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
           .invoice-table th.desc { text-align: left; width: 50%; }
           .invoice-table th.qty { text-align: center; width: 10%; }
           .invoice-table th.price { text-align: right; width: 20%; }
-          .invoice-table th.total { text-align: right; width: 20%; }
+          .invoice-table th.total { text-align: right; width: 20%; padding-right: 8px; }
           
           .summary-section {
             display: flex;
             justify-content: space-between;
-            margin: 60px 40px 20px 40px; /* Generous top margin to place note section beautifully at bottom */
+            margin: 60px 50px 20px 40px; /* Generous top margin to place note section beautifully at bottom */
           }
           .notes-box {
             width: 50%;
@@ -1558,7 +1756,7 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
             color: #4b5563;
           }
           .totals-box {
-            width: 40%;
+            width: 42%;
             font-size: 12px;
           }
           .totals-box table {
@@ -1577,6 +1775,7 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
             font-weight: 700;
             color: #4b5563;
             text-align: right;
+            padding-right: 8px;
           }
           .totals-box tr.total-due-row td {
             padding: 10px;
@@ -1591,11 +1790,12 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
             font-size: 14px;
             font-weight: 800;
             color: #464646; /* Dark text matching invoice body */
+            padding-right: 8px;
           }
           .signature-section {
             margin-top: 80px;
             text-align: right;
-            padding-right: 40px;
+            padding-right: 50px;
           }
           .signature-line {
             display: inline-block;
@@ -1616,6 +1816,7 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               width: 100%;
               min-height: auto;
               box-shadow: none;
+              padding-right: 10px;
             }
           }
         </style>
@@ -1649,9 +1850,9 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
           <div class="meta-section">
             <div class="bill-to">
               <h2>${billTo}</h2>
-              <p>${order.customerName}</p>
-              ${(order.customerPhone || order.customer_phone) ? `<p style="font-size: 11px; color: #4b5563; margin-top: 3px; font-weight: 600;">Tel: ${order.customerPhone || order.customer_phone}</p>` : ''}
-              ${(order.customerAddress || order.customer_address) ? `<p style="font-size: 11px; color: #4b5563; margin-top: 2px;">Address: ${order.customerAddress || order.customer_address}</p>` : ''}
+              <p>${order.customerName || order.customer_name || (isSi ? 'පාරිභෝගිකයා (Guest)' : 'Guest Customer')}</p>
+              ${(order.customerPhone || order.customer_phone || (shopSettings?.customers || []).find((c: any) => (order.customer_id && c.id === order.customer_id) || (order.customerName && c.name && c.name.toLowerCase() === order.customerName.toLowerCase()))?.phone) ? `<p style="font-size: 11px; color: #4b5563; margin-top: 3px; font-weight: 600;">Tel: ${order.customerPhone || order.customer_phone || (shopSettings?.customers || []).find((c: any) => (order.customer_id && c.id === order.customer_id) || (order.customerName && c.name && c.name.toLowerCase() === order.customerName.toLowerCase()))?.phone}</p>` : ''}
+              ${(order.customerAddress || order.customer_address || (shopSettings?.customers || []).find((c: any) => (order.customer_id && c.id === order.customer_id) || (order.customerName && c.name && c.name.toLowerCase() === order.customerName.toLowerCase()))?.address) ? `<p style="font-size: 11px; color: #4b5563; margin-top: 2px;">Address: ${order.customerAddress || order.customer_address || (shopSettings?.customers || []).find((c: any) => (order.customer_id && c.id === order.customer_id) || (order.customerName && c.name && c.name.toLowerCase() === order.customerName.toLowerCase()))?.address}</p>` : ''}
             </div>
             <div class="invoice-details">
               <table>
@@ -1696,17 +1897,33 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
                   <td class="label">${subTotalLabel}</td>
                   <td class="value">${symbolStr} ${formatNum(order.subtotal || 0)}</td>
                 </tr>
+                ${Number(order.discount || 0) > 0 ? `
                 <tr>
                   <td class="label">${discountLabel}</td>
                   <td class="value">-${symbolStr} ${formatNum(order.discount || 0)}</td>
                 </tr>
+                ` : ''}
+                ${Number(order.transportation_fee || order.transportationFee || 0) > 0 ? `
+                <tr>
+                  <td class="label">${isSi ? 'ප්‍රවාහන ගාස්තුව:' : 'Transportation Fee:'}</td>
+                  <td class="value">+${symbolStr} ${formatNum(order.transportation_fee || order.transportationFee || 0)}</td>
+                </tr>
+                ` : ''}
+                ${Number(order.tax || 0) > 0 ? `
                 <tr>
                   <td class="label">${taxLabel}</td>
                   <td class="value">+${symbolStr} ${formatNum(order.tax || 0)}</td>
                 </tr>
+                ` : ''}
+                ${Number(order.credit_note_applied || order.creditNoteApplied || 0) > 0 ? `
+                <tr>
+                  <td class="label">${isSi ? 'ණය සටහන:' : 'Credit Note Applied:'}</td>
+                  <td class="value">-${symbolStr} ${formatNum(order.credit_note_applied || order.creditNoteApplied || 0)}</td>
+                </tr>
+                ` : ''}
                 <tr class="total-due-row">
                   <td class="label">${totalDueLabel}</td>
-                  <td class="value">${symbolStr} ${formatNum(order.total)}</td>
+                  <td class="value">${symbolStr} ${formatNum(order.total_amount !== undefined ? order.total_amount : order.total)}</td>
                 </tr>
               </table>
             </div>
@@ -1742,11 +1959,152 @@ const formatInvoiceDateTime = (created_at?: string, fallbackDate?: string) => {
   return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
 };
 
+const generateReturnPrintHTML = (sr: SalesReturn, isSi: boolean, shopSettings?: any) => {
+  const symbolStr = isSi ? 'රු.' : 'Rs.';
+  const formatNum = (num: number) => (num || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const title = sr.returnMethod === 'Exchange' 
+    ? (isSi ? 'භාණ්ඩ හුවමාරු රසීදුව' : 'EXCHANGE RECEIPT')
+    : (sr.returnMethod === 'Credit Note' ? (isSi ? 'ණය සටහන් රසීදුව' : 'CREDIT NOTE RECEIPT') : (isSi ? 'ආපසු භාරගැනීමේ රසීදුව' : 'RETURN RECEIPT'));
+
+  const returnedItems = Array.isArray(sr.returnedItems) ? sr.returnedItems : safeParseJson(sr.returnedItems, []);
+  const exchangeItems = Array.isArray(sr.exchangeItems) ? sr.exchangeItems : safeParseJson(sr.exchangeItems, []);
+
+  const retRows = returnedItems.map((i: any) => `
+    <tr style="border-bottom: 1px dashed #e5e7eb;">
+      <td style="padding: 4px 0; text-align: left; color: #1f2937; font-weight: bold;">${i.productName}</td>
+      <td style="padding: 4px 0; text-align: center;">${i.qty} ${i.unit || ''}</td>
+      <td style="padding: 4px 0; text-align: right; font-weight: bold; color: #dc2626;">${symbolStr} ${formatNum(i.qty * i.price)}</td>
+    </tr>
+  `).join('');
+
+  const exRows = exchangeItems.map((i: any) => `
+    <tr style="border-bottom: 1px dashed #e5e7eb;">
+      <td style="padding: 4px 0; text-align: left; color: #1f2937; font-weight: bold;">${i.productName}</td>
+      <td style="padding: 4px 0; text-align: center;">${i.qty} ${i.unit || ''}</td>
+      <td style="padding: 4px 0; text-align: right; font-weight: bold; color: #059669;">${symbolStr} ${formatNum(i.qty * i.price)}</td>
+    </tr>
+  `).join('');
+
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>${title} - ${sr.returnNo || sr.return_no || sr.id}</title>
+        <style>
+          @page { margin: 0; size: 80mm auto; }
+          body { font-family: 'Inter', sans-serif; margin: 0; padding: 10px; font-size: 12px; }
+          .title { font-weight: 900; font-size: 14px; text-align: center; margin: 8px 0; text-transform: uppercase; }
+          table { width: 100%; border-collapse: collapse; }
+          th { text-align: left; border-bottom: 1px solid #000; padding: 3px 0; font-size: 10px; }
+        </style>
+      </head>
+      <body>
+        <div style="text-align: center; font-weight: 900; font-size: 15px;">MUTHUWADIGE HARDWARE</div>
+        <div style="text-align: center; font-size: 10px; color: #4b5563;">Negombo | Tel: 077 076 076 7</div>
+        <div style="text-align:center; font-weight:bold; margin: 10px 0;">${title}</div>
+        <div style="font-size: 11px; margin-bottom: 8px;">
+          <div><strong>Return No:</strong> ${sr.returnNo || sr.return_no || sr.id}</div>
+          <div><strong>Original Inv:</strong> ${sr.invoiceNo || sr.invoice_no}</div>
+          <div><strong>Customer:</strong> ${sr.customerName || sr.customer_name || 'Guest'}</div>
+          <div><strong>Date:</strong> ${new Date(sr.created_at).toLocaleString()}</div>
+        </div>
+        
+        <div style="font-weight: bold; margin-top: 6px; font-size: 11px; color: #dc2626;">Returned Products:</div>
+        <table>
+          <thead><tr><th>Item</th><th style="text-align:center;">Qty</th><th style="text-align:right;">Total</th></tr></thead>
+          <tbody>${retRows}</tbody>
+        </table>
+
+        ${exchangeItems.length > 0 ? `
+          <div style="font-weight: bold; margin-top: 10px; font-size: 11px; color: #059669;">Exchange Replacement Products:</div>
+          <table>
+            <thead><tr><th>Item</th><th style="text-align:center;">Qty</th><th style="text-align:right;">Total</th></tr></thead>
+            <tbody>${exRows}</tbody>
+          </table>
+        ` : ''}
+
+        <div style="margin-top: 10px; border-top: 1px solid #000; padding-top: 6px; text-align: right; font-weight: bold;">
+          <div>Return Total: ${symbolStr} ${formatNum(sr.returnAmount || sr.totalRefunded || 0)}</div>
+          ${sr.exchangeAmount ? `<div>Exchange Total: ${symbolStr} ${formatNum(sr.exchangeAmount)}</div>` : ''}
+          ${sr.customerPaid ? `<div>Customer Paid: ${symbolStr} ${formatNum(sr.customerPaid)}</div>` : ''}
+          ${sr.changeGiven ? `<div>Change Given: ${symbolStr} ${formatNum(sr.changeGiven)}</div>` : ''}
+          <div style="font-size: 13px; margin-top: 4px;">Net Refund/Paid: ${symbolStr} ${formatNum(sr.totalRefunded || sr.returnAmount || 0)}</div>
+        </div>
+      </body>
+    </html>
+  `;
+};
+
+const generateCreditNotePrintHTML = (cn: CreditNote, isSi: boolean, shopSettings?: any) => {
+  const symbolStr = isSi ? 'රු.' : 'Rs.';
+  const formatNum = (num: number) => (num || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const items = Array.isArray(cn.items) ? cn.items : safeParseJson(cn.items, []);
+
+  const itemsRows = items.map((i: any) => `
+    <tr style="border-bottom: 1px dashed #e5e7eb;">
+      <td style="padding: 4px 0; text-align: left;">${i.productName}</td>
+      <td style="padding: 4px 0; text-align: center;">${i.qty} ${i.unit || ''}</td>
+      <td style="padding: 4px 0; text-align: right; font-weight: bold;">${symbolStr} ${formatNum(i.qty * i.price)}</td>
+    </tr>
+  `).join('');
+
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Credit Note - ${cn.creditNoteNo || cn.credit_note_no || cn.id}</title>
+        <style>
+          @page { margin: 0; size: 80mm auto; }
+          body { font-family: 'Inter', sans-serif; margin: 0; padding: 10px; font-size: 12px; }
+          table { width: 100%; border-collapse: collapse; }
+          th { text-align: left; border-bottom: 1px solid #000; padding: 3px 0; font-size: 10px; }
+        </style>
+      </head>
+      <body>
+        <div style="text-align: center; font-weight: 900; font-size: 15px;">MUTHUWADIGE HARDWARE</div>
+        <div style="text-align: center; font-size: 10px; color: #4b5563;">Negombo | Tel: 077 076 076 7</div>
+        <div style="text-align: center; font-weight: 900; font-size: 14px; margin: 8px 0; text-transform: uppercase;">CREDIT NOTE</div>
+        <div style="font-size: 11px; margin-bottom: 8px;">
+          <div><strong>CN No:</strong> ${cn.creditNoteNo || cn.credit_note_no || cn.id}</div>
+          <div><strong>Ref Inv:</strong> ${cn.invoiceNo || cn.invoice_no || 'N/A'}</div>
+          <div><strong>Customer:</strong> ${cn.customerName || cn.customer_name || 'Guest'}</div>
+          <div><strong>Date:</strong> ${new Date(cn.created_at).toLocaleString()}</div>
+        </div>
+
+        ${items.length > 0 ? `
+          <table>
+            <thead><tr><th>Item</th><th style="text-align:center;">Qty</th><th style="text-align:right;">Total</th></tr></thead>
+            <tbody>${itemsRows}</tbody>
+          </table>
+        ` : ''}
+
+        <div style="margin-top: 10px; border-top: 1px solid #000; padding-top: 6px; text-align: right; font-weight: 900; font-size: 14px;">
+          Credit Value: ${symbolStr} ${formatNum(cn.amount || cn.value || 0)}
+        </div>
+      </body>
+    </html>
+  `;
+};
+
 // Premium On-Screen Interactive Preview Component
-function ReceiptPreview({ order, isSinhala }: { order: SaleOrder; isSinhala: boolean }) {
+function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }: { order: SaleOrder; isSinhala: boolean; customers?: Customer[]; salesReturns?: SalesReturn[] }) {
   const symbol = isSinhala ? 'රු.' : 'Rs.';
-  const formatNum = (num: number) => num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const formatNum = (num: number) => (num || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   
+  const matchedCust = customers.find(c => 
+    (order.customer_id && c.id === order.customer_id) || 
+    (order.customerName && c.name && c.name.toLowerCase() === order.customerName.toLowerCase()) ||
+    (order.customer_name && c.name && c.name.toLowerCase() === order.customer_name.toLowerCase())
+  );
+
+  const customerName = order.customerName || order.customer_name || matchedCust?.name || (isSinhala ? 'පාරිභෝගිකයා (Guest)' : 'Guest Customer');
+  const custPhone = order.customerPhone || order.customer_phone || matchedCust?.phone || '';
+  const custAddress = order.customerAddress || order.customer_address || matchedCust?.address || '';
+
+  const activeOrderReturns = (salesReturns || []).filter(sr => sr.status !== 'voided' && (sr.invoiceNo === order.invoiceNo || sr.invoice_no === order.invoiceNo));
+
   return (
     <div id="receipt-preview" className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-inner text-left max-w-2xl mx-auto my-4 font-sans leading-relaxed">
       {/* Dark Header Banner */}
@@ -1756,9 +2114,9 @@ function ReceiptPreview({ order, isSinhala }: { order: SaleOrder; isSinhala: boo
           <p className="text-[10px] opacity-90 m-0 mt-1 font-semibold">No: 80, Mahahunupitiya, Negombo</p>
           <p className="text-[10px] opacity-90 m-0 mt-0.5 font-semibold">Contact: 077 076 076 7</p>
         </div>
-        {/* White Protruding Logo Container */}
-        <div className="absolute right-8 top-0 bg-black border border-gray-900 border-t-0 rounded-b-lg w-[102px] h-[138px] flex items-center justify-center shadow-md z-10 p-2">
-          <img src="./images/logo.png" alt="Logo" className="max-w-full max-h-full object-contain" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+        {/* Wider Black Protruding Logo Container */}
+        <div className="absolute right-8 top-0 bg-black border border-gray-900 border-t-0 rounded-b-lg w-[170px] h-[138px] flex items-center justify-center shadow-md z-10 p-0 overflow-hidden">
+          <img src="./images/logo.png" alt="Logo" className="w-full h-full object-contain scale-115 transition-transform" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
         </div>
       </div>
       
@@ -1781,12 +2139,12 @@ function ReceiptPreview({ order, isSinhala }: { order: SaleOrder; isSinhala: boo
       <div className="mx-6 my-4 flex justify-between items-start text-xs gap-4">
         <div>
           <h3 className="text-[#595959] text-[9px] font-black uppercase tracking-wider mb-1">{isSinhala ? 'පාරිභෝගිකයා:' : 'BILL TO:'}</h3>
-          <p className="text-[#2c2c2c] font-black text-sm">{order.customerName}</p>
-          {(order.customerPhone || order.customer_phone) && (
-            <p className="text-gray-500 font-bold text-xs mt-0.5">Tel: {order.customerPhone || order.customer_phone}</p>
+          <p className="text-[#2c2c2c] font-black text-sm">{customerName}</p>
+          {custPhone && (
+            <p className="text-gray-500 font-bold text-xs mt-0.5">Tel: {custPhone}</p>
           )}
-          {(order.customerAddress || order.customer_address) && (
-            <p className="text-gray-500 font-bold text-xs mt-0.5">Address: {order.customerAddress || order.customer_address}</p>
+          {custAddress && (
+            <p className="text-gray-500 font-bold text-xs mt-0.5">Address: {custAddress}</p>
           )}
         </div>
         <div className="text-right text-gray-500 font-semibold space-y-1">
@@ -1807,7 +2165,7 @@ function ReceiptPreview({ order, isSinhala }: { order: SaleOrder; isSinhala: boo
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {(order.items || []).map((item: any, idx: number) => (
+            {(Array.isArray(order.items) ? order.items : (typeof order.items === 'string' ? (() => { try { return JSON.parse(order.items); } catch(e) { return []; } })() : [])).map((item: any, idx: number) => (
               <tr key={idx} className="hover:bg-gray-50/50">
                 <td className="py-2.5 px-3 font-bold text-[#464646]">{item.productName}</td>
                 <td className="py-2.5 px-3 text-center text-gray-500 font-semibold">{item.qty} {item.unit || ''}</td>
@@ -1818,6 +2176,62 @@ function ReceiptPreview({ order, isSinhala }: { order: SaleOrder; isSinhala: boo
           </tbody>
         </table>
       </div>
+
+      {/* Associated Sales Returns & Exchange Activity Card */}
+      {activeOrderReturns.length > 0 && (
+        <div className="mx-6 my-4 bg-amber-50/50 border border-amber-200 rounded-xl p-4 space-y-3">
+          <h4 className="text-xs font-black text-amber-900 uppercase tracking-widest flex items-center gap-1.5 border-b border-amber-200/60 pb-2">
+            <span>⇄</span> {isSinhala ? 'මෙම ඉන්වොයිසියට අදාළ ආපසු භාරගැනීම් / හුවමාරු:' : 'Return & Exchange Activity for this Invoice:'}
+          </h4>
+
+          {activeOrderReturns.map((retRecord, rIdx) => {
+            const retItems = Array.isArray(retRecord.returnedItems) ? retRecord.returnedItems : safeParseJson(retRecord.returnedItems, []);
+            const exItems = Array.isArray(retRecord.exchangeItems) ? retRecord.exchangeItems : safeParseJson(retRecord.exchangeItems, []);
+
+            return (
+              <div key={rIdx} className="bg-white rounded-lg border border-amber-200 p-3 space-y-2 text-xs">
+                <div className="flex justify-between items-center font-bold text-slate-800 border-b border-slate-100 pb-1.5">
+                  <div>
+                    <span className="font-mono text-amber-600">{retRecord.returnNo || retRecord.return_no || retRecord.id}</span>
+                    <span className="ml-2 px-2 py-0.5 bg-slate-100 rounded text-[10px] uppercase font-black">{retRecord.returnMethod}</span>
+                  </div>
+                  <span className="text-gray-400 text-[10px]">{formatInvoiceDateTime(retRecord.created_at)}</span>
+                </div>
+
+                {/* Returned Sub-Items */}
+                {retItems.length > 0 && (
+                  <div>
+                    <span className="text-[10px] font-black text-rose-700 uppercase block mb-1">↩ {isSinhala ? 'ආපසු භාරගත් භාණ්ඩ:' : 'Returned Sub-Items:'}</span>
+                    <ul className="space-y-1 pl-2 border-l-2 border-rose-400">
+                      {retItems.map((ri: any, iIdx: number) => (
+                        <li key={iIdx} className="flex justify-between font-medium text-slate-700 text-[11px]">
+                          <span>{ri.productName} (x{ri.qty} {ri.unit || ''})</span>
+                          <span className="font-bold text-rose-600">{symbol} {formatNum(ri.qty * ri.price)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Exchange Replacement Sub-Items */}
+                {exItems.length > 0 && (
+                  <div className="pt-1">
+                    <span className="text-[10px] font-black text-emerald-700 uppercase block mb-1">⇄ {isSinhala ? 'හුවමාරු ලබාදුන් නව භාණ්ඩ:' : 'Exchange Replacement Sub-Items:'}</span>
+                    <ul className="space-y-1 pl-2 border-l-2 border-emerald-400">
+                      {exItems.map((ei: any, eIdx: number) => (
+                        <li key={eIdx} className="flex justify-between font-medium text-slate-700 text-[11px]">
+                          <span>{ei.productName} (x{ei.qty} {ei.unit || ''})</span>
+                          <span className="font-bold text-emerald-600">{symbol} {formatNum(ei.qty * ei.price)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
       
       {/* Bottom section matching paper output exactly */}
       <div className="mx-6 mt-12 mb-4 flex justify-between items-start flex-wrap gap-4 text-xs">
@@ -1828,29 +2242,319 @@ function ReceiptPreview({ order, isSinhala }: { order: SaleOrder; isSinhala: boo
           <p className="text-[#4b5563] font-bold text-[10px]">{isSinhala ? 'ඔබගේ ව්‍යාපාරයට ස්තූතියි!' : 'Thank you for your business!'}</p>
         </div>
         
-        {/* Totals with exact light grey styling */}
-        <div className="w-[45%] space-y-2 text-right">
+        {/* Totals with exact light grey styling & right margin safety */}
+        <div className="w-[48%] space-y-2 text-right pr-3">
           <div className="flex justify-between font-semibold text-gray-500">
             <span>{isSinhala ? 'උප එකතුව:' : 'Sub Total:'}</span>
             <span className="font-bold text-[#4b5563]">{symbol} {formatNum(order.subtotal || 0)}</span>
           </div>
-          <div className="flex justify-between font-semibold text-gray-500">
-            <span>{isSinhala ? 'වට්ටම:' : 'Discount:'}</span>
-            <span className="font-bold text-[#4b5563]">-{symbol} {formatNum(order.discount || 0)}</span>
-          </div>
-          <div className="flex justify-between font-semibold text-gray-500">
-            <span>{isSinhala ? `බද්ද (${order.tax_rate || 0}%):` : `Tax (${order.tax_rate || 0}%):`}</span>
-            <span className="font-bold text-[#4b5563]">+{symbol} {formatNum(order.tax || 0)}</span>
-          </div>
+          {Number(order.discount || 0) > 0 && (
+            <div className="flex justify-between font-semibold text-gray-500">
+              <span>{isSinhala ? 'වට්ටම:' : 'Discount:'}</span>
+              <span className="font-bold text-red-600">-{symbol} {formatNum(order.discount || 0)}</span>
+            </div>
+          )}
+          {Number(order.transportation_fee || order.transportationFee || 0) > 0 && (
+            <div className="flex justify-between font-semibold text-gray-500">
+              <span>{isSinhala ? 'ප්‍රවාහන ගාස්තුව:' : 'Transportation Fee:'}</span>
+              <span className="font-bold text-[#4b5563]">+{symbol} {formatNum(order.transportation_fee || order.transportationFee || 0)}</span>
+            </div>
+          )}
+          {Number(order.tax || 0) > 0 && (
+            <div className="flex justify-between font-semibold text-gray-500">
+              <span>{isSinhala ? `බද්ද (${order.tax_rate || 0}%):` : `Tax (${order.tax_rate || 0}%):`}</span>
+              <span className="font-bold text-[#4b5563]">+{symbol} {formatNum(order.tax || 0)}</span>
+            </div>
+          )}
+          {Number(order.credit_note_applied || order.creditNoteApplied || 0) > 0 && (
+            <div className="flex justify-between font-semibold text-emerald-600">
+              <span>{isSinhala ? 'ණය සටහන:' : 'Credit Note Applied:'}</span>
+              <span className="font-bold text-emerald-600">-{symbol} {formatNum(order.credit_note_applied || order.creditNoteApplied || 0)}</span>
+            </div>
+          )}
           <div className="flex justify-between items-center py-2.5 px-3 bg-[#f3f4f6] rounded-lg text-sm font-black text-[#464646] mt-2 border border-gray-100">
-            <span>{isSinhala ? 'ගෙවිය යුතු මුළු මුදල:' : 'Total Due:'}</span>
-            <span className="text-base">{symbol} {formatNum(order.total)}</span>
+            <span>{isSinhala ? 'ගෙවිය යුතු මුළු මුදල:' : 'Total Amount:'}</span>
+            <span className="text-base font-black">{symbol} {formatNum(order.total_amount !== undefined ? order.total_amount : order.total)}</span>
           </div>
         </div>
       </div>
       
       {/* Signature */}
       <div className="mx-6 mt-16 mb-6 text-right">
+        <div className="inline-block border-t border-gray-300 pt-1.5 w-40 text-center text-[10px] italic text-gray-400 font-semibold">
+          {isSinhala ? 'බලයලත් අත්සන' : 'Authorized Signee'}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Return Receipt Preview Component
+function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: SalesReturn; isSinhala: boolean }) {
+  const symbol = isSinhala ? 'රු.' : 'Rs.';
+  const formatNum = (num: number) => (num || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const returnedItemsList = Array.isArray(returnRecord.returnedItems)
+    ? returnRecord.returnedItems
+    : safeParseJson(returnRecord.returnedItems, []);
+
+  const exchangeItemsList = Array.isArray(returnRecord.exchangeItems)
+    ? returnRecord.exchangeItems
+    : safeParseJson(returnRecord.exchangeItems, []);
+
+  const title = returnRecord.returnMethod === 'Exchange'
+    ? (isSinhala ? 'භාණ්ඩ හුවමාරු රසීදුව' : 'EXCHANGE RECEIPT')
+    : returnRecord.returnMethod === 'Credit Note'
+      ? (isSinhala ? 'ණය සටහන් රසීදුව' : 'CREDIT NOTE RECEIPT')
+      : (isSinhala ? 'ආපසු භාරගැනීමේ රසීදුව' : 'RETURN RECEIPT');
+
+  return (
+    <div id="return-receipt-preview" className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-inner text-left max-w-2xl mx-auto my-4 font-sans leading-relaxed">
+      {/* Header Banner */}
+      <div className="bg-[#464646] p-6 text-white relative flex justify-between items-center h-[110px] overflow-visible">
+        <div>
+          <h1 className="text-lg font-black tracking-wide m-0 leading-tight">MUTHUWADIGE HARDWARE</h1>
+          <p className="text-[10px] opacity-90 m-0 mt-1 font-semibold">No: 80, Mahahunupitiya, Negombo</p>
+          <p className="text-[10px] opacity-90 m-0 mt-0.5 font-semibold">Contact: 077 076 076 7</p>
+        </div>
+        <div className="absolute right-8 top-0 bg-black border border-gray-900 border-t-0 rounded-b-lg w-[170px] h-[138px] flex items-center justify-center shadow-md z-10 p-0 overflow-hidden">
+          <img src="./images/logo.png" alt="Logo" className="w-full h-full object-contain scale-115 transition-transform" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+        </div>
+      </div>
+
+      {/* Title */}
+      <div className="mt-8 text-center flex flex-col items-center justify-center">
+        <div className="bg-amber-500 border-2 border-amber-600 px-6 py-2 rounded-2xl shadow-md inline-block">
+          <h2 className="text-slate-950 text-base font-black tracking-widest uppercase m-0">
+            {title}
+          </h2>
+        </div>
+      </div>
+
+      {/* Meta details */}
+      <div className="mx-6 my-4 flex justify-between items-start text-xs gap-4 border-b border-gray-100 pb-3">
+        <div>
+          <h3 className="text-[#595959] text-[9px] font-black uppercase tracking-wider mb-1">{isSinhala ? 'පාරිභෝගිකයා:' : 'CUSTOMER:'}</h3>
+          <p className="text-[#2c2c2c] font-black text-sm">{returnRecord.customerName || returnRecord.customer_name || (isSinhala ? 'පාරිභෝගිකයා' : 'Guest Customer')}</p>
+          {(returnRecord.customerPhone || returnRecord.customer_phone) && (
+            <p className="text-gray-500 font-bold text-xs mt-0.5">Tel: {returnRecord.customerPhone || returnRecord.customer_phone}</p>
+          )}
+        </div>
+        <div className="text-right text-gray-500 font-semibold space-y-1">
+          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'ආපසු අංකය:' : 'Return No:'}</span> <span className="font-mono text-slate-800 font-bold">{returnRecord.returnNo || returnRecord.return_no || returnRecord.id}</span></p>
+          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'මුල් ඉන්වොයිසිය:' : 'Original Inv:'}</span> <span className="font-mono text-amber-600 font-bold">{returnRecord.invoiceNo || returnRecord.invoice_no}</span></p>
+          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'දිනය:' : 'Date:'}</span> {formatInvoiceDateTime(returnRecord.created_at)}</p>
+        </div>
+      </div>
+
+      {/* Returned Items Table */}
+      <div className="mx-6 my-3">
+        <h4 className="text-xs font-black text-rose-700 uppercase tracking-wider mb-2 flex items-center gap-1">
+          <span>↩</span> {isSinhala ? 'ආපසු භාරගත් භාණ්ඩ' : 'Returned Products'}
+        </h4>
+        <div className="overflow-hidden border border-rose-100 rounded-lg">
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="bg-rose-50 text-rose-800 font-black uppercase text-[10px] tracking-wider">
+                <th className="py-2 px-3 text-left">{isSinhala ? 'විස්තරය' : 'Description'}</th>
+                <th className="py-2 px-3 text-center">{isSinhala ? 'ප්‍රමාණය' : 'Qty'}</th>
+                <th className="py-2 px-3 text-right">{isSinhala ? 'ඒකක මිල' : 'Unit Price'}</th>
+                <th className="py-2 px-3 text-right">{isSinhala ? 'එකතුව' : 'Total'}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-rose-50">
+              {returnedItemsList.map((item: any, idx: number) => (
+                <tr key={idx} className="hover:bg-rose-50/30">
+                  <td className="py-2 px-3 font-bold text-slate-800">{item.productName}</td>
+                  <td className="py-2 px-3 text-center text-slate-600 font-semibold">{item.qty} {item.unit || ''}</td>
+                  <td className="py-2 px-3 text-right text-slate-600 font-semibold">{symbol} {formatNum(item.price)}</td>
+                  <td className="py-2 px-3 text-right font-bold text-rose-700">{symbol} {formatNum(item.qty * item.price)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Exchange Items Table (if any) */}
+      {exchangeItemsList.length > 0 && (
+        <div className="mx-6 my-3">
+          <h4 className="text-xs font-black text-emerald-700 uppercase tracking-wider mb-2 flex items-center gap-1">
+            <span>⇄</span> {isSinhala ? 'හුවමාරු ලැබුණු භාණ්ඩ' : 'Exchange Replacement Products'}
+          </h4>
+          <div className="overflow-hidden border border-emerald-100 rounded-lg">
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr className="bg-emerald-50 text-emerald-800 font-black uppercase text-[10px] tracking-wider">
+                  <th className="py-2 px-3 text-left">{isSinhala ? 'විස්තරය' : 'Description'}</th>
+                  <th className="py-2 px-3 text-center">{isSinhala ? 'ප්‍රමාණය' : 'Qty'}</th>
+                  <th className="py-2 px-3 text-right">{isSinhala ? 'ඒකක මිල' : 'Unit Price'}</th>
+                  <th className="py-2 px-3 text-right">{isSinhala ? 'එකතුව' : 'Total'}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-emerald-50">
+                {exchangeItemsList.map((item: any, idx: number) => (
+                  <tr key={idx} className="hover:bg-emerald-50/30">
+                    <td className="py-2 px-3 font-bold text-slate-800">{item.productName}</td>
+                    <td className="py-2 px-3 text-center text-slate-600 font-semibold">{item.qty} {item.unit || ''}</td>
+                    <td className="py-2 px-3 text-right text-slate-600 font-semibold">{symbol} {formatNum(item.price)}</td>
+                    <td className="py-2 px-3 text-right font-bold text-emerald-700">{symbol} {formatNum(item.qty * item.price)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Financial Summary */}
+      <div className="mx-6 mt-4 mb-4 flex justify-between items-start flex-wrap gap-4 text-xs">
+        <div className="w-[45%]">
+          <h3 className="text-[#d29d2b] text-[9px] font-black uppercase tracking-wider mb-1">{isSinhala ? 'ආපසු ගෙවීමේ ක්‍රමය' : 'RETURN METHOD'}</h3>
+          <p className="text-slate-800 font-black text-xs">{returnRecord.returnMethod}</p>
+          {returnRecord.creditNoteNo && (
+            <p className="text-amber-600 font-bold text-xs mt-1">Credit Note: {returnRecord.creditNoteNo}</p>
+          )}
+          {returnRecord.reason && (
+            <p className="text-gray-500 font-semibold text-[10px] mt-1">{isSinhala ? 'හේතුව:' : 'Reason:'} {returnRecord.reason}</p>
+          )}
+        </div>
+
+        <div className="w-[45%] space-y-1.5 text-right">
+          <div className="flex justify-between font-semibold text-gray-500">
+            <span>{isSinhala ? 'ආපසු භාරගත් අගය:' : 'Return Total:'}</span>
+            <span className="font-bold text-rose-600">{symbol} {formatNum(returnRecord.returnAmount || returnRecord.totalRefunded || 0)}</span>
+          </div>
+          {returnRecord.exchangeAmount ? (
+            <div className="flex justify-between font-semibold text-gray-500">
+              <span>{isSinhala ? 'හුවමාරු භාණ්ඩ අගය:' : 'Exchange Total:'}</span>
+              <span className="font-bold text-emerald-600">{symbol} {formatNum(returnRecord.exchangeAmount)}</span>
+            </div>
+          ) : null}
+          {returnRecord.customerPaid ? (
+            <div className="flex justify-between font-semibold text-gray-500">
+              <span>{isSinhala ? 'පාරිභෝගිකයා ගෙවූ මුදල:' : 'Customer Paid:'}</span>
+              <span className="font-bold text-slate-800">+{symbol} {formatNum(returnRecord.customerPaid)}</span>
+            </div>
+          ) : null}
+          {returnRecord.changeGiven ? (
+            <div className="flex justify-between font-semibold text-gray-500">
+              <span>{isSinhala ? 'ඉතිරි මුදල:' : 'Change Given:'}</span>
+              <span className="font-bold text-slate-800">-{symbol} {formatNum(returnRecord.changeGiven)}</span>
+            </div>
+          ) : null}
+          <div className="flex justify-between items-center py-2 px-3 bg-slate-100 rounded-lg text-xs font-black text-slate-800 mt-2 border border-slate-200">
+            <span>{isSinhala ? 'මුළු ආපසු/ගෙවූ මුදල:' : 'Net Refund/Paid:'}</span>
+            <span className="text-sm font-black text-emerald-700">{symbol} {formatNum(returnRecord.totalRefunded || returnRecord.returnAmount || 0)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Signature */}
+      <div className="mx-6 mt-10 mb-6 text-right">
+        <div className="inline-block border-t border-gray-300 pt-1.5 w-40 text-center text-[10px] italic text-gray-400 font-semibold">
+          {isSinhala ? 'බලයලත් අත්සන' : 'Authorized Signee'}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Credit Note Receipt Preview Component
+function CreditNoteReceiptPreview({ creditNoteRecord, isSinhala }: { creditNoteRecord: CreditNote; isSinhala: boolean }) {
+  const symbol = isSinhala ? 'රු.' : 'Rs.';
+  const formatNum = (num: number) => (num || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const itemsList = Array.isArray(creditNoteRecord.items)
+    ? creditNoteRecord.items
+    : safeParseJson(creditNoteRecord.items, []);
+
+  return (
+    <div id="credit-note-preview" className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-inner text-left max-w-2xl mx-auto my-4 font-sans leading-relaxed">
+      {/* Header Banner */}
+      <div className="bg-[#464646] p-6 text-white relative flex justify-between items-center h-[110px] overflow-visible">
+        <div>
+          <h1 className="text-lg font-black tracking-wide m-0 leading-tight">MUTHUWADIGE HARDWARE</h1>
+          <p className="text-[10px] opacity-90 m-0 mt-1 font-semibold">No: 80, Mahahunupitiya, Negombo</p>
+          <p className="text-[10px] opacity-90 m-0 mt-0.5 font-semibold">Contact: 077 076 076 7</p>
+        </div>
+        <div className="absolute right-8 top-0 bg-black border border-gray-900 border-t-0 rounded-b-lg w-[170px] h-[138px] flex items-center justify-center shadow-md z-10 p-0 overflow-hidden">
+          <img src="./images/logo.png" alt="Logo" className="w-full h-full object-contain scale-115 transition-transform" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+        </div>
+      </div>
+
+      {/* Title */}
+      <div className="mt-8 text-center flex flex-col items-center justify-center">
+        <div className="bg-slate-900 border-2 border-amber-500 px-8 py-2 rounded-2xl shadow-md inline-block">
+          <h2 className="text-amber-400 text-base font-black tracking-widest uppercase m-0">
+            {isSinhala ? 'ණය සටහන / CREDIT NOTE' : 'CREDIT NOTE'}
+          </h2>
+        </div>
+      </div>
+
+      {/* Meta details */}
+      <div className="mx-6 my-4 flex justify-between items-start text-xs gap-4 border-b border-gray-100 pb-3">
+        <div>
+          <h3 className="text-[#595959] text-[9px] font-black uppercase tracking-wider mb-1">{isSinhala ? 'පාරිභෝගිකයා:' : 'CUSTOMER:'}</h3>
+          <p className="text-[#2c2c2c] font-black text-sm">{creditNoteRecord.customerName || creditNoteRecord.customer_name || (isSinhala ? 'පාරිභෝගිකයා' : 'Guest Customer')}</p>
+          {(creditNoteRecord.customerPhone || creditNoteRecord.customer_phone) && (
+            <p className="text-gray-500 font-bold text-xs mt-0.5">Tel: {creditNoteRecord.customerPhone || creditNoteRecord.customer_phone}</p>
+          )}
+        </div>
+        <div className="text-right text-gray-500 font-semibold space-y-1">
+          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'ණය සටහන් අංකය:' : 'Credit Note No:'}</span> <span className="font-mono text-amber-600 font-black">{creditNoteRecord.creditNoteNo || creditNoteRecord.credit_note_no || creditNoteRecord.id}</span></p>
+          {creditNoteRecord.invoiceNo && (
+            <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'ඉන්වොයිසිය:' : 'Ref Invoice:'}</span> <span className="font-mono text-slate-700 font-bold">{creditNoteRecord.invoiceNo || creditNoteRecord.invoice_no}</span></p>
+          )}
+          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'දිනය:' : 'Date:'}</span> {formatInvoiceDateTime(creditNoteRecord.created_at)}</p>
+          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'තත්ත්වය:' : 'Status:'}</span> <span className="font-bold text-emerald-600 uppercase">{creditNoteRecord.status}</span></p>
+        </div>
+      </div>
+
+      {/* Items Table */}
+      {itemsList.length > 0 && (
+        <div className="mx-6 my-3">
+          <div className="overflow-hidden border border-gray-200 rounded-lg">
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr className="bg-amber-500 text-slate-950 font-black uppercase text-[10px] tracking-wider">
+                  <th className="py-2 px-3 text-left">{isSinhala ? 'විස්තරය' : 'Description'}</th>
+                  <th className="py-2 px-3 text-center">{isSinhala ? 'ප්‍රමාණය' : 'Qty'}</th>
+                  <th className="py-2 px-3 text-right">{isSinhala ? 'ඒකක මිල' : 'Unit Price'}</th>
+                  <th className="py-2 px-3 text-right">{isSinhala ? 'එකතුව' : 'Total'}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {itemsList.map((item: any, idx: number) => (
+                  <tr key={idx} className="hover:bg-gray-50">
+                    <td className="py-2 px-3 font-bold text-slate-800">{item.productName}</td>
+                    <td className="py-2 px-3 text-center text-slate-600 font-semibold">{item.qty} {item.unit || ''}</td>
+                    <td className="py-2 px-3 text-right text-slate-600 font-semibold">{symbol} {formatNum(item.price)}</td>
+                    <td className="py-2 px-3 text-right font-bold text-slate-800">{symbol} {formatNum(item.qty * item.price)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Total Amount */}
+      <div className="mx-6 mt-4 mb-4 flex justify-between items-start flex-wrap gap-4 text-xs">
+        <div className="w-[45%]">
+          <h3 className="text-[#d29d2b] text-[9px] font-black uppercase tracking-wider mb-1">{isSinhala ? 'විස්තර' : 'NOTES'}</h3>
+          <p className="text-gray-400 font-semibold text-[10px]">{isSinhala ? 'මෙම ණය සටහන ඉදිරි මිලදී ගැනීම් සඳහා භාවිතා කළ හැක.' : 'This credit note can be redeemed against future purchases.'}</p>
+        </div>
+        <div className="w-[45%] space-y-1.5 text-right">
+          <div className="flex justify-between items-center py-2 px-3 bg-amber-50 rounded-lg text-xs font-black text-slate-800 border border-amber-200">
+            <span>{isSinhala ? 'මුළු ණය මුදල:' : 'Total Credit Value:'}</span>
+            <span className="text-base font-black text-amber-700">{symbol} {formatNum(creditNoteRecord.amount || creditNoteRecord.value || 0)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Signature */}
+      <div className="mx-6 mt-10 mb-6 text-right">
         <div className="inline-block border-t border-gray-300 pt-1.5 w-40 text-center text-[10px] italic text-gray-400 font-semibold">
           {isSinhala ? 'බලයලත් අත්සන' : 'Authorized Signee'}
         </div>
@@ -2061,11 +2765,25 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   // Quotations State
   const [quotes, setQuotes] = useState<Quotation[]>([]);
   const [isCreatingQuote, setIsCreatingQuote] = useState(false);
+  const [quoteNo, setQuoteNo] = useState('Q-0001');
   const [quoteCustomerName, setQuoteCustomerName] = useState('');
+  const [quoteCustomerPhone, setQuoteCustomerPhone] = useState('');
+  const [quoteCustomerAddress, setQuoteCustomerAddress] = useState('');
+  const [quoteValidityPeriod, setQuoteValidityPeriod] = useState('30 Days');
   const [quoteCart, setQuoteCart] = useState<SaleItem[]>([]);
-  const [selectedQuoteProduct, setSelectedQuoteProduct] = useState<Product | null>(null);
-  const [quoteQty, setQuoteQty] = useState(1);
   const [quoteSearch, setQuoteSearch] = useState('');
+  const quoteSearchInputRef = useRef<HTMLInputElement>(null);
+
+  // Quotation Additional Charges State
+  const [quoteDiscountType, setQuoteDiscountType] = useState<'amount' | 'percentage'>('amount');
+  const [quoteDiscountValue, setQuoteDiscountValue] = useState<number | ''>('');
+  const [quoteTransportationFee, setQuoteTransportationFee] = useState<number | ''>('');
+  const [quoteTaxType, setQuoteTaxType] = useState<'percentage' | 'amount'>('percentage');
+  const [quoteTaxValue, setQuoteTaxValue] = useState<number | ''>('');
+
+  // Quotation Preview Modal State
+  const [showQuotePreviewModal, setShowQuotePreviewModal] = useState(false);
+  const [selectedQuotePreview, setSelectedQuotePreview] = useState<Quotation | null>(null);
 
   // Delivery Notes State
   const [deliveryNotes, setDeliveryNotes] = useState<DeliveryNote[]>([]);
@@ -2084,19 +2802,64 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   const [transportationFee, setTransportationFee] = useState<number>(0);
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
 
+  // Credit Note Applied in POS Checkout State
+  const [creditNoteApplied, setCreditNoteApplied] = useState<number | ''>('');
+  const [selectedCreditNoteCode, setSelectedCreditNoteCode] = useState<string>('');
+
   // Void Passkey Modal State
   const [showVoidModal, setShowVoidModal] = useState(false);
   const [voidPasskeyInput, setVoidPasskeyInput] = useState('');
   const [targetVoidInvoiceId, setTargetVoidInvoiceId] = useState<string | null>(null);
   const [targetVoidReturnId, setTargetVoidReturnId] = useState<string | null>(null);
 
-  // Sales Returns State
+  // Sales Returns & Exchange & Credit Notes State
+  const returnSearchInputRef = useRef<HTMLInputElement>(null);
   const [salesReturnsList, setSalesReturnsList] = useState<SalesReturn[]>([]);
+  const [creditNotesList, setCreditNotesList] = useState<CreditNote[]>([]);
   const [returnSearchQuery, setReturnSearchQuery] = useState('');
+  const [returnProductSearch, setReturnProductSearch] = useState('');
   const [targetReturnInvoice, setTargetReturnInvoice] = useState<SaleOrder | null>(null);
   const [returnQtys, setReturnQtys] = useState<Record<string, number>>({});
   const [returnMethod, setReturnMethod] = useState<'Cash Refund' | 'Exchange' | 'Credit Note'>('Cash Refund');
   const [returnReason, setReturnReason] = useState('');
+
+  useEffect(() => {
+    if (tab === 'returns') {
+      setTimeout(() => returnSearchInputRef.current?.focus(), 150);
+    }
+  }, [tab]);
+
+  // Exchange State
+  const [exchangeCartItems, setExchangeCartItems] = useState<SaleItem[]>([]);
+  const [exchangeProductSearch, setExchangeProductSearch] = useState('');
+  const [exchangeCategoryFilter, setExchangeCategoryFilter] = useState<string>('All');
+  const [exchangeCustomerPaid, setExchangeCustomerPaid] = useState<number>(0);
+  const [exchangeRefundGiven, setExchangeRefundGiven] = useState<number>(0);
+
+  // Return & Credit Note History Preview Modals
+  const [showReturnPreviewModal, setShowReturnPreviewModal] = useState(false);
+  const [selectedReturnPreview, setSelectedReturnPreview] = useState<SalesReturn | null>(null);
+  const [showCreditNotePreviewModal, setShowCreditNotePreviewModal] = useState(false);
+  const [selectedCreditNotePreview, setSelectedCreditNotePreview] = useState<CreditNote | null>(null);
+  const [returnSubTab, setReturnSubTab] = useState<'history' | 'credit_notes'>('history');
+
+  // Credit Note Usage History State
+  const [showCreditNoteUsageModal, setShowCreditNoteUsageModal] = useState(false);
+  const [creditNoteUsageLogs, setCreditNoteUsageLogs] = useState<CreditNoteUsage[]>([]);
+  const [loadingCNUsage, setLoadingCNUsage] = useState(false);
+
+  const fetchCreditNoteUsage = async (code?: string) => {
+    setLoadingCNUsage(true);
+    try {
+      const logs = await api.creditNotes.getUsageHistory(code);
+      setCreditNoteUsageLogs(logs || []);
+    } catch (e) {
+      console.error('Failed to fetch credit note usage history', e);
+    } finally {
+      setLoadingCNUsage(false);
+    }
+  };
+  const [expandedReturnId, setExpandedReturnId] = useState<string | null>(null);
 
   const fetchSalesReturns = async () => {
     try {
@@ -2107,6 +2870,244 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       }
     } catch (e) {
       console.error('Failed to fetch sales returns', e);
+    }
+  };
+
+  const fetchCreditNotes = async () => {
+    try {
+      const res = await fetch(`${API_URL}/credit-notes`);
+      if (res.ok) {
+        const data = await res.json();
+        setCreditNotesList(data || []);
+        return;
+      }
+    } catch (e) {}
+    try {
+      const res = await fetch(`${API_URL}/sales/credit-notes`);
+      if (res.ok) {
+        const data = await res.json();
+        setCreditNotesList(data || []);
+      }
+    } catch (e) {
+      console.error('Failed to fetch credit notes', e);
+    }
+  };
+
+  const handleCreditNoteCashRefund = async (cn: CreditNote) => {
+    const cnCode = cn.creditNoteNo || cn.credit_note_no || cn.code || cn.id;
+    const remBal = Number(cn.balance_remaining !== undefined ? cn.balance_remaining : (cn.balanceRemaining || cn.amount || 0));
+    if (remBal <= 0) {
+      return alert(t("Credit note balance is 0 or already fully used.", "ණය සටහන් ශේෂය 0 වේ හෝ දැනටමත් සම්පූර්ණයෙන්ම භාවිතා කර ඇත."));
+    }
+    const confirmRefund = window.confirm(t(
+      `Are you sure you want to cash refund ${symbol} ${convert(remBal).toLocaleString()} for Credit Note ${cnCode}? This is a separate authorized action that will log an expense transaction in accounting ledger.`,
+      `ණය සටහන් ${cnCode} සඳහා ${symbol} ${convert(remBal).toLocaleString()} ක මුදල් ආපසු ගෙවීමට ඔබට විශ්වාසද? මෙය ගිණුම්කරණ ලේඛනයේ වෙනම බලයලත් වියදම් ගනුදෙනුවක් ලෙස සටහන් වේ.`
+    ));
+    if (!confirmRefund) return;
+
+    try {
+      setIsLoading(true);
+      const userMail = isGuest ? 'system' : (selectedCustomer?.email || 'system');
+      const res = await api.creditNotes.refundCash(cnCode, 'Authorized Cash Refund of Credit Note', userMail);
+      alert(t(res.message || 'Cash refund processed successfully!', 'මුදල් ආපසු ගෙවීම සාර්ථකයි!'));
+      fetchCreditNotes();
+    } catch (e: any) {
+      alert("Cash refund failed: " + e.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const generateReturnPrintHTML = (sr: SalesReturn, shopSettings: any, isSi: boolean) => {
+    const symbolStr = isSi ? 'රු.' : 'Rs.';
+    const formatNum = (num: number) => num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const title = isSi ? 'විකුණුම් ආපසු ලදුපත' : 'SALES RETURN RECEIPT';
+
+    const retItems = Array.isArray(sr.returnedItems) ? sr.returnedItems : safeParseJson(sr.returnedItems, []);
+    const exItems = Array.isArray(sr.exchangeItems) ? sr.exchangeItems : safeParseJson(sr.exchangeItems, []);
+
+    const retRows = retItems.map((i: any) => `
+      <tr style="border-bottom: 1px dashed #e5e7eb;">
+        <td style="padding: 5px 0 2px 0; font-weight: bold; text-align: left; color: #1f2937; font-size: 13px;">${i.productName || i.name}</td>
+        <td style="padding: 5px 0 2px 0; text-align: center; color: #374151; font-size: 12px;">${i.qty} ${i.unit || ''}</td>
+        <td style="padding: 5px 0 2px 0; text-align: right; color: #1f2937; font-weight: bold; font-size: 13px;">${symbolStr} ${formatNum(i.qty * i.price)}</td>
+      </tr>
+    `).join('');
+
+    const exRows = exItems.map((i: any) => `
+      <tr style="border-bottom: 1px dashed #e5e7eb;">
+        <td style="padding: 5px 0 2px 0; font-weight: bold; text-align: left; color: #047857; font-size: 13px;">⇄ ${i.productName || i.name}</td>
+        <td style="padding: 5px 0 2px 0; text-align: center; color: #374151; font-size: 12px;">${i.qty} ${i.unit || ''}</td>
+        <td style="padding: 5px 0 2px 0; text-align: right; color: #047857; font-weight: bold; font-size: 13px;">${symbolStr} ${formatNum(i.qty * i.price)}</td>
+      </tr>
+    `).join('');
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Sales Return - ${sr.returnNo || sr.id}</title>
+          <style>
+            @page { margin: 0; size: 80mm auto; }
+            body { font-family: sans-serif; margin: 0; padding: 10px; font-size: 12px; color: #111827; }
+            .header { text-align: center; border-bottom: 2px dashed #374151; padding-bottom: 8px; margin-bottom: 8px; }
+            .title { text-align: center; font-weight: 800; font-size: 14px; margin: 8px 0; text-transform: uppercase; border: 1px solid #1f2937; padding: 4px; }
+            .table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+            .table th { border-bottom: 1px solid #374151; text-align: left; padding: 4px 0; font-size: 11px; }
+            .summary { border-top: 2px dashed #374151; margin-top: 10px; padding-top: 6px; }
+            .summary-row { display: flex; justify-content: space-between; padding: 2px 0; font-weight: bold; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h2 style="margin:0; font-size: 16px;">${shopSettings?.shop_name || 'MUTUWADIGE HARDWARE'}</h2>
+            <p style="margin:2px 0;">${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</p>
+            <p style="margin:2px 0;">Tel: ${shopSettings?.phone || '077 076 076 7'}</p>
+          </div>
+          <div class="title">${title}</div>
+          <div>
+            <div><b>${isSi ? 'ආපසු අංකය:' : 'Return No:'}</b> ${sr.returnNo || sr.return_no || sr.id}</div>
+            <div><b>${isSi ? 'ඉන්වොයිස් අංකය:' : 'Orig Invoice:'}</b> ${sr.invoiceNo || sr.invoice_no}</div>
+            <div><b>${isSi ? 'පාරිභෝගිකයා:' : 'Customer:'}</b> ${sr.customerName || sr.customer_name || 'Guest'}</div>
+            <div><b>${isSi ? 'දිනය:' : 'Date:'}</b> ${new Date(sr.created_at).toLocaleString()}</div>
+            <div><b>${isSi ? 'ක්‍රමය:' : 'Method:'}</b> ${sr.returnMethod}</div>
+          </div>
+
+          <table class="table">
+            <thead>
+              <tr>
+                <th>${isSi ? 'ආපසු භාණ්ඩ' : 'Returned Item'}</th>
+                <th style="text-align:center;">${isSi ? 'ප්‍රමාණය' : 'Qty'}</th>
+                <th style="text-align:right;">${isSi ? 'එකතුව' : 'Total'}</th>
+              </tr>
+            </thead>
+            <tbody>${retRows}</tbody>
+          </table>
+
+          ${exItems.length > 0 ? `
+            <table class="table" style="margin-top: 10px;">
+              <thead>
+                <tr>
+                  <th style="color:#047857;">${isSi ? 'හුවමාරු භාණ්ඩ' : 'Exchange Item'}</th>
+                  <th style="text-align:center;">${isSi ? 'ප්‍රමාණය' : 'Qty'}</th>
+                  <th style="text-align:right;">${isSi ? 'එකතුව' : 'Total'}</th>
+                </tr>
+              </thead>
+              <tbody>${exRows}</tbody>
+            </table>
+          ` : ''}
+
+          <div class="summary">
+            <div class="summary-row">
+              <span>${isSi ? 'ආපසු ලැබුණු වටිනාකම:' : 'Return Total Value:'}</span>
+              <span>${symbolStr} ${formatNum(sr.returnAmount || sr.totalRefunded || 0)}</span>
+            </div>
+            ${sr.returnMethod === 'Credit Note' ? `
+              <div class="summary-row" style="color: #d97706;">
+                <span>${isSi ? 'නිකුත් කළ ණය සටහන් අංකය:' : 'Credit Note Issued:'}</span>
+                <span>${sr.creditNoteNo || 'CN-ISSUED'}</span>
+              </div>
+            ` : ''}
+            ${sr.returnMethod === 'Cash Refund' ? `
+              <div class="summary-row" style="color: #dc2626;">
+                <span>${isSi ? 'ආපසු ගෙවූ මුදල:' : 'Cash Refunded:'}</span>
+                <span>${symbolStr} ${formatNum(sr.totalRefunded || 0)}</span>
+              </div>
+            ` : ''}
+          </div>
+          <div style="text-align:center; margin-top: 15px; font-size: 11px; color: #6b7280;">
+            ${isSi ? 'ස්තූතියි!' : 'Thank you!'}
+          </div>
+        </body>
+      </html>
+    `;
+  };
+
+  const generateCreditNotePrintHTML = (cn: CreditNote, shopSettings: any, isSi: boolean) => {
+    const symbolStr = isSi ? 'රු.' : 'Rs.';
+    const formatNum = (num: number) => num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const title = isSi ? 'ණය සටහන (CREDIT NOTE)' : 'CREDIT NOTE';
+
+    const cnNo = cn.creditNoteNo || cn.credit_note_no || cn.code || cn.id;
+    const originalVal = Number(cn.amount || cn.value || 0);
+    const balRem = Number(cn.balanceRemaining !== undefined ? cn.balanceRemaining : (cn.balance_remaining !== undefined ? cn.balance_remaining : originalVal));
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Credit Note - ${cnNo}</title>
+          <style>
+            @page { margin: 0; size: 80mm auto; }
+            body { font-family: sans-serif; margin: 0; padding: 10px; font-size: 12px; color: #111827; }
+            .header { text-align: center; border-bottom: 2px dashed #374151; padding-bottom: 8px; margin-bottom: 8px; }
+            .title { text-align: center; font-weight: 800; font-size: 14px; margin: 8px 0; text-transform: uppercase; border: 1px solid #d97706; background: #fef3c7; color: #92400e; padding: 6px; }
+            .summary-box { border: 1.5px solid #f59e0b; background: #fffbe8; padding: 10px; border-radius: 8px; margin: 10px 0; }
+            .row { display: flex; justify-content: space-between; padding: 3px 0; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h2 style="margin:0; font-size: 16px;">${shopSettings?.shop_name || 'MUTUWADIGE HARDWARE'}</h2>
+            <p style="margin:2px 0;">${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</p>
+            <p style="margin:2px 0;">Tel: ${shopSettings?.phone || '077 076 076 7'}</p>
+          </div>
+          <div class="title">${title}</div>
+          <div>
+            <div><b>${isSi ? 'ණය සටහන් අංකය:' : 'Credit Note No:'}</b> <span style="font-family: monospace; font-weight: 900;">${cnNo}</span></div>
+            <div><b>${isSi ? 'යොමු ඉන්වොයිසිය:' : 'Ref Invoice:'}</b> ${cn.invoiceNo || cn.invoice_no || 'N/A'}</div>
+            <div><b>${isSi ? 'පාරිභෝගිකයා:' : 'Customer:'}</b> ${cn.customerName || cn.customer_name || 'Guest'}</div>
+            ${(cn.customerPhone || cn.customer_phone) ? `<div><b>${isSi ? 'දුරකථනය:' : 'Phone:'}</b> ${cn.customerPhone || cn.customer_phone}</div>` : ''}
+            <div><b>${isSi ? 'දිනය:' : 'Date:'}</b> ${new Date(cn.created_at).toLocaleString()}</div>
+            <div><b>${isSi ? 'තත්ත්වය:' : 'Status:'}</b> <span style="text-transform: uppercase; font-weight: bold;">${cn.status}</span></div>
+          </div>
+
+          <div class="summary-box">
+            <div class="row">
+              <span>${isSi ? 'මුළු ණය මුදල:' : 'Original Credit Amount:'}</span>
+              <span style="font-weight: bold;">${symbolStr} ${formatNum(originalVal)}</span>
+            </div>
+            <div class="row" style="font-size: 14px; font-weight: 900; color: #b45309; border-top: 1px dashed #f59e0b; padding-top: 5px; margin-top: 4px;">
+              <span>${isSi ? 'ඉතිරි ශේෂය:' : 'Remaining Balance:'}</span>
+              <span>${symbolStr} ${formatNum(balRem)}</span>
+            </div>
+          </div>
+
+          <div style="text-align:center; margin-top: 15px; font-size: 10px; color: #4b5563;">
+            ${isSi ? 'මෙම ණය සටහන ඊළඟ භාණ්ඩ මිලදී ගැනීමේදී භාවිතා කළ හැක.' : 'This credit note can be redeemed on future purchases.'}
+          </div>
+        </body>
+      </html>
+    `;
+  };
+
+  const handlePrintReturnReceipt = (returnRecord: SalesReturn) => {
+    const printHTML = generateReturnPrintHTML(returnRecord, shopSettings, isSinhala);
+    const win = window.open('', '_blank', 'width=400,height=600');
+    if (win) {
+      win.document.write(printHTML);
+      win.document.close();
+      win.focus();
+      setTimeout(() => {
+        win.print();
+        win.close();
+      }, 300);
+    }
+  };
+
+  const handlePrintCreditNote = (creditNoteRecord: CreditNote) => {
+    const printHTML = generateCreditNotePrintHTML(creditNoteRecord, shopSettings, isSinhala);
+    const win = window.open('', '_blank', 'width=400,height=600');
+    if (win) {
+      win.document.write(printHTML);
+      win.document.close();
+      win.focus();
+      setTimeout(() => {
+        win.print();
+        win.close();
+      }, 300);
     }
   };
 
@@ -2142,13 +3143,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   const updateCreditQty = (idx: number, qty: number) => {
     setCreditCartItems(prev => {
       const updated = [...prev];
-      if (qty <= 0) {
-        updated.splice(idx, 1);
-      } else {
-        const item = updated[idx];
-        const gross = qty * item.price;
-        updated[idx] = { ...item, qty, total: gross };
-      }
+      const item = updated[idx];
+      if (!item) return prev;
+      const validQty = Math.max(0, qty);
+      const gross = validQty * item.price;
+      const disc = item.discount || 0;
+      const discType = item.discountType || 'amount';
+      const discAmt = discType === 'percent' ? gross * (disc / 100) : disc;
+      updated[idx] = { ...item, qty: validQty, total: Math.max(0, gross - discAmt) };
       return updated;
     });
   };
@@ -2272,6 +3274,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
       let customerId = selectedCreditCustomer?.id || null;
       let finalCustomerName = creditCustomerName.trim();
+      const finalCustomerPhone = creditCustomerPhone.trim() || selectedCreditCustomer?.phone || '';
+      const finalCustomerAddress = creditCustomerAddress.trim() || selectedCreditCustomer?.address || '';
 
       // If it is a new customer, save them to the customers table first!
       if (!customerId && creditCustomerName.trim()) {
@@ -2310,6 +3314,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         invoice_no: `INV-${Date.now()}`,
         customer_id: customerId,
         customer_name: finalCustomerName,
+        customer_phone: finalCustomerPhone,
+        customer_address: finalCustomerAddress,
         items: creditCartItems,
         subtotal: grossCreditSubtotal,
         discount: creditTotalDiscount,
@@ -2320,11 +3326,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         user_id: user?.id,
         due_date: calculateDueDate(creditTabPeriodDays),
         credit_period_days: creditTabPeriodDays,
-        payment_method: 'Credit'
+        payment_method: 'Credit',
+        transportation_fee: Number(creditTransportationFee) || 0
       };
 
       const { data: saleRecord, error: saleError } = await supabase.from('sales').insert([newOrderData]).select().single();
-      if (saleError) throw saleError;
+      if (saleError && !saleRecord) {
+        console.warn("Supabase credit sale insert notice:", saleError);
+      }
 
       // Update product stock levels
       for (const item of creditCartItems) {
@@ -2337,23 +3346,30 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       }
 
       const completedOrder: SaleOrder = {
-        id: saleRecord.id || `so_${Date.now()}`,
-        invoiceNo: saleRecord.invoice_no || saleRecord.invoiceNo || newOrderData.invoice_no,
+        id: saleRecord?.id || `so_${Date.now()}`,
+        invoiceNo: saleRecord?.invoice_no || saleRecord?.invoiceNo || newOrderData.invoice_no,
         customer_id: newOrderData.customer_id || '',
         customerName: newOrderData.customer_name,
+        customerPhone: finalCustomerPhone,
+        customer_phone: finalCustomerPhone,
+        customerAddress: finalCustomerAddress,
+        customer_address: finalCustomerAddress,
         cashier: user?.email || 'system',
         date: new Date().toLocaleDateString(),
         items: creditCartItems,
-        created_at: saleRecord.created_at,
+        created_at: saleRecord?.created_at || new Date().toISOString(),
         subtotal: grossCreditSubtotal,
         discount: creditTotalDiscount,
         tax: creditTaxAmt,
         tax_rate: applyTax ? creditTaxRate : 0,
         total: creditTotal,
+        total_amount: creditTotal,
         status: 'Non Paid',
         due_date: newOrderData.due_date,
         credit_period_days: newOrderData.credit_period_days,
-        payment_method: 'Credit'
+        payment_method: 'Credit',
+        transportation_fee: Number(creditTransportationFee) || 0,
+        transportationFee: Number(creditTransportationFee) || 0
       };
 
       setLastOrder(completedOrder);
@@ -2367,6 +3383,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       setCreditCustomerPhone('');
       setCreditCustomerAddress('');
       setCreditCustomerNIC('');
+      setCreditTransportationFee(0);
       setCreditStep('customer');
       setCreditDiscount(0);
       setCreditTaxRate(shopSettings?.tax_rate || 0);
@@ -2391,6 +3408,18 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     }
   };
 
+  const fetchNextQuoteNumber = async () => {
+    try {
+      const res = await fetch(`${API_URL}/quotations/next-number`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.nextNumber) setQuoteNo(data.nextNumber);
+      }
+    } catch (e) {
+      console.error('Error fetching next quote number:', e);
+    }
+  };
+
   const fetchData = async () => {
     setIsLoading(true);
     try {
@@ -2406,22 +3435,28 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         .order('created_at', { ascending: false });
       
       if (salesData) {
-        const mappedOrders = salesData.map((s: any) => ({
-          ...s,
-          invoiceNo: s.invoice_no,
-          customerName: s.customerName || s.customer_name || custData?.find((c: any) => c.id === s.customer_id)?.name || 'Guest',
-          customerPhone: s.customerPhone || s.customer_phone || custData?.find((c: any) => c.id === s.customer_id)?.phone || '',
-          customerAddress: s.customerAddress || s.customer_address || custData?.find((c: any) => c.id === s.customer_id)?.address || '',
-          date: (() => {
-            const d = new Date(s.created_at);
-            if (isNaN(d.getTime())) return '';
-            const yyyy = d.getFullYear();
-            const mm = String(d.getMonth() + 1).padStart(2, '0');
-            const dd = String(d.getDate()).padStart(2, '0');
-            return `${yyyy}-${mm}-${dd}`;
-          })(),
-          total: s.total_amount 
-        }));
+        const mappedOrders = salesData.map((s: any) => {
+          const matchedCust = custData?.find((c: any) => 
+            (s.customer_id && c.id === s.customer_id) || 
+            (s.customer_name && c.name && c.name.toLowerCase() === s.customer_name.toLowerCase())
+          );
+          return {
+            ...s,
+            invoiceNo: s.invoice_no,
+            customerName: s.customerName || s.customer_name || matchedCust?.name || 'Guest Customer',
+            customerPhone: s.customerPhone || s.customer_phone || matchedCust?.phone || '',
+            customerAddress: s.customerAddress || s.customer_address || matchedCust?.address || '',
+            date: (() => {
+              const d = new Date(s.created_at);
+              if (isNaN(d.getTime())) return '';
+              const yyyy = d.getFullYear();
+              const mm = String(d.getMonth() + 1).padStart(2, '0');
+              const dd = String(d.getDate()).padStart(2, '0');
+              return `${yyyy}-${mm}-${dd}`;
+            })(),
+            total: s.total_amount 
+          };
+        });
         setOrders(mappedOrders);
 
         // Scan for overdue credits
@@ -2440,11 +3475,33 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         }
       }
 
-      const { data: quotesData } = await supabase.from('quotations').select('*');
-      if (quotesData) setQuotes(quotesData);
+      try {
+        const qRes = await fetch(`${API_URL}/quotations`);
+        if (qRes.ok) {
+          const qJson = await qRes.json();
+          setQuotes(qJson || []);
+        } else {
+          const { data: quotesData } = await supabase.from('quotations').select('*');
+          if (quotesData) setQuotes(quotesData);
+        }
+      } catch (e) {
+        const { data: quotesData } = await supabase.from('quotations').select('*');
+        if (quotesData) setQuotes(quotesData);
+      }
+
+      try {
+        const nRes = await fetch(`${API_URL}/quotations/next-number`);
+        if (nRes.ok) {
+          const nJson = await nRes.json();
+          if (nJson.nextNumber) setQuoteNo(nJson.nextNumber);
+        }
+      } catch (e) {}
 
       const { data: dnData } = await supabase.from('delivery_notes').select('*');
       if (dnData) setDeliveryNotes(dnData);
+
+      await fetchSalesReturns();
+      await fetchCreditNotes();
     } catch (error) {
       console.error("Error fetching data:", error);
     } finally {
@@ -2644,18 +3701,124 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     setCartItems((prev) => prev.map((i) => i.productId === productId ? { ...i, qty: targetQty, total: targetQty * i.price } : i));
   };
 
-  const subtotal = cartItems.reduce((sum, i) => sum + i.total, 0);
-  const discountAmt = subtotal * (discount / 100);
-  const taxAmt = applyTax ? (subtotal - discountAmt) * (taxRate / 100) : 0;
-  const totalAmountValue = subtotal - discountAmt + taxAmt + (Number(transportationFee) || 0);
+  const availableCustomerCreditNotes = React.useMemo(() => {
+    if (!creditNotesList || creditNotesList.length === 0) return [];
+    const custId = selectedCustomer?.id || '';
+    const custName = (isGuest ? guestName : (selectedCustomer?.name || '')).trim().toLowerCase();
+    const custPhone = (isGuest ? guestPhone : (selectedCustomer?.phone || '')).trim();
+
+    return creditNotesList.filter((cn: any) => {
+      const st = (cn.status || '').toLowerCase();
+      if (st === 'fully used' || st === 'used' || st === 'voided') return false;
+      const bal = Number(cn.balance_remaining !== undefined ? cn.balance_remaining : (cn.balanceRemaining !== undefined ? cn.balanceRemaining : cn.amount || 0));
+      if (bal <= 0) return false;
+
+      const cnId = (cn.customer_id || cn.customerId || '').toLowerCase();
+      const cnName = (cn.customer_name || cn.customerName || '').toLowerCase();
+      const cnPhone = (cn.customer_phone || cn.customerPhone || '').trim();
+
+      if (custId && cnId === custId.toLowerCase()) return true;
+      if (custName && custName !== 'guest customer' && cnName === custName) return true;
+      if (custPhone && cnPhone && cnPhone === custPhone) return true;
+      return false;
+    });
+  }, [creditNotesList, selectedCustomer, isGuest, guestName, guestPhone]);
+
+  const totalAvailableCreditNoteBalance = React.useMemo(() => {
+    return availableCustomerCreditNotes.reduce((sum, cn: any) => {
+      const bal = Number(cn.balance_remaining !== undefined ? cn.balance_remaining : (cn.balanceRemaining !== undefined ? cn.balanceRemaining : cn.amount || 0));
+      return sum + bal;
+    }, 0);
+  }, [availableCustomerCreditNotes]);
+
+  const matchedCreditNote = React.useMemo(() => {
+    if (!selectedCreditNoteCode.trim()) return null;
+    const q = selectedCreditNoteCode.trim().toLowerCase();
+    return creditNotesList.find((cn: any) => {
+      const code = (cn.credit_note_no || cn.code || cn.id || '').toLowerCase();
+      const cnNo = (cn.creditNoteNo || '').toLowerCase();
+      return (code === q || cnNo === q);
+    }) || null;
+  }, [selectedCreditNoteCode, creditNotesList]);
+
+  const activeCreditBalance = React.useMemo(() => {
+    if (matchedCreditNote) {
+      const origVal = Number(matchedCreditNote.amount !== undefined ? matchedCreditNote.amount : (matchedCreditNote.value || 0));
+      return Number(matchedCreditNote.balance_remaining !== undefined ? matchedCreditNote.balance_remaining : (matchedCreditNote.balanceRemaining !== undefined ? matchedCreditNote.balanceRemaining : origVal));
+    }
+    return totalAvailableCreditNoteBalance;
+  }, [matchedCreditNote, totalAvailableCreditNoteBalance]);
+
+  const grossSubtotal = cartItems.reduce((sum, i) => sum + ((Number(i.price) || 0) * (Number(i.qty) || 0)), 0);
+  const totalProductDiscounts = cartItems.reduce((sum, i) => {
+    const discType = i.discountType || 'percent';
+    const gross = (Number(i.price) || 0) * (Number(i.qty) || 0);
+    const discVal = Number(i.discount) || 0;
+    const discAmt = discType === 'percent' ? gross * (discVal / 100) : discVal;
+    return sum + discAmt;
+  }, 0);
+  const subtotal = grossSubtotal;
+  const discountAmt = totalProductDiscounts;
+  const taxAmt = applyTax ? Math.max(0, subtotal - discountAmt) * (taxRate / 100) : 0;
+  const netTotalBeforeCreditNote = Math.max(0, subtotal - discountAmt + taxAmt + (Number(transportationFee) || 0));
+  const numCreditNoteApplied = Math.min(
+    Math.max(0, activeCreditBalance),
+    Math.min(Number(creditNoteApplied || 0), netTotalBeforeCreditNote)
+  );
+  const totalAmountValue = Math.max(0, netTotalBeforeCreditNote - numCreditNoteApplied);
+  const remainingCNBalanceAfterSale = Math.max(0, activeCreditBalance - numCreditNoteApplied);
+
+  // Automatically populate credit note price/amount when credit note code is entered/scanned
+  useEffect(() => {
+    if (!selectedCreditNoteCode.trim()) return;
+    const q = selectedCreditNoteCode.trim().toUpperCase();
+    const found = creditNotesList.find((c: any) => {
+      const code = (c.credit_note_no || c.code || c.id || '').toUpperCase();
+      const st = (c.status || '').toLowerCase();
+      const isNotFullyUsed = st !== 'fully used' && st !== 'used' && st !== 'voided';
+      return code === q && isNotFullyUsed;
+    });
+    if (found) {
+      const origVal = Number(found.amount !== undefined ? found.amount : (found.value || 0));
+      const bal = Number(found.balance_remaining !== undefined ? found.balance_remaining : (found.balanceRemaining !== undefined ? found.balanceRemaining : origVal));
+      if (bal > 0) {
+        const autoAmount = netTotalBeforeCreditNote > 0 ? Math.min(bal, netTotalBeforeCreditNote) : bal;
+        setCreditNoteApplied(autoAmount);
+      }
+    }
+  }, [selectedCreditNoteCode, creditNotesList, netTotalBeforeCreditNote]);
 
   const processSale = async () => {
+    if (isLoading) return;
+
     if ((!isGuest && !selectedCustomer) || cartItems.length === 0) {
         return alert(t("Please select a customer or use Guest Checkout", "කරුණාකර පාරිභෝගිකයෙකු තෝරන්න හෝ අමුත්තන්ගේ පරීක්ෂාව භාවිතා කරන්න"));
     }
 
     if (cartItems.some(i => i.qty <= 0)) {
         return alert(t("Please enter a valid quantity greater than 0 for all items.", "කරුණාකර සියලුම භාණ්ඩ සඳහා 0 ට වැඩි වලංගු ප්‍රමාණයක් ඇතුළත් කරන්න."));
+    }
+
+    // Strict Credit Note Validation
+    if (numCreditNoteApplied > 0 && selectedCreditNoteCode.trim()) {
+      const q = selectedCreditNoteCode.trim().toUpperCase();
+      const targetCN = creditNotesList.find((c: any) => (c.credit_note_no || c.code || c.id || '').toUpperCase() === q);
+
+      if (!targetCN) {
+        return alert(t(`Credit Note code ${selectedCreditNoteCode} not found in system.`, `ණය සටහන් අංකය ${selectedCreditNoteCode} පද්ධතියේ හමු නොවීය.`));
+      }
+
+      const origVal = Number(targetCN.amount !== undefined ? targetCN.amount : (targetCN.value || 0));
+      const availBal = Number(targetCN.balance_remaining !== undefined ? targetCN.balance_remaining : (targetCN.balanceRemaining !== undefined ? targetCN.balanceRemaining : origVal));
+      const st = (targetCN.status || '').toLowerCase();
+
+      if (st === 'fully used' || st === 'used' || st === 'voided' || availBal <= 0) {
+        return alert(t(`Credit Note ${selectedCreditNoteCode} is fully used or voided (Available Balance: Rs. 0.00).`, `ණය සටහන් අංකය ${selectedCreditNoteCode} සම්පූර්ණයෙන්ම භාවිතා කර ඇත.`));
+      }
+
+      if (numCreditNoteApplied > availBal + 0.001) {
+        return alert(t(`Credit Note balance is only Rs. ${availBal.toLocaleString()}. You cannot apply Rs. ${numCreditNoteApplied.toLocaleString()}.`, `ණය සටහනේ ඉතිරි ශේෂය රු. ${availBal.toLocaleString()} කි. ඔබට රු. ${numCreditNoteApplied.toLocaleString()} භාවිතා කළ නොහැක.`));
+      }
     }
 
     setIsLoading(true);
@@ -2667,6 +3830,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         : (selectedCustomer?.name || 'Guest Customer');
       const finalCustomerPhone = isGuest ? guestPhone.trim() : (selectedCustomer?.phone || '');
       const finalCustomerAddress = isGuest ? guestAddress.trim() : (selectedCustomer?.address || '');
+
+      const activeCNCode = selectedCreditNoteCode || (availableCustomerCreditNotes[0]?.credit_note_no || availableCustomerCreditNotes[0]?.code || '');
 
       const newOrderData = {
         invoice_no: `INV-${Date.now()}`,
@@ -2683,13 +3848,18 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         status: paymentMethod === 'Credit' ? 'Non Paid' : 'paid',
         payment_method: paymentMethod,
         user_id: user?.id,
+        user_email: user?.email || 'system',
         due_date: paymentMethod === 'Credit' ? calculateDueDate(creditPeriodDays) : null,
         credit_period_days: paymentMethod === 'Credit' ? creditPeriodDays : 0,
-        transportation_fee: Number(transportationFee) || 0
+        transportation_fee: Number(transportationFee) || 0,
+        credit_note_applied: numCreditNoteApplied,
+        credit_note_code: activeCNCode
       };
 
       const { data: saleRecord, error: saleError } = await supabase.from('sales').insert([newOrderData]).select().single();
-      if (saleError) throw saleError;
+      if (saleError && !saleRecord) {
+        console.warn("Supabase sale insert notice:", saleError);
+      }
 
       // Note: SQLite backend handles product stock levels automatically, 
       // but let's notify supabaseClient of sync so local caching updates.
@@ -2703,8 +3873,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       }
 
       const completedOrder: SaleOrder = {
-        id: saleRecord.id || `so_${Date.now()}`,
-        invoiceNo: saleRecord.invoice_no || saleRecord.invoiceNo || newOrderData.invoice_no,
+        id: saleRecord?.id || `so_${Date.now()}`,
+        invoiceNo: saleRecord?.invoice_no || saleRecord?.invoiceNo || newOrderData.invoice_no,
         customer_id: newOrderData.customer_id || '',
         customerName: finalCustomerName,
         customerPhone: finalCustomerPhone,
@@ -2714,16 +3884,23 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         cashier: user?.email || 'system',
         date: new Date().toLocaleDateString(),
         items: cartItems,
-        created_at: saleRecord.created_at,
+        created_at: saleRecord?.created_at || new Date().toISOString(),
         subtotal: subtotal,
         discount: discountAmt,
         tax: taxAmt,
         tax_rate: newOrderData.tax_rate,
         total: totalAmountValue,
+        total_amount: totalAmountValue,
         status: (paymentMethod === 'Credit' ? 'Non Paid' : 'paid') as any,
         due_date: newOrderData.due_date || undefined,
         credit_period_days: newOrderData.credit_period_days,
-        payment_method: paymentMethod
+        payment_method: paymentMethod,
+        transportation_fee: Number(transportationFee) || 0,
+        transportationFee: Number(transportationFee) || 0,
+        credit_note_applied: numCreditNoteApplied,
+        creditNoteApplied: numCreditNoteApplied,
+        credit_note_code: activeCNCode,
+        creditNoteCode: activeCNCode
       };
       setLastOrder(completedOrder);
       setShowReceipt(true);
@@ -2733,9 +3910,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       setGuestName('Guest Customer');
       setGuestPhone('');
       setGuestAddress('');
+      setTransportationFee(0);
       setDiscount(0);
       setPaymentMethod('Cash');
+      setCreditNoteApplied('');
+      setSelectedCreditNoteCode('');
       fetchData(); 
+      fetchCreditNotes();
     } catch (error: any) {
       alert("Sale failed: " + error.message);
     } finally {
@@ -3327,13 +4508,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 bg-white">
-                        {cartItems.map((item) => {
+                        {cartItems.map((item, itemIdx) => {
                           const prod = products.find(p => p.id === item.productId);
                           const baseStock = prod?.stock || 0;
                           const conversionRate = item.conversionRate || 1;
                           const maxStockInUnit = Math.round((baseStock * conversionRate) * 100000) / 100000;
                           return (
-                            <tr key={item.productId} className="hover:bg-slate-50/30 transition-colors">
+                            <tr key={itemIdx} className="hover:bg-slate-50/30 transition-colors">
                               <td className="px-5 py-4">
                                 <p className="font-black text-slate-800 text-sm">{item.productName}</p>
                                 <div className="flex items-center gap-2 mt-1">
@@ -3402,23 +4583,23 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                 <div className="inline-flex items-center bg-slate-50 border border-slate-200 rounded-xl p-1 shadow-inner">
                                   <button
                                     type="button"
-                                    onClick={() => updateQty(item.productId, Math.max(1, item.qty - 1))}
+                                    onClick={() => updateQty(item.productId, Math.max(0.5, Math.round((item.qty - 0.5) * 100) / 100))}
                                     className="w-7 h-7 bg-white hover:bg-slate-100 active:scale-95 text-slate-600 rounded-lg flex items-center justify-center font-black transition-all border border-slate-200 shadow-sm"
                                   >
                                     -
                                   </button>
                                   <input 
                                     type="number" 
-                                    min={0.01} 
+                                    min={0.5} 
                                     step="any"
                                     max={maxStockInUnit} 
                                     value={item.qty === 0 ? '' : item.qty} 
                                     onChange={(e) => updateQty(item.productId, e.target.value === '' ? 0 : Math.min(maxStockInUnit, parseFloat(e.target.value) || 0))} 
-                                    className="w-12 text-center bg-transparent border-0 font-bold text-slate-800 outline-none select-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+                                    className="w-16 text-center bg-transparent border-0 font-bold text-slate-800 outline-none select-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
                                   />
                                   <button
                                     type="button"
-                                    onClick={() => updateQty(item.productId, Math.min(maxStockInUnit, item.qty + 1))}
+                                    onClick={() => updateQty(item.productId, Math.min(maxStockInUnit, Math.round((item.qty + 0.5) * 100) / 100))}
                                     className="w-7 h-7 bg-white hover:bg-slate-100 active:scale-95 text-slate-600 rounded-lg flex items-center justify-center font-black transition-all border border-slate-200 shadow-sm"
                                   >
                                     +
@@ -3545,6 +4726,180 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                     </div>
                   </div>
                 </div>
+
+                {/* Credit Note Code & Application Field */}
+                <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3.5 space-y-2.5">
+                  <div className="flex justify-between items-center">
+                    <label className="text-[9px] font-black text-amber-900 uppercase tracking-wider flex items-center gap-1.5">
+                      <span>💳</span> {t('Credit Note Code', 'ණය සටහන් අංකය')}
+                    </label>
+                    {activeCreditBalance > 0 && (
+                      <span className="text-[9px] font-black text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full">
+                        {t('Avail Balance: ', 'ශේෂය: ')}{symbol} {convert(activeCreditBalance).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Code Input / Dropdown Combo */}
+                  <div className="space-y-1.5">
+                    {availableCustomerCreditNotes.length > 0 && (
+                      <select
+                        value={selectedCreditNoteCode}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSelectedCreditNoteCode(val);
+                          if (val) {
+                            const found = creditNotesList.find((c: any) => (c.credit_note_no || c.code || c.id) === val);
+                            if (found) {
+                              const bal = Number(found.balance_remaining !== undefined ? found.balance_remaining : (found.balanceRemaining || found.amount || 0));
+                              setCreditNoteApplied(Math.min(bal, netTotalBeforeCreditNote));
+                            }
+                          }
+                        }}
+                        className="w-full px-3 py-2 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500 shadow-sm"
+                      >
+                        <option value="">-- {t('Select Active Customer Credit Note', 'සක්‍රිය ණය සටහන තෝරන්න')} --</option>
+                        {availableCustomerCreditNotes.map((cn: any) => {
+                          const cnCode = cn.credit_note_no || cn.code || cn.id;
+                          const bal = Number(cn.balance_remaining !== undefined ? cn.balance_remaining : (cn.balanceRemaining || cn.amount || 0));
+                          return (
+                            <option key={cn.id} value={cnCode}>
+                              {cnCode} - {symbol} {convert(bal).toLocaleString()}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    )}
+
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder={t('Enter/Scan CN Code (e.g. CN-055468)', 'ණය සටහන් අංකය ඇතුළත්/ස්කෑන් කරන්න...')}
+                        value={selectedCreditNoteCode}
+                        onChange={(e) => {
+                          const val = e.target.value.toUpperCase();
+                          setSelectedCreditNoteCode(val);
+                          const found = creditNotesList.find((c: any) => (c.credit_note_no || c.code || c.id || '').toUpperCase() === val.trim() && c.status === 'active');
+                          if (found) {
+                            const bal = Number(found.balance_remaining !== undefined ? found.balance_remaining : (found.balanceRemaining || found.amount || 0));
+                            setCreditNoteApplied(Math.min(bal, netTotalBeforeCreditNote));
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const val = selectedCreditNoteCode.trim().toUpperCase();
+                            const found = creditNotesList.find((c: any) => (c.credit_note_no || c.code || c.id || '').toUpperCase() === val && c.status === 'active');
+                            if (found) {
+                              const bal = Number(found.balance_remaining !== undefined ? found.balance_remaining : (found.balanceRemaining || found.amount || 0));
+                              setCreditNoteApplied(Math.min(bal, netTotalBeforeCreditNote));
+                            } else if (val) {
+                              alert(t("Credit Note code not found or already used.", "ණය සටහන් අංකය හමු නොවීය හෝ දැනටමත් භාවිතා කර ඇත."));
+                            }
+                          }
+                        }}
+                        className="w-full px-3 py-2 bg-white border border-amber-200 rounded-xl text-xs font-mono font-bold text-amber-900 outline-none placeholder-slate-400 focus:border-amber-500 shadow-sm"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Auto-Detected Credit Note Price Banner */}
+                  {matchedCreditNote && (() => {
+                    const origVal = Number(matchedCreditNote.amount !== undefined ? matchedCreditNote.amount : (matchedCreditNote.value || 0));
+                    const availBal = Number(matchedCreditNote.balance_remaining !== undefined ? matchedCreditNote.balance_remaining : (matchedCreditNote.balanceRemaining !== undefined ? matchedCreditNote.balanceRemaining : origVal));
+                    const usedVal = Math.max(0, origVal - availBal);
+                    const st = (matchedCreditNote.status || '').toLowerCase();
+                    const isFullyUsed = st === 'fully used' || st === 'used' || availBal <= 0;
+                    const isPartiallyUsed = !isFullyUsed && (st === 'partially used' || st === 'partially_used' || usedVal > 0);
+
+                    return (
+                      <div className={`border rounded-xl p-3 space-y-2 animate-in fade-in duration-200 ${
+                        isFullyUsed ? 'bg-rose-50 border-rose-200' : isPartiallyUsed ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'
+                      }`}>
+                        <div className="flex justify-between items-center text-xs font-black">
+                          <span className="flex items-center gap-1 font-mono text-slate-800">
+                            💳 {matchedCreditNote.credit_note_no || matchedCreditNote.code || matchedCreditNote.id}
+                          </span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
+                            isFullyUsed
+                              ? 'bg-rose-200 text-rose-900'
+                              : isPartiallyUsed
+                              ? 'bg-amber-200 text-amber-900'
+                              : 'bg-emerald-200 text-emerald-900'
+                          }`}>
+                            {isFullyUsed
+                              ? t('Fully Used', 'සම්පූර්ණයෙන්ම භාවිතා කර ඇත')
+                              : isPartiallyUsed
+                              ? t('Partially Used', 'කොටසක් භාවිතා කර ඇත')
+                              : t('Active', 'සක්‍රියයි')}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-[11px] pt-1.5 border-t border-slate-200/80">
+                          <div>
+                            <span className="text-[9px] font-black text-slate-400 uppercase block">{t('Original', 'මුල් වටිනාකම')}</span>
+                            <span className="font-mono font-bold text-slate-700">{symbol} {convert(origVal).toLocaleString()}</span>
+                          </div>
+                          <div>
+                            <span className="text-[9px] font-black text-slate-400 uppercase block">{t('Used', 'භාවිත කල')}</span>
+                            <span className="font-mono font-bold text-amber-700">{symbol} {convert(usedVal).toLocaleString()}</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[9px] font-black text-emerald-600 uppercase block">{t('Available Bal', 'ඉතිරි ශේෂය')}</span>
+                            <span className="font-mono font-black text-emerald-700 text-xs">{symbol} {convert(availBal).toLocaleString()}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Amount Applied Input & Max Button */}
+                  <div className="space-y-1 pt-1">
+                    <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest block">
+                      {t('Amount to Apply (Rs.)', 'භාවිතා කරන මුදල (රු.)')}
+                    </label>
+                    <div className="flex gap-2">
+                      <input 
+                        type="number" 
+                        min={0} 
+                        max={Math.min(activeCreditBalance > 0 ? activeCreditBalance : 999999, netTotalBeforeCreditNote)}
+                        value={creditNoteApplied === '' ? '' : creditNoteApplied} 
+                        onChange={(e) => {
+                          const val = e.target.value === '' ? '' : Math.max(0, parseFloat(e.target.value) || 0);
+                          if (typeof val === 'number') {
+                            const maxAllow = activeCreditBalance > 0 
+                              ? Math.min(activeCreditBalance, netTotalBeforeCreditNote)
+                              : netTotalBeforeCreditNote;
+                            setCreditNoteApplied(Math.min(val, maxAllow));
+                          } else {
+                            setCreditNoteApplied('');
+                          }
+                        }} 
+                        placeholder="0.00"
+                        className="w-full px-3 py-2 bg-white border border-amber-200 rounded-xl font-bold text-slate-800 text-xs outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm" 
+                      />
+                      {activeCreditBalance > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const maxAllow = Math.min(activeCreditBalance, netTotalBeforeCreditNote);
+                            setCreditNoteApplied(maxAllow);
+                          }}
+                          className="px-3 py-2 bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-black text-[10px] uppercase tracking-wider rounded-xl transition-all shadow-sm shrink-0"
+                        >
+                          {t('Max', 'උපරිම')}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Remaining Balance After Sale Live Badge */}
+                  {numCreditNoteApplied > 0 && (
+                    <div className="bg-emerald-50 border border-emerald-200/80 rounded-lg p-2 flex justify-between items-center text-[10px] font-black text-emerald-900 animate-in fade-in duration-200">
+                      <span>{t('Remaining CN Balance after Sale:', 'මෙම ගනුදෙනුවෙන් පසු ඉතිරි ශේෂය:')}</span>
+                      <span className="font-mono text-xs text-emerald-700 font-bold">{symbol} {convert(remainingCNBalanceAfterSale).toLocaleString()}</span>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Price Calculation Details Block */}
@@ -3553,14 +4908,34 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                   <span>{t('Subtotal', 'උප එකතුව')}</span>
                   <span className="text-slate-700 font-mono">{symbol} {convert(subtotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
-                <div className="flex justify-between text-xs font-black text-red-400 uppercase tracking-widest">
-                  <span>{t('Savings', 'ඉතිරිකිරීම්')}</span>
-                  <span className="text-red-500 font-mono">-{symbol} {convert(discountAmt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </div>
+                {discountAmt > 0 && (
+                  <div className="flex justify-between text-xs font-black text-red-400 uppercase tracking-widest">
+                    <span>{t('Discount', 'වට්ටම')}</span>
+                    <span className="text-red-500 font-mono">-{symbol} {convert(discountAmt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                {Number(transportationFee || 0) > 0 && (
+                  <div className="flex justify-between text-xs font-black text-slate-400 uppercase tracking-widest">
+                    <span>{t('Transportation Fee', 'ප්‍රවාහන ගාස්තුව')}</span>
+                    <span className="text-slate-700 font-mono">+{symbol} {convert(transportationFee).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-xs font-black text-slate-400 uppercase tracking-widest">
                   <span>{t('Total Tax', 'මුළු බද්ද')} ({applyTax ? taxRate : 0}%)</span>
                   <span className="text-slate-700 font-mono">+{symbol} {convert(taxAmt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
+                {numCreditNoteApplied > 0 && (
+                  <>
+                    <div className="flex justify-between text-xs font-black text-emerald-600 uppercase tracking-widest bg-emerald-50 p-2 rounded-lg border border-emerald-200">
+                      <span>{t('Credit Note Applied', 'ණය සටහන භාවිතා කරන ලදී')} {selectedCreditNoteCode ? `(${selectedCreditNoteCode})` : ''}</span>
+                      <span className="font-mono">-{symbol} {convert(numCreditNoteApplied).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="flex justify-between text-[11px] font-black text-amber-700 uppercase tracking-wider px-2">
+                      <span>{t('Remaining Credit Note Balance', 'ණය සටහනේ ඉතිරි ශේෂය')}</span>
+                      <span className="font-mono">{symbol} {convert(remainingCNBalanceAfterSale).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                  </>
+                )}
                 
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex justify-between items-center mt-2 shadow-md">
                   <span className="uppercase tracking-widest text-xs font-black text-slate-400">{t('Payable', 'ගෙවිය යුතු මුදල')}</span>
@@ -4162,23 +5537,23 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                 <div className="inline-flex items-center bg-slate-50 border border-slate-200 rounded-xl p-1 shadow-inner">
                                   <button
                                     type="button"
-                                    onClick={() => updateCreditQty(itemIdx, Math.max(1, item.qty - 1))}
+                                    onClick={() => updateCreditQty(itemIdx, Math.max(0.5, Math.round((item.qty - 0.5) * 100) / 100))}
                                     className="w-7 h-7 bg-white hover:bg-slate-100 active:scale-95 text-slate-600 rounded-lg flex items-center justify-center font-black transition-all border border-slate-200 shadow-sm"
                                   >
                                     -
                                   </button>
                                   <input 
                                     type="number" 
-                                    min={0.01} 
+                                    min={0.5} 
                                     step="any"
                                     max={maxStockInUnit} 
                                     value={item.qty === 0 ? '' : item.qty} 
                                     onChange={(e) => updateCreditQty(itemIdx, e.target.value === '' ? 0 : Math.min(maxStockInUnit, parseFloat(e.target.value) || 0))} 
-                                    className="w-12 text-center bg-transparent border-0 font-bold text-slate-800 outline-none select-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+                                    className="w-16 text-center bg-transparent border-0 font-bold text-slate-800 outline-none select-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
                                   />
                                   <button
                                     type="button"
-                                    onClick={() => updateCreditQty(itemIdx, Math.min(maxStockInUnit, item.qty + 1))}
+                                    onClick={() => updateCreditQty(itemIdx, Math.min(maxStockInUnit, Math.round((item.qty + 0.5) * 100) / 100))}
                                     className="w-7 h-7 bg-white hover:bg-slate-100 active:scale-95 text-slate-600 rounded-lg flex items-center justify-center font-black transition-all border border-slate-200 shadow-sm"
                                   >
                                     +
@@ -4576,7 +5951,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
             {/* Premium Receipt Preview Rendering */}
             <div className="max-h-[60vh] overflow-y-auto pr-1">
-              <ReceiptPreview order={lastOrder} isSinhala={isSinhala} />
+              <ReceiptPreview order={lastOrder} isSinhala={isSinhala} customers={customers} salesReturns={salesReturnsList} />
             </div>
 
             <div className="pt-2">
@@ -4673,337 +6048,746 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
             </h3>
             <button
               onClick={() => {
+                if (!isCreatingQuote) {
+                  fetchNextQuoteNumber();
+                }
                 setIsCreatingQuote(!isCreatingQuote);
-                setQuoteCart([]);
-                setQuoteCustomerName('');
               }}
               className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-amber-400 border border-slate-800 rounded-xl text-xs font-black uppercase tracking-wider transition-all shadow-lg shadow-slate-900/10 flex items-center gap-2"
             >
               <PlusIcon className="w-4 h-4 text-amber-400" />
-              {isCreatingQuote ? t('View Quotations', 'මිල ගණන් බලාගන්න') : t('Create Quotation', 'නව මිල ගණන් පත්‍රයක්')}
+              {isCreatingQuote ? t('View Quotation History', 'මිල ගණන් ලැයිස්තුව') : t('Create New Quotation', 'නව මිල ගණන් පත්‍රයක්')}
             </button>
           </div>
 
-          {isCreatingQuote ? (
-            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-              {/* Product Selector Left Column */}
-              <div className="xl:col-span-1 space-y-4">
-                <div className="bg-white rounded-2xl border-l-4 border-l-amber-500 border-y border-r border-slate-100 shadow-xl shadow-slate-100/40 p-6 space-y-4 hover:shadow-2xl hover:shadow-slate-200/40 transition-all duration-300 transform hover:-translate-y-0.5">
-                  <h4 className="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-3">
-                    <SearchIcon className="w-4 h-4 text-amber-500" />
-                    {t('Select Items', 'භාණ්ඩ තෝරන්න')}
-                  </h4>
+          {/* Quotation Container (Unified Sub-Items & Barcode Search Engine) */}
+          {(() => {
+            const allQuoteSelectables: Array<{
+              key: string;
+              productId: string;
+              displayName: string;
+              mainProductName: string;
+              subItemName?: string;
+              category: string;
+              price: number;
+              unit: string;
+              conversionRate: number;
+              barcode?: string;
+              sku?: string;
+              isSubItem: boolean;
+              stock: number;
+            }> = [];
 
-                  {/* Customer Name input */}
-                  <div>
-                    <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">{t('Customer Name', 'පාරිභෝගිකයාගේ නම')}</label>
-                    <input
-                      type="text"
-                      className="w-full px-4 py-3.5 bg-slate-50/50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm"
-                      placeholder={t('Enter customer name...', 'පාරිභෝගිකයාගේ නම ඇතුළත් කරන්න...')}
-                      value={quoteCustomerName}
-                      onChange={(e) => setQuoteCustomerName(e.target.value)}
-                    />
-                  </div>
+            (products || []).forEach((p: any) => {
+              const mainPrice = Number(p.sellingPrice || p.price || 0);
+              const mainUnit = p.unit || 'pcs';
+              const mainCategory = p.category || 'General';
 
-                  {/* Product Search */}
-                  <div>
-                    <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1">{t('Search Products', 'භාණ්ඩ සොයන්න')}</label>
-                    <input
-                      type="text"
-                      className="w-full px-4 py-3.5 bg-slate-50/50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm"
-                      placeholder={t('Search by Name or SKU...', 'නම හෝ SKU මඟින් සොයන්න...')}
-                      value={quoteSearch}
-                      onChange={(e) => setQuoteSearch(e.target.value)}
-                    />
-                  </div>
+              // 1. Base Main Product
+              allQuoteSelectables.push({
+                key: `qmain_${p.id}`,
+                productId: p.id,
+                displayName: p.name,
+                mainProductName: p.name,
+                category: mainCategory,
+                price: mainPrice,
+                unit: mainUnit,
+                conversionRate: 1,
+                barcode: p.barcode || '',
+                sku: p.sku || '',
+                isSubItem: false,
+                stock: Number(p.stock || 0)
+              });
 
-                  {/* Search results */}
-                  <div className="max-h-60 overflow-y-auto divide-y divide-slate-100/60 pr-1">
-                    {products
-                      .filter(p => p.name.toLowerCase().includes(quoteSearch.toLowerCase()) || p.sku.toLowerCase().includes(quoteSearch.toLowerCase()))
-                      .slice(0, 5)
-                      .map(p => (
-                        <div
-                          key={p.id}
-                          onClick={() => {
-                            setQuoteCart(prev => {
-                              const existing = prev.find(i => i.productId === p.id);
-                              if (existing) {
-                                  return prev.map(i => i.productId === p.id ? { ...i, qty: i.qty + 1, total: (i.qty + 1) * i.price } : i);
-                              } else {
-                                  return [...prev, {
-                                    productId: p.id,
-                                    productName: p.name,
-                                    qty: 1,
-                                    price: p.price,
-                                    total: p.price,
-                                    taxRate: 0,
-                                    serialNo: p.serialNo,
-                                    batchCode: p.batchCode
-                                  }];
-                              }
-                            });
-                          }}
-                          className="py-3 cursor-pointer hover:bg-slate-50 flex justify-between items-center px-3.5 transition-all rounded-xl"
-                        >
-                          <div className="space-y-0.5">
-                            <div className="text-sm font-black text-slate-800">{p.name}</div>
-                            <div className="text-[9px] text-slate-400 font-mono">SKU: {p.sku || 'N/A'} • {symbol} {p.price.toLocaleString()}</div>
-                          </div>
-                          <div className="p-1 bg-amber-50 hover:bg-amber-100 rounded-lg text-amber-500 border border-amber-200/40 shadow-sm transition-colors">
-                            <PlusIcon className="w-4 h-4 text-amber-500" />
-                          </div>
+              // 2. Sub-Units / Unit Options (Sand Cube/Half-Cube/Wheelbarrow, etc.)
+              const unitOpts = getUnitOptions(p);
+              unitOpts.forEach((opt) => {
+                if (opt.unit.toLowerCase() !== mainUnit.toLowerCase()) {
+                  allQuoteSelectables.push({
+                    key: `qsub_${p.id}_${opt.unit}`,
+                    productId: p.id,
+                    displayName: `${p.name} (${opt.unit})`,
+                    mainProductName: p.name,
+                    subItemName: opt.unit,
+                    category: mainCategory,
+                    price: Number(opt.price) || (mainPrice / (opt.conversionRate || 1)),
+                    unit: opt.unit,
+                    conversionRate: Number(opt.conversionRate) || 1,
+                    barcode: p.barcode || '',
+                    sku: p.sku || '',
+                    isSubItem: true,
+                    stock: Number(p.stock || 0)
+                  });
+                }
+              });
+
+              // 3. Explicit subItems / variants array
+              const explicitSubItems = Array.isArray(p.subItems) ? p.subItems : (Array.isArray(p.sub_items) ? p.sub_items : (Array.isArray(p.variants) ? p.variants : []));
+              explicitSubItems.forEach((sub: any, sIdx: number) => {
+                allQuoteSelectables.push({
+                  key: `qexplicit_sub_${p.id}_${sIdx}`,
+                  productId: p.id,
+                  displayName: `${p.name} - ${sub.name || sub.title || sub.unit || 'Sub-Item'}`,
+                  mainProductName: p.name,
+                  subItemName: sub.name || sub.title || sub.unit,
+                  category: mainCategory,
+                  price: Number(sub.price || sub.sellingPrice || mainPrice),
+                  unit: sub.unit || mainUnit,
+                  conversionRate: Number(sub.conversionRate || 1),
+                  barcode: sub.barcode || p.barcode || '',
+                  sku: sub.sku || p.sku || '',
+                  isSubItem: true,
+                  stock: Number(sub.stock || p.stock || 0)
+                });
+              });
+            });
+
+            const handleAddSelectableToQuoteCart = (item: typeof allQuoteSelectables[0]) => {
+              setQuoteCart(prev => {
+                const existingIdx = prev.findIndex(i => i.productId === item.productId && (i.unit || '').toLowerCase() === item.unit.toLowerCase());
+                if (existingIdx >= 0) {
+                  const updated = [...prev];
+                  updated[existingIdx].qty += 1;
+                  updated[existingIdx].total = updated[existingIdx].qty * updated[existingIdx].price;
+                  return updated;
+                }
+
+                const newItem: SaleItem = {
+                  productId: item.productId,
+                  productName: item.displayName,
+                  qty: 1,
+                  price: item.price,
+                  total: item.price,
+                  unit: item.unit,
+                  conversionRate: item.conversionRate,
+                  discount: 0,
+                  discountType: 'amount',
+                  taxRate: 0
+                };
+                return [...prev, newItem];
+              });
+            };
+
+            const qStr = quoteSearch.trim().toLowerCase();
+            const matchingQuoteSelectables = allQuoteSelectables.filter(item => {
+              if (!qStr) return true;
+              return (
+                (item.barcode && item.barcode.trim().toLowerCase().includes(qStr)) ||
+                item.mainProductName.toLowerCase().includes(qStr) ||
+                item.displayName.toLowerCase().includes(qStr) ||
+                (item.subItemName && item.subItemName.toLowerCase().includes(qStr)) ||
+                (item.sku && item.sku.toLowerCase().includes(qStr)) ||
+                item.category.toLowerCase().includes(qStr)
+              );
+            });
+
+            // Financial Calculations
+            const numDiscountValue = Number(quoteDiscountValue || 0);
+            const numTransportationFee = Number(quoteTransportationFee || 0);
+            const numTaxValue = Number(quoteTaxValue || 0);
+
+            const quoteSubtotal = quoteCart.reduce((sum, item) => sum + (item.qty * item.price), 0);
+            const quoteDiscountAmount = quoteDiscountType === 'percentage' 
+              ? (quoteSubtotal * numDiscountValue / 100) 
+              : numDiscountValue;
+            const netAfterDiscount = Math.max(0, quoteSubtotal - quoteDiscountAmount);
+            const quoteTaxAmount = quoteTaxType === 'percentage' 
+              ? (netAfterDiscount * numTaxValue / 100) 
+              : numTaxValue;
+            const quoteGrandTotal = Math.max(0, netAfterDiscount + numTransportationFee + quoteTaxAmount);
+
+            const handleSaveQuotation = async (shouldPrint: boolean = false) => {
+              if (!quoteCustomerName.trim()) {
+                return alert(t('Please enter or select customer name.', 'කරුණාකර පාරිභෝගිකයාගේ නම ඇතුළත් කරන්න.'));
+              }
+              if (quoteCart.length === 0) {
+                return alert(t('Please add items to quotation.', 'කරුණාකර මිල ගණන් පත්‍රයට භාණ්ඩ එක් කරන්න.'));
+              }
+
+              const payload = {
+                quote_no: quoteNo,
+                customer_name: quoteCustomerName,
+                customer_phone: quoteCustomerPhone,
+                customer_address: quoteCustomerAddress,
+                validity_period: quoteValidityPeriod || '30 Days',
+                items: quoteCart,
+                subtotal: quoteSubtotal,
+                discount_type: quoteDiscountType,
+                discount_value: numDiscountValue,
+                discount_amount: quoteDiscountAmount,
+                transportation_fee: numTransportationFee,
+                tax_amount: quoteTaxAmount,
+                total: quoteGrandTotal,
+                status: 'Active'
+              };
+
+              try {
+                setIsLoading(true);
+                const res = await fetch(`${API_URL}/quotations`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(payload)
+                });
+                
+                let result = null;
+                if (res.ok) {
+                  result = await res.json();
+                } else {
+                  // Fallback to Supabase
+                  const { error } = await supabase.from('quotations').insert([payload]);
+                  if (error) throw error;
+                }
+
+                if (shouldPrint) {
+                  const htmlContent = generateQuotePrintHTML({ ...payload, created_at: new Date().toISOString() }, isSinhala, shopSettings);
+                  const iframe = document.createElement('iframe');
+                  iframe.style.position = 'fixed';
+                  iframe.style.right = '0';
+                  iframe.style.bottom = '0';
+                  iframe.style.width = '0';
+                  iframe.style.height = '0';
+                  iframe.style.border = '0';
+                  document.body.appendChild(iframe);
+                  const doc = iframe.contentWindow?.document || iframe.contentDocument;
+                  if (doc) {
+                    doc.open();
+                    doc.write(htmlContent);
+                    doc.close();
+                  }
+                  setTimeout(() => {
+                    iframe.contentWindow?.focus();
+                    iframe.contentWindow?.print();
+                    setTimeout(() => {
+                      if (document.body.contains(iframe)) document.body.removeChild(iframe);
+                    }, 1000);
+                  }, 300);
+                }
+
+                alert(t(`Quotation ${payload.quote_no} saved successfully!`, `මිල ගණන් පත්‍රය ${payload.quote_no} සාර්ථකව සුරකින ලදී!`));
+
+                // Reset
+                setQuoteCart([]);
+                setQuoteCustomerName('');
+                setQuoteCustomerPhone('');
+                setQuoteCustomerAddress('');
+                setQuoteDiscountValue('');
+                setQuoteTransportationFee('');
+                setQuoteTaxValue('');
+                setIsCreatingQuote(false);
+                await fetchData();
+              } catch (err: any) {
+                alert(t('Failed to save quotation: ', 'මිල ගණන් පත්‍රය සුරැකීමට අපොහොසත් විය: ') + err.message);
+              } finally {
+                setIsLoading(false);
+              }
+            };
+
+            if (isCreatingQuote) {
+              return (
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                  {/* Left Column: Customer Details & Product Selection */}
+                  <div className="xl:col-span-1 space-y-4">
+                    {/* Customer Information Card */}
+                    <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-3.5 shadow-sm">
+                      <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-2.5">
+                        <UserIcon className="w-4 h-4 text-amber-500" />
+                        {t('Quotation & Customer Details', 'මිල ගණන් පත්‍රයේ සහ පාරිභෝගික තොරතුරු')}
+                      </h4>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{t('Quotation No', 'මිල ගණන් අංකය')}</label>
+                          <input
+                            type="text"
+                            value={quoteNo}
+                            onChange={(e) => setQuoteNo(e.target.value)}
+                            className="w-full px-3 py-2 bg-amber-50/70 border border-amber-200 rounded-xl text-xs font-black font-mono text-amber-900 outline-none"
+                          />
                         </div>
-                      ))}
-                  </div>
-                </div>
-              </div>
+                        <div>
+                          <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{t('Validity Period', 'වලංගු කාලය')}</label>
+                          <select
+                            value={quoteValidityPeriod}
+                            onChange={(e) => setQuoteValidityPeriod(e.target.value)}
+                            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                          >
+                            <option value="7 Days">7 Days</option>
+                            <option value="14 Days">14 Days</option>
+                            <option value="30 Days">30 Days</option>
+                            <option value="60 Days">60 Days</option>
+                            <option value="90 Days">90 Days</option>
+                          </select>
+                        </div>
+                      </div>
 
-              {/* Quotation Cart Right Column */}
-              <div className="xl:col-span-2 space-y-4">
-                <div className="bg-white rounded-2xl border-l-4 border-l-amber-500 border-y border-r border-slate-100 shadow-xl shadow-slate-100/40 p-6 flex flex-col min-h-[400px] hover:shadow-2xl hover:shadow-slate-200/40 transition-all duration-300 transform hover:-translate-y-0.5">
-                  <h4 className="text-sm font-black text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-3 mb-4">
-                    {t('Quotation Items', 'මිල ගණන් අයිතම ලැයිස්තුව')}
-                  </h4>
+                      {/* Select Existing Customer Dropdown */}
+                      <div>
+                        <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{t('Select Existing Customer', 'පවතින පාරිභෝගිකයෙකු තෝරන්න')}</label>
+                        <select
+                          onChange={(e) => {
+                            const foundCust = customers.find(c => c.id === e.target.value);
+                            if (foundCust) {
+                              setQuoteCustomerName(foundCust.name);
+                              setQuoteCustomerPhone(foundCust.phone || '');
+                              setQuoteCustomerAddress(foundCust.address || '');
+                            }
+                          }}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                        >
+                          <option value="">-- {t('Manual Entry / Select Customer', 'පාරිභෝගිකයා තෝරන්න')} --</option>
+                          {customers.map(c => (
+                            <option key={c.id} value={c.id}>{c.name} {c.phone ? `(${c.phone})` : ''}</option>
+                          ))}
+                        </select>
+                      </div>
 
-                  <div className="flex-1 overflow-x-auto">
-                    <table className="w-full text-sm text-left border-collapse">
-                      <thead>
-                        <tr className="bg-slate-50 border-b border-slate-100 text-[9px] font-black text-slate-400 tracking-widest uppercase">
-                          <th className="px-4 py-3">{t('Item', 'භාණ්ඩය')}</th>
-                          <th className="px-4 py-3 text-center">{t('Qty', 'ප්‍රමාණය')}</th>
-                          <th className="px-4 py-3 text-right">{t('Price', 'මිල')}</th>
-                          <th className="px-4 py-3 text-right">{t('Total', 'එකතුව')}</th>
-                          <th className="px-4 py-3 text-center"></th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 bg-white">
-                        {quoteCart.length === 0 ? (
-                          <tr>
-                            <td colSpan={5} className="py-12 text-center text-slate-400 font-bold text-sm">
-                              {t('No items in quotation.', 'මිල ගණන් පත්‍රයේ කිසිදු භාණ්ඩයක් නොමැත.')}
-                            </td>
-                          </tr>
+                      <div>
+                        <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{t('Customer Name *', 'පාරිභෝගිකයාගේ නම *')}</label>
+                        <input
+                          type="text"
+                          placeholder={t('Customer name...', 'පාරිභෝගිකයාගේ නම...')}
+                          value={quoteCustomerName}
+                          onChange={(e) => setQuoteCustomerName(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{t('Phone Number', 'දුරකථන අංකය')}</label>
+                          <input
+                            type="text"
+                            placeholder="077 123 4567"
+                            value={quoteCustomerPhone}
+                            onChange={(e) => setQuoteCustomerPhone(e.target.value)}
+                            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">{t('Address', 'ලිපිනය')}</label>
+                          <input
+                            type="text"
+                            placeholder="Street, City..."
+                            value={quoteCustomerAddress}
+                            onChange={(e) => setQuoteCustomerAddress(e.target.value)}
+                            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Product & Sub-Items Search Card */}
+                    <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-3.5 shadow-sm">
+                      <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 pb-2.5">
+                        <SearchIcon className="w-4 h-4 text-amber-500" />
+                        {t('Search Products & Sub-Items', 'භාණ්ඩ සහ උප-භාණ්ඩ සොයන්න')}
+                      </h4>
+
+                      <div className="relative">
+                        <input
+                          type="text"
+                          ref={quoteSearchInputRef}
+                          placeholder={t('Scan barcode or type name, sub-item, SKU & press Enter...', 'බාර්කෝඩ් ස්කෑන් කරන්න හෝ නම ගහලා Enter ඔබන්න...')}
+                          value={quoteSearch}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setQuoteSearch(val);
+                            if (val.trim()) {
+                              const q = val.trim().toLowerCase();
+                              const exactMatch = allQuoteSelectables.find(i => i.barcode && i.barcode.trim().toLowerCase() === q);
+                              if (exactMatch) {
+                                handleAddSelectableToQuoteCart(exactMatch);
+                                setQuoteSearch('');
+                              }
+                            }
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              if (!quoteSearch.trim()) return;
+                              if (matchingQuoteSelectables.length > 0) {
+                                handleAddSelectableToQuoteCart(matchingQuoteSelectables[0]);
+                                setQuoteSearch('');
+                              } else {
+                                alert(t(`No product matching "${quoteSearch}" found!`, `"${quoteSearch}" නමින් භාණ්ඩයක් හමු නොවීය!`));
+                              }
+                            }
+                          }}
+                          className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                        />
+                        {quoteSearch && (
+                          <button type="button" onClick={() => setQuoteSearch('')} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 text-xs font-bold">✕</button>
+                        )}
+                      </div>
+
+                      {/* Matching Selectables List (Sand, Bucket, Shovel, Sub-items) */}
+                      <div className="max-h-56 overflow-y-auto divide-y divide-slate-100 pr-1">
+                        {matchingQuoteSelectables.length === 0 ? (
+                          <div className="py-4 text-center text-slate-400 font-bold text-xs italic">
+                            {t('No products or sub-items found.', 'කිසිදු භාණ්ඩයක් හමු නොවීය.')}
+                          </div>
                         ) : (
-                          quoteCart.map((item, idx) => (
-                            <tr key={idx} className="hover:bg-slate-50/30 transition-colors">
-                              <td className="px-4 py-3.5 font-bold text-slate-800">
-                                <div className="font-black text-sm">{item.productName}</div>
-                                {(item.serialNo || item.batchCode) && (
-                                  <div className="text-[9px] font-mono text-slate-400 mt-1">
-                                    {item.serialNo && `S/N: ${item.serialNo}`} {item.batchCode && `Batch: ${item.batchCode}`}
-                                  </div>
-                                )}
-                              </td>
-                              <td className="px-4 py-3.5 text-center">
-                                <input
-                                  type="number"
-                                  min={1}
-                                  value={item.qty}
-                                  onChange={(e) => {
-                                    const val = Math.max(1, parseInt(e.target.value) || 1);
-                                    setQuoteCart(prev => prev.map((itm, i) => i === idx ? { ...itm, qty: val, total: val * itm.price } : itm));
-                                  }}
-                                  className="w-16 text-center border border-slate-200 rounded-xl px-2 py-1 text-xs font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all"
-                                />
-                              </td>
-                              <td className="px-4 py-3.5 text-right font-bold text-slate-500 text-xs">
-                                {symbol} {item.price.toLocaleString()}
-                              </td>
-                              <td className="px-4 py-3.5 text-right font-black text-slate-800 text-sm">
-                                {symbol} {item.total.toLocaleString()}
-                              </td>
-                              <td className="px-4 py-3.5 text-center">
-                                <button
-                                  onClick={() => setQuoteCart(prev => prev.filter((_, i) => i !== idx))}
-                                  className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all duration-200"
-                                >
-                                  <Trash2Icon className="w-4 h-4" />
-                                </button>
-                              </td>
-                            </tr>
+                          matchingQuoteSelectables.slice(0, 15).map(item => (
+                            <div
+                              key={item.key}
+                              onClick={() => {
+                                handleAddSelectableToQuoteCart(item);
+                                setQuoteSearch('');
+                              }}
+                              className="py-2.5 px-3 cursor-pointer hover:bg-amber-50/70 flex justify-between items-center transition-all rounded-xl group border border-transparent hover:border-amber-200"
+                            >
+                              <div className="space-y-0.5">
+                                <div className="text-xs font-bold text-slate-800 group-hover:text-amber-900 flex items-center gap-1.5">
+                                  <span>{item.displayName}</span>
+                                  {item.isSubItem && (
+                                    <span className="px-1 py-0.2 bg-amber-100 text-amber-800 text-[8px] font-black rounded uppercase">Sub</span>
+                                  )}
+                                </div>
+                                <div className="text-[9px] text-slate-400 font-mono">
+                                  Cat: {item.category} • SKU: {item.sku || 'N/A'} • Barcode: {item.barcode || 'N/A'}
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className="text-xs font-black text-amber-600">{symbol} {convert(item.price).toLocaleString()}</div>
+                                <span className="text-[9px] font-black text-amber-700 uppercase bg-amber-100 px-2 py-0.5 rounded group-hover:bg-amber-500 group-hover:text-white transition-all">+ Add</span>
+                              </div>
+                            </div>
                           ))
                         )}
-                      </tbody>
-                    </table>
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="border-t border-slate-100 pt-4 mt-4 flex justify-between items-center bg-slate-50/50 p-4 rounded-2xl border border-slate-200/20">
-                    <div>
-                      <span className="text-[9px] text-slate-400 font-black uppercase tracking-widest block mb-0.5 ml-1">{t('Total Estimate', 'ඇස්තමේන්තු එකතුව')}</span>
-                      <span className="text-xl font-black text-amber-500 font-mono">
-                        {symbol} {quoteCart.reduce((sum, itm) => sum + itm.total, 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                      </span>
+                  {/* Right Column: Quotation Cart, Charges & Summary */}
+                  <div className="xl:col-span-2 space-y-4">
+                    <div className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col min-h-[450px] shadow-sm">
+                      <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider border-b border-slate-100 pb-3 mb-4 flex justify-between items-center">
+                        <span>{t('Quotation Product Items', 'මිල ගණන් භාණ්ඩ ලැයිස්තුව')}</span>
+                        <span className="text-slate-400 font-bold text-xs">{quoteCart.length} items</span>
+                      </h4>
+
+                      {/* Product Cart Table */}
+                      <div className="flex-1 overflow-x-auto">
+                        <table className="w-full text-xs text-left border-collapse">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-black text-slate-400 tracking-widest uppercase">
+                              <th className="px-3 py-2.5">{t('Item Description', 'භාණ්ඩය')}</th>
+                              <th className="px-3 py-2.5 text-center w-24">{t('Qty', 'ප්‍රමාණය')}</th>
+                              <th className="px-3 py-2.5 text-right w-28">{t('Unit Price', 'ඒකක මිල')}</th>
+                              <th className="px-3 py-2.5 text-right w-28">{t('Line Total', 'එකතුව')}</th>
+                              <th className="px-3 py-2.5 text-center w-12"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {quoteCart.length === 0 ? (
+                              <tr>
+                                <td colSpan={5} className="py-12 text-center text-slate-400 font-bold italic">
+                                  {t('No items added yet. Search or scan barcode on the left to add products.', 'තවමත් භාණ්ඩ එකතු කර නොමැත.')}
+                                </td>
+                              </tr>
+                            ) : (
+                              quoteCart.map((item, idx) => (
+                                <tr key={`${item.productId}_${item.unit}_${idx}`} className="hover:bg-slate-50/60 transition-colors">
+                                  <td className="px-3 py-2.5 font-bold text-slate-800">
+                                    {item.productName}
+                                    {item.unit && <span className="ml-1.5 px-1.5 py-0.5 bg-amber-50 text-amber-800 border border-amber-200 rounded text-[9px] font-bold">{item.unit}</span>}
+                                  </td>
+                                  <td className="px-3 py-2.5 text-center">
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      value={item.qty}
+                                      onChange={(e) => {
+                                        const newQty = Math.max(1, parseFloat(e.target.value) || 1);
+                                        const updated = [...quoteCart];
+                                        updated[idx].qty = newQty;
+                                        updated[idx].total = newQty * updated[idx].price;
+                                        setQuoteCart(updated);
+                                      }}
+                                      className="w-16 text-center border border-slate-300 rounded-lg px-2 py-1 font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2.5 text-right font-bold text-slate-700">
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      value={item.price}
+                                      onChange={(e) => {
+                                        const newPrice = Math.max(0, parseFloat(e.target.value) || 0);
+                                        const updated = [...quoteCart];
+                                        updated[idx].price = newPrice;
+                                        updated[idx].total = updated[idx].qty * newPrice;
+                                        setQuoteCart(updated);
+                                      }}
+                                      className="w-24 text-right border border-slate-300 rounded-lg px-2 py-1 font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
+                                    />
+                                  </td>
+                                  <td className="px-3 py-2.5 text-right font-black text-amber-700">
+                                    {symbol} {convert(item.total).toLocaleString()}
+                                  </td>
+                                  <td className="px-3 py-2.5 text-center">
+                                    <button
+                                      type="button"
+                                      onClick={() => setQuoteCart(prev => prev.filter((_, i) => i !== idx))}
+                                      className="text-rose-500 hover:text-rose-700 font-bold text-xs"
+                                    >
+                                      ✕
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Additional Charges Section (Discount, Transportation, Tax) */}
+                      <div className="mt-4 pt-4 border-t border-slate-200/80 bg-slate-50/70 p-4 rounded-xl space-y-3">
+                        <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('Optional Charges & Adjustments:', 'අමතර ගාස්තු සහ වට්ටම්:')}</div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                          {/* Discount */}
+                          <div className="bg-white p-2.5 rounded-xl border border-slate-200 space-y-1">
+                            <label className="text-[10px] font-bold text-slate-600 block">{t('Discount', 'වට්ටම')}</label>
+                            <div className="flex gap-1">
+                              <select
+                                value={quoteDiscountType}
+                                onChange={(e) => setQuoteDiscountType(e.target.value as any)}
+                                className="bg-slate-100 text-xs font-bold text-slate-700 px-1.5 py-1 rounded border border-slate-200 outline-none"
+                              >
+                                <option value="amount">Rs.</option>
+                                <option value="percentage">%</option>
+                              </select>
+                              <input
+                                type="number"
+                                min={0}
+                                placeholder="0"
+                                value={quoteDiscountValue}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setQuoteDiscountValue(val === '' ? '' : Math.max(0, parseFloat(val) || 0));
+                                }}
+                                className="w-full px-2 py-1 border border-slate-200 rounded text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Transportation Fee */}
+                          <div className="bg-white p-2.5 rounded-xl border border-slate-200 space-y-1">
+                            <label className="text-[10px] font-bold text-slate-600 block">{t('Transportation Fee (Rs.)', 'ප්‍රවාහන ගාස්තු')}</label>
+                            <input
+                              type="number"
+                              min={0}
+                              placeholder="0"
+                              value={quoteTransportationFee}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setQuoteTransportationFee(val === '' ? '' : Math.max(0, parseFloat(val) || 0));
+                              }}
+                              className="w-full px-2 py-1 border border-slate-200 rounded text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                            />
+                          </div>
+
+                          {/* Tax */}
+                          <div className="bg-white p-2.5 rounded-xl border border-slate-200 space-y-1">
+                            <label className="text-[10px] font-bold text-slate-600 block">{t('Tax', 'බදු')}</label>
+                            <div className="flex gap-1">
+                              <select
+                                value={quoteTaxType}
+                                onChange={(e) => setQuoteTaxType(e.target.value as any)}
+                                className="bg-slate-100 text-xs font-bold text-slate-700 px-1.5 py-1 rounded border border-slate-200 outline-none"
+                              >
+                                <option value="percentage">%</option>
+                                <option value="amount">Rs.</option>
+                              </select>
+                              <input
+                                type="number"
+                                min={0}
+                                placeholder="0"
+                                value={quoteTaxValue}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setQuoteTaxValue(val === '' ? '' : Math.max(0, parseFloat(val) || 0));
+                                }}
+                                className="w-full px-2 py-1 border border-slate-200 rounded text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Financial Summary & Actions */}
+                      <div className="border-t border-slate-200 pt-4 mt-4 flex justify-between items-center flex-wrap gap-4 bg-amber-50/50 p-4 rounded-xl border border-amber-200/60">
+                        <div className="space-y-1 text-xs font-bold">
+                          <div className="text-slate-500">{t('Subtotal:', 'උප එකතුව:')} <span className="text-slate-800">{symbol} {convert(quoteSubtotal).toLocaleString()}</span></div>
+                          {quoteDiscountAmount > 0 && <div className="text-rose-600">{t('Discount:', 'වට්ටම:')} -{symbol} {convert(quoteDiscountAmount).toLocaleString()}</div>}
+                          {numTransportationFee > 0 && <div className="text-blue-600">{t('Transportation:', 'ප්‍රවාහන ගාස්තු:')} +{symbol} {convert(numTransportationFee).toLocaleString()}</div>}
+                          {quoteTaxAmount > 0 && <div className="text-amber-700">{t('Tax:', 'බදු:')} +{symbol} {convert(quoteTaxAmount).toLocaleString()}</div>}
+                          <div className="text-sm font-black text-amber-900 border-t border-amber-200 pt-1">
+                            {t('Grand Total:', 'මුළු එකතුව:')} <span className="text-amber-600">{symbol} {convert(quoteGrandTotal).toLocaleString()}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedQuotePreview({
+                                id: 'preview',
+                                quote_no: quoteNo,
+                                customer_name: quoteCustomerName || 'Guest Customer',
+                                customer_phone: quoteCustomerPhone,
+                                customer_address: quoteCustomerAddress,
+                                validity_period: quoteValidityPeriod,
+                                items: quoteCart,
+                                subtotal: quoteSubtotal,
+                                discount_type: quoteDiscountType,
+                                discount_value: numDiscountValue,
+                                discount_amount: quoteDiscountAmount,
+                                transportation_fee: numTransportationFee,
+                                tax_amount: quoteTaxAmount,
+                                total: quoteGrandTotal,
+                                status: 'Draft',
+                                created_at: new Date().toISOString()
+                              });
+                              setShowQuotePreviewModal(true);
+                            }}
+                            className="px-4 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 font-bold rounded-xl text-xs uppercase tracking-wider shadow-sm transition-all"
+                          >
+                            {t('Preview', 'පූර්ව දර්ශනය')}
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={isLoading}
+                            onClick={() => handleSaveQuotation(true)}
+                            className="px-6 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:brightness-110 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider transition-all shadow-md"
+                          >
+                            {t('Save & Print', 'සුරකින්න සහ මුද්‍රණය කරන්න')}
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                    <button
-                      onClick={async () => {
-                        if (!quoteCustomerName.trim()) {
-                          alert(t('Please enter customer name', 'කරුණාකර පාරිභෝගිකයාගේ නම ඇතුළත් කරන්න'));
-                          return;
-                        }
-                        if (quoteCart.length === 0) {
-                          alert(t('Please add items to quotation', 'කරුණාකර මිල ගණන් පත්‍රයට අයිතම එක් කරන්න'));
-                          return;
-                        }
-
-                        const totalAmount = quoteCart.reduce((sum, item) => sum + item.total, 0);
-                        const quoteNo = `QT-${Date.now().toString().slice(-6)}`;
-                        const newQuote = {
-                          quote_no: quoteNo,
-                          customer_name: quoteCustomerName,
-                          items: JSON.stringify(quoteCart),
-                          total: totalAmount,
-                        };
-
-                        try {
-                          setIsLoading(true);
-                          const { data, error } = await supabase.from('quotations').insert([newQuote]);
-                          if (error) throw error;
-                          
-                          // Print Quote natively using a hidden iframe
-                          const htmlContent = generateQuotePrintHTML({ ...newQuote, created_at: new Date().toISOString() }, isSinhala, shopSettings);
-                          const iframe = document.createElement('iframe');
-                          iframe.style.position = 'fixed';
-                          iframe.style.right = '0';
-                          iframe.style.bottom = '0';
-                          iframe.style.width = '0';
-                          iframe.style.height = '0';
-                          iframe.style.border = '0';
-                          document.body.appendChild(iframe);
-
-                          const doc = iframe.contentWindow?.document || iframe.contentDocument;
-                          if (doc) {
-                            doc.open();
-                            doc.write(htmlContent);
-                            doc.close();
-                          }
-
-                          setTimeout(() => {
-                            iframe.contentWindow?.focus();
-                            iframe.contentWindow?.print();
-                            setTimeout(() => {
-                              document.body.removeChild(iframe);
-                            }, 1000);
-                          }, 300);
-
-                          // Reset
-                          setQuoteCustomerName('');
-                          setQuoteCart([]);
-                          setIsCreatingQuote(false);
-                          fetchData();
-                        } catch (err: any) {
-                          alert(t('Failed to save quotation: ', 'මිල ගණන් පත්‍රය සුරැකීමට අපොහොසත් විය: ') + err.message);
-                        } finally {
-                          setIsLoading(false);
-                        }
-                      }}
-                      className="px-6 py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:brightness-110 active:scale-[0.99] text-slate-950 font-black rounded-xl uppercase tracking-widest text-[10px] transition-all shadow-md shadow-amber-500/10 border border-amber-400/20"
-                    >
-                      {t('Save & Print Quote', 'සුරකින්න සහ මුද්‍රණය කරන්න')}
-                    </button>
                   </div>
                 </div>
-              </div>
-            </div>
-          ) : (
-            /* Quotations History View */
-            <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-100/40 overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm text-left border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-black text-slate-400 tracking-widest uppercase">
-                      <th className="px-6 py-4.5">{t('Date', 'දිනය')}</th>
-                      <th className="px-6 py-4.5">{t('Quotation No', 'මිල ගණන් අංකය')}</th>
-                      <th className="px-6 py-4.5">{t('Customer', 'පාරිභෝගිකයා')}</th>
-                      <th className="px-6 py-4.5 text-right">{t('Total', 'මුළු එකතුව')}</th>
-                      <th className="px-6 py-4.5 text-center">{t('Actions', 'ක්‍රියාකාරකම්')}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
-                    {quotes.length === 0 ? (
-                      <tr>
-                        <td colSpan={5} className="py-12 text-center text-slate-400 font-bold text-sm">
-                          {t('No quotations found.', 'මිල ගණන් කැඳවීම් කිසිවක් හමු නොවීය.')}
-                        </td>
+              );
+            }
+
+            {/* Quotations History View */}
+            return (
+              <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-100/40 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-black text-slate-400 tracking-widest uppercase">
+                        <th className="px-6 py-4.5">{t('Date', 'දිනය')}</th>
+                        <th className="px-6 py-4.5">{t('Quotation No', 'මිල ගණන් අංකය')}</th>
+                        <th className="px-6 py-4.5">{t('Customer', 'පාරිභෝගිකයා')}</th>
+                        <th className="px-6 py-4.5">{t('Validity', 'වලංගු කාලය')}</th>
+                        <th className="px-6 py-4.5 text-right">{t('Total', 'මුළු එකතුව')}</th>
+                        <th className="px-6 py-4.5 text-center">{t('Actions', 'ක්‍රියාකාරකම්')}</th>
                       </tr>
-                    ) : (
-                      quotes.map((quote) => (
-                        <tr key={quote.id} className="hover:bg-slate-50/30 transition-all duration-200">
-                          <td className="px-6 py-4 font-bold text-slate-500 text-xs">
-                            {new Date(quote.created_at).toLocaleDateString()}
-                          </td>
-                          <td className="px-6 py-4 font-black text-slate-800 font-mono text-sm">
-                            {quote.quote_no}
-                          </td>
-                          <td className="px-6 py-4 font-black text-slate-800 text-sm">
-                            {quote.customer_name}
-                          </td>
-                          <td className="px-6 py-4 text-right font-black text-amber-500 font-mono text-sm">
-                            {symbol} {quote.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                          </td>
-                          <td className="px-6 py-4 text-center flex items-center justify-center gap-2">
-                            <button
-                              onClick={() => {
-                                const htmlContent = generateQuotePrintHTML(quote, isSinhala, shopSettings);
-                                const iframe = document.createElement('iframe');
-                                iframe.style.position = 'fixed';
-                                iframe.style.right = '0';
-                                iframe.style.bottom = '0';
-                                iframe.style.width = '0';
-                                iframe.style.height = '0';
-                                iframe.style.border = '0';
-                                document.body.appendChild(iframe);
-
-                                const doc = iframe.contentWindow?.document || iframe.contentDocument;
-                                if (doc) {
-                                  doc.open();
-                                  doc.write(htmlContent);
-                                  doc.close();
-                                }
-
-                                setTimeout(() => {
-                                  iframe.contentWindow?.focus();
-                                  iframe.contentWindow?.print();
-                                  setTimeout(() => {
-                                    document.body.removeChild(iframe);
-                                  }, 1000);
-                                }, 300);
-                              }}
-                              className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl border border-slate-200/50 shadow-sm transition-colors"
-                              title={t('Print Quote', 'මිල ගණන් පත්‍රය මුද්‍රණය')}
-                            >
-                              <PrinterIcon className="w-4 h-4 text-amber-500" />
-                            </button>
-                            <button
-                              onClick={async () => {
-                                if (window.confirm(t('Are you sure you want to delete this quotation?', 'මෙම මිල ගණන් පත්‍රය මැකීමට ඔබට විශ්වාසද?'))) {
-                                  try {
-                                    setIsLoading(true);
-                                    const { error } = await supabase.from('quotations').delete().eq('id', quote.id);
-                                    if (error) throw error;
-                                    fetchData();
-                                  } catch (err: any) {
-                                    alert(t('Failed to delete quotation: ', 'මිල ගණන් පත්‍රය මැකීමට අපොහොසත් විය: ') + err.message);
-                                  } finally {
-                                    setIsLoading(false);
-                                  }
-                                }
-                              }}
-                              className="p-2 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl border border-red-200/50 shadow-sm transition-colors"
-                              title={t('Delete Quote', 'මිල ගණන් පත්‍රය මකන්න')}
-                            >
-                              <Trash2Icon className="w-4 h-4" />
-                            </button>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {quotes.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="py-12 text-center text-slate-400 font-bold text-sm">
+                            {t('No quotations found.', 'මිල ගණන් කැඳවීම් කිසිවක් හමු නොවීය.')}
                           </td>
                         </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+                      ) : (
+                        quotes.map((quote) => (
+                          <tr key={quote.id} className="hover:bg-slate-50/60 transition-all duration-200">
+                            <td className="px-6 py-4 font-bold text-slate-500 text-xs">
+                              {new Date(quote.created_at).toLocaleDateString()}
+                            </td>
+                            <td className="px-6 py-4 font-black text-slate-800 font-mono text-sm">
+                              {quote.quote_no}
+                            </td>
+                            <td className="px-6 py-4 font-bold text-slate-800 text-sm">
+                              <div>{quote.customer_name}</div>
+                              {quote.customer_phone && <div className="text-[10px] text-slate-400 font-mono">{quote.customer_phone}</div>}
+                            </td>
+                            <td className="px-6 py-4 font-semibold text-slate-600 text-xs">
+                              {quote.validity_period || '30 Days'}
+                            </td>
+                            <td className="px-6 py-4 text-right font-black text-amber-600 font-mono text-sm">
+                              {symbol} {convert(quote.total).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </td>
+                            <td className="px-6 py-4 text-center flex items-center justify-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedQuotePreview(quote);
+                                  setShowQuotePreviewModal(true);
+                                }}
+                                className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-xs rounded-xl border border-amber-200 transition-colors"
+                              >
+                                {t('Preview', 'බලන්න')}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const htmlContent = generateQuotePrintHTML(quote, isSinhala, shopSettings);
+                                  const iframe = document.createElement('iframe');
+                                  iframe.style.position = 'fixed';
+                                  iframe.style.right = '0';
+                                  iframe.style.bottom = '0';
+                                  iframe.style.width = '0';
+                                  iframe.style.height = '0';
+                                  iframe.style.border = '0';
+                                  document.body.appendChild(iframe);
+                                  const doc = iframe.contentWindow?.document || iframe.contentDocument;
+                                  if (doc) {
+                                    doc.open();
+                                    doc.write(htmlContent);
+                                    doc.close();
+                                  }
+                                  setTimeout(() => {
+                                    iframe.contentWindow?.focus();
+                                    iframe.contentWindow?.print();
+                                    setTimeout(() => {
+                                      if (document.body.contains(iframe)) document.body.removeChild(iframe);
+                                    }, 1000);
+                                  }, 300);
+                                }}
+                                className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl border border-slate-200/50 transition-colors"
+                                title={t('Print Quote', 'මුද්‍රණය කරන්න')}
+                              >
+                                <PrinterIcon className="w-4 h-4 text-amber-500" />
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (window.confirm(t('Are you sure you want to delete this quotation?', 'මෙම මිල ගණන් පත්‍රය මැකීමට ඔබට විශ්වාසද?'))) {
+                                    try {
+                                      setIsLoading(true);
+                                      await fetch(`${API_URL}/quotations/${quote.id}`, { method: 'DELETE' });
+                                      await supabase.from('quotations').delete().eq('id', quote.id);
+                                      await fetchData();
+                                    } catch (err: any) {
+                                      alert(t('Failed to delete quotation: ', 'මිල ගණන් පත්‍රය මැකීමට අපොහොසත් විය: ') + err.message);
+                                    } finally {
+                                      setIsLoading(false);
+                                    }
+                                  }
+                                }}
+                                className="p-2 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl border border-red-200/50 transition-colors"
+                                title={t('Delete Quote', 'මකන්න')}
+                              >
+                                <Trash2Icon className="w-4 h-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       )}
 
@@ -5015,257 +6799,1398 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
           <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-100/40 p-6">
             <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2 mb-6">
               <span className="w-1.5 h-4 bg-amber-500 rounded-full"></span>
-              {t('Process Sales Return', 'විකුණුම් ආපසු භාරගැනීම')}
+              {t('Process Sales Return & Exchange', 'විකුණුම් ආපසු භාරගැනීම සහ හුවමාරු')}
             </h3>
 
-            {/* Search Invoice */}
-            <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-2xl p-2 mb-6">
-              <SearchIcon className="w-5 h-5 text-slate-400 ml-2" />
-              <input
-                type="text"
-                placeholder={t('Enter Bill / Invoice Number or Customer Name...', 'ඉන්වොයිස් අංකය හෝ පාරිභෝගික නම ඇතුළත් කරන්න...')}
-                value={returnSearchQuery}
-                onChange={(e) => setReturnSearchQuery(e.target.value)}
-                className="bg-transparent text-sm font-bold text-slate-800 outline-none w-full placeholder-slate-400 py-1"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  const q = returnSearchQuery.trim().toLowerCase();
-                  if (!q) return alert(t('Please enter an invoice number or customer name.', 'කරුණාකර ඉන්වොයිස් අංකයක් හෝ නමක් ඇතුළත් කරන්න.'));
-                  const found = orders.find(o => 
-                    o.invoiceNo.toLowerCase().includes(q) || 
-                    (o.customerName && o.customerName.toLowerCase().includes(q))
+            {/* Search Invoice (Displays All Associated Bills for Barcode, Product Name, SKU, Invoice No) */}
+            <div className="relative mb-6">
+              <div className="flex items-center gap-3 bg-slate-50 border border-slate-200 rounded-2xl p-2 shadow-sm focus-within:ring-2 focus-within:ring-amber-500/20 focus-within:border-amber-500 transition-all">
+                <SearchIcon className="w-5 h-5 text-slate-400 ml-2 shrink-0" />
+                <input
+                  type="text"
+                  ref={returnSearchInputRef}
+                  placeholder={t('Scan Barcode or Search by Product Name, Invoice #, Customer Name...', 'බාර්කෝඩ් ස්කෑන් කරන්න හෝ භාණ්ඩයේ නම, ඉන්වොයිස් අංකය, නම සෙවුම් කරන්න...')}
+                  value={returnSearchQuery}
+                  onChange={(e) => {
+                    setReturnSearchQuery(e.target.value);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      const q = returnSearchQuery.trim().toLowerCase();
+                      if (!q) return;
+
+                      // Find all matching products & invoices
+                      const matchedProdIds = new Set(
+                        products
+                          .filter(p => 
+                            (p.barcode && p.barcode.trim().toLowerCase().includes(q)) ||
+                            (p.sku && p.sku.toLowerCase().includes(q)) ||
+                            (p.name && p.name.toLowerCase().includes(q))
+                          )
+                          .map(p => p.id)
+                      );
+
+                      const matchedProdNames = new Set(
+                        products
+                          .filter(p => p.name && p.name.toLowerCase().includes(q))
+                          .map(p => p.name.toLowerCase())
+                      );
+
+                      const matches = orders.filter(o => {
+                        if (o.invoiceNo.toLowerCase().includes(q)) return true;
+                        if (o.customerName && o.customerName.toLowerCase().includes(q)) return true;
+                        const items = Array.isArray(o.items) ? o.items : safeParseJson(o.items, []);
+                        return items.some((i: any) => 
+                          (i.barcode && i.barcode.trim().toLowerCase().includes(q)) ||
+                          (i.productName && i.productName.toLowerCase().includes(q)) ||
+                          (i.name && i.name.toLowerCase().includes(q)) ||
+                          (i.productId && matchedProdIds.has(i.productId)) ||
+                          (i.productName && matchedProdNames.has(i.productName.toLowerCase()))
+                        );
+                      });
+
+                      if (matches.length === 0) {
+                        return alert(t(`No bills found containing barcode or details matching "${returnSearchQuery}"!`, `"${returnSearchQuery}" සඳහා ගැලපෙන පත් නැත!`));
+                      }
+
+                      // If exactly 1 associated bill, auto-select it directly
+                      if (matches.length === 1) {
+                        const selected = matches[0];
+                        setTargetReturnInvoice(selected);
+                        const initialQtys: Record<string, number> = {};
+                        const items = Array.isArray(selected.items) ? selected.items : safeParseJson(selected.items, []);
+                        items.forEach((item: any) => { 
+                          const isMatch = q && (
+                            (item.barcode && item.barcode.trim().toLowerCase().includes(q)) ||
+                            (item.productName && item.productName.toLowerCase().includes(q)) ||
+                            (item.productId && matchedProdIds.has(item.productId))
+                          );
+                          initialQtys[item.productId] = isMatch ? 1 : 0; 
+                        });
+                        setReturnQtys(initialQtys);
+                      }
+                    }
+                  }}
+                  className="bg-transparent text-sm font-bold text-slate-800 outline-none w-full placeholder-slate-400 py-1"
+                />
+                {returnSearchQuery && (
+                  <button type="button" onClick={() => setReturnSearchQuery('')} className="text-slate-400 hover:text-slate-600 text-xs font-bold px-1">✕</button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const q = returnSearchQuery.trim().toLowerCase();
+                    if (!q) return alert(t('Please enter a product name, barcode, invoice number, or customer name.', 'කරුණාකර භාණ්ඩ නමක්, බාර්කෝඩ් හෝ ඉන්වොයිස් අංකයක් ඇතුළත් කරන්න.'));
+
+                    const matchedProdIds = new Set(
+                      products
+                        .filter(p => 
+                          (p.barcode && p.barcode.trim().toLowerCase().includes(q)) ||
+                          (p.sku && p.sku.toLowerCase().includes(q)) ||
+                          (p.name && p.name.toLowerCase().includes(q))
+                        )
+                        .map(p => p.id)
+                    );
+
+                    const matchedProdNames = new Set(
+                      products
+                        .filter(p => p.name && p.name.toLowerCase().includes(q))
+                        .map(p => p.name.toLowerCase())
+                    );
+
+                    const matches = orders.filter(o => {
+                      if (o.invoiceNo.toLowerCase().includes(q)) return true;
+                      if (o.customerName && o.customerName.toLowerCase().includes(q)) return true;
+                      const items = Array.isArray(o.items) ? o.items : safeParseJson(o.items, []);
+                      return items.some((i: any) => 
+                        (i.barcode && i.barcode.trim().toLowerCase().includes(q)) ||
+                        (i.productName && i.productName.toLowerCase().includes(q)) ||
+                        (i.name && i.name.toLowerCase().includes(q)) ||
+                        (i.productId && matchedProdIds.has(i.productId)) ||
+                        (i.productName && matchedProdNames.has(i.productName.toLowerCase()))
+                      );
+                    });
+
+                    if (matches.length === 0) return alert(t(`No bills found containing barcode or details matching "${returnSearchQuery}"!`, `"${returnSearchQuery}" සඳහා ගැලපෙන පත් නැත!`));
+                    
+                    if (matches.length === 1) {
+                      const selected = matches[0];
+                      setTargetReturnInvoice(selected);
+                      const initialQtys: Record<string, number> = {};
+                      const items = Array.isArray(selected.items) ? selected.items : safeParseJson(selected.items, []);
+                      items.forEach((item: any) => { 
+                        const isMatch = q && (
+                          (item.barcode && item.barcode.trim().toLowerCase().includes(q)) ||
+                          (item.productName && item.productName.toLowerCase().includes(q)) ||
+                          (item.productId && matchedProdIds.has(item.productId))
+                        );
+                        initialQtys[item.productId] = isMatch ? 1 : 0; 
+                      });
+                      setReturnQtys(initialQtys);
+                    }
+                  }}
+                  className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-amber-400 font-black rounded-xl text-xs uppercase tracking-wider transition-all shadow-md flex items-center gap-1 shrink-0"
+                >
+                  <SearchIcon className="w-3.5 h-3.5" />
+                  {t('Search Bills', 'පත් සොයන්න')}
+                </button>
+              </div>
+
+              {/* Display ALL Bills Associated with Barcode / Product Search Query */}
+              {returnSearchQuery.trim().length >= 1 && (() => {
+                const q = returnSearchQuery.trim().toLowerCase();
+
+                const matchedProdIds = new Set(
+                  products
+                    .filter(p => 
+                      (p.barcode && p.barcode.trim().toLowerCase().includes(q)) ||
+                      (p.sku && p.sku.toLowerCase().includes(q)) ||
+                      (p.name && p.name.toLowerCase().includes(q))
+                    )
+                    .map(p => p.id)
+                );
+
+                const matchedProdNames = new Set(
+                  products
+                    .filter(p => p.name && p.name.toLowerCase().includes(q))
+                    .map(p => p.name.toLowerCase())
+                );
+
+                const matchedInvoices = orders.filter(o => {
+                  if (o.invoiceNo.toLowerCase().includes(q)) return true;
+                  if (o.customerName && o.customerName.toLowerCase().includes(q)) return true;
+                  const items = Array.isArray(o.items) ? o.items : safeParseJson(o.items, []);
+                  return items.some((i: any) => 
+                    (i.barcode && i.barcode.trim().toLowerCase().includes(q)) ||
+                    (i.productName && i.productName.toLowerCase().includes(q)) ||
+                    (i.name && i.name.toLowerCase().includes(q)) ||
+                    (i.productId && matchedProdIds.has(i.productId)) ||
+                    (i.productName && matchedProdNames.has(i.productName.toLowerCase()))
                   );
-                  if (!found) return alert(t('Invoice not found!', 'ඉන්වොයිසිය හමු නොවීය!'));
-                  setTargetReturnInvoice(found);
-                  const initialQtys: Record<string, number> = {};
-                  (found.items || []).forEach((item: any) => { initialQtys[item.productId] = 0; });
-                  setReturnQtys(initialQtys);
-                }}
-                className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-amber-400 font-black rounded-xl text-xs uppercase tracking-wider transition-all shadow-md"
-              >
-                {t('Search Invoice', 'සොයන්න')}
-              </button>
+                });
+
+                if (matchedInvoices.length === 0) {
+                  return (
+                    <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl border border-rose-200 shadow-2xl z-50 p-4 text-center">
+                      <p className="text-xs font-bold text-rose-600">
+                        {t(`No bills found containing barcode or product matching "${returnSearchQuery}".`, `"${returnSearchQuery}" සඳහා කිසිදු පතක් හමු නොවීය.`)}
+                      </p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl border border-slate-200 shadow-2xl z-50 max-h-96 overflow-y-auto divide-y divide-slate-100 p-3 space-y-2">
+                    <div className="flex justify-between items-center px-1 pb-1">
+                      <span className="text-[11px] font-black text-amber-700 uppercase tracking-wider flex items-center gap-1.5">
+                        <ReceiptIcon className="w-4 h-4 text-amber-500" />
+                        {t('Associated Bills Found:', 'අදාළ සියලුම ඉන්වොයිස් පත්:')} ({matchedInvoices.length} {t('Bills', 'පත්')})
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-semibold">
+                        {t('Click a bill below to select it for return', 'පහතින් පතක් තෝරන්න')}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-2 pt-1">
+                      {matchedInvoices.map((inv) => {
+                        const items = Array.isArray(inv.items) ? inv.items : safeParseJson(inv.items, []);
+                        const matchedProds = items.filter((i: any) => 
+                          (i.barcode && i.barcode.trim().toLowerCase().includes(q)) ||
+                          (i.productName && i.productName.toLowerCase().includes(q)) ||
+                          (i.name && i.name.toLowerCase().includes(q)) ||
+                          (i.productId && matchedProdIds.has(i.productId)) ||
+                          (i.productName && matchedProdNames.has(i.productName.toLowerCase()))
+                        );
+
+                        const isCurrentlySelected = targetReturnInvoice?.id === inv.id;
+
+                        return (
+                          <div
+                            key={inv.id}
+                            onClick={() => {
+                              setTargetReturnInvoice(inv);
+                              const initialQtys: Record<string, number> = {};
+                              items.forEach((item: any) => { 
+                                const isMatch = (item.barcode && item.barcode.trim().toLowerCase().includes(q)) ||
+                                                (item.productName && item.productName.toLowerCase().includes(q)) ||
+                                                (item.productId && matchedProdIds.has(item.productId));
+                                initialQtys[item.productId] = isMatch ? 1 : 0; 
+                              });
+                              setReturnQtys(initialQtys);
+                            }}
+                            className={`p-3 rounded-xl transition-all cursor-pointer border flex justify-between items-center group ${isCurrentlySelected ? 'bg-amber-100/90 border-amber-400 shadow-sm' : 'bg-slate-50/70 hover:bg-amber-50/70 border-slate-200 hover:border-amber-300'}`}
+                          >
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono font-black text-xs text-slate-900 group-hover:text-amber-700 bg-white px-2 py-0.5 rounded border border-slate-200">{inv.invoiceNo}</span>
+                                <span className="font-bold text-xs text-slate-800">{inv.customerName || 'Guest Customer'}</span>
+                                {inv.customerPhone && <span className="text-[10px] text-slate-400 font-semibold">({inv.customerPhone})</span>}
+                                <span className="text-[10px] text-slate-400 font-semibold ml-1">{formatInvoiceDateTime(inv.created_at, inv.date)}</span>
+                              </div>
+                              {matchedProds.length > 0 && (
+                                <div className="flex flex-wrap gap-1 pt-0.5">
+                                  {matchedProds.map((mp: any, mpIdx: number) => (
+                                    <span key={mpIdx} className="px-2 py-0.5 bg-amber-200/80 text-amber-900 text-[10px] font-black rounded-md flex items-center gap-1">
+                                      <span>Matched:</span>
+                                      <span>{mp.productName}</span>
+                                      <span className="text-amber-700">({mp.qty || 1} {mp.unit || 'pcs'} @ {symbol} {convert(mp.price).toLocaleString()})</span>
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="text-right shrink-0 ml-3">
+                              <span className="font-black text-xs text-slate-900 block">{symbol} {convert(inv.total).toLocaleString()}</span>
+                              <span className={`inline-block mt-1 px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all ${isCurrentlySelected ? 'bg-emerald-600 text-white shadow-sm' : 'bg-slate-900 text-amber-400 group-hover:bg-amber-500 group-hover:text-slate-950'}`}>
+                                {isCurrentlySelected ? '✓ Selected' : t('Select Bill →', 'පත තෝරන්න →')}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Selected Invoice Return Details */}
-            {targetReturnInvoice && (
-              <div className="bg-slate-50/60 rounded-2xl border border-slate-200/80 p-5 space-y-5 animate-in slide-in-from-top-3 duration-300">
-                <div className="flex justify-between items-center flex-wrap gap-2 border-b border-slate-200/60 pb-3">
-                  <div>
-                    <h4 className="text-base font-black text-slate-800">
-                      {t('Invoice:', 'ඉන්වොයිසිය:')} <span className="font-mono text-amber-600">{targetReturnInvoice.invoiceNo}</span>
-                    </h4>
-                    <p className="text-xs font-bold text-slate-500">
-                      {t('Customer:', 'පාරිභෝගිකයා:')} {targetReturnInvoice.customerName} | {t('Date:', 'දිනය:')} {targetReturnInvoice.date}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setTargetReturnInvoice(null)}
-                    className="text-xs font-bold text-slate-400 hover:text-slate-600 underline"
-                  >
-                    {t('Clear / Change Invoice', 'වෙනත් ඉන්වොයිසියක්')}
-                  </button>
-                </div>
+            {targetReturnInvoice && (() => {
+              // Calculate already returned quantities map for this invoice across active returns
+              const alreadyReturnedMap: Record<string, number> = {};
+              salesReturnsList
+                .filter(sr => sr.status !== 'voided' && (sr.invoiceNo === targetReturnInvoice.invoiceNo || sr.invoice_no === targetReturnInvoice.invoiceNo))
+                .forEach(sr => {
+                  const items = Array.isArray(sr.returnedItems) ? sr.returnedItems : safeParseJson(sr.returnedItems, []);
+                  items.forEach((ri: any) => {
+                    const pId = ri.productId || ri.product_id;
+                    alreadyReturnedMap[pId] = (alreadyReturnedMap[pId] || 0) + Number(ri.qty || 0);
+                  });
+                });
 
-                {/* Items to Return Table */}
-                <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-                  <table className="w-full text-sm text-left border-collapse">
-                    <thead>
-                      <tr className="bg-slate-100/80 border-b border-slate-200 text-[10px] font-black text-slate-500 tracking-widest uppercase">
-                        <th className="px-4 py-3">{t('Item', 'භාණ්ඩය')}</th>
-                        <th className="px-4 py-3 text-center">{t('Purchased Qty', 'මිලදී ගත් ප්‍රමාණය')}</th>
-                        <th className="px-4 py-3 text-right">{t('Unit Price', 'ඒකක මිල')}</th>
-                        <th className="px-4 py-3 text-center w-36">{t('Return Qty', 'ආපසු ප්‍රමාණය')}</th>
-                        <th className="px-4 py-3 text-right">{t('Refund Amount', 'ආපසු මුදල')}</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {targetReturnInvoice.items.map((item: any) => {
-                        const maxReturn = item.qty;
-                        const currReturn = returnQtys[item.productId] || 0;
-                        const itemRefund = currReturn * item.price;
-                        return (
-                          <tr key={item.productId} className="hover:bg-slate-50/50">
-                            <td className="px-4 py-3 font-black text-slate-800 text-xs">{item.productName}</td>
-                            <td className="px-4 py-3 text-center font-bold text-slate-600 text-xs">{item.qty} {item.unit || ''}</td>
-                            <td className="px-4 py-3 text-right font-bold text-slate-600 text-xs">{symbol} {convert(item.price).toLocaleString()}</td>
-                            <td className="px-4 py-3 text-center">
-                              <input
-                                type="number"
-                                min={0}
-                                max={maxReturn}
-                                value={currReturn || ''}
-                                onChange={(e) => {
-                                  const val = Math.min(maxReturn, Math.max(0, parseFloat(e.target.value) || 0));
-                                  setReturnQtys(prev => ({ ...prev, [item.productId]: val }));
-                                }}
-                                className="w-20 px-2 py-1 text-center bg-white border border-slate-300 rounded-lg font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
-                              />
-                            </td>
-                            <td className="px-4 py-3 text-right font-black text-emerald-600 text-xs">{symbol} {convert(itemRefund).toLocaleString()}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+              const targetItems = Array.isArray(targetReturnInvoice.items) ? targetReturnInvoice.items : safeParseJson(targetReturnInvoice.items, []);
 
-                {/* Return Settings & Submit */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-                  <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 block">{t('Return Method', 'ආපසු ගෙවීමේ ක්‍රමය')}</label>
-                    <select
-                      value={returnMethod}
-                      onChange={(e) => setReturnMethod(e.target.value as any)}
-                      className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
-                    >
-                      <option value="Cash Refund">Cash Refund / මුදල් ආපසු</option>
-                      <option value="Exchange">Exchange / භාණ්ඩ හුවමාරුව</option>
-                      <option value="Credit Note">Credit Note / ණය සටහන</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 block">{t('Reason (Optional)', 'හේතුව')}</label>
-                    <input
-                      type="text"
-                      placeholder={t('Damaged, Wrong item, etc.', 'හානි වී ඇත, වෙනත්...')}
-                      value={returnReason}
-                      onChange={(e) => setReturnReason(e.target.value)}
-                      className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
-                    />
-                  </div>
-                  <div className="flex items-end">
+              const itemsToReturn = targetItems
+                .filter((item: any) => (returnQtys[item.productId] || 0) > 0)
+                .map((item: any) => ({
+                  ...item,
+                  qty: returnQtys[item.productId]
+                }));
+
+              const returnTotalValue = itemsToReturn.reduce((sum: number, i: any) => sum + (i.qty * i.price), 0);
+              const exchangeTotalValue = exchangeCartItems.reduce((sum: number, i: any) => sum + (i.qty * i.price), 0);
+              const netExchangeBalance = exchangeTotalValue - returnTotalValue;
+
+              const handleConfirmProcessReturn = async () => {
+                if (itemsToReturn.length === 0) {
+                  return alert(t('Please select at least 1 product quantity to return.', 'කරුණාකර ආපසු බාරදීමට අවම වශයෙන් එක් භාණ්ඩයකවත් ප්‍රමාණයක් ඇතුළත් කරන්න.'));
+                }
+
+                if (returnMethod === 'Exchange') {
+                  if (exchangeCartItems.length === 0) {
+                    return alert(t('Please add at least 1 replacement product for exchange.', 'කරුණාකර හුවමාරුව සඳහා අවම වශයෙන් එක් නව භාණ්ඩයක්වත් ඇතුළත් කරන්න.'));
+                  }
+                  if (netExchangeBalance > 0 && exchangeCustomerPaid < netExchangeBalance) {
+                    return alert(t(`Customer Payment (Rs. ${exchangeCustomerPaid}) is less than Balance Due (Rs. ${netExchangeBalance}).`, `පාරිභෝගිකයා ගෙවූ මුදල හිඟ මුදලට වඩා අඩුය.`));
+                  }
+                }
+
+                const calculatedRefund = returnMethod === 'Cash Refund' 
+                  ? returnTotalValue 
+                  : (returnMethod === 'Exchange' && netExchangeBalance < 0 ? (exchangeRefundGiven || Math.abs(netExchangeBalance)) : 0);
+
+                const calculatedPaid = returnMethod === 'Exchange' && netExchangeBalance > 0 ? exchangeCustomerPaid : 0;
+                const calculatedChange = returnMethod === 'Exchange' && netExchangeBalance > 0 ? Math.max(0, exchangeCustomerPaid - netExchangeBalance) : 0;
+
+                try {
+                  setIsLoading(true);
+                  const { data: { user } } = await supabase.auth.getUser();
+                  const res = await fetch(`${API_URL}/sales/returns`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      invoiceNo: targetReturnInvoice.invoiceNo,
+                      returnedItems: itemsToReturn,
+                      exchangeItems: exchangeCartItems,
+                      returnMethod,
+                      returnAmount: returnTotalValue,
+                      exchangeAmount: exchangeTotalValue,
+                      balanceAmount: netExchangeBalance,
+                      totalRefunded: calculatedRefund,
+                      customerPaid: calculatedPaid,
+                      changeGiven: calculatedChange,
+                      customerName: targetReturnInvoice.customerName,
+                      customerPhone: targetReturnInvoice.customerPhone,
+                      userEmail: user?.email || 'system',
+                      reason: returnReason
+                    })
+                  });
+
+                  const result = await res.json();
+                  if (!res.ok) throw new Error(result.error || 'Failed to process sales return');
+
+                  alert(t('Sales Return processed successfully!', 'විකුණුම් ආපසු භාරගැනීම සාර්ථකයි!'));
+                  
+                  const newReturnRecord: SalesReturn = {
+                    id: result.id,
+                    returnNo: result.returnNo || result.return_no,
+                    invoiceNo: targetReturnInvoice.invoiceNo,
+                    customerName: targetReturnInvoice.customerName,
+                    customerPhone: targetReturnInvoice.customerPhone,
+                    returnedItems: itemsToReturn,
+                    exchangeItems: exchangeCartItems,
+                    returnMethod,
+                    returnAmount: returnTotalValue,
+                    exchangeAmount: exchangeTotalValue,
+                    balanceAmount: netExchangeBalance,
+                    totalRefunded: calculatedRefund,
+                    customerPaid: calculatedPaid,
+                    changeGiven: calculatedChange,
+                    creditNoteNo: result.creditNoteNo,
+                    status: 'active',
+                    reason: returnReason,
+                    created_at: new Date().toISOString()
+                  };
+
+                  setSelectedReturnPreview(newReturnRecord);
+                  setShowReturnPreviewModal(true);
+
+                  setTargetReturnInvoice(null);
+                  setReturnQtys({});
+                  setExchangeCartItems([]);
+                  setReturnReason('');
+                  setExchangeCustomerPaid(0);
+                  setExchangeRefundGiven(0);
+                  fetchSalesReturns();
+                  fetchCreditNotes();
+                  fetchData();
+                } catch (err: any) {
+                  alert(t('Failed to process return: ', 'ආපසු භාරගැනීම අසමත් විය: ') + err.message);
+                } finally {
+                  setIsLoading(false);
+                }
+              };
+
+              return (
+                <div className="bg-slate-50/60 rounded-2xl border border-slate-200/80 p-5 space-y-5 animate-in slide-in-from-top-3 duration-300">
+                  <div className="flex justify-between items-center flex-wrap gap-2 border-b border-slate-200/60 pb-3">
+                    <div>
+                      <h4 className="text-base font-black text-slate-800 flex items-center gap-2">
+                        {t('Invoice:', 'ඉන්වොයිසිය:')} <span className="font-mono text-amber-600">{targetReturnInvoice.invoiceNo}</span>
+                        <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-black uppercase ${targetReturnInvoice.status === 'Fully Returned' ? 'bg-rose-100 text-rose-700' : targetReturnInvoice.status === 'Partially Returned' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-700'}`}>
+                          {targetReturnInvoice.status}
+                        </span>
+                      </h4>
+                      <p className="text-xs font-bold text-slate-500 mt-0.5">
+                        {t('Customer:', 'පාරිභෝගිකයා:')} {targetReturnInvoice.customerName} | {t('Date:', 'දිනය:')} {targetReturnInvoice.date}
+                      </p>
+                    </div>
                     <button
                       type="button"
-                      onClick={async () => {
-                        const itemsToReturn = targetReturnInvoice.items
-                          .filter((item: any) => (returnQtys[item.productId] || 0) > 0)
-                          .map((item: any) => ({
-                            ...item,
-                            qty: returnQtys[item.productId]
-                          }));
-
-                        if (itemsToReturn.length === 0) {
-                          return alert(t('Please select at least 1 item quantity to return.', 'කරුණාකර ආපසු බාරදීමට අවම වශයෙන් එක් භාණ්ඩයකවත් ප්‍රමාණයක් ඇතුළත් කරන්න.'));
-                        }
-
-                        const totalRefunded = itemsToReturn.reduce((sum: number, i: any) => sum + (i.qty * i.price), 0);
-
-                        try {
-                          setIsLoading(true);
-                          const { data: { user } } = await supabase.auth.getUser();
-                          const res = await fetch(`${API_URL}/sales/returns`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                              invoiceNo: targetReturnInvoice.invoiceNo,
-                              returnedItems: itemsToReturn,
-                              returnMethod,
-                              totalRefunded,
-                              userEmail: user?.email || 'system',
-                              reason: returnReason
-                            })
-                          });
-
-                          const result = await res.json();
-                          if (!res.ok) throw new Error(result.error || 'Failed to process sales return');
-
-                          alert(t('Sales Return processed successfully!', 'විකුණුම් ආපසු භාරගැනීම සාර්ථකයි!'));
-                          setTargetReturnInvoice(null);
-                          setReturnQtys({});
-                          setReturnReason('');
-                          fetchSalesReturns();
-                          fetchData();
-                        } catch (err: any) {
-                          alert(t('Failed to process return: ', 'ආපසු භාරගැනීම අසමත් විය: ') + err.message);
-                        } finally {
-                          setIsLoading(false);
-                        }
+                      onClick={() => {
+                        setTargetReturnInvoice(null);
+                        setReturnQtys({});
+                        setExchangeCartItems([]);
                       }}
-                      className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-xs uppercase tracking-wider transition-all shadow-md flex items-center justify-center gap-2"
+                      className="text-xs font-bold text-slate-400 hover:text-slate-600 underline"
+                    >
+                      {t('Clear / Change Invoice', 'වෙනත් ඉන්වොයිසියක්')}
+                    </button>
+                  </div>
+
+                  {/* Return Product Search Input within Loaded Invoice (Barcode / Name Scanner Support) */}
+                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3 space-y-2">
+                    <label className="text-[10px] font-black text-amber-800 uppercase tracking-widest flex items-center gap-1.5">
+                      <span>⚡</span> {t('Scan Product Barcode or Search Item Name to Select Return Quantity:', 'බාර්කෝඩ් ස්කෑන් කරන්න හෝ භාණ්ඩයේ නමෙන් සොයන්න:')}
+                    </label>
+                    <div className="flex items-center gap-2 bg-white rounded-xl border border-slate-200 px-3 py-1.5 shadow-inner">
+                      <SearchIcon className="w-4 h-4 text-amber-500" />
+                      <input
+                        type="text"
+                        placeholder={t('Scan barcode or type product name & press Enter...', 'බාර්කෝඩ් ස්කෑන් කරන්න හෝ නම ගහලා Enter ඔබන්න...')}
+                        value={returnProductSearch}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setReturnProductSearch(val);
+                          if (val.trim()) {
+                            const exactMatch = targetItems.find((i: any) => i.barcode && i.barcode.trim().toLowerCase() === val.trim().toLowerCase());
+                            if (exactMatch) {
+                              const alreadyReturned = alreadyReturnedMap[exactMatch.productId] || 0;
+                              const maxReturn = Math.max(0, Number(exactMatch.qty || 0) - alreadyReturned);
+                              const curr = returnQtys[exactMatch.productId] || 0;
+                              if (curr < maxReturn) {
+                                setReturnQtys(prev => ({ ...prev, [exactMatch.productId]: curr + 1 }));
+                                setReturnProductSearch('');
+                              }
+                            }
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            if (!returnProductSearch.trim()) return;
+                            const q = returnProductSearch.trim().toLowerCase();
+                            const matched = targetItems.find((i: any) => 
+                              (i.barcode && i.barcode.trim().toLowerCase() === q) ||
+                              (i.productName && i.productName.toLowerCase().includes(q))
+                            );
+                            if (!matched) {
+                              alert(t(`Product "${returnProductSearch}" not found in this invoice!`, `මෙම ඉන්වොයිසියේ "${returnProductSearch}" භාණ්ඩය නොමැත!`));
+                              return;
+                            }
+                            const alreadyReturned = alreadyReturnedMap[matched.productId] || 0;
+                            const maxReturn = Math.max(0, Number(matched.qty || 0) - alreadyReturned);
+                            const curr = returnQtys[matched.productId] || 0;
+                            if (curr + 1 > maxReturn) {
+                              alert(t(`Cannot exceed remaining returnable quantity (${maxReturn} remaining).`, `ඉතිරි ආපසු භාරගත හැකි ප්‍රමාණය ${maxReturn} කි.`));
+                              return;
+                            }
+                            setReturnQtys(prev => ({ ...prev, [matched.productId]: curr + 1 }));
+                            setReturnProductSearch('');
+                          }
+                        }}
+                        className="w-full bg-transparent text-xs font-bold text-slate-800 outline-none placeholder-slate-400"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Items to Return Table with Remaining Qty Tracking */}
+                  <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+                    <table className="w-full text-sm text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-100/80 border-b border-slate-200 text-[10px] font-black text-slate-500 tracking-widest uppercase">
+                          <th className="px-4 py-3">{t('Item', 'භාණ්ඩය')}</th>
+                          <th className="px-4 py-3 text-center">{t('Sold Qty', 'වික්ක ප්‍රමාණය')}</th>
+                          <th className="px-4 py-3 text-center">{t('Prev Returned', 'කලින් ආපසු')}</th>
+                          <th className="px-4 py-3 text-center">{t('Remaining Returnable', 'ඉතිරි ආපසු ප්‍රමාණය')}</th>
+                          <th className="px-4 py-3 text-right">{t('Unit Price', 'ඒකක මිල')}</th>
+                          <th className="px-4 py-3 text-center w-36">{t('Return Qty', 'ආපසු ප්‍රමාණය')}</th>
+                          <th className="px-4 py-3 text-right">{t('Refund/Return Amount', 'ආපසු මුදල')}</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {targetItems.map((item: any) => {
+                          const origQty = Number(item.qty || 0);
+                          const prevReturned = alreadyReturnedMap[item.productId] || 0;
+                          const maxReturn = Math.max(0, origQty - prevReturned);
+                          const currReturn = returnQtys[item.productId] || 0;
+                          const itemRefund = currReturn * item.price;
+                          return (
+                            <tr key={item.productId} className={`hover:bg-slate-50/50 ${maxReturn === 0 ? 'bg-slate-50/60 opacity-60' : ''}`}>
+                              <td className="px-4 py-3 font-black text-slate-800 text-xs">
+                                {item.productName}
+                                {item.barcode && <span className="block text-[10px] font-mono font-normal text-slate-400">Barcode: {item.barcode}</span>}
+                              </td>
+                              <td className="px-4 py-3 text-center font-bold text-slate-600 text-xs">{origQty} {item.unit || ''}</td>
+                              <td className="px-4 py-3 text-center font-bold text-amber-700 text-xs">{prevReturned} {item.unit || ''}</td>
+                              <td className="px-4 py-3 text-center font-black text-emerald-700 text-xs">
+                                {maxReturn > 0 ? `${maxReturn} ${item.unit || ''}` : <span className="text-rose-600 font-bold uppercase">{t('Fully Returned', 'සම්පූර්ණයෙන්ම ආපසු')}</span>}
+                              </td>
+                              <td className="px-4 py-3 text-right font-bold text-slate-600 text-xs">{symbol} {convert(item.price).toLocaleString()}</td>
+                              <td className="px-4 py-3 text-center">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={maxReturn}
+                                  disabled={maxReturn === 0}
+                                  value={currReturn || ''}
+                                  onChange={(e) => {
+                                    const val = Math.min(maxReturn, Math.max(0, parseFloat(e.target.value) || 0));
+                                    setReturnQtys(prev => ({ ...prev, [item.productId]: val }));
+                                  }}
+                                  className="w-20 px-2 py-1 text-center bg-white border border-slate-300 rounded-lg font-bold text-slate-800 text-xs outline-none focus:border-amber-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
+                                />
+                              </td>
+                              <td className="px-4 py-3 text-right font-black text-emerald-600 text-xs">{symbol} {convert(itemRefund).toLocaleString()}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Return Method Selection & Settings */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 block">{t('Return Method', 'ආපසු ගෙවීමේ ක්‍රමය')}</label>
+                      <select
+                        value={returnMethod}
+                        onChange={(e) => setReturnMethod(e.target.value as any)}
+                        className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
+                      >
+                        <option value="Cash Refund">Cash Refund / මුදල් ආපසු</option>
+                        <option value="Exchange">Exchange / භාණ්ඩ හුවමාරුව</option>
+                        <option value="Credit Note">Credit Note / ණය සටහන</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 block">{t('Reason (Optional)', 'හේතුව')}</label>
+                      <input
+                        type="text"
+                        placeholder={t('Damaged, Wrong item, Quality issue, etc.', 'හානි වී ඇත, වෙනත්...')}
+                        value={returnReason}
+                        onChange={(e) => setReturnReason(e.target.value)}
+                        className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* EXCHANGE SECTION (When returnMethod === 'Exchange') */}
+                  {returnMethod === 'Exchange' && (() => {
+                    // Build full list of main products and sub-items/unit variants
+                    const allSelectables: Array<{
+                      key: string;
+                      productId: string;
+                      displayName: string;
+                      mainProductName: string;
+                      subItemName?: string;
+                      category: string;
+                      price: number;
+                      unit: string;
+                      conversionRate: number;
+                      barcode?: string;
+                      sku?: string;
+                      isSubItem: boolean;
+                      stock: number;
+                    }> = [];
+
+                    (products || []).forEach((p: any) => {
+                      const mainPrice = Number(p.sellingPrice || p.price || 0);
+                      const mainUnit = p.unit || 'pcs';
+                      const mainCategory = p.category || 'General';
+
+                      // 1. Base Main Product
+                      allSelectables.push({
+                        key: `main_${p.id}`,
+                        productId: p.id,
+                        displayName: p.name,
+                        mainProductName: p.name,
+                        category: mainCategory,
+                        price: mainPrice,
+                        unit: mainUnit,
+                        conversionRate: 1,
+                        barcode: p.barcode || '',
+                        sku: p.sku || '',
+                        isSubItem: false,
+                        stock: Number(p.stock || 0)
+                      });
+
+                      // 2. Sub-Units / Unit Options from measureDetails or conversions
+                      const unitOpts = getUnitOptions(p);
+                      unitOpts.forEach((opt) => {
+                        if (opt.unit.toLowerCase() !== mainUnit.toLowerCase()) {
+                          allSelectables.push({
+                            key: `sub_${p.id}_${opt.unit}`,
+                            productId: p.id,
+                            displayName: `${p.name} (${opt.unit})`,
+                            mainProductName: p.name,
+                            subItemName: opt.unit,
+                            category: mainCategory,
+                            price: Number(opt.price) || (mainPrice / (opt.conversionRate || 1)),
+                            unit: opt.unit,
+                            conversionRate: Number(opt.conversionRate) || 1,
+                            barcode: p.barcode || '',
+                            sku: p.sku || '',
+                            isSubItem: true,
+                            stock: Number(p.stock || 0)
+                          });
+                        }
+                      });
+
+                      // 3. Explicit subItems / variants array if defined
+                      const explicitSubItems = Array.isArray(p.subItems) ? p.subItems : (Array.isArray(p.sub_items) ? p.sub_items : (Array.isArray(p.variants) ? p.variants : []));
+                      explicitSubItems.forEach((sub: any, sIdx: number) => {
+                        allSelectables.push({
+                          key: `explicit_sub_${p.id}_${sIdx}`,
+                          productId: p.id,
+                          displayName: `${p.name} - ${sub.name || sub.title || sub.unit || 'Sub-Item'}`,
+                          mainProductName: p.name,
+                          subItemName: sub.name || sub.title || sub.unit,
+                          category: mainCategory,
+                          price: Number(sub.price || sub.sellingPrice || mainPrice),
+                          unit: sub.unit || mainUnit,
+                          conversionRate: Number(sub.conversionRate || 1),
+                          barcode: sub.barcode || p.barcode || '',
+                          sku: sub.sku || p.sku || '',
+                          isSubItem: true,
+                          stock: Number(sub.stock || p.stock || 0)
+                        });
+                      });
+                    });
+
+                    // Unique categories list
+                    const categoriesList = ['All', ...Array.from(new Set(allSelectables.map(i => i.category).filter(Boolean)))];
+
+                    // Helper to add item to exchange cart
+                    const handleAddSelectableToCart = (item: typeof allSelectables[0]) => {
+                      setExchangeCartItems(prev => {
+                        const existingIdx = prev.findIndex(i => i.productId === item.productId && (i.unit || '').toLowerCase() === item.unit.toLowerCase());
+                        if (existingIdx >= 0) {
+                          const updated = [...prev];
+                          updated[existingIdx].qty += 1;
+                          updated[existingIdx].total = updated[existingIdx].qty * updated[existingIdx].price;
+                          return updated;
+                        }
+
+                        const newItem: SaleItem = {
+                          productId: item.productId,
+                          productName: item.displayName,
+                          qty: 1,
+                          price: item.price,
+                          total: item.price,
+                          unit: item.unit,
+                          conversionRate: item.conversionRate,
+                          discount: 0,
+                          discountType: 'amount',
+                          taxRate: 0
+                        };
+                        return [...prev, newItem];
+                      });
+                    };
+
+                    const exQuery = exchangeProductSearch.trim().toLowerCase();
+
+                    // Search filtering
+                    const matchingSelectables = allSelectables.filter(item => {
+                      if (exchangeCategoryFilter !== 'All' && item.category.toLowerCase() !== exchangeCategoryFilter.toLowerCase()) {
+                        return false;
+                      }
+                      if (!exQuery) return true;
+                      return (
+                        (item.barcode && item.barcode.trim().toLowerCase().includes(exQuery)) ||
+                        item.mainProductName.toLowerCase().includes(exQuery) ||
+                        item.displayName.toLowerCase().includes(exQuery) ||
+                        (item.subItemName && item.subItemName.toLowerCase().includes(exQuery)) ||
+                        (item.sku && item.sku.toLowerCase().includes(exQuery)) ||
+                        item.category.toLowerCase().includes(exQuery)
+                      );
+                    });
+
+                    return (
+                      <div className="bg-emerald-50/50 border border-emerald-200 rounded-2xl p-4 space-y-4 animate-in fade-in duration-300">
+                        <h4 className="text-xs font-black text-emerald-800 uppercase tracking-widest flex items-center gap-2">
+                          <span className="w-2 h-2 bg-emerald-500 rounded-full"></span>
+                          {t('Select Replacement Exchange Products & Sub-Items:', 'හුවමාරු ලබාගන්නා නව භාණ්ඩ සහ උප-භාණ්ඩ තෝරන්න:')}
+                        </h4>
+
+                        {/* Category & Subcategory Filter Tabs */}
+                        <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
+                          {categoriesList.map((cat) => (
+                            <button
+                              key={cat}
+                              type="button"
+                              onClick={() => setExchangeCategoryFilter(cat)}
+                              className={`px-3 py-1 rounded-xl text-[10px] font-black uppercase transition-all whitespace-nowrap ${exchangeCategoryFilter.toLowerCase() === cat.toLowerCase() ? 'bg-emerald-700 text-white shadow-sm' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'}`}
+                            >
+                              {cat}
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Search Input for Barcode, Product Name, Sub-Item Name, SKU */}
+                        <div className="relative">
+                          <div className="flex items-center gap-2 bg-white rounded-xl border border-slate-200 px-3 py-2 shadow-inner focus-within:ring-2 focus-within:ring-emerald-500/20 focus-within:border-emerald-500">
+                            <SearchIcon className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <input
+                              type="text"
+                              placeholder={t('Scan barcode or search by Main Product, Sub-Item, Variant, Category...', 'බාර්කෝඩ් ස්කෑන් කරන්න හෝ ප්‍රධාන භාණ්ඩය, උප-භාණ්ඩය, ප්‍රභේදය සෙවුම් කරන්න...')}
+                              value={exchangeProductSearch}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setExchangeProductSearch(val);
+
+                                // Immediate Barcode scan auto-add
+                                if (val.trim()) {
+                                  const qStr = val.trim().toLowerCase();
+                                  const exactMatch = allSelectables.find(i => i.barcode && i.barcode.trim().toLowerCase() === qStr);
+                                  if (exactMatch) {
+                                    handleAddSelectableToCart(exactMatch);
+                                    setExchangeProductSearch('');
+                                  }
+                                }
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  if (!exchangeProductSearch.trim()) return;
+
+                                  if (matchingSelectables.length > 0) {
+                                    handleAddSelectableToCart(matchingSelectables[0]);
+                                    setExchangeProductSearch('');
+                                  } else {
+                                    alert(t(`No product or sub-item matching "${exchangeProductSearch}" found!`, `"${exchangeProductSearch}" නමින් ගැලපෙන භාණ්ඩයක් හෝ උප-භාණ්ඩයක් හමු නොවීය!`));
+                                  }
+                                }
+                              }}
+                              className="w-full bg-transparent text-xs font-bold text-slate-800 outline-none placeholder-slate-400"
+                            />
+                            {exchangeProductSearch && (
+                              <button type="button" onClick={() => setExchangeProductSearch('')} className="text-slate-400 hover:text-slate-600 text-xs font-bold px-1">✕</button>
+                            )}
+                          </div>
+
+                          {/* Live Search Results Dropdown Panel */}
+                          {exchangeProductSearch.trim().length >= 1 && (
+                            <div className="absolute top-full left-0 right-0 mt-1 bg-white rounded-xl border border-slate-200 shadow-2xl z-50 max-h-72 overflow-y-auto divide-y divide-slate-100 p-1.5">
+                              <div className="px-2 py-1 text-[9px] font-black text-slate-400 uppercase tracking-wider">
+                                {t('Matching Exchange Products & Sub-Items:', 'සෙවුමට ගැලපෙන භාණ්ඩ සහ උප-භාණ්ඩ:')} ({matchingSelectables.length})
+                              </div>
+                              {matchingSelectables.length === 0 ? (
+                                <div className="p-3 text-center text-slate-400 font-bold text-xs italic">
+                                  {t('No matching product or sub-item found.', 'ගැලපෙන කිසිවක් හමු නොවීය.')}
+                                </div>
+                              ) : (
+                                matchingSelectables.map((item) => (
+                                  <button
+                                    key={item.key}
+                                    type="button"
+                                    onClick={() => {
+                                      handleAddSelectableToCart(item);
+                                      setExchangeProductSearch('');
+                                    }}
+                                    className="w-full text-left p-2 hover:bg-emerald-50/70 rounded-lg transition-colors flex justify-between items-center group"
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-bold text-xs text-slate-800 group-hover:text-emerald-700">{item.displayName}</span>
+                                      {item.isSubItem && (
+                                        <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 font-black text-[9px] rounded uppercase">
+                                          Sub-Item ({item.unit})
+                                        </span>
+                                      )}
+                                      <span className="text-[9px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">{item.category}</span>
+                                    </div>
+                                    <div className="text-right flex items-center gap-3">
+                                      <div>
+                                        <span className="font-black text-xs text-emerald-700">{symbol} {convert(item.price).toLocaleString()}</span>
+                                        <span className="text-[10px] text-slate-400 block font-semibold">Stock: {item.stock}</span>
+                                      </div>
+                                      <span className="px-2 py-1 bg-emerald-600 text-white rounded-lg text-[10px] font-black uppercase shadow-sm group-hover:bg-emerald-700">
+                                        + Add
+                                      </span>
+                                    </div>
+                                  </button>
+                                ))
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Quick Selection Grid for Main Products & Sub-Items */}
+                        {allSelectables.length > 0 && !exchangeProductSearch.trim() && (
+                          <div className="space-y-2">
+                            <div className="text-[10px] font-black text-emerald-800 uppercase tracking-wider flex justify-between items-center">
+                              <span>{t('Quick Pick Products & Sub-Items:', 'ඉක්මනින් තෝරාගැනීමට භාණ්ඩ:')}</span>
+                              <span className="text-slate-400 font-semibold">{matchingSelectables.length} available</span>
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-48 overflow-y-auto p-1 bg-white/70 rounded-xl border border-slate-200/80">
+                              {matchingSelectables.slice(0, 16).map((item) => (
+                                <button
+                                  key={item.key}
+                                  type="button"
+                                  onClick={() => handleAddSelectableToCart(item)}
+                                  className="p-2 bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 rounded-xl text-left transition-all shadow-sm flex flex-col justify-between group"
+                                >
+                                  <div>
+                                    <div className="font-bold text-xs text-slate-800 line-clamp-1 group-hover:text-emerald-700">{item.displayName}</div>
+                                    <div className="flex items-center gap-1 mt-0.5">
+                                      <span className="text-[9px] font-semibold text-slate-400">{item.category}</span>
+                                      {item.isSubItem && (
+                                        <span className="px-1 py-0.2 bg-amber-100 text-amber-800 text-[8px] font-black rounded">
+                                          Sub
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="mt-1.5 flex justify-between items-center border-t border-slate-100 pt-1">
+                                    <span className="font-black text-xs text-emerald-700">{symbol} {convert(item.price).toLocaleString()}</span>
+                                    <span className="text-[9px] font-black text-emerald-600 uppercase">+ Add</span>
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Exchange Products Cart Table */}
+                        <div className="overflow-x-auto rounded-xl border border-emerald-100 bg-white shadow-sm">
+                          <table className="w-full text-xs text-left border-collapse">
+                            <thead>
+                              <tr className="bg-emerald-100/60 border-b border-emerald-200 text-[10px] font-black text-emerald-900 tracking-widest uppercase">
+                                <th className="px-3 py-2">{t('Replacement Item / Sub-Item', 'නව භාණ්ඩය / උප-භාණ්ඩය')}</th>
+                                <th className="px-3 py-2 text-center w-24">{t('Qty', 'ප්‍රමාණය')}</th>
+                                <th className="px-3 py-2 text-right">{t('Unit Price', 'ඒකක මිල')}</th>
+                                <th className="px-3 py-2 text-right">{t('Total', 'එකතුව')}</th>
+                                <th className="px-3 py-2 text-center w-12">{t('Action', 'ක්‍රියා')}</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {exchangeCartItems.length === 0 ? (
+                                <tr>
+                                  <td colSpan={5} className="py-4 text-center text-slate-400 font-bold italic">
+                                    {t('No exchange items added yet. Search or select main products & sub-items above.', 'තවමත් හුවමාරු භාණ්ඩ එකතු කර නොමැත.')}
+                                  </td>
+                                </tr>
+                              ) : (
+                                exchangeCartItems.map((item, idx) => (
+                                  <tr key={`${item.productId}_${item.unit}_${idx}`} className="hover:bg-slate-50">
+                                    <td className="px-3 py-2 font-bold text-slate-800">
+                                      {item.productName}
+                                      {item.unit && <span className="ml-1.5 px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[9px] font-semibold">{item.unit}</span>}
+                                    </td>
+                                    <td className="px-3 py-2 text-center">
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        value={item.qty}
+                                        onChange={(e) => {
+                                          const newQty = Math.max(1, parseFloat(e.target.value) || 1);
+                                          const updated = [...exchangeCartItems];
+                                          updated[idx].qty = newQty;
+                                          updated[idx].total = newQty * updated[idx].price;
+                                          setExchangeCartItems(updated);
+                                        }}
+                                        className="w-16 px-1.5 py-0.5 text-center bg-white border border-slate-300 rounded font-bold text-slate-800 text-xs"
+                                      />
+                                    </td>
+                                    <td className="px-3 py-2 text-right font-semibold text-slate-600">{symbol} {convert(item.price).toLocaleString()}</td>
+                                    <td className="px-3 py-2 text-right font-black text-emerald-700">{symbol} {convert(item.total).toLocaleString()}</td>
+                                    <td className="px-3 py-2 text-center">
+                                      <button
+                                        type="button"
+                                        onClick={() => setExchangeCartItems(prev => prev.filter((_, i) => i !== idx))}
+                                        className="text-rose-500 hover:text-rose-700 font-bold text-xs"
+                                      >
+                                        ✕
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+
+                      {/* Exchange Balance Calculation Summary */}
+                      <div className="bg-white rounded-xl border border-emerald-200 p-4 space-y-3 shadow-sm">
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs font-bold border-b border-slate-100 pb-3">
+                          <div>
+                            <span className="text-slate-400 block text-[10px] uppercase font-black">{t('Returned Total Value:', 'ආපසු භාරගත් මුළු අගය:')}</span>
+                            <span className="text-rose-600 font-black text-sm">{symbol} {convert(returnTotalValue).toLocaleString()}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400 block text-[10px] uppercase font-black">{t('Exchange Products Value:', 'නව හුවමාරු භාණ්ඩ අගය:')}</span>
+                            <span className="text-emerald-600 font-black text-sm">{symbol} {convert(exchangeTotalValue).toLocaleString()}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400 block text-[10px] uppercase font-black">{t('Net Difference:', 'ශේෂ වෙනස:')}</span>
+                            <span className={`font-black text-sm ${netExchangeBalance > 0 ? 'text-amber-600' : netExchangeBalance < 0 ? 'text-blue-600' : 'text-slate-700'}`}>
+                              {netExchangeBalance > 0 
+                                ? `${symbol} ${convert(netExchangeBalance).toLocaleString()} (Customer Owes)` 
+                                : netExchangeBalance < 0 
+                                  ? `${symbol} ${convert(Math.abs(netExchangeBalance)).toLocaleString()} (Refund Due)` 
+                                  : 'Rs. 0 (Even Exchange)'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Customer Pays Balance Due Scenario */}
+                        {netExchangeBalance > 0 && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 bg-amber-50/60 p-3 rounded-xl border border-amber-200">
+                            <div>
+                              <label className="text-[10px] font-black text-amber-900 uppercase tracking-wider block mb-1">
+                                {t('Balance Due from Customer:', 'පාරිභෝගිකයාගෙන් අයවිය යුතු ශේෂය:')}
+                              </label>
+                              <div className="text-base font-black text-amber-700">{symbol} {convert(netExchangeBalance).toLocaleString()}</div>
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-black text-slate-600 uppercase tracking-wider block">
+                                {t('Customer Payment / Amount Paid:', 'පාරිභෝගිකයා ලබාදුන් මුදල:')}
+                              </label>
+                              <input
+                                type="number"
+                                min={netExchangeBalance}
+                                value={exchangeCustomerPaid || ''}
+                                onChange={(e) => setExchangeCustomerPaid(parseFloat(e.target.value) || 0)}
+                                placeholder={`Min ${netExchangeBalance}`}
+                                className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg font-black text-slate-800 text-sm outline-none focus:border-amber-500"
+                              />
+                              {exchangeCustomerPaid > netExchangeBalance && (
+                                <p className="text-xs font-black text-emerald-700">
+                                  {t('Change to Customer:', 'පාරිභෝගිකයාට ඉතිරි ලබාදිය යුතු මුදල:')} {symbol} {convert(exchangeCustomerPaid - netExchangeBalance).toLocaleString()}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Customer Gets Refund Due Scenario */}
+                        {netExchangeBalance < 0 && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 bg-blue-50/60 p-3 rounded-xl border border-blue-200">
+                            <div>
+                              <label className="text-[10px] font-black text-blue-900 uppercase tracking-wider block mb-1">
+                                {t('Refund Due to Customer:', 'පාරිභෝගිකයාට ආපසු ගෙවිය යුතු මුදල:')}
+                              </label>
+                              <div className="text-base font-black text-blue-700">{symbol} {convert(Math.abs(netExchangeBalance)).toLocaleString()}</div>
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-black text-slate-600 uppercase tracking-wider block mb-1">
+                                {t('Confirm Refund Amount:', 'ආපසු ගෙවන මුදල තහවුරු කරන්න:')}
+                              </label>
+                              <input
+                                type="number"
+                                value={exchangeRefundGiven || Math.abs(netExchangeBalance)}
+                                onChange={(e) => setExchangeRefundGiven(parseFloat(e.target.value) || 0)}
+                                className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg font-black text-slate-800 text-sm outline-none focus:border-amber-500"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                  {/* SUBMIT BUTTON */}
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      disabled={isLoading}
+                      onClick={handleConfirmProcessReturn}
+                      className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-xs uppercase tracking-wider transition-all shadow-md flex items-center justify-center gap-2 disabled:opacity-50"
                     >
                       <CheckCircleIcon className="w-4 h-4" />
-                      {t('Confirm & Process Return', 'ආපසු භාරගැනීම තහවුරු කරන්න')}
+                      {returnMethod === 'Exchange' 
+                        ? t('Confirm & Process Exchange', 'භාණ්ඩ හුවමාරුව තහවුරු කරන්න') 
+                        : returnMethod === 'Credit Note' 
+                          ? t('Confirm & Issue Credit Note', 'ණය සටහන නිකුත් කිරීම තහවුරු කරන්න') 
+                          : t('Confirm & Process Return', 'ආපසු භාරගැනීම තහවුරු කරන්න')}
                     </button>
                   </div>
                 </div>
+              );
+            })()}
+          </div>
+
+          {/* Sales Return History & Credit Notes Section */}
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-100/40 p-6">
+            <div className="flex justify-between items-center flex-wrap gap-3 mb-6 border-b border-slate-100 pb-4">
+              <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                <span className="w-1.5 h-4 bg-amber-500 rounded-full"></span>
+                {returnSubTab === 'history' ? t('Sales Return History', 'ආපසු භාරගැනීම් ඉතිහාසය') : t('Credit Notes History', 'ණය සටහන් ඉතිහාසය')}
+              </h3>
+
+              <div className="flex gap-2 bg-slate-100 p-1 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setReturnSubTab('history')}
+                  className={`px-4 py-1.5 rounded-lg text-xs font-black uppercase transition-all ${returnSubTab === 'history' ? 'bg-slate-900 text-amber-400 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                >
+                  {t('Return History', 'ආපසු ඉතිහාසය')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReturnSubTab('credit_notes')}
+                  className={`px-4 py-1.5 rounded-lg text-xs font-black uppercase transition-all ${returnSubTab === 'credit_notes' ? 'bg-slate-900 text-amber-400 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                >
+                  {t('Credit Notes', 'ණය සටහන්')} ({creditNotesList.length})
+                </button>
+              </div>
+            </div>
+
+            {returnSubTab === 'history' ? (
+              <div className="overflow-x-auto rounded-2xl border border-slate-100">
+                <table className="w-full text-sm text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-black text-slate-400 tracking-widest uppercase">
+                      <th className="px-6 py-4">{t('Date & Time', 'දිනය හා වේලාව')}</th>
+                      <th className="px-6 py-4">{t('Return No', 'ආපසු අංකය')}</th>
+                      <th className="px-6 py-4">{t('Original Invoice', 'ඉන්වොයිස් අංකය')}</th>
+                      <th className="px-6 py-4">{t('Customer', 'පාරිභෝගිකයා')}</th>
+                      <th className="px-6 py-4">{t('Return Method', 'ක්‍රමය')}</th>
+                      <th className="px-6 py-4 text-right">{t('Total Refunded / Paid', 'මුළු මුදල')}</th>
+                      <th className="px-6 py-4 text-center">{t('Status', 'තත්ත්වය')}</th>
+                      <th className="px-6 py-4 text-center">{t('Actions', 'ක්‍රියාකාරකම්')}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {salesReturnsList.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="py-8 text-center text-slate-400 font-bold text-sm">
+                          {t('No sales returns recorded yet.', 'තවමත් ආපසු භාරගැනීම් කිසිවක් නොමැත.')}
+                        </td>
+                      </tr>
+                    ) : (
+                      salesReturnsList.map((sr) => {
+                        const retItemsList = Array.isArray(sr.returnedItems) ? sr.returnedItems : safeParseJson(sr.returnedItems, []);
+                        const exItemsList = Array.isArray(sr.exchangeItems) ? sr.exchangeItems : safeParseJson(sr.exchangeItems, []);
+                        const isExpanded = expandedReturnId === sr.id;
+
+                        return (
+                          <React.Fragment key={sr.id}>
+                            <tr className="hover:bg-slate-50/50">
+                              <td className="px-6 py-4 font-bold text-slate-500 text-xs">
+                                {formatInvoiceDateTime(sr.created_at)}
+                              </td>
+                              <td className="px-6 py-4 font-black text-slate-800 font-mono text-xs">
+                                {sr.returnNo || sr.return_no || sr.id}
+                              </td>
+                              <td className="px-6 py-4 font-black text-amber-600 font-mono text-xs">
+                                {sr.invoiceNo || sr.invoice_no}
+                              </td>
+                              <td className="px-6 py-4 font-bold text-slate-700 text-xs">
+                                {sr.customerName || sr.customer_name || 'Guest Customer'}
+                              </td>
+                              <td className="px-6 py-4 font-bold text-slate-600 text-xs space-y-1">
+                                <span className={`px-2.5 py-1 rounded-full font-black text-[10px] uppercase block w-max ${sr.returnMethod === 'Exchange' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'}`}>
+                                  {sr.returnMethod}
+                                </span>
+                                {retItemsList.length > 0 && (
+                                  <span className="text-[10px] font-bold text-rose-600 block">
+                                    ↩ {retItemsList.length} returned
+                                  </span>
+                                )}
+                                {exItemsList.length > 0 && (
+                                  <span className="text-[10px] font-bold text-emerald-600 block">
+                                    ⇄ {exItemsList.length} exchanged
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-6 py-4 text-right font-black text-emerald-600 text-sm">
+                                {symbol} {convert(sr.totalRefunded || sr.returnAmount || 0).toLocaleString()}
+                              </td>
+                              <td className="px-6 py-4 text-center">
+                                <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full ${sr.status === 'voided' ? 'bg-slate-100 text-slate-500' : 'bg-emerald-100 text-emerald-700'}`}>
+                                  {sr.status === 'voided' ? 'VOIDED' : 'ACTIVE'}
+                                </span>
+                              </td>
+                              <td className="px-6 py-4 text-center flex items-center justify-center gap-1.5 flex-wrap">
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedReturnId(isExpanded ? null : sr.id)}
+                                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors flex items-center gap-1 ${isExpanded ? 'bg-amber-500 text-slate-950 font-black' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'}`}
+                                >
+                                  {isExpanded ? '▲ Hide' : '▼ Sub-Items'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedReturnPreview(sr);
+                                    setShowReturnPreviewModal(true);
+                                  }}
+                                  className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-lg text-xs font-bold transition-colors flex items-center gap-1"
+                                >
+                                  <ReceiptIcon className="w-3.5 h-3.5" />
+                                  {t('Preview', 'පෙරදසුන')}
+                                </button>
+                                {sr.status !== 'voided' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setTargetVoidReturnId(sr.id);
+                                      setTargetVoidInvoiceId(null);
+                                      setVoidPasskeyInput('');
+                                      setShowVoidModal(true);
+                                    }}
+                                    className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-xs font-bold transition-colors"
+                                  >
+                                    {t('Void', 'අවලංගු')}
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+
+                            {/* Sub-Items Expandable Drawer */}
+                            {isExpanded && (
+                              <tr className="bg-slate-50/80">
+                                <td colSpan={8} className="p-4 border-b border-slate-200">
+                                  <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-4 shadow-sm">
+                                    <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+                                      <h5 className="font-black text-xs text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                                        <span className="w-2 h-2 bg-amber-500 rounded-full"></span>
+                                        {t('Sub-Items Breakdown for Return:', 'මෙම ආපසු භාරගැනීමේ සියලුම භාණ්ඩ විස්තරය:')} <span className="font-mono text-amber-600">{sr.returnNo || sr.return_no || sr.id}</span>
+                                      </h5>
+                                      <span className="text-[10px] font-bold text-slate-400">{formatInvoiceDateTime(sr.created_at)}</span>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                      {/* Returned Items Sub-Table */}
+                                      <div>
+                                        <h6 className="text-[11px] font-black text-rose-700 uppercase tracking-wider mb-2 flex items-center gap-1">
+                                          <span>↩</span> {t('Returned Products', 'ආපසු භාරගත් භාණ්ඩ')} ({retItemsList.length})
+                                        </h6>
+                                        <div className="overflow-hidden border border-rose-100 rounded-lg bg-rose-50/30">
+                                          <table className="w-full text-xs text-left border-collapse">
+                                            <thead>
+                                              <tr className="bg-rose-100/60 text-rose-900 font-black uppercase text-[9px] tracking-wider">
+                                                <th className="py-1.5 px-2.5">Item Name</th>
+                                                <th className="py-1.5 px-2.5 text-center">Qty</th>
+                                                <th className="py-1.5 px-2.5 text-right">Price</th>
+                                                <th className="py-1.5 px-2.5 text-right">Total</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-rose-100/60">
+                                              {retItemsList.map((ri: any, idx: number) => (
+                                                <tr key={idx}>
+                                                  <td className="py-1.5 px-2.5 font-bold text-slate-800">{ri.productName}</td>
+                                                  <td className="py-1.5 px-2.5 text-center font-semibold text-slate-600">{ri.qty} {ri.unit || ''}</td>
+                                                  <td className="py-1.5 px-2.5 text-right text-slate-600">{symbol} {convert(ri.price).toLocaleString()}</td>
+                                                  <td className="py-1.5 px-2.5 text-right font-black text-rose-700">{symbol} {convert(ri.qty * ri.price).toLocaleString()}</td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </div>
+
+                                      {/* Exchange Replacement Sub-Items Table */}
+                                      <div>
+                                        <h6 className="text-[11px] font-black text-emerald-700 uppercase tracking-wider mb-2 flex items-center gap-1">
+                                          <span>⇄</span> {t('Exchange Replacement Sub-Items', 'හුවමාරු ලබාදුන් නව භාණ්ඩ')} ({exItemsList.length})
+                                        </h6>
+                                        {exItemsList.length === 0 ? (
+                                          <div className="p-3 text-center text-slate-400 font-bold text-xs italic bg-slate-50 rounded-lg border border-slate-100">
+                                            {t('No exchange replacement items in this transaction.', 'මෙම ගනුදෙනුවේ හුවමාරු භාණ්ඩ නොමැත.')}
+                                          </div>
+                                        ) : (
+                                          <div className="overflow-hidden border border-emerald-100 rounded-lg bg-emerald-50/30">
+                                            <table className="w-full text-xs text-left border-collapse">
+                                              <thead>
+                                                <tr className="bg-emerald-100/60 text-emerald-900 font-black uppercase text-[9px] tracking-wider">
+                                                  <th className="py-1.5 px-2.5">Item Name</th>
+                                                  <th className="py-1.5 px-2.5 text-center">Qty</th>
+                                                  <th className="py-1.5 px-2.5 text-right">Price</th>
+                                                  <th className="py-1.5 px-2.5 text-right">Total</th>
+                                                </tr>
+                                              </thead>
+                                              <tbody className="divide-y divide-emerald-100/60">
+                                                {exItemsList.map((ei: any, idx: number) => (
+                                                  <tr key={idx}>
+                                                    <td className="py-1.5 px-2.5 font-bold text-slate-800">{ei.productName}</td>
+                                                    <td className="py-1.5 px-2.5 text-center font-semibold text-slate-600">{ei.qty} {ei.unit || ''}</td>
+                                                    <td className="py-1.5 px-2.5 text-right text-slate-600">{symbol} {convert(ei.price).toLocaleString()}</td>
+                                                    <td className="py-1.5 px-2.5 text-right font-black text-emerald-700">{symbol} {convert(ei.qty * ei.price).toLocaleString()}</td>
+                                                  </tr>
+                                                ))}
+                                              </tbody>
+                                            </table>
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              /* Credit Notes History Table */
+              <div className="overflow-x-auto rounded-2xl border border-slate-100">
+                <table className="w-full text-sm text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-black text-slate-400 tracking-widest uppercase">
+                      <th className="px-4 py-3.5">{t('Date', 'දිනය')}</th>
+                      <th className="px-4 py-3.5">{t('Credit Note No', 'ණය සටහන් අංකය')}</th>
+                      <th className="px-4 py-3.5">{t('Ref Invoice', 'මුල් ඉන්වොයිසිය')}</th>
+                      <th className="px-4 py-3.5">{t('Customer', 'පාරිභෝගිකයා')}</th>
+                      <th className="px-4 py-3.5 text-right">{t('Original Amount', 'මුළු ණය මුදල')}</th>
+                      <th className="px-4 py-3.5 text-right">{t('Used Amount', 'භාවිත කල මුදල')}</th>
+                      <th className="px-4 py-3.5 text-right">{t('Remaining Bal', 'ඉතිරි ශේෂය')}</th>
+                      <th className="px-4 py-3.5 text-center">{t('Status', 'තත්ත්වය')}</th>
+                      <th className="px-4 py-3.5 text-center">{t('Actions', 'ක්‍රියාකාරකම්')}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {creditNotesList.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="py-8 text-center text-slate-400 font-bold text-sm">
+                          {t('No credit notes recorded yet.', 'තවමත් ණය සටහන් කිසිවක් නොමැත.')}
+                        </td>
+                      </tr>
+                    ) : (
+                      creditNotesList.map((cn) => {
+                        const cnCode = cn.creditNoteNo || cn.credit_note_no || cn.code || cn.id;
+                        const origVal = Number(cn.amount || cn.value || 0);
+                        const remBal = Number(cn.balance_remaining !== undefined ? cn.balance_remaining : (cn.balanceRemaining !== undefined ? cn.balanceRemaining : origVal));
+                        const usedVal = Math.max(0, origVal - remBal);
+                        const stLower = (cn.status || '').toLowerCase();
+                        const isFullyUsed = stLower === 'fully used' || stLower === 'used' || remBal <= 0.001;
+                        const isPartiallyUsed = !isFullyUsed && remBal < origVal;
+
+                        return (
+                          <tr key={cn.id} className="hover:bg-slate-50/50">
+                            <td className="px-4 py-3.5 font-bold text-slate-500 text-xs">
+                              {new Date(cn.created_at).toLocaleDateString()}
+                            </td>
+                            <td className="px-4 py-3.5 font-black text-amber-600 font-mono text-sm">
+                              {cnCode}
+                            </td>
+                            <td className="px-4 py-3.5 font-mono font-bold text-slate-700 text-xs">
+                              {cn.invoiceNo || cn.invoice_no || 'N/A'}
+                            </td>
+                            <td className="px-4 py-3.5 font-bold text-slate-700 text-xs">
+                              {cn.customerName || cn.customer_name || 'Guest Customer'}
+                            </td>
+                            <td className="px-4 py-3.5 text-right font-black text-slate-700 text-xs font-mono">
+                              {symbol} {convert(origVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="px-4 py-3.5 text-right font-bold text-amber-700 text-xs font-mono">
+                              {symbol} {convert(usedVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="px-4 py-3.5 text-right font-black text-emerald-600 text-sm font-mono">
+                              {symbol} {convert(remBal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="px-4 py-3.5 text-center">
+                              <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full ${
+                                isFullyUsed ? 'bg-slate-100 text-slate-500' : isPartiallyUsed ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-700'
+                              }`}>
+                                {isFullyUsed ? t('Fully Used', 'සම්පූර්ණයෙන්ම භාවිතා කර ඇත') : isPartiallyUsed ? t('Partially Used', 'කොටසක් භාවිතා කර ඇත') : t('Active', 'සක්‍රියයි')}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5 text-center">
+                              <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedCreditNotePreview(cn);
+                                    setShowCreditNotePreviewModal(true);
+                                  }}
+                                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[11px] font-bold transition-colors flex items-center gap-1"
+                                >
+                                  <ReceiptIcon className="w-3 h-3" />
+                                  {t('Receipt', 'ලදුපත')}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedCreditNotePreview(cn);
+                                    fetchCreditNoteUsage(cnCode);
+                                    setShowCreditNoteUsageModal(true);
+                                  }}
+                                  className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-lg text-[11px] font-bold transition-colors flex items-center gap-1"
+                                >
+                                  <span>📜</span>
+                                  {t('History', 'ඉතිහාසය')}
+                                </button>
+                                {!isFullyUsed && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCreditNoteCashRefund(cn)}
+                                    className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-[11px] font-bold transition-colors flex items-center gap-1"
+                                  >
+                                    <span>💵</span>
+                                    {t('Refund Cash', 'මුදල් ලබාදෙන්න')}
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
+        </div>
+      )}
 
-          {/* Sales Return History */}
-          <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-100/40 p-6">
-            <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2 mb-6">
-              <span className="w-1.5 h-4 bg-amber-500 rounded-full"></span>
-              {t('Sales Return History', 'ආපසු භාරගැනීම් ඉතිහාසය')}
-            </h3>
+      {/* Return Receipt Preview Modal */}
+      {showReturnPreviewModal && selectedReturnPreview && (
+        <Modal 
+          isOpen={showReturnPreviewModal} 
+          onClose={() => setShowReturnPreviewModal(false)} 
+          title={t('Return Receipt Preview', 'ආපසු භාරගැනීමේ රසීදු පෙරදසුන')} 
+          size="lg"
+        >
+          <div className="space-y-4 p-4 text-center animate-in zoom-in duration-300">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-amber-50 text-amber-600 rounded-lg flex items-center justify-center border border-amber-200">
+                  <ReceiptIcon className="w-5 h-5" />
+                </div>
+                <div className="text-left">
+                  <h4 className="font-black text-sm text-[#464646]">{t('Sales Return Receipt', 'ආපසු භාරගැනීමේ රසීදුව')}</h4>
+                  <p className="text-[10px] text-gray-400 font-bold">{selectedReturnPreview.returnNo || selectedReturnPreview.return_no || selectedReturnPreview.id}</p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => handlePrintReturnReceipt(selectedReturnPreview)} 
+                  className="bg-[#DAA520] hover:bg-[#B8860B] text-white px-4 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-2 transition-all uppercase tracking-widest"
+                >
+                  <PrinterIcon className="w-4 h-4" /> {t('Print', 'මුද්‍රණය කරන්න')}
+                </button>
+              </div>
+            </div>
 
-            <div className="overflow-x-auto rounded-2xl border border-slate-100">
-              <table className="w-full text-sm text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-black text-slate-400 tracking-widest uppercase">
-                    <th className="px-6 py-4">{t('Date', 'දිනය')}</th>
-                    <th className="px-6 py-4">{t('Invoice No', 'ඉන්වොයිස් අංකය')}</th>
-                    <th className="px-6 py-4">{t('Return Method', 'ක්‍රමය')}</th>
-                    <th className="px-6 py-4 text-right">{t('Total Refunded', 'මුළු ආපසු මුදල')}</th>
-                    <th className="px-6 py-4 text-center">{t('Status', 'තත්ත්වය')}</th>
-                    <th className="px-6 py-4 text-center">{t('Actions', 'ක්‍රියාකාරකම්')}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
-                  {salesReturnsList.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="py-8 text-center text-slate-400 font-bold text-sm">
-                        {t('No sales returns recorded yet.', 'තවමත් ආපසු භාරගැනීම් කිසිවක් නොමැත.')}
-                      </td>
-                    </tr>
-                  ) : (
-                    salesReturnsList.map((sr) => (
-                      <tr key={sr.id} className="hover:bg-slate-50/50">
-                        <td className="px-6 py-4 font-bold text-slate-500 text-xs">
-                          {new Date(sr.created_at).toLocaleDateString()}
-                        </td>
-                        <td className="px-6 py-4 font-black text-slate-800 font-mono text-sm">
-                          {sr.invoiceNo || sr.invoice_no}
-                        </td>
-                        <td className="px-6 py-4 font-bold text-slate-600 text-xs">
-                          {sr.returnMethod}
-                        </td>
-                        <td className="px-6 py-4 text-right font-black text-emerald-600 text-sm">
-                          {symbol} {convert(sr.totalRefunded).toLocaleString()}
-                        </td>
-                        <td className="px-6 py-4 text-center">
-                          <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full ${sr.status === 'voided' ? 'bg-slate-100 text-slate-500' : 'bg-emerald-100 text-emerald-700'}`}>
-                            {sr.status === 'voided' ? 'VOIDED' : 'ACTIVE'}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-center flex items-center justify-center gap-2">
-                          {sr.status !== 'voided' && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setTargetVoidReturnId(sr.id);
-                                setTargetVoidInvoiceId(null);
-                                setVoidPasskeyInput('');
-                                setShowVoidModal(true);
-                              }}
-                              className="px-3 py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg text-xs font-bold transition-colors"
-                            >
-                              {t('Void Return', 'අවලංගු කරන්න')}
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+            <div className="max-h-[60vh] overflow-y-auto pr-1">
+              <ReturnReceiptPreview returnRecord={selectedReturnPreview} isSinhala={isSinhala} />
+            </div>
+
+            <div className="pt-2">
+              <button 
+                onClick={() => setShowReturnPreviewModal(false)} 
+                className="w-full bg-gray-100 text-gray-500 py-3.5 rounded-xl font-black uppercase tracking-widest text-[10px] hover:bg-gray-200 transition-colors"
+              >
+                {t('Dismiss', 'ඉවත් කරන්න')}
+              </button>
             </div>
           </div>
-        </div>
+        </Modal>
+      )}
+
+      {/* Credit Note Preview Modal */}
+      {showCreditNotePreviewModal && selectedCreditNotePreview && (
+        <Modal 
+          isOpen={showCreditNotePreviewModal} 
+          onClose={() => setShowCreditNotePreviewModal(false)} 
+          title={t('Credit Note Preview', 'ණය සටහන් පෙරදසුන')} 
+          size="lg"
+        >
+          <div className="space-y-4 p-4 text-center animate-in zoom-in duration-300">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-amber-50 text-amber-600 rounded-lg flex items-center justify-center border border-amber-200">
+                  <ReceiptIcon className="w-5 h-5" />
+                </div>
+                <div className="text-left">
+                  <h4 className="font-black text-sm text-[#464646]">{t('Credit Note Document', 'ණය සටහන')}</h4>
+                  <p className="text-[10px] text-gray-400 font-bold">{selectedCreditNotePreview.creditNoteNo || selectedCreditNotePreview.credit_note_no || selectedCreditNotePreview.id}</p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => handlePrintCreditNote(selectedCreditNotePreview)} 
+                  className="bg-[#DAA520] hover:bg-[#B8860B] text-white px-4 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-2 transition-all uppercase tracking-widest"
+                >
+                  <PrinterIcon className="w-4 h-4" /> {t('Print', 'මුද්‍රණය කරන්න')}
+                </button>
+              </div>
+            </div>
+
+            <div className="max-h-[60vh] overflow-y-auto pr-1">
+              <CreditNoteReceiptPreview creditNoteRecord={selectedCreditNotePreview} isSinhala={isSinhala} />
+            </div>
+
+            <div className="pt-2">
+              <button 
+                onClick={() => setShowCreditNotePreviewModal(false)} 
+                className="w-full bg-gray-100 text-gray-500 py-3.5 rounded-xl font-black uppercase tracking-widest text-[10px] hover:bg-gray-200 transition-colors"
+              >
+                {t('Dismiss', 'ඉවත් කරන්න')}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Centralized Void Passkey Confirmation Modal */}
@@ -5323,6 +8248,284 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                 className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-xs uppercase shadow-md"
               >
                 {t('Confirm Void', 'අවලංගු කිරීම තහවුරු කරන්න')}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Quotation Preview Modal */}
+      {showQuotePreviewModal && selectedQuotePreview && (
+        <Modal isOpen={showQuotePreviewModal} onClose={() => setShowQuotePreviewModal(false)} title={t('Quotation Preview', 'මිල ගණන් පූර්ව දර්ශනය')}>
+          <div className="p-6 space-y-6 max-w-3xl mx-auto bg-white rounded-3xl text-left">
+            {/* Business Header */}
+            <div className="flex justify-between items-start border-b border-slate-200 pb-5 flex-wrap gap-4">
+              <div className="flex items-center gap-4">
+                <img
+                  src={shopSettings?.logo_path || './images/logo.png'}
+                  alt="Shop Logo"
+                  className="w-16 h-16 object-contain"
+                  onError={(e: any) => { e.target.style.display = 'none'; }}
+                />
+                <div>
+                  <h3 className="text-base font-black text-slate-900 uppercase tracking-wide">{shopSettings?.shop_name || 'Hardware & ERP Store'}</h3>
+                  <p className="text-xs font-semibold text-slate-500">{shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</p>
+                  <p className="text-xs font-bold text-slate-600">Tel: {shopSettings?.phone || '077 076 076 7'}</p>
+                </div>
+              </div>
+
+              <div className="text-right">
+                <span className="px-3 py-1 bg-amber-100 text-amber-900 font-black text-xs rounded-full uppercase tracking-wider block mb-1">
+                  {t('Quotation Preview', 'මිල ගණන් පූර්ව දර්ශනය')}
+                </span>
+                <div className="text-sm font-black font-mono text-amber-600">{selectedQuotePreview.quote_no}</div>
+                <div className="text-xs font-bold text-slate-400">Date: {new Date(selectedQuotePreview.created_at).toLocaleDateString()}</div>
+                <div className="text-xs font-black text-emerald-600 mt-1">Validity: {selectedQuotePreview.validity_period || '30 Days'}</div>
+              </div>
+            </div>
+
+            {/* Customer Details Card */}
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">{t('Customer Name', 'පාරිභෝගිකයා')}</span>
+                <span className="text-xs font-black text-slate-800">{selectedQuotePreview.customer_name}</span>
+              </div>
+              <div>
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">{t('Phone Number', 'දුරකථන අංකය')}</span>
+                <span className="text-xs font-bold text-slate-700">{selectedQuotePreview.customer_phone || 'N/A'}</span>
+              </div>
+              <div>
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">{t('Address', 'ලිපිනය')}</span>
+                <span className="text-xs font-bold text-slate-700">{selectedQuotePreview.customer_address || 'N/A'}</span>
+              </div>
+            </div>
+
+            {/* Product Items Table */}
+            <div className="overflow-x-auto rounded-2xl border border-slate-200">
+              <table className="w-full text-xs text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-100 border-b border-slate-200 font-black text-slate-700 uppercase tracking-wider text-[10px]">
+                    <th className="p-3">#</th>
+                    <th className="p-3">{t('Product Description', 'භාණ්ඩ විස්තරය')}</th>
+                    <th className="p-3 text-center">{t('Qty', 'ප්‍රමාණය')}</th>
+                    <th className="p-3 text-right">{t('Unit Price', 'ඒකක මිල')}</th>
+                    <th className="p-3 text-right">{t('Line Total', 'එකතුව')}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(() => {
+                    const rawItems = typeof selectedQuotePreview.items === 'string'
+                      ? safeParseJson(selectedQuotePreview.items, [])
+                      : (Array.isArray(selectedQuotePreview.items) ? selectedQuotePreview.items : []);
+
+                    return rawItems.map((item: any, idx: number) => (
+                      <tr key={idx} className="hover:bg-slate-50">
+                        <td className="p-3 font-mono font-bold text-slate-400">{idx + 1}</td>
+                        <td className="p-3 font-bold text-slate-800">
+                          {item.productName || item.name}
+                          {item.unit && <span className="ml-1.5 px-1.5 py-0.5 bg-amber-50 text-amber-800 text-[9px] font-bold rounded">{item.unit}</span>}
+                          {(item.barcode || item.sku) && <div className="text-[9px] font-mono text-slate-400">Code: {item.barcode || item.sku}</div>}
+                        </td>
+                        <td className="p-3 text-center font-black text-slate-700">{item.qty}</td>
+                        <td className="p-3 text-right font-semibold text-slate-600">{symbol} {convert(item.price).toLocaleString()}</td>
+                        <td className="p-3 text-right font-black text-slate-900">{symbol} {convert(item.total).toLocaleString()}</td>
+                      </tr>
+                    ));
+                  })()}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Financial Summary */}
+            <div className="flex justify-end">
+              <div className="w-full md:w-72 bg-amber-50/70 p-4 rounded-2xl border border-amber-200/80 space-y-1.5 text-xs font-bold">
+                {selectedQuotePreview.subtotal && selectedQuotePreview.subtotal > 0 && selectedQuotePreview.subtotal !== selectedQuotePreview.total && (
+                  <div className="flex justify-between text-slate-600">
+                    <span>{t('Subtotal:', 'උප එකතුව:')}</span>
+                    <span>{symbol} {convert(selectedQuotePreview.subtotal).toLocaleString()}</span>
+                  </div>
+                )}
+                {selectedQuotePreview.discount_amount && selectedQuotePreview.discount_amount > 0 && (
+                  <div className="flex justify-between text-rose-600">
+                    <span>{t('Discount:', 'වට්ටම:')}</span>
+                    <span>-{symbol} {convert(selectedQuotePreview.discount_amount).toLocaleString()}</span>
+                  </div>
+                )}
+                {selectedQuotePreview.transportation_fee && selectedQuotePreview.transportation_fee > 0 && (
+                  <div className="flex justify-between text-blue-600">
+                    <span>{t('Transportation:', 'ප්‍රවාහන ගාස්තු:')}</span>
+                    <span>+{symbol} {convert(selectedQuotePreview.transportation_fee).toLocaleString()}</span>
+                  </div>
+                )}
+                {selectedQuotePreview.tax_amount && selectedQuotePreview.tax_amount > 0 && (
+                  <div className="flex justify-between text-amber-800">
+                    <span>{t('Tax:', 'බදු:')}</span>
+                    <span>+{symbol} {convert(selectedQuotePreview.tax_amount).toLocaleString()}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-sm font-black text-amber-950 border-t border-amber-300 pt-2 mt-1">
+                  <span>{t('Grand Total:', 'මුළු එකතුව:')}</span>
+                  <span className="text-amber-600">{symbol} {convert(selectedQuotePreview.total).toLocaleString()}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer Actions */}
+            <div className="flex justify-end gap-3 border-t border-slate-100 pt-4">
+              <button
+                type="button"
+                onClick={() => setShowQuotePreviewModal(false)}
+                className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs uppercase"
+              >
+                {t('Close', 'වහන්න')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const htmlContent = generateQuotePrintHTML(selectedQuotePreview, isSinhala, shopSettings);
+                  const iframe = document.createElement('iframe');
+                  iframe.style.position = 'fixed';
+                  iframe.style.right = '0';
+                  iframe.style.bottom = '0';
+                  iframe.style.width = '0';
+                  iframe.style.height = '0';
+                  iframe.style.border = '0';
+                  document.body.appendChild(iframe);
+                  const doc = iframe.contentWindow?.document || iframe.contentDocument;
+                  if (doc) {
+                    doc.open();
+                    doc.write(htmlContent);
+                    doc.close();
+                  }
+                  setTimeout(() => {
+                    iframe.contentWindow?.focus();
+                    iframe.contentWindow?.print();
+                    setTimeout(() => {
+                      if (document.body.contains(iframe)) document.body.removeChild(iframe);
+                    }, 1000);
+                  }, 300);
+                }}
+                className="px-6 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider shadow-md flex items-center gap-1.5"
+              >
+                <PrinterIcon className="w-4 h-4" />
+                {t('Print Quotation', 'මුද්‍රණය කරන්න')}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Credit Note Usage History Modal */}
+      {showCreditNoteUsageModal && (
+        <Modal
+          isOpen={showCreditNoteUsageModal}
+          onClose={() => setShowCreditNoteUsageModal(false)}
+          title={t('Credit Note Usage History & Audit Trail', 'ණය සටහන් භාවිත ඉතිහාසය සහ විගණන ලොගය')}
+          size="xl"
+        >
+          <div className="space-y-4">
+            {selectedCreditNotePreview && (
+              <div className="bg-amber-50/70 border border-amber-200 p-4 rounded-2xl flex flex-wrap justify-between items-center gap-4">
+                <div>
+                  <span className="text-[10px] font-black text-amber-800 uppercase tracking-widest block">{t('Credit Note Code', 'ණය සටහන් අංකය')}</span>
+                  <span className="text-lg font-black font-mono text-amber-900">
+                    💳 {selectedCreditNotePreview.creditNoteNo || selectedCreditNotePreview.credit_note_no || selectedCreditNotePreview.code || selectedCreditNotePreview.id}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest block">{t('Customer', 'පාරිභෝගිකයා')}</span>
+                  <span className="text-sm font-bold text-slate-800">{selectedCreditNotePreview.customerName || selectedCreditNotePreview.customer_name || 'Guest Customer'}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest block">{t('Original Credit', 'මුළු ණය මුදල')}</span>
+                  <span className="text-sm font-black text-slate-900 font-mono">
+                    {symbol} {convert(selectedCreditNotePreview.amount || selectedCreditNotePreview.value || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-black text-amber-700 uppercase tracking-widest block">{t('Total Used', 'භාවිත කළ මුදල')}</span>
+                  <span className="text-sm font-black text-amber-800 font-mono">
+                    {symbol} {convert(Math.max(0, Number(selectedCreditNotePreview.amount || selectedCreditNotePreview.value || 0) - Number(selectedCreditNotePreview.balance_remaining !== undefined ? selectedCreditNotePreview.balance_remaining : (selectedCreditNotePreview.balanceRemaining || 0)))).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest block">{t('Current Available Balance', 'ඉතිරි ශේෂය')}</span>
+                  <span className="text-base font-black text-emerald-700 font-mono">
+                    {symbol} {convert(selectedCreditNotePreview.balance_remaining !== undefined ? selectedCreditNotePreview.balance_remaining : (selectedCreditNotePreview.balanceRemaining || 0)).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="overflow-x-auto rounded-2xl border border-slate-200">
+              <table className="w-full text-xs text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-100 border-b border-slate-200 font-black text-slate-600 uppercase tracking-wider text-[9px]">
+                    <th className="p-3">{t('Date / Time', 'දිනය / වේලාව')}</th>
+                    <th className="p-3">{t('Invoice / Ref', 'ඉන්වොයිසි අංකය')}</th>
+                    <th className="p-3">{t('Action', 'ක්‍රියාව')}</th>
+                    <th className="p-3 text-right">{t('Prev Balance', 'පෙර ශේෂය')}</th>
+                    <th className="p-3 text-right">{t('Amount Applied', 'භාවිතා කල මුදල')}</th>
+                    <th className="p-3 text-right">{t('Remaining Balance', 'ඉතිරි ශේෂය')}</th>
+                    <th className="p-3 text-center">{t('User / Cashier', 'පරිශීලක')}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {loadingCNUsage ? (
+                    <tr>
+                      <td colSpan={7} className="p-8 text-center text-slate-400 font-bold">
+                        <Loader2Icon className="w-6 h-6 animate-spin mx-auto mb-2 text-amber-500" />
+                        {t('Loading usage history...', 'භාවිත ඉතිහාසය පූරණය වෙමින් පවතී...')}
+                      </td>
+                    </tr>
+                  ) : creditNoteUsageLogs.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="p-8 text-center text-slate-400 font-bold">
+                        {t('No usage transactions recorded for this credit note yet.', 'මෙම ණය සටහන සඳහා තවමත් ගනුදෙනු කිසිවක් නොමැත.')}
+                      </td>
+                    </tr>
+                  ) : (
+                    creditNoteUsageLogs.map((log) => (
+                      <tr key={log.id} className="hover:bg-slate-50 font-medium">
+                        <td className="p-3 text-slate-600 font-bold whitespace-nowrap">
+                          {new Date(log.created_at).toLocaleString()}
+                        </td>
+                        <td className="p-3 font-mono font-bold text-indigo-700">
+                          {log.invoice_no || 'N/A'}
+                        </td>
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                            log.action === 'cash_refund' ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
+                          }`}>
+                            {log.action === 'cash_refund' ? t('Cash Refund', 'මුදල් ආපසු ගෙවීම') : t('Applied to Sale', 'විකුණුමට භාවිතා කරන ලදී')}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right font-mono text-slate-600 font-bold">
+                          {symbol} {convert(log.previous_balance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-3 text-right font-mono font-black text-amber-600">
+                          {symbol} {convert(log.amount_applied).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-3 text-right font-mono font-black text-emerald-700">
+                          {symbol} {convert(log.remaining_balance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-3 text-center text-slate-500 font-bold text-[10px]">
+                          {log.user_email || 'system'}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setShowCreditNoteUsageModal(false)}
+                className="px-5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs"
+              >
+                {t('Close', 'වසා දමන්න')}
               </button>
             </div>
           </div>

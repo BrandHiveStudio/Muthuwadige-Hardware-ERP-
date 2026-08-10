@@ -79,10 +79,15 @@ export interface SaleOrder {
   credit_period_days?: number;
   payment_received?: number;
   transportation_fee?: number;
+  transportationFee?: number;
   customer_phone?: string;
   customerPhone?: string;
   customer_address?: string;
   customerAddress?: string;
+  credit_note_applied?: number;
+  creditNoteApplied?: number;
+  credit_note_code?: string;
+  creditNoteCode?: string;
 }
 
 export interface PurchaseItem {
@@ -158,8 +163,18 @@ export interface Quotation {
   id: string;
   quote_no: string;
   customer_name: string;
-  items: string; // JSON string representation of SaleItem[]
+  customer_phone?: string;
+  customer_address?: string;
+  validity_period?: string;
+  items: string | SaleItem[];
+  subtotal?: number;
+  discount_type?: 'amount' | 'percentage';
+  discount_value?: number;
+  discount_amount?: number;
+  transportation_fee?: number;
+  tax_amount?: number;
   total: number;
+  status?: string;
   created_at: string;
 }
 
@@ -174,12 +189,26 @@ export interface DeliveryNote {
 
 export interface SalesReturn {
   id: string;
+  returnNo?: string;
+  return_no?: string;
   invoiceNo: string;
   invoice_no?: string;
+  customerName?: string;
+  customer_name?: string;
+  customerPhone?: string;
+  customer_phone?: string;
   returnedItems: SaleItem[];
+  exchangeItems?: SaleItem[];
   returnMethod: 'Cash Refund' | 'Exchange' | 'Credit Note';
+  returnAmount?: number;
+  exchangeAmount?: number;
+  balanceAmount?: number;
   totalRefunded: number;
+  customerPaid?: number;
+  changeGiven?: number;
+  creditNoteNo?: string;
   userId?: string;
+  user_id?: string;
   status?: string;
   reason?: string;
   created_at: string;
@@ -187,11 +216,41 @@ export interface SalesReturn {
 
 export interface CreditNote {
   id: string;
-  code: string;
+  creditNoteNo?: string;
+  credit_note_no?: string;
+  code?: string;
+  invoiceNo?: string;
+  invoice_no?: string;
+  customerId?: string;
+  customer_id?: string;
+  customerName?: string;
+  customer_name?: string;
+  customerPhone?: string;
+  customer_phone?: string;
+  items?: SaleItem[] | string;
+  amount?: number;
+  value?: number;
+  balanceRemaining?: number;
+  balance_remaining?: number;
+  status: 'active' | 'Active' | 'partially_used' | 'Partially Used' | 'fully_used' | 'Fully Used' | 'used' | 'redeemed' | 'expired' | 'voided';
+  reason?: string;
+  userId?: string;
+  user_id?: string;
+  redeemed_invoice?: string;
+  created_at: string;
+}
+
+export interface CreditNoteUsage {
+  id: string;
+  credit_note_no: string;
+  invoice_no?: string;
   customer_id?: string;
   customer_name?: string;
-  value: number;
-  status: 'active' | 'redeemed' | 'expired';
-  redeemed_invoice?: string;
+  customer_phone?: string;
+  amount_applied: number;
+  previous_balance: number;
+  remaining_balance: number;
+  action?: 'applied' | 'cash_refund';
+  user_email?: string;
   created_at: string;
 }
