@@ -1041,7 +1041,6 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
     let purchaseOrders = await db.all('SELECT * FROM purchase_orders');
     let stockAdjustments = await db.all('SELECT * FROM stock_adjustments');
     let quotations = await db.all('SELECT * FROM quotations');
-    let deliveryNotes = await db.all('SELECT * FROM delivery_notes');
     const branches = await db.all('SELECT * FROM branches');
 
     const isWithinDateRange = (dateVal) => {
@@ -1075,7 +1074,6 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
       purchaseOrders = purchaseOrders.filter(po => isWithinDateRange(po.created_at));
       stockAdjustments = stockAdjustments.filter(sa => isWithinDateRange(sa.created_at));
       quotations = quotations.filter(q => isWithinDateRange(q.created_at));
-      deliveryNotes = deliveryNotes.filter(dn => isWithinDateRange(dn.created_at));
     }
 
     // 1. Calculate dashboard statistics for the beautiful Overview page
@@ -1125,9 +1123,33 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
           });
         }
       } catch (err) {
-        console.warn("Failed to parse items for profit calculation in backup", err);
+        console.warn("Failed to parse items for profit calculation", err);
       }
     });
+
+    // Payment Method Breakdown
+    let cashAmount = 0;
+    let cardAmount = 0;
+    let creditAmount = 0;
+    let bankTransferAmount = 0;
+
+    sales.filter(s => s.status?.toUpperCase() !== 'CANCELLED').forEach(s => {
+      const amt = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
+      const rawMethod = (s.payment_method || s.paymentMethod || '').toString().trim();
+      const methodLower = rawMethod.toLowerCase();
+      const statusStr = (s.status || '').toString();
+
+      if (methodLower === 'card') {
+        cardAmount += amt;
+      } else if (methodLower === 'bank transfer' || methodLower === 'bank' || methodLower === 'banktransfer' || methodLower === 'online') {
+        bankTransferAmount += amt;
+      } else if (methodLower === 'credit' || statusStr === 'Non Paid' || statusStr === 'Non-Paid' || statusStr === 'pending') {
+        creditAmount += amt;
+      } else {
+        cashAmount += amt;
+      }
+    });
+    const paymentTotal = cashAmount + cardAmount + creditAmount + bankTransferAmount;
 
     // Scan all dates to find min and max date when fromDate and/or toDate are not provided
     let minDate = null;
@@ -1212,59 +1234,71 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
     const valB12 = products.reduce((sum, p) => sum + ((p.stock || 0) * (p.cost_price || 0)), 0);
 
     const overviewRows = [
-      ["HARDWARE SHOP ACCOUNT DASHBOARD", "", "", "", "", "", "", "", ""],
+      ["MUTHUWADIGE HARDWARE - BUSINESS & ACCOUNTING BACKUP REPORT", "", "", "", "", "", "", "", ""],
       ["", "", "", "", "", "", "", "", ""],
-      ["Month Start", "Month End", "", "", "", "", "", "", ""],
+      ["Report Start Date", "Report End Date", "", "", "", "", "", "", ""],
       [finalStart, finalEnd, "", "", "", "", "", "", ""],
       ["", "", "", "", "", "", "", "", ""],
-      ["Total Sales", "", "", "", "", "", "", "", ""],
+      ["KEY BUSINESS METRICS (ERP SUMMARY)", "", "", "", "", "", "", "", ""],
+      ["Total Sales Revenue", "", "", "", "", "", "", "", ""],
       ["Cash Received", "", "", "", "", "", "", "", ""],
-      ["Customer Credit\nOutstanding", "", "", "", "", "", "", "", ""],
+      ["Customer Credit Outstanding", "", "", "", "", "", "", "", ""],
       ["Total Purchases", "", "", "", "", "", "", "", ""],
       ["Net Profit", "", "", "", "", "", "", "", ""],
       ["Total Stock Value", "", "", "", "", "", "", "", ""],
       ["", "", "", "", "", "", "", "", ""],
-      ["Useful Notes", "", "", "", "", "", "", "", ""],
-      ["Use Sales sheet for daily sales and customer payments.", "", "", "", "", "", "", "", ""],
-      ["Use Purchases sheet for supplier bills and payments.", "", "", "", "", "", "", "", ""],
-      ["Use Stock sheet to track opening stock, purchases, sales and current balance.", "", "", "", "", "", "", "", ""],
-      ["Dashboard updates automatically using current month transactions.", "", "", "", "", "", "", "", ""]
+      ["PAYMENT METHOD BREAKDOWN", "", "", "", "", "", "", "", ""],
+      ["Cash Amount", "", "", "", "", "", "", "", ""],
+      ["Card Amount", "", "", "", "", "", "", "", ""],
+      ["Credit Amount", "", "", "", "", "", "", "", ""],
+      ["Bank Transfer Amount", "", "", "", "", "", "", "", ""],
+      ["Total Payment Methods", "", "", "", "", "", "", "", ""],
+      ["", "", "", "", "", "", "", "", ""],
+      ["REMARKS & USEFUL NOTES", "", "", "", "", "", "", "", ""],
+      ["• Sales sheet contains daily invoices, customer payments, and payment methods.", "", "", "", "", "", "", "", ""],
+      ["• Inventory Stock sheet provides real-time stock quantities and market valuations.", "", "", "", "", "", "", "", ""],
+      ["• Accounting Ledger contains all business expense and income transaction records.", "", "", "", "", "", "", "", ""],
+      ["• Report figures are generated directly from Muthuwadige Hardware ERP.", "", "", "", "", "", "", "", ""]
     ];
 
     const wsOverview = XLSX.utils.aoa_to_sheet(overviewRows);
     wsOverview['!cols'] = [
-      { wch: 30 }, { wch: 20 }, { wch: 5 }, 
+      { wch: 34 }, { wch: 24 }, { wch: 5 }, 
       { wch: 15 }, { wch: 15 }, { wch: 15 }, 
       { wch: 15 }, { wch: 15 }, { wch: 15 }
     ];
 
     wsOverview['!merges'] = [
       { s: { r: 0, c: 0 }, e: { r: 1, c: 8 } },
-      { s: { r: 12, c: 0 }, e: { r: 12, c: 8 } },
+      { s: { r: 5, c: 0 }, e: { r: 5, c: 8 } },
       { s: { r: 13, c: 0 }, e: { r: 13, c: 8 } },
-      { s: { r: 14, c: 0 }, e: { r: 14, c: 8 } },
-      { s: { r: 15, c: 0 }, e: { r: 15, c: 8 } },
-      { s: { r: 16, c: 0 }, e: { r: 16, c: 8 } }
+      { s: { r: 20, c: 0 }, e: { r: 20, c: 8 } },
+      { s: { r: 21, c: 0 }, e: { r: 21, c: 8 } },
+      { s: { r: 22, c: 0 }, e: { r: 22, c: 8 } },
+      { s: { r: 23, c: 0 }, e: { r: 23, c: 8 } },
+      { s: { r: 24, c: 0 }, e: { r: 24, c: 8 } }
     ];
 
-    // Set dynamic date cell values as numbers formatted as yyyy-mm-dd
     wsOverview['A4'] = { t: 'n', v: getExcelDecimalDate(finalStart), z: 'yyyy-mm-dd' };
     wsOverview['B4'] = { t: 'n', v: getExcelDecimalDate(finalEnd), z: 'yyyy-mm-dd' };
 
-    // Set dynamic formulas with initial pre-calculated values
-    wsOverview['B6'] = { t: 'n', v: valB6, f: "SUMIFS('Sales & Invoices'!K:K, 'Sales & Invoices'!Q:Q, \">=\"&A4, 'Sales & Invoices'!Q:Q, \"<=\"&B4, 'Sales & Invoices'!N:N, \"<>CANCELLED\")", z: '#,##0.00' };
-    wsOverview['B7'] = { t: 'n', v: valB7, f: "B6-B8", z: '#,##0.00' };
-    wsOverview['B8'] = { t: 'n', v: valB8, f: "SUMIFS('Sales & Invoices'!M:M, 'Sales & Invoices'!Q:Q, \">=\"&A4, 'Sales & Invoices'!Q:Q, \"<=\"&B4, 'Sales & Invoices'!N:N, \"<>CANCELLED\")", z: '#,##0.00' };
-    wsOverview['B9'] = { t: 'n', v: valB9, f: "SUMIFS('Purchase Orders'!G:G, 'Purchase Orders'!J:J, \">=\"&A4, 'Purchase Orders'!J:J, \"<=\"&B4, 'Purchase Orders'!H:H, \"<>CANCELLED\")", z: '#,##0.00' };
-    wsOverview['B10'] = { t: 'n', v: valB11, f: "B6-SUMIFS('Sales & Invoices'!T:T, 'Sales & Invoices'!Q:Q, \">=\"&A4, 'Sales & Invoices'!Q:Q, \"<=\"&B4, 'Sales & Invoices'!N:N, \"<>CANCELLED\")", z: '#,##0.00' };
-    wsOverview['B11'] = { t: 'n', v: valB12, f: "SUM('Inventory Stock'!O:O)", z: '#,##0.00' };
+    wsOverview['B7'] = { t: 'n', v: valB6, f: "SUMIFS('Sales & Invoices'!G:G, 'Sales & Invoices'!L:L, \">=\"&A4, 'Sales & Invoices'!L:L, \"<=\"&B4, 'Sales & Invoices'!J:J, \"<>CANCELLED\")", z: '#,##0.00' };
+    wsOverview['B8'] = { t: 'n', v: valB7, f: "B7-B9", z: '#,##0.00' };
+    wsOverview['B9'] = { t: 'n', v: valB8, f: "SUMIFS('Sales & Invoices'!I:I, 'Sales & Invoices'!L:L, \">=\"&A4, 'Sales & Invoices'!L:L, \"<=\"&B4, 'Sales & Invoices'!J:J, \"<>CANCELLED\")", z: '#,##0.00' };
+    wsOverview['B10'] = { t: 'n', v: valB9, f: "SUMIFS('Purchase Orders'!D:D, 'Purchase Orders'!G:G, \">=\"&A4, 'Purchase Orders'!G:G, \"<=\"&B4, 'Purchase Orders'!E:E, \"<>CANCELLED\")", z: '#,##0.00' };
+    wsOverview['B11'] = { t: 'n', v: valB11, f: "B7-SUMIFS('Sales & Invoices'!O:O, 'Sales & Invoices'!L:L, \">=\"&A4, 'Sales & Invoices'!L:L, \"<=\"&B4, 'Sales & Invoices'!J:J, \"<>CANCELLED\")", z: '#,##0.00' };
+    wsOverview['B12'] = { t: 'n', v: valB12, f: "SUM('Inventory Stock'!I:I)", z: '#,##0.00' };
 
+    wsOverview['B15'] = { t: 'n', v: cashAmount, z: '#,##0.00' };
+    wsOverview['B16'] = { t: 'n', v: cardAmount, z: '#,##0.00' };
+    wsOverview['B17'] = { t: 'n', v: creditAmount, z: '#,##0.00' };
+    wsOverview['B18'] = { t: 'n', v: bankTransferAmount, z: '#,##0.00' };
+    wsOverview['B19'] = { t: 'n', v: paymentTotal, f: "SUM(B15:B18)", z: '#,##0.00' };
 
-    // Helper to calculate column widths dynamically to prevent ### and clipping
     const setColWidths = (ws, structuredData, headers) => {
       if (!structuredData || structuredData.length === 0) {
         if (headers) {
-          ws['!cols'] = headers.map(h => ({ wch: Math.max(h.toString().length + 4, 12) }));
+          ws['!cols'] = headers.map(h => ({ wch: Math.max(h.toString().length + 6, 16) }));
         }
         return;
       }
@@ -1278,7 +1312,7 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
             if (valLen > maxLen) maxLen = valLen;
           }
         });
-        return { wch: Math.min(Math.max(maxLen + 4, 12), 40) };
+        return { wch: Math.min(Math.max(maxLen + 6, 16), 55) };
       });
     };
 
@@ -1289,16 +1323,15 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
       return XLSX.utils.json_to_sheet(structuredData);
     };
 
-    // Styling helpers for xlsx-js-style to create colored and professional tables
-    const applyTableStyles = (ws, themeColor) => {
+    const applyTableStyles = (ws, themeColor = "1E3A8A") => {
       const ref = ws['!ref'];
       if (!ref) return;
-      
       const range = XLSX.utils.decode_range(ref);
       const headerRow = range.s.r;
-
-      // Find which column indices correspond to dates
+      ws['!rows'] = ws['!rows'] || [];
+      ws['!rows'][headerRow] = { hpt: 28 };
       const dateColIndices = [];
+      const amountColIndices = [];
       for (let col = range.s.c; col <= range.e.c; col++) {
         const cellRef = XLSX.utils.encode_cell({ r: headerRow, c: col });
         const cell = ws[cellRef];
@@ -1307,10 +1340,11 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
           if (label.includes('date') || label.includes('time') || label.includes('timestamp')) {
             dateColIndices.push(col);
           }
+          if (label.includes('(rs.)') || label.includes('price') || label.includes('cost') || label.includes('subtotal') || label.includes('discount') || label.includes('tax amount') || label.includes('total amount') || label.includes('balance') || label.includes('value') || label.includes('salary')) {
+            amountColIndices.push(col);
+          }
         }
       }
-      
-      // 1. Style Header Row (Row 0) with a premium colored header
       for (let col = range.s.c; col <= range.e.c; col++) {
         const cellRef = XLSX.utils.encode_cell({ r: range.s.r, c: col });
         const cell = ws[cellRef];
@@ -1320,46 +1354,62 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
             fill: { fgColor: { rgb: themeColor } }, 
             alignment: { vertical: "center", horizontal: "center", wrapText: true },
             border: {
-              bottom: { style: "medium", color: { rgb: "333333" } },
-              top: { style: "thin", color: { rgb: "E2E8F0" } },
-              left: { style: "thin", color: { rgb: "E2E8F0" } },
-              right: { style: "thin", color: { rgb: "E2E8F0" } }
+              bottom: { style: "medium", color: { rgb: "0F172A" } },
+              top: { style: "thin", color: { rgb: "94A3B8" } },
+              left: { style: "thin", color: { rgb: "94A3B8" } },
+              right: { style: "thin", color: { rgb: "94A3B8" } }
             }
           };
         }
       }
-
-      // 2. Style Data Rows (alternate backgrounds for zebra-striping)
       for (let row = range.s.r + 1; row <= range.e.r; row++) {
+        ws['!rows'][row] = { hpt: 22 };
+        const firstCellRef = XLSX.utils.encode_cell({ r: row, c: range.s.c });
+        const firstCell = ws[firstCellRef];
+        const isTotalRow = firstCell && String(firstCell.v).toUpperCase().includes("TOTAL");
         const isEven = (row % 2 === 0);
         for (let col = range.s.c; col <= range.e.c; col++) {
           const cellRef = XLSX.utils.encode_cell({ r: row, c: col });
           const cell = ws[cellRef];
           if (cell) {
-            const bgColor = isEven ? "F8FAFC" : "FFFFFF"; // alternate row colors
-            
             let alignment = "left";
             if (typeof cell.v === 'number') {
               alignment = "right";
             }
-            
-            // If it's a date column and has a numeric value, format it as date in Excel
             if (dateColIndices.includes(col) && typeof cell.v === 'number') {
               cell.z = 'yyyy-mm-dd';
               alignment = "center";
             }
-
-            cell.s = {
-              font: { name: "Segoe UI", sz: 10, color: { rgb: "334155" } },
-              fill: { fgColor: { rgb: bgColor } },
-              alignment: { vertical: "center", horizontal: alignment },
-              border: {
-                bottom: { style: "thin", color: { rgb: "F1F5F9" } },
-                top: { style: "thin", color: { rgb: "F1F5F9" } },
-                left: { style: "thin", color: { rgb: "F1F5F9" } },
-                right: { style: "thin", color: { rgb: "F1F5F9" } }
-              }
-            };
+            if (amountColIndices.includes(col) && typeof cell.v === 'number') {
+              cell.z = '#,##0.00';
+              alignment = "right";
+            }
+            if (isTotalRow) {
+              cell.s = {
+                font: { bold: true, name: "Segoe UI", sz: 11, color: { rgb: "0F172A" } },
+                fill: { fgColor: { rgb: "E0F2FE" } },
+                alignment: { vertical: "center", horizontal: alignment },
+                border: {
+                  top: { style: "thin", color: { rgb: "0284C7" } },
+                  bottom: { style: "double", color: { rgb: "0369A1" } },
+                  left: { style: "thin", color: { rgb: "BAE6FD" } },
+                  right: { style: "thin", color: { rgb: "BAE6FD" } }
+                }
+              };
+            } else {
+              const bgColor = isEven ? "F8FAFC" : "FFFFFF";
+              cell.s = {
+                font: { name: "Segoe UI", sz: 11, color: { rgb: "1E293B" } },
+                fill: { fgColor: { rgb: bgColor } },
+                alignment: { vertical: "center", horizontal: alignment },
+                border: {
+                  bottom: { style: "thin", color: { rgb: "E2E8F0" } },
+                  top: { style: "thin", color: { rgb: "E2E8F0" } },
+                  left: { style: "thin", color: { rgb: "E2E8F0" } },
+                  right: { style: "thin", color: { rgb: "E2E8F0" } }
+                }
+              };
+            }
           }
         }
       }
@@ -1369,69 +1419,70 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
       const ref = ws['!ref'];
       if (!ref) return;
       const range = XLSX.utils.decode_range(ref);
-      
+      ws['!rows'] = ws['!rows'] || [];
+      ws['!rows'][0] = { hpt: 36 };
+      ws['!rows'][1] = { hpt: 36 };
       for (let row = range.s.r; row <= range.e.r; row++) {
+        if (row >= 2) ws['!rows'][row] = { hpt: 24 };
         for (let col = range.s.c; col <= range.e.c; col++) {
           const cellRef = XLSX.utils.encode_cell({ r: row, c: col });
           const cell = ws[cellRef];
           if (!cell) continue;
-
-          // Default font
           cell.s = {
-            font: { name: "Segoe UI", sz: 10, color: { rgb: "334155" } }
+            font: { name: "Segoe UI", sz: 11, color: { rgb: "1E293B" } }
           };
-
-          // 1. Banner Title (A1:I2)
           if (row === 0 || row === 1) {
             cell.s = {
-              font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 16 },
-              fill: { fgColor: { rgb: "581C87" } }, // royal purple
+              font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 18 },
+              fill: { fgColor: { rgb: "1E1B4B" } },
               alignment: { vertical: "center", horizontal: "center" }
             };
           }
-          // 2. Month Start & Month End Headers (A3:B3)
           else if (row === 2 && (col === 0 || col === 1)) {
             cell.s = {
-              font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 10 },
-              fill: { fgColor: { rgb: "581C87" } },
+              font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 11 },
+              fill: { fgColor: { rgb: "312E81" } },
               alignment: { vertical: "center", horizontal: "center" }
             };
           }
-          // 3. Month Date Values (A4:B4)
           else if (row === 3 && (col === 0 || col === 1)) {
             cell.s = {
-              font: { name: "Segoe UI", sz: 10, bold: true },
+              font: { name: "Segoe UI", sz: 11, bold: true, color: { rgb: "1E1B4B" } },
+              fill: { fgColor: { rgb: "F3E8FF" } },
               alignment: { vertical: "center", horizontal: "center" },
               border: {
-                bottom: { style: "thin", color: { rgb: "E2E8F0" } },
-                top: { style: "thin", color: { rgb: "E2E8F0" } },
-                left: { style: "thin", color: { rgb: "E2E8F0" } },
-                right: { style: "thin", color: { rgb: "E2E8F0" } }
+                bottom: { style: "thin", color: { rgb: "C084FC" } },
+                top: { style: "thin", color: { rgb: "C084FC" } },
+                left: { style: "thin", color: { rgb: "C084FC" } },
+                right: { style: "thin", color: { rgb: "C084FC" } }
               }
             };
           }
-          // 4. KPI Table (Rows 6-11, columns A and B)
-          else if (row >= 5 && row <= 10 && (col === 0 || col === 1)) {
+          else if ((row === 5 || row === 13) && col >= 0 && col <= 8) {
+            cell.s = {
+              font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 12 },
+              fill: { fgColor: { rgb: "312E81" } },
+              alignment: { vertical: "center", horizontal: "left" }
+            };
+          }
+          else if (((row >= 6 && row <= 11) || (row >= 14 && row <= 17)) && (col === 0 || col === 1)) {
             const isLeftColumn = (col === 0);
-            
             if (isLeftColumn) {
-              // Light purple background with dark purple text
               cell.s = {
-                font: { bold: true, color: { rgb: "3B0764" }, name: "Segoe UI", sz: 10 },
-                fill: { fgColor: { rgb: "F3E8FF" } },
-                alignment: { vertical: "center", horizontal: "center", wrapText: true },
+                font: { bold: true, color: { rgb: "1E1B4B" }, name: "Segoe UI", sz: 11 },
+                fill: { fgColor: { rgb: "F5F3FF" } },
+                alignment: { vertical: "center", horizontal: "left" },
                 border: {
-                  bottom: { style: "thin", color: { rgb: "E9D5FF" } },
-                  top: { style: "thin", color: { rgb: "E9D5FF" } },
-                  left: { style: "thin", color: { rgb: "E9D5FF" } },
-                  right: { style: "thin", color: { rgb: "E9D5FF" } }
+                  bottom: { style: "thin", color: { rgb: "DDD6FE" } },
+                  top: { style: "thin", color: { rgb: "DDD6FE" } },
+                  left: { style: "thin", color: { rgb: "DDD6FE" } },
+                  right: { style: "thin", color: { rgb: "DDD6FE" } }
                 }
               };
             } else {
-              // Right value column: styled nicely with borders
               cell.s = {
-                font: { bold: true, name: "Segoe UI", sz: 10, color: { rgb: "0F172A" } },
-                fill: { fgColor: { rgb: "F1F5F9" } },
+                font: { bold: true, name: "Segoe UI", sz: 11, color: { rgb: "0F172A" } },
+                fill: { fgColor: { rgb: "FFFFFF" } },
                 alignment: { vertical: "center", horizontal: "right" },
                 border: {
                   bottom: { style: "thin", color: { rgb: "E2E8F0" } },
@@ -1442,18 +1493,30 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
               };
             }
           }
-          // 5. Useful Notes Header (A13)
-          else if (row === 12 && col >= 0 && col <= 8) {
+          else if (row === 18 && (col === 0 || col === 1)) {
+            const isLeftColumn = (col === 0);
             cell.s = {
-              font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 11 },
-              fill: { fgColor: { rgb: "581C87" } },
+              font: { bold: true, color: { rgb: "0369A1" }, name: "Segoe UI", sz: 12 },
+              fill: { fgColor: { rgb: "E0F2FE" } },
+              alignment: { vertical: "center", horizontal: isLeftColumn ? "left" : "right" },
+              border: {
+                top: { style: "thin", color: { rgb: "0284C7" } },
+                bottom: { style: "double", color: { rgb: "0369A1" } },
+                left: { style: "thin", color: { rgb: "BAE6FD" } },
+                right: { style: "thin", color: { rgb: "BAE6FD" } }
+              }
+            };
+          }
+          else if (row === 20 && col >= 0 && col <= 8) {
+            cell.s = {
+              font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 12 },
+              fill: { fgColor: { rgb: "312E81" } },
               alignment: { vertical: "center", horizontal: "left" }
             };
           }
-          // 6. Useful Notes details (Rows 14-17)
-          else if (row >= 13 && row <= 16 && col >= 0 && col <= 8) {
+          else if (row >= 21 && row <= 24 && col >= 0 && col <= 8) {
             cell.s = {
-              font: { name: "Segoe UI", sz: 9.5, italic: true, color: { rgb: "475569" } },
+              font: { name: "Segoe UI", sz: 10, italic: true, color: { rgb: "475569" } },
               alignment: { vertical: "center", horizontal: "left" }
             };
           }
@@ -1461,42 +1524,43 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
       }
     };
 
-    // 2. Map and structure tables for beautiful presentation
-
-    // A. Inventory (Gold Theme: DAA520)
-    const structuredInventory = products.map(p => {
-      const minStock = p.min_stock !== undefined ? p.min_stock : 10;
-      return {
-        "Product ID": p.id,
-        "Product SKU": p.sku || '---',
-        "Item Name": p.name,
-        "Category": p.category || 'Other',
-        "Base Retail Price (Rs.)": p.price || 0,
-        "Base Cost Price (Rs.)": p.cost_price || 0,
-        "Current Stock Level": p.stock || 0,
-        "Measurement Unit": p.unit || 'pcs',
-        "Min Stock Threshold": minStock,
-        "Brand": p.brand || '',
-        "Supplier Entity": p.supplier || '',
-        "Barcode": p.barcode || '',
-        "Serial Number": p.serial_no || '',
-        "Batch Code": p.batch_code || '',
-        "Total Cost Value (Rs.)": (p.stock || 0) * (p.cost_price || 0),
-        "Total Market Value (Rs.)": (p.stock || 0) * (p.price || 0)
-      };
-    });
+    const structuredInventory = products.map(p => ({
+      "Item Name": p.name,
+      "Category": p.category || 'Other',
+      "Base Retail Price (Rs.)": p.price || 0,
+      "Base Cost Price (Rs.)": p.cost_price || 0,
+      "Current Stock Level": p.stock || 0,
+      "Measurement Unit": p.unit || 'pcs',
+      "Brand": p.brand || '',
+      "Supplier Entity": p.supplier || '',
+      "Total Cost Value (Rs.)": (p.stock || 0) * (p.cost_price || 0),
+      "Total Market Value (Rs.)": (p.stock || 0) * (p.price || 0)
+    }));
+    if (structuredInventory.length > 0) {
+      const costValSum = products.reduce((sum, p) => sum + ((p.stock || 0) * (p.cost_price || 0)), 0);
+      const marketValSum = products.reduce((sum, p) => sum + ((p.stock || 0) * (p.price || 0)), 0);
+      structuredInventory.push({
+        "Item Name": "TOTAL",
+        "Category": "",
+        "Base Retail Price (Rs.)": null,
+        "Base Cost Price (Rs.)": null,
+        "Current Stock Level": null,
+        "Measurement Unit": "",
+        "Brand": "",
+        "Supplier Entity": "",
+        "Total Cost Value (Rs.)": costValSum,
+        "Total Market Value (Rs.)": marketValSum
+      });
+    }
     const wsInventoryHeaders = [
-      "Product ID", "Product SKU", "Item Name", "Category", 
-      "Base Retail Price (Rs.)", "Base Cost Price (Rs.)", "Current Stock Level", 
-      "Measurement Unit", "Min Stock Threshold", "Brand", "Supplier Entity", 
-      "Barcode", "Serial Number", "Batch Code", "Total Cost Value (Rs.)", 
-      "Total Market Value (Rs.)"
+      "Item Name", "Category", "Base Retail Price (Rs.)", "Base Cost Price (Rs.)", 
+      "Current Stock Level", "Measurement Unit", "Brand", "Supplier Entity", 
+      "Total Cost Value (Rs.)", "Total Market Value (Rs.)"
     ];
     const wsInventory = createWorksheet(structuredInventory, wsInventoryHeaders);
     setColWidths(wsInventory, structuredInventory, wsInventoryHeaders);
-    applyTableStyles(wsInventory, "581C87");
+    applyTableStyles(wsInventory, "1E3A8A");
 
-    // B. Sales Orders (Ash Theme: 464646)
     const structuredSales = sales.map(s => {
       let itemsList = '---';
       try {
@@ -1504,27 +1568,20 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
         if (Array.isArray(items)) {
           itemsList = items.map(it => `${it.productName || it.name || 'Item'} (x${it.qty || 1})`).join(', ');
         }
-      } catch (e) {
-        console.warn("Failed to parse items for sales export", e);
-      }
+      } catch (e) {}
 
       return {
-        "Sale ID": s.id,
         "Invoice Number": s.invoice_no,
-        "Customer ID": s.customer_id || '',
         "Customer Name": s.customer_name || 'Guest Customer',
-        "Products Sold (Text)": itemsList,
-        "Sold Items (JSON)": typeof s.items === 'string' ? s.items : JSON.stringify(s.items),
+        "Products Sold": itemsList,
         "Subtotal (Rs.)": s.subtotal || 0,
         "Discount (Rs.)": s.discount || 0,
         "Tax Amount (Rs.)": s.tax || 0,
-        "Tax Rate (%)": `${s.tax_rate || 0}%`,
         "Total Amount (Rs.)": s.total_amount || 0,
         "Payment Received (Rs.)": s.status?.toLowerCase() === 'paid' ? (s.total_amount || 0) : (s.payment_received || 0),
         "Outstanding Balance (Rs.)": s.status?.toLowerCase() === 'paid' ? 0 : Math.max(0, (s.total_amount || 0) - (s.payment_received || 0)),
         "Payment Status": s.status ? s.status.toUpperCase() : 'PAID',
         "Payment Method": s.payment_method || 'Cash',
-        "Logged Cashier": s.user_id || '---',
         "Checkout Date & Time": getExcelDecimalDate(s.created_at) || '---',
         "Due Date": getExcelDecimalDate(s.due_date) || '---',
         "Credit Period (Days)": s.credit_period_days || 0,
@@ -1566,42 +1623,75 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
         })()
       };
     });
+
+    if (structuredSales.length > 0) {
+      const subtotalSum = sales.reduce((sum, s) => sum + (s.subtotal || 0), 0);
+      const discountSum = sales.reduce((sum, s) => sum + (s.discount || 0), 0);
+      const taxSum = sales.reduce((sum, s) => sum + (s.tax || 0), 0);
+      const totalSum = sales.reduce((sum, s) => sum + (s.total_amount || 0), 0);
+      const receivedSum = sales.reduce((sum, s) => sum + (s.status?.toLowerCase() === 'paid' ? (s.total_amount || 0) : (s.payment_received || 0)), 0);
+      const balanceSum = sales.reduce((sum, s) => sum + (s.status?.toLowerCase() === 'paid' ? 0 : Math.max(0, (s.total_amount || 0) - (s.payment_received || 0))), 0);
+      
+      structuredSales.push({
+        "Invoice Number": "TOTAL",
+        "Customer Name": "",
+        "Products Sold": "",
+        "Subtotal (Rs.)": subtotalSum,
+        "Discount (Rs.)": discountSum,
+        "Tax Amount (Rs.)": taxSum,
+        "Total Amount (Rs.)": totalSum,
+        "Payment Received (Rs.)": receivedSum,
+        "Outstanding Balance (Rs.)": balanceSum,
+        "Payment Status": "",
+        "Payment Method": "",
+        "Checkout Date & Time": "",
+        "Due Date": "",
+        "Credit Period (Days)": "",
+        "Cost of Goods Sold (Rs.)": totalCostOfSales
+      });
+    }
+
     const wsSalesHeaders = [
-      "Sale ID", "Invoice Number", "Customer ID", "Customer Name", 
-      "Products Sold (Text)", "Sold Items (JSON)", "Subtotal (Rs.)", 
-      "Discount (Rs.)", "Tax Amount (Rs.)", "Tax Rate (%)", "Total Amount (Rs.)", 
+      "Invoice Number", "Customer Name", "Products Sold", "Subtotal (Rs.)", 
+      "Discount (Rs.)", "Tax Amount (Rs.)", "Total Amount (Rs.)", 
       "Payment Received (Rs.)", "Outstanding Balance (Rs.)", "Payment Status", 
-      "Payment Method", "Logged Cashier", "Checkout Date & Time", "Due Date", 
+      "Payment Method", "Checkout Date & Time", "Due Date", 
       "Credit Period (Days)", "Cost of Goods Sold (Rs.)"
     ];
     const wsSales = createWorksheet(structuredSales, wsSalesHeaders);
     setColWidths(wsSales, structuredSales, wsSalesHeaders);
-    applyTableStyles(wsSales, "581C87");
+    applyTableStyles(wsSales, "1E3A8A");
 
-    // C. Transactions (Royal Purple Theme: 581C87)
     const structuredTransactions = transactions.map(t => ({
-      "Transaction ID": t.id,
       "Record Date": getExcelDecimalDate(t.date) || '---',
       "Flow Type": t.type ? t.type.toUpperCase() : 'INCOME',
       "Finance Category": t.category || 'Other',
       "Description Details": t.description,
       "Reference Invoice / PO": t.reference || '---',
       "Transaction Value (Rs.)": t.amount || 0,
-      "Cashier Staff ID": t.user_id || '---',
       "System Log Date": getExcelDecimalDate(t.created_at) || '---'
     }));
+    if (structuredTransactions.length > 0) {
+      const transSum = transactions.reduce((sum, t) => sum + (t.amount || 0), 0);
+      structuredTransactions.push({
+        "Record Date": "TOTAL",
+        "Flow Type": "",
+        "Finance Category": "",
+        "Description Details": "",
+        "Reference Invoice / PO": "",
+        "Transaction Value (Rs.)": transSum,
+        "System Log Date": ""
+      });
+    }
     const wsTransactionsHeaders = [
-      "Transaction ID", "Record Date", "Flow Type", "Finance Category", 
-      "Description Details", "Reference Invoice / PO", "Transaction Value (Rs.)", 
-      "Cashier Staff ID", "System Log Date"
+      "Record Date", "Flow Type", "Finance Category", "Description Details", 
+      "Reference Invoice / PO", "Transaction Value (Rs.)", "System Log Date"
     ];
     const wsTransactions = createWorksheet(structuredTransactions, wsTransactionsHeaders);
     setColWidths(wsTransactions, structuredTransactions, wsTransactionsHeaders);
-    applyTableStyles(wsTransactions, "581C87");
+    applyTableStyles(wsTransactions, "1E3A8A");
 
-    // D. Loyalty Customers (Royal Purple Theme: 581C87)
     const structuredCustomers = customers.map(c => ({
-      "Customer ID": c.id,
       "Customer Name": c.name,
       "Email": c.email || '',
       "Phone Number": c.phone || '—',
@@ -1612,17 +1702,14 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
       "Registered Date": getExcelDecimalDate(c.created_at) || '---'
     }));
     const wsCustomersHeaders = [
-      "Customer ID", "Customer Name", "Email", "Phone Number", 
-      "Address", "NIC Number", "Loyalty Points", "Total Purchases (Rs.)", 
-      "Registered Date"
+      "Customer Name", "Email", "Phone Number", "Address", 
+      "NIC Number", "Loyalty Points", "Total Purchases (Rs.)", "Registered Date"
     ];
     const wsCustomers = createWorksheet(structuredCustomers, wsCustomersHeaders);
     setColWidths(wsCustomers, structuredCustomers, wsCustomersHeaders);
-    applyTableStyles(wsCustomers, "581C87");
+    applyTableStyles(wsCustomers, "1E3A8A");
 
-    // E. Employees (Royal Purple Theme: 581C87)
     const structuredEmployees = employees.map(e => ({
-      "Staff ID": e.id,
       "Full Name": e.name,
       "Designated Role": e.role,
       "Department": e.department,
@@ -1634,33 +1721,27 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
       "Date of Joining": getExcelDecimalDate(e.join_date) || '---'
     }));
     const wsEmployeesHeaders = [
-      "Staff ID", "Full Name", "Designated Role", "Department", 
-      "Email Address", "Phone Number", "Salary (Rs.)", "Active Status", 
+      "Full Name", "Designated Role", "Department", "Email Address", 
+      "Phone Number", "Salary (Rs.)", "Active Status", 
       "Attendance Percentage (%)", "Date of Joining"
     ];
     const wsEmployees = createWorksheet(structuredEmployees, wsEmployeesHeaders);
     setColWidths(wsEmployees, structuredEmployees, wsEmployeesHeaders);
-    applyTableStyles(wsEmployees, "581C87");
+    applyTableStyles(wsEmployees, "1E3A8A");
 
-    // F. User Accounts / Profiles (Royal Purple Theme: 581C87)
     const structuredProfiles = profiles.map(pr => ({
-      "Profile ID": pr.id,
       "User Full Name": pr.name,
       "User Email": pr.email,
       "Access Privilege Level": pr.role ? pr.role.toUpperCase() : 'CASHIER',
-      "Profile Avatar": pr.avatar || '',
-      "User Password": pr.password || '123456',
       "Created Date": getExcelDecimalDate(pr.created_at) || '---'
     }));
     const wsProfilesHeaders = [
-      "Profile ID", "User Full Name", "User Email", "Access Privilege Level", 
-      "Profile Avatar", "User Password", "Created Date"
+      "User Full Name", "User Email", "Access Privilege Level", "Created Date"
     ];
     const wsProfiles = createWorksheet(structuredProfiles, wsProfilesHeaders);
     setColWidths(wsProfiles, structuredProfiles, wsProfilesHeaders);
-    applyTableStyles(wsProfiles, "581C87");
+    applyTableStyles(wsProfiles, "1E3A8A");
 
-    // G. Settings (Royal Purple Theme: 581C87)
     const structuredSettings = settings.map(set => ({
       "Shop Name": set.shop_name,
       "Address": set.address,
@@ -1670,23 +1751,17 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
       "Tax Rate (%)": set.tax_rate,
       "Backup Email": set.backup_email,
       "Weekly Auto-Backup": set.backup_enabled ? "ENABLED" : "DISABLED",
-      "Logo Path Base64": set.logo_path || '',
-      "Printer Config JSON": typeof set.printer_settings === 'object' ? JSON.stringify(set.printer_settings) : set.printer_settings || '',
-      "Branch Config JSON": typeof set.branch_settings === 'object' ? JSON.stringify(set.branch_settings) : set.branch_settings || '',
       "Last Synced Time": getExcelDecimalDate(set.updated_at) || '---'
     }));
     const wsSettingsHeaders = [
       "Shop Name", "Address", "Phone", "Email", "Currency", "Tax Rate (%)", 
-      "Backup Email", "Weekly Auto-Backup", "Logo Path Base64", "Printer Config JSON", 
-      "Branch Config JSON", "Last Synced Time"
+      "Backup Email", "Weekly Auto-Backup", "Last Synced Time"
     ];
     const wsSettings = createWorksheet(structuredSettings, wsSettingsHeaders);
     setColWidths(wsSettings, structuredSettings, wsSettingsHeaders);
-    applyTableStyles(wsSettings, "581C87");
+    applyTableStyles(wsSettings, "1E3A8A");
 
-    // H. Suppliers (Royal Purple Theme: 581C87)
     const structuredSuppliers = suppliers.map(s => ({
-      "Supplier ID": s.id,
       "Supplier Name": s.name,
       "Email Address": s.email || '---',
       "Phone Number": s.phone || '---',
@@ -1696,14 +1771,13 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
       "Registered Date": getExcelDecimalDate(s.created_at) || '---'
     }));
     const wsSuppliersHeaders = [
-      "Supplier ID", "Supplier Name", "Email Address", "Phone Number", 
-      "Address", "Credit Terms", "Payable Balance (Rs.)", "Registered Date"
+      "Supplier Name", "Email Address", "Phone Number", "Address", 
+      "Credit Terms", "Payable Balance (Rs.)", "Registered Date"
     ];
     const wsSuppliers = createWorksheet(structuredSuppliers, wsSuppliersHeaders);
     setColWidths(wsSuppliers, structuredSuppliers, wsSuppliersHeaders);
-    applyTableStyles(wsSuppliers, "581C87");
+    applyTableStyles(wsSuppliers, "1E3A8A");
 
-    // I. Purchase Orders (Royal Purple Theme: 581C87)
     const structuredPO = purchaseOrders.map(po => {
       let poItems = '---';
       try {
@@ -1713,31 +1787,36 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
         }
       } catch(e) {}
       return {
-        "PO ID": po.id,
         "PO Number": po.po_no,
-        "Supplier ID": po.supplier_id || '---',
         "Supplier Name": po.supplier_name,
-        "PO Items (Text)": poItems,
-        "PO Items (JSON)": typeof po.items === 'string' ? po.items : JSON.stringify(po.items),
+        "PO Items": poItems,
         "Total Amount (Rs.)": po.total || 0,
         "PO Status": po.status ? po.status.toUpperCase() : 'PENDING',
         "Due Date": getExcelDecimalDate(po.due_date) || '---',
         "Created Date": getExcelDecimalDate(po.created_at) || '---'
       };
     });
+    if (structuredPO.length > 0) {
+      const poSum = purchaseOrders.reduce((sum, po) => sum + (po.total || 0), 0);
+      structuredPO.push({
+        "PO Number": "TOTAL",
+        "Supplier Name": "",
+        "PO Items": "",
+        "Total Amount (Rs.)": poSum,
+        "PO Status": "",
+        "Due Date": "",
+        "Created Date": ""
+      });
+    }
     const wsPOHeaders = [
-      "PO ID", "PO Number", "Supplier ID", "Supplier Name", 
-      "PO Items (Text)", "PO Items (JSON)", "Total Amount (Rs.)", 
+      "PO Number", "Supplier Name", "PO Items", "Total Amount (Rs.)", 
       "PO Status", "Due Date", "Created Date"
     ];
     const wsPO = createWorksheet(structuredPO, wsPOHeaders);
     setColWidths(wsPO, structuredPO, wsPOHeaders);
-    applyTableStyles(wsPO, "581C87");
+    applyTableStyles(wsPO, "1E3A8A");
 
-    // J. Stock Adjustments (Royal Purple Theme: 581C87)
     const structuredAdjustments = stockAdjustments.map(sa => ({
-      "Adjustment ID": sa.id,
-      "Product ID": sa.product_id,
       "Product Name": sa.product_name,
       "Old Quantity": sa.old_qty || 0,
       "New Quantity": sa.new_qty || 0,
@@ -1747,51 +1826,27 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
       "Timestamp": getExcelDecimalDate(sa.created_at) || '---'
     }));
     const wsAdjustmentsHeaders = [
-      "Adjustment ID", "Product ID", "Product Name", "Old Quantity", 
-      "New Quantity", "Adjustment Type", "Reason Details", "Staff Email", 
-      "Timestamp"
+      "Product Name", "Old Quantity", "New Quantity", "Adjustment Type", 
+      "Reason Details", "Staff Email", "Timestamp"
     ];
     const wsAdjustments = createWorksheet(structuredAdjustments, wsAdjustmentsHeaders);
     setColWidths(wsAdjustments, structuredAdjustments, wsAdjustmentsHeaders);
-    applyTableStyles(wsAdjustments, "581C87");
+    applyTableStyles(wsAdjustments, "1E3A8A");
 
-    // K. Quotations (Royal Purple Theme: 581C87)
     const structuredQuotes = quotations.map(q => ({
-      "Quotation ID": q.id,
       "Quotation Number": q.quote_no,
       "Customer Name": q.customer_name,
-      "Items (JSON)": typeof q.items === 'string' ? q.items : JSON.stringify(q.items),
       "Total Amount (Rs.)": q.total || 0,
       "Created Date": getExcelDecimalDate(q.created_at) || '---'
     }));
     const wsQuotesHeaders = [
-      "Quotation ID", "Quotation Number", "Customer Name", "Items (JSON)", 
-      "Total Amount (Rs.)", "Created Date"
+      "Quotation Number", "Customer Name", "Total Amount (Rs.)", "Created Date"
     ];
     const wsQuotes = createWorksheet(structuredQuotes, wsQuotesHeaders);
     setColWidths(wsQuotes, structuredQuotes, wsQuotesHeaders);
-    applyTableStyles(wsQuotes, "581C87");
+    applyTableStyles(wsQuotes, "1E3A8A");
 
-    // L. Delivery Notes (Royal Purple Theme: 581C87)
-    const structuredDN = deliveryNotes.map(dn => ({
-      "DN ID": dn.id,
-      "DN Number": dn.dn_no,
-      "Customer Name": dn.customer_name,
-      "Items (JSON)": typeof dn.items === 'string' ? dn.items : JSON.stringify(dn.items),
-      "Reference Invoice": dn.reference_invoice,
-      "Created Date": getExcelDecimalDate(dn.created_at) || '---'
-    }));
-    const wsDNHeaders = [
-      "DN ID", "DN Number", "Customer Name", "Items (JSON)", 
-      "Reference Invoice", "Created Date"
-    ];
-    const wsDN = createWorksheet(structuredDN, wsDNHeaders);
-    setColWidths(wsDN, structuredDN, wsDNHeaders);
-    applyTableStyles(wsDN, "581C87");
-
-    // M. Branch Locations (Royal Purple Theme: 581C87)
     const structuredBranches = branches.map(b => ({
-      "Branch ID": b.id,
       "Branch Name": b.name,
       "Branch Code": b.code,
       "Address": b.address || '---',
@@ -1799,14 +1854,12 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
       "Created Date": getExcelDecimalDate(b.created_at) || '---'
     }));
     const wsBranchesHeaders = [
-      "Branch ID", "Branch Name", "Branch Code", "Address", 
-      "Phone Number", "Created Date"
+      "Branch Name", "Branch Code", "Address", "Phone Number", "Created Date"
     ];
     const wsBranches = createWorksheet(structuredBranches, wsBranchesHeaders);
     setColWidths(wsBranches, structuredBranches, wsBranchesHeaders);
-    applyTableStyles(wsBranches, "581C87");
+    applyTableStyles(wsBranches, "1E3A8A");
 
-    // Style the Overview sheet with dynamic theme
     styleOverviewSheet(wsOverview);
 
     const wb = XLSX.utils.book_new();
@@ -1819,13 +1872,12 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
     XLSX.utils.book_append_sheet(wb, wsPO, "Purchase Orders");
     XLSX.utils.book_append_sheet(wb, wsAdjustments, "Stock Adjustments");
     XLSX.utils.book_append_sheet(wb, wsQuotes, "Quotations");
-    XLSX.utils.book_append_sheet(wb, wsDN, "Delivery Notes");
+    XLSX.utils.book_append_sheet(wb, wsEmployees, "Employees");
+    XLSX.utils.book_append_sheet(wb, wsProfiles, "User Profiles");
+    XLSX.utils.book_append_sheet(wb, wsSettings, "System Settings");
     XLSX.utils.book_append_sheet(wb, wsBranches, "Branches");
 
     XLSX.writeFile(wb, filePath);
-    console.log("[Backup] Styled Excel file created at:", filePath);
-
-
 
     const gmailUser = process.env.GMAIL_USER || 'sanojhardware@gmail.com';
     const gmailPass = process.env.GMAIL_PASS;
@@ -1853,6 +1905,83 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
       auth: { user: gmailUser, pass: gmailPass }
     });
 
+    const currSymbol = settings[0]?.currency || "Rs.";
+    const formattedCash = `${currSymbol} ${cashAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const formattedCard = `${currSymbol} ${cardAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const formattedCredit = `${currSymbol} ${creditAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const formattedBank = `${currSymbol} ${bankTransferAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const formattedTotal = `${currSymbol} ${paymentTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+    const backupHtml = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Muthuwadige Hardware - System Backup Report</title></head>
+    <body style="margin:0;padding:0;background:#f0f4f8;font-family:'Segoe UI',Arial,Helvetica,sans-serif;">
+      <div style="max-width:680px;margin:0 auto;padding:24px 16px;">
+        <div style="background:linear-gradient(135deg,#1e293b 0%,#0f172a 60%,#1a1a2e 100%);border-radius:20px 20px 0 0;padding:36px 32px;position:relative;overflow:hidden;">
+          <div style="position:relative;">
+            <div style="display:inline-block;background:rgba(218,165,32,0.2);border:1px solid rgba(218,165,32,0.4);border-radius:12px;padding:8px 16px;margin-bottom:16px;">
+              <span style="color:#DAA520;font-size:11px;font-weight:800;letter-spacing:2px;text-transform:uppercase;">🔐 Automated Daily Backup</span>
+            </div>
+            <h1 style="margin:0;color:#ffffff;font-size:26px;font-weight:900;">${settings[0]?.shop_name || 'Muthuwadige Hardware'}</h1>
+            <p style="margin:6px 0 0 0;color:#94a3b8;font-size:13px;">${settings[0]?.address || 'No: 80, Mahahunupitiya, Negombo'} | ${settings[0]?.phone || '077 076 076 7'}</p>
+          </div>
+        </div>
+
+        <div style="background:#ffffff;padding:24px 28px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0;">
+          <h2 style="margin:0 0 16px 0;color:#0f172a;font-size:15px;font-weight:800;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #f1f5f9;padding-bottom:12px;">📊 Financial Performance Summary</h2>
+          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:20px;">
+            <div style="background:#f8fafc;padding:14px;border-radius:10px;border:1px solid #e2e8f0;">
+              <span style="color:#64748b;font-size:11px;font-weight:700;">Total Gross Sales</span>
+              <div style="color:#0f172a;font-size:18px;font-weight:900;margin-top:4px;">${currSymbol} ${totalSalesRevenue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+            </div>
+            <div style="background:#f0fdf4;padding:14px;border-radius:10px;border:1px solid #bbf7d0;">
+              <span style="color:#166534;font-size:11px;font-weight:700;">Net Sales Profit</span>
+              <div style="color:#15803d;font-size:18px;font-weight:900;margin-top:4px;">${currSymbol} ${totalSalesProfit.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Payment Method Breakdown Section -->
+        <div style="background:#ffffff;padding:24px 28px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0;border-top:1px solid #f1f5f9;">
+          <h2 style="margin:0 0 16px 0;color:#0f172a;font-size:15px;font-weight:800;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #f1f5f9;padding-bottom:12px;">💳 Payment Method Breakdown</h2>
+          <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px 20px;">
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <tbody>
+                <tr>
+                  <td style="padding:8px 0;color:#334155;font-weight:600;">💵 Cash:</td>
+                  <td style="padding:8px 0;font-weight:800;color:#0f172a;text-align:right;">${formattedCash}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;color:#334155;font-weight:600;">💳 Card:</td>
+                  <td style="padding:8px 0;font-weight:800;color:#0f172a;text-align:right;">${formattedCard}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;color:#334155;font-weight:600;">📜 Credit:</td>
+                  <td style="padding:8px 0;font-weight:800;color:#0f172a;text-align:right;">${formattedCredit}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;color:#334155;font-weight:600;">🏦 Bank Transfer:</td>
+                  <td style="padding:8px 0;font-weight:800;color:#0f172a;text-align:right;">${formattedBank}</td>
+                </tr>
+                <tr style="border-top:2px dashed #cbd5e1;">
+                  <td style="padding:10px 0 2px 0;color:#0f172a;font-weight:800;font-size:14px;">Total:</td>
+                  <td style="padding:10px 0 2px 0;font-weight:900;color:#0f172a;font-size:15px;text-align:right;">${formattedTotal}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div style="background:linear-gradient(135deg,#1e293b,#0f172a);padding:20px 32px;border-radius:0 0 20px 20px;text-align:center;">
+          <p style="margin:0;color:#DAA520;font-size:12px;font-weight:800;">${settings[0]?.shop_name || 'MUTHUWADIGE HARDWARE'}</p>
+          <p style="margin:4px 0 0 0;color:#475569;font-size:11px;">Automated Backup ID: ${dateStr}</p>
+        </div>
+      </div>
+    </body></html>
+    `;
+
     await transporter.sendMail({
       from: gmailUser,
       to: targetEmail || 'sanojhardware@gmail.com',
@@ -1863,15 +1992,25 @@ Please find attached the comprehensive Excel database report backup from the Mut
 
 Summary of Business & Financial Performance:
 ---------------------------------------------
-📈 Total Gross Sales Revenue: ${settings[0]?.currency || "Rs."} ${totalSalesRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-💰 Total Net Sales Profit:   ${settings[0]?.currency || "Rs."} ${totalSalesProfit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-📦 Total Inventory Asset Value: ${settings[0]?.currency || "Rs."} ${totalInventoryValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+📈 Total Gross Sales Revenue: ${currSymbol} ${totalSalesRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+💰 Total Net Sales Profit:   ${currSymbol} ${totalSalesProfit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+📦 Total Inventory Asset Value: ${currSymbol} ${totalInventoryValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
 🛒 Total Orders Processed:   ${totalSalesCount}
 🔧 Stock Adjustments Recorded: ${stockAdjustments.length} logs
 🤝 Loyalty Registered Customers: ${totalCustomersCount}
 👔 Active Staff Members (Employees): ${activeEmployeesCount}
 
+Payment Method Breakdown:
+----------------------------
+Cash: ${formattedCash}
+Card: ${formattedCard}
+Credit: ${formattedCredit}
+Bank Transfer: ${formattedBank}
+----------------------------
+Total: ${formattedTotal}
+
 💡 Tip: Use the Excel tabs in the attached spreadsheet file to explore each database table in detail (including Inventory Stock, Stock Adjustments, Sales & Invoices, Accounting Ledger, etc.).`,
+      html: backupHtml,
       attachments: [{ filename: fileName, path: filePath }]
     });
 
@@ -2458,10 +2597,24 @@ app.post('/api/sales', async (req, res) => {
       [id, finalInvoiceNo, s.customer_id, s.customer_name, JSON.stringify(s.items), s.subtotal, s.discount, s.tax, s.tax_rate, s.total_amount, s.status, s.user_id, s.payment_method || 'Cash', created_at, s.due_date || null, s.credit_period_days || 0, s.payment_received || 0, transportationFeeVal, creditNoteApplied, creditNoteCode]
     );
 
-    // 3. Decrement Product Stock levels
+    // 3. Decrement Product Stock levels & validate available stock
     for (const item of s.items) {
       const convRate = Number(item.conversionRate) || 1;
       const baseQtyDeduction = convRate > 0 ? (Number(item.qty || 0) / convRate) : Number(item.qty || 0);
+
+      // Backend stock validation check
+      const prod = await db.get('SELECT stock, name FROM products WHERE id = ?', [item.productId]);
+      if (prod) {
+        const availableStock = Number(prod.stock || 0);
+        if (baseQtyDeduction > availableStock + 0.0001) {
+          await db.run('ROLLBACK');
+          const maxAvailableInUnit = Math.round((availableStock * convRate) * 100) / 100;
+          return res.status(400).json({ 
+            error: `Only ${maxAvailableInUnit} ${item.unit || ''} available in stock for "${prod.name}".` 
+          });
+        }
+      }
+
       await db.run(
         'UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?',
         [baseQtyDeduction, item.productId]

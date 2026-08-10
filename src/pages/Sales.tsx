@@ -1193,6 +1193,22 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
     : {};
   const paperSize = printerConfig?.paperSize || '80mm';
 
+  const matchedCust = (shopSettings?.customers || []).find((c: any) => 
+    (order.customer_id && c.id === order.customer_id) || 
+    (order.customerName && c.name && c.name.toLowerCase() === order.customerName.toLowerCase()) ||
+    (order.customer_name && c.name && c.name.toLowerCase() === order.customer_name.toLowerCase())
+  );
+
+  const validOrderCustName = (order.customerName && order.customerName.trim() && order.customerName !== 'Guest Customer' && order.customerName !== 'Guest')
+    ? order.customerName.trim()
+    : ((order.customer_name && order.customer_name.trim() && order.customer_name !== 'Guest Customer' && order.customer_name !== 'Guest')
+        ? order.customer_name.trim()
+        : null);
+
+  const customerName = validOrderCustName || matchedCust?.name || (isSi ? 'පාරිභෝගිකයා (Guest)' : 'Guest Customer');
+  const custPhone = order.customerPhone || order.customer_phone || matchedCust?.phone || '';
+  const custAddress = order.customerAddress || order.customer_address || matchedCust?.address || '';
+
   if (paperSize === '80mm') {
     const symbolStr = isSi ? 'රු.' : 'Rs.';
     const formatNum = (num: number) => num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1200,16 +1216,6 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
     const title = isCredit 
       ? (isSi ? 'ණය ඉන්වොයිසිය' : 'CREDIT INVOICE')
       : (isSi ? 'ඉන්වොයිසිය' : 'INVOICE');
-
-    const matchedCust = (shopSettings?.customers || []).find((c: any) => 
-      (order.customer_id && c.id === order.customer_id) || 
-      (order.customerName && c.name && c.name.toLowerCase() === order.customerName.toLowerCase()) ||
-      (order.customer_name && c.name && c.name.toLowerCase() === order.customer_name.toLowerCase())
-    );
-
-    const customerName = order.customerName || order.customer_name || matchedCust?.name || (isSi ? 'පාරිභෝගිකයා (Guest)' : 'Guest Customer');
-    const custPhone = order.customerPhone || order.customer_phone || matchedCust?.phone || '';
-    const custAddress = order.customerAddress || order.customer_address || matchedCust?.address || '';
     
     const orderItemsList = Array.isArray(order.items) 
       ? order.items 
@@ -1267,7 +1273,7 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               max-width: 80mm;
               width: 100%;
               margin: 0 auto;
-              padding: 0 4mm 0 2mm;
+              padding: 0 6mm;
               box-sizing: border-box;
             }
             .header {
@@ -1326,7 +1332,6 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               font-weight: 700;
               color: #1f2937;
               font-size: 13px;
-              padding-right: 4px;
             }
             .items-table {
               width: 100%;
@@ -1357,7 +1362,6 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               text-align: right;
               font-weight: 700;
               color: #1f2937;
-              padding-right: 4px;
             }
             .summary-table tr.total-row td {
               font-size: 16px;
@@ -1396,7 +1400,7 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               .receipt-container {
                 width: 100%;
                 max-width: 100%;
-                padding: 0 6mm 0 2mm !important;
+                padding: 0 6mm !important;
                 box-sizing: border-box;
               }
             }
@@ -1447,7 +1451,7 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               <thead>
                 <tr>
                   <th style="text-align: left;">${isSi ? 'විස්තරය' : 'Item Description'}</th>
-                  <th style="text-align: right; width: 80px; padding-right: 4px;">${isSi ? 'එකතුව' : 'Total'}</th>
+                  <th style="text-align: right; width: 80px;">${isSi ? 'එකතුව' : 'Total'}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1850,7 +1854,7 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
           <div class="meta-section">
             <div class="bill-to">
               <h2>${billTo}</h2>
-              <p>${order.customerName || order.customer_name || (isSi ? 'පාරිභෝගිකයා (Guest)' : 'Guest Customer')}</p>
+              <p>${customerName}</p>
               ${(order.customerPhone || order.customer_phone || (shopSettings?.customers || []).find((c: any) => (order.customer_id && c.id === order.customer_id) || (order.customerName && c.name && c.name.toLowerCase() === order.customerName.toLowerCase()))?.phone) ? `<p style="font-size: 11px; color: #4b5563; margin-top: 3px; font-weight: 600;">Tel: ${order.customerPhone || order.customer_phone || (shopSettings?.customers || []).find((c: any) => (order.customer_id && c.id === order.customer_id) || (order.customerName && c.name && c.name.toLowerCase() === order.customerName.toLowerCase()))?.phone}</p>` : ''}
               ${(order.customerAddress || order.customer_address || (shopSettings?.customers || []).find((c: any) => (order.customer_id && c.id === order.customer_id) || (order.customerName && c.name && c.name.toLowerCase() === order.customerName.toLowerCase()))?.address) ? `<p style="font-size: 11px; color: #4b5563; margin-top: 2px;">Address: ${order.customerAddress || order.customer_address || (shopSettings?.customers || []).find((c: any) => (order.customer_id && c.id === order.customer_id) || (order.customerName && c.name && c.name.toLowerCase() === order.customerName.toLowerCase()))?.address}</p>` : ''}
             </div>
@@ -2099,7 +2103,13 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
     (order.customer_name && c.name && c.name.toLowerCase() === order.customer_name.toLowerCase())
   );
 
-  const customerName = order.customerName || order.customer_name || matchedCust?.name || (isSinhala ? 'පාරිභෝගිකයා (Guest)' : 'Guest Customer');
+  const validOrderCustName = (order.customerName && order.customerName.trim() && order.customerName !== 'Guest Customer' && order.customerName !== 'Guest')
+    ? order.customerName.trim()
+    : ((order.customer_name && order.customer_name.trim() && order.customer_name !== 'Guest Customer' && order.customer_name !== 'Guest')
+        ? order.customer_name.trim()
+        : null);
+
+  const customerName = validOrderCustName || matchedCust?.name || (isSinhala ? 'පාරිභෝගිකයා (Guest)' : 'Guest Customer');
   const custPhone = order.customerPhone || order.customer_phone || matchedCust?.phone || '';
   const custAddress = order.customerAddress || order.customer_address || matchedCust?.address || '';
 
@@ -2802,6 +2812,37 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   const [transportationFee, setTransportationFee] = useState<number>(0);
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
 
+  const resetNewSale = () => {
+    setCartItems([]);
+    setSelectedCustomer(null);
+    setIsGuest(false);
+    setGuestName('Guest Customer');
+    setGuestPhone('');
+    setGuestAddress('');
+    setTransportationFee(0);
+    setDiscount(0);
+    setPaymentMethod('Cash');
+    setCreditNoteApplied('');
+    setSelectedCreditNoteCode('');
+    setProductSearch('');
+    setSelectedIndex(0);
+    if (shopSettings && shopSettings.tax_rate !== undefined) {
+      setTaxRate(shopSettings.tax_rate);
+      setApplyTax(shopSettings.tax_rate > 0);
+    } else {
+      setTaxRate(0);
+      setApplyTax(false);
+    }
+  };
+
+  useEffect(() => {
+    const handleReset = () => {
+      resetNewSale();
+    };
+    window.addEventListener('reset-new-sale', handleReset);
+    return () => window.removeEventListener('reset-new-sale', handleReset);
+  }, []);
+
   // Credit Note Applied in POS Checkout State
   const [creditNoteApplied, setCreditNoteApplied] = useState<number | ''>('');
   const [selectedCreditNoteCode, setSelectedCreditNoteCode] = useState<string>('');
@@ -2948,11 +2989,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         <head>
           <meta charset="utf-8" />
           <title>Sales Return - ${sr.returnNo || sr.id}</title>
+          <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Sinhala:wght@400;600;700;800&display=swap" rel="stylesheet">
           <style>
             @page { margin: 0; size: 80mm auto; }
-            body { font-family: sans-serif; margin: 0; padding: 10px; font-size: 12px; color: #111827; }
+            body { font-family: 'Inter', 'Noto Sans Sinhala', sans-serif; margin: 0; padding: 10px; font-size: 12px; color: #111827; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            .receipt-container { width: 100%; max-width: 80mm; margin: 0 auto; box-sizing: border-box; }
             .header { text-align: center; border-bottom: 2px dashed #374151; padding-bottom: 8px; margin-bottom: 8px; }
-            .title { text-align: center; font-weight: 800; font-size: 14px; margin: 8px 0; text-transform: uppercase; border: 1px solid #1f2937; padding: 4px; }
+            .title { text-align: center; font-weight: 800; font-size: 14px; margin: 8px 0; text-transform: uppercase; border: 1px solid #1f2937; padding: 4px; background: #f9fafb; }
             .table { width: 100%; border-collapse: collapse; margin-top: 8px; }
             .table th { border-bottom: 1px solid #374151; text-align: left; padding: 4px 0; font-size: 11px; }
             .summary { border-top: 2px dashed #374151; margin-top: 10px; padding-top: 6px; }
@@ -2960,64 +3003,66 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
           </style>
         </head>
         <body>
-          <div class="header">
-            <h2 style="margin:0; font-size: 16px;">${shopSettings?.shop_name || 'MUTUWADIGE HARDWARE'}</h2>
-            <p style="margin:2px 0;">${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</p>
-            <p style="margin:2px 0;">Tel: ${shopSettings?.phone || '077 076 076 7'}</p>
-          </div>
-          <div class="title">${title}</div>
-          <div>
-            <div><b>${isSi ? 'ආපසු අංකය:' : 'Return No:'}</b> ${sr.returnNo || sr.return_no || sr.id}</div>
-            <div><b>${isSi ? 'ඉන්වොයිස් අංකය:' : 'Orig Invoice:'}</b> ${sr.invoiceNo || sr.invoice_no}</div>
-            <div><b>${isSi ? 'පාරිභෝගිකයා:' : 'Customer:'}</b> ${sr.customerName || sr.customer_name || 'Guest'}</div>
-            <div><b>${isSi ? 'දිනය:' : 'Date:'}</b> ${new Date(sr.created_at).toLocaleString()}</div>
-            <div><b>${isSi ? 'ක්‍රමය:' : 'Method:'}</b> ${sr.returnMethod}</div>
-          </div>
+          <div class="receipt-container">
+            <div class="header">
+              <h2 style="margin:0; font-size: 16px;">${shopSettings?.shop_name || 'MUTUWADIGE HARDWARE'}</h2>
+              <p style="margin:2px 0;">${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</p>
+              <p style="margin:2px 0;">Tel: ${shopSettings?.phone || '077 076 076 7'}</p>
+            </div>
+            <div class="title">${title}</div>
+            <div>
+              <div><b>${isSi ? 'ආපසු අංකය:' : 'Return No:'}</b> ${sr.returnNo || sr.return_no || sr.id}</div>
+              <div><b>${isSi ? 'ඉන්වොයිස් අංකය:' : 'Orig Invoice:'}</b> ${sr.invoiceNo || sr.invoice_no}</div>
+              <div><b>${isSi ? 'පාරිභෝගිකයා:' : 'Customer:'}</b> ${sr.customerName || sr.customer_name || 'Guest'}</div>
+              <div><b>${isSi ? 'දිනය:' : 'Date:'}</b> ${new Date(sr.created_at).toLocaleString()}</div>
+              <div><b>${isSi ? 'ක්‍රමය:' : 'Method:'}</b> ${sr.returnMethod}</div>
+            </div>
 
-          <table class="table">
-            <thead>
-              <tr>
-                <th>${isSi ? 'ආපසු භාණ්ඩ' : 'Returned Item'}</th>
-                <th style="text-align:center;">${isSi ? 'ප්‍රමාණය' : 'Qty'}</th>
-                <th style="text-align:right;">${isSi ? 'එකතුව' : 'Total'}</th>
-              </tr>
-            </thead>
-            <tbody>${retRows}</tbody>
-          </table>
-
-          ${exItems.length > 0 ? `
-            <table class="table" style="margin-top: 10px;">
+            <table class="table">
               <thead>
                 <tr>
-                  <th style="color:#047857;">${isSi ? 'හුවමාරු භාණ්ඩ' : 'Exchange Item'}</th>
+                  <th>${isSi ? 'ආපසු භාණ්ඩ' : 'Returned Item'}</th>
                   <th style="text-align:center;">${isSi ? 'ප්‍රමාණය' : 'Qty'}</th>
                   <th style="text-align:right;">${isSi ? 'එකතුව' : 'Total'}</th>
                 </tr>
               </thead>
-              <tbody>${exRows}</tbody>
+              <tbody>${retRows}</tbody>
             </table>
-          ` : ''}
 
-          <div class="summary">
-            <div class="summary-row">
-              <span>${isSi ? 'ආපසු ලැබුණු වටිනාකම:' : 'Return Total Value:'}</span>
-              <span>${symbolStr} ${formatNum(sr.returnAmount || sr.totalRefunded || 0)}</span>
+            ${exItems.length > 0 ? `
+              <table class="table" style="margin-top: 10px;">
+                <thead>
+                  <tr>
+                    <th style="color:#047857;">${isSi ? 'හුවමාරු භාණ්ඩ' : 'Exchange Item'}</th>
+                    <th style="text-align:center;">${isSi ? 'ප්‍රමාණය' : 'Qty'}</th>
+                    <th style="text-align:right;">${isSi ? 'එකතුව' : 'Total'}</th>
+                  </tr>
+                </thead>
+                <tbody>${exRows}</tbody>
+              </table>
+            ` : ''}
+
+            <div class="summary">
+              <div class="summary-row">
+                <span>${isSi ? 'ආපසු ලැබුණු වටිනාකම:' : 'Return Total Value:'}</span>
+                <span>${symbolStr} ${formatNum(sr.returnAmount || sr.totalRefunded || 0)}</span>
+              </div>
+              ${sr.returnMethod === 'Credit Note' ? `
+                <div class="summary-row" style="color: #d97706;">
+                  <span>${isSi ? 'නිකුත් කළ ණය සටහන් අංකය:' : 'Credit Note Issued:'}</span>
+                  <span>${sr.creditNoteNo || 'CN-ISSUED'}</span>
+                </div>
+              ` : ''}
+              ${sr.returnMethod === 'Cash Refund' ? `
+                <div class="summary-row" style="color: #dc2626;">
+                  <span>${isSi ? 'ආපසු ගෙවූ මුදල:' : 'Cash Refunded:'}</span>
+                  <span>${symbolStr} ${formatNum(sr.totalRefunded || 0)}</span>
+                </div>
+              ` : ''}
             </div>
-            ${sr.returnMethod === 'Credit Note' ? `
-              <div class="summary-row" style="color: #d97706;">
-                <span>${isSi ? 'නිකුත් කළ ණය සටහන් අංකය:' : 'Credit Note Issued:'}</span>
-                <span>${sr.creditNoteNo || 'CN-ISSUED'}</span>
-              </div>
-            ` : ''}
-            ${sr.returnMethod === 'Cash Refund' ? `
-              <div class="summary-row" style="color: #dc2626;">
-                <span>${isSi ? 'ආපසු ගෙවූ මුදල:' : 'Cash Refunded:'}</span>
-                <span>${symbolStr} ${formatNum(sr.totalRefunded || 0)}</span>
-              </div>
-            ` : ''}
-          </div>
-          <div style="text-align:center; margin-top: 15px; font-size: 11px; color: #6b7280;">
-            ${isSi ? 'ස්තූතියි!' : 'Thank you!'}
+            <div style="text-align:center; margin-top: 15px; font-size: 11px; color: #6b7280;">
+              ${isSi ? 'ස්තූතියි!' : 'Thank you!'}
+            </div>
           </div>
         </body>
       </html>
@@ -3084,31 +3129,146 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   };
 
   const handlePrintReturnReceipt = (returnRecord: SalesReturn) => {
-    const printHTML = generateReturnPrintHTML(returnRecord, shopSettings, isSinhala);
-    const win = window.open('', '_blank', 'width=400,height=600');
-    if (win) {
-      win.document.write(printHTML);
-      win.document.close();
-      win.focus();
+    const htmlContent = generateReturnPrintHTML(returnRecord, shopSettings, isSinhala);
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow?.document || iframe.contentDocument;
+    if (doc) {
+      doc.open();
+      doc.write(htmlContent);
+      doc.close();
+    }
+
+    setTimeout(() => {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
       setTimeout(() => {
-        win.print();
-        win.close();
-      }, 300);
+        if (document.body.contains(iframe)) document.body.removeChild(iframe);
+      }, 1000);
+    }, 300);
+  };
+
+  const handleDownloadReturnPDF = async (returnRecord: SalesReturn) => {
+    if (!returnRecord) return;
+    try {
+      setIsLoading(true);
+      const htmlContent = generateReturnPrintHTML(returnRecord, shopSettings, isSinhala);
+      const cleanHtml = htmlContent.replace(/window\.print\(\);?/g, '');
+
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.left = '-9999px';
+      iframe.style.top = '-9999px';
+      iframe.style.width = '210mm';
+      iframe.style.height = '297mm';
+      iframe.style.border = '0';
+      iframe.style.visibility = 'hidden';
+      document.body.appendChild(iframe);
+
+      const doc = iframe.contentWindow?.document || iframe.contentDocument;
+      if (!doc) throw new Error('Failed to create iframe document');
+
+      doc.open();
+      doc.write(cleanHtml);
+      doc.close();
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const targetElement = (doc.querySelector('.receipt-container') || doc.body) as HTMLElement;
+
+      const canvas = await html2canvas(targetElement, {
+        scale: 3,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff',
+        logging: false
+      });
+
+      if (document.body.contains(iframe)) {
+        document.body.removeChild(iframe);
+      }
+
+      const imgData = canvas.toDataURL('image/png');
+      const printerConfig = shopSettings?.printer_settings 
+        ? (typeof shopSettings.printer_settings === 'object' 
+            ? shopSettings.printer_settings 
+            : (() => { try { return JSON.parse(shopSettings.printer_settings); } catch(e) { return {}; } })())
+        : {};
+      const is80mm = printerConfig?.paperSize === '80mm';
+
+      let pdf: jsPDF;
+      if (is80mm) {
+        const pdfWidth = 80;
+        const imgWidth = 80;
+        const imgHeight = (canvas.height * imgWidth) / canvas.width;
+        pdf = new jsPDF('p', 'mm', [80, Math.max(120, imgHeight)]);
+        pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+      } else {
+        pdf = new jsPDF('p', 'mm', 'a4');
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pdfHeight = pdf.internal.pageSize.getHeight();
+        const imgWidth = pdfWidth;
+        const imgHeight = (canvas.height * pdfWidth) / canvas.width;
+
+        if (imgHeight <= pdfHeight) {
+          pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+        } else {
+          let heightLeft = imgHeight;
+          let position = 0;
+          pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+          heightLeft -= pdfHeight;
+
+          while (heightLeft > 0) {
+            position = heightLeft - imgHeight;
+            pdf.addPage();
+            pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+            heightLeft -= pdfHeight;
+          }
+        }
+      }
+
+      const retNo = returnRecord.returnNo || returnRecord.return_no || returnRecord.id;
+      pdf.save(`SalesReturn_${retNo}.pdf`);
+    } catch (err: any) {
+      console.error('Failed to download Sales Return PDF:', err);
+      alert(t('Failed to download PDF: ', 'ආපසු භාරගැනීමේ PDF පත්‍රය බාගත කිරීමට අපොහොසත් විය: ') + (err?.message || err));
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handlePrintCreditNote = (creditNoteRecord: CreditNote) => {
-    const printHTML = generateCreditNotePrintHTML(creditNoteRecord, shopSettings, isSinhala);
-    const win = window.open('', '_blank', 'width=400,height=600');
-    if (win) {
-      win.document.write(printHTML);
-      win.document.close();
-      win.focus();
-      setTimeout(() => {
-        win.print();
-        win.close();
-      }, 300);
+    const htmlContent = generateCreditNotePrintHTML(creditNoteRecord, shopSettings, isSinhala);
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow?.document || iframe.contentDocument;
+    if (doc) {
+      doc.open();
+      doc.write(htmlContent);
+      doc.close();
     }
+
+    setTimeout(() => {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+      setTimeout(() => {
+        if (document.body.contains(iframe)) document.body.removeChild(iframe);
+      }, 1000);
+    }, 300);
   };
 
   const calculateDueDate = (days: number) => {
@@ -3140,17 +3300,44 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     }
   };
 
-  const updateCreditQty = (idx: number, qty: number) => {
+  const updateCreditQty = (idx: number, newQty: number, forceValidate: boolean = false) => {
     setCreditCartItems(prev => {
       const updated = [...prev];
       const item = updated[idx];
       if (!item) return prev;
-      const validQty = Math.max(0, qty);
-      const gross = validQty * item.price;
+      const product = products.find(p => p.id === item.productId);
+      const baseStock = Number(product?.stock) || 0;
+      const convRate = item.conversionRate || 1;
+      const stockAvailableInSelectedUnit = Math.round((baseStock * convRate) * 100000) / 100000;
+
+      let targetQty = newQty;
+
+      if (forceValidate) {
+        if (isNaN(targetQty) || targetQty < 1) {
+          targetQty = 1;
+        } else if (targetQty > stockAvailableInSelectedUnit) {
+          alert(t(
+            `Only ${stockAvailableInSelectedUnit} ${item.unit || 'unit(s)'} available in stock!`,
+            `තොගයේ ඇත්තේ ${stockAvailableInSelectedUnit} ${item.unit || ''} ක් පමණි!`
+          ));
+          targetQty = stockAvailableInSelectedUnit;
+        }
+      } else {
+        if (!isNaN(targetQty) && targetQty > stockAvailableInSelectedUnit) {
+          alert(t(
+            `Only ${stockAvailableInSelectedUnit} ${item.unit || 'unit(s)'} available in stock!`,
+            `තොගයේ ඇත්තේ ${stockAvailableInSelectedUnit} ${item.unit || ''} ක් පමණි!`
+          ));
+          targetQty = stockAvailableInSelectedUnit;
+        }
+      }
+
+      const safeQtyForTotal = Math.max(0, targetQty);
+      const gross = safeQtyForTotal * item.price;
       const disc = item.discount || 0;
       const discType = item.discountType || 'amount';
       const discAmt = discType === 'percent' ? gross * (disc / 100) : disc;
-      updated[idx] = { ...item, qty: validQty, total: Math.max(0, gross - discAmt) };
+      updated[idx] = { ...item, qty: targetQty, total: Math.max(0, gross - discAmt) };
       return updated;
     });
   };
@@ -3273,12 +3460,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       const { data: { user } } = await supabase.auth.getUser();
 
       let customerId = selectedCreditCustomer?.id || null;
-      let finalCustomerName = creditCustomerName.trim();
+      let finalCustomerName = creditCustomerType === 'registered' 
+        ? (selectedCreditCustomer?.name || creditCustomerName.trim() || 'Guest Customer')
+        : (creditCustomerName.trim() || 'Guest Customer');
       const finalCustomerPhone = creditCustomerPhone.trim() || selectedCreditCustomer?.phone || '';
       const finalCustomerAddress = creditCustomerAddress.trim() || selectedCreditCustomer?.address || '';
 
       // If it is a new customer, save them to the customers table first!
-      if (!customerId && creditCustomerName.trim()) {
+      if (!customerId && creditCustomerName.trim() && creditCustomerName.trim() !== 'Guest Customer') {
         try {
           const newCustPayload = {
             name: creditCustomerName.trim(),
@@ -3349,7 +3538,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         id: saleRecord?.id || `so_${Date.now()}`,
         invoiceNo: saleRecord?.invoice_no || saleRecord?.invoiceNo || newOrderData.invoice_no,
         customer_id: newOrderData.customer_id || '',
-        customerName: newOrderData.customer_name,
+        customerName: finalCustomerName,
+        customer_name: finalCustomerName,
         customerPhone: finalCustomerPhone,
         customer_phone: finalCustomerPhone,
         customerAddress: finalCustomerAddress,
@@ -3440,10 +3630,19 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
             (s.customer_id && c.id === s.customer_id) || 
             (s.customer_name && c.name && c.name.toLowerCase() === s.customer_name.toLowerCase())
           );
+          const validName = (s.customerName && s.customerName.trim() && s.customerName !== 'Guest Customer' && s.customerName !== 'Guest')
+            ? s.customerName.trim()
+            : ((s.customer_name && s.customer_name.trim() && s.customer_name !== 'Guest Customer' && s.customer_name !== 'Guest')
+                ? s.customer_name.trim()
+                : null);
+
+          const finalName = validName || matchedCust?.name || s.customerName || s.customer_name || 'Guest Customer';
+
           return {
             ...s,
             invoiceNo: s.invoice_no,
-            customerName: s.customerName || s.customer_name || matchedCust?.name || 'Guest Customer',
+            customerName: finalName,
+            customer_name: finalName,
             customerPhone: s.customerPhone || s.customer_phone || matchedCust?.phone || '',
             customerAddress: s.customerAddress || s.customer_address || matchedCust?.address || '',
             date: (() => {
@@ -3610,6 +3809,97 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     }, 300);
   };
 
+  // Download Quotation PDF using the exact same layout and details as Print/Preview version
+  const handleDownloadQuotePDF = async (quote: any) => {
+    if (!quote) return;
+    try {
+      setIsLoading(true);
+      const htmlContent = generateQuotePrintHTML(quote, isSinhala, shopSettings);
+      const cleanHtml = htmlContent.replace(/window\.print\(\);?/g, '');
+
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.left = '-9999px';
+      iframe.style.top = '-9999px';
+      iframe.style.width = '210mm';
+      iframe.style.height = '297mm';
+      iframe.style.border = '0';
+      iframe.style.visibility = 'hidden';
+      document.body.appendChild(iframe);
+
+      const doc = iframe.contentWindow?.document || iframe.contentDocument;
+      if (!doc) {
+        throw new Error('Failed to create iframe document');
+      }
+
+      doc.open();
+      doc.write(cleanHtml);
+      doc.close();
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const targetElement = (doc.querySelector('.invoice-container') || doc.querySelector('.receipt-container') || doc.body) as HTMLElement;
+
+      const canvas = await html2canvas(targetElement, {
+        scale: 3,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff',
+        logging: false
+      });
+
+      if (document.body.contains(iframe)) {
+        document.body.removeChild(iframe);
+      }
+
+      const imgData = canvas.toDataURL('image/png');
+      const printerConfig = shopSettings?.printer_settings 
+        ? (typeof shopSettings.printer_settings === 'object' 
+            ? shopSettings.printer_settings 
+            : (() => { try { return JSON.parse(shopSettings.printer_settings); } catch(e) { return {}; } })())
+        : {};
+      const is80mm = printerConfig?.paperSize === '80mm';
+
+      let pdf: jsPDF;
+      if (is80mm) {
+        const pdfWidth = 80;
+        const imgWidth = 80;
+        const imgHeight = (canvas.height * imgWidth) / canvas.width;
+        pdf = new jsPDF('p', 'mm', [80, Math.max(120, imgHeight)]);
+        pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+      } else {
+        pdf = new jsPDF('p', 'mm', 'a4');
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pdfHeight = pdf.internal.pageSize.getHeight();
+        const imgWidth = pdfWidth;
+        const imgHeight = (canvas.height * pdfWidth) / canvas.width;
+
+        if (imgHeight <= pdfHeight) {
+          pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+        } else {
+          let heightLeft = imgHeight;
+          let position = 0;
+          pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+          heightLeft -= pdfHeight;
+
+          while (heightLeft > 0) {
+            position = heightLeft - imgHeight;
+            pdf.addPage();
+            pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+            heightLeft -= pdfHeight;
+          }
+        }
+      }
+
+      pdf.save(`Quotation_${quote.quote_no || 'Draft'}.pdf`);
+    } catch (err: any) {
+      console.error('Failed to download quotation PDF:', err);
+      alert(t('Failed to download quotation PDF: ', 'මිල ගණන් පත්‍රය PDF ලෙස බාගත කිරීමට අපොහොසත් විය: ') + (err?.message || err));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const filteredProducts = products.filter(
     (p) =>
       (p.name.toLowerCase().includes(productSearch.toLowerCase()) || 
@@ -3674,31 +3964,56 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         serialNo: product.serialNo || '',
         batchCode: product.batchCode || '',
         unit: initialUnit,
-        conversionRate: initialRate
+        conversionRate: initialRate,
+        discount: 0,
+        discountType: 'amount'
       }];
     });
     setProductSearch('');
   };
 
-  const updateQty = (productId: string, newQty: number) => {
+  const updateQty = (productId: string, newQty: number, forceValidate: boolean = false) => {
     const product = products.find(p => p.id === productId);
     if (!product) return;
     const item = cartItems.find(i => i.productId === productId);
     const conversionRate = item?.conversionRate || 1;
     const baseStock = Number(product.stock) || 0;
     const stockAvailableInSelectedUnit = Math.round((baseStock * conversionRate) * 100000) / 100000;
-    const targetQty = Math.round(Math.max(0, newQty) * 100000) / 100000;
+    
+    let targetQty = newQty;
 
-    if (targetQty > stockAvailableInSelectedUnit) {
-      alert(t(
-        `Only ${stockAvailableInSelectedUnit.toFixed(2)} ${item?.unit || 'item(s)'} available in stock!`,
-        `තොගයේ ඇත්තේ ${stockAvailableInSelectedUnit.toFixed(2)} ${item?.unit || ''} ක් පමණි!`
-      ));
-      setCartItems((prev) => prev.map((i) => i.productId === productId ? { ...i, qty: stockAvailableInSelectedUnit, total: stockAvailableInSelectedUnit * i.price } : i));
-      return;
+    if (forceValidate) {
+      if (isNaN(targetQty) || targetQty < 1) {
+        targetQty = 1;
+      } else if (targetQty > stockAvailableInSelectedUnit) {
+        alert(t(
+          `Only ${stockAvailableInSelectedUnit} ${item?.unit || 'unit(s)'} available in stock!`,
+          `තොගයේ ඇත්තේ ${stockAvailableInSelectedUnit} ${item?.unit || ''} ක් පමණි!`
+        ));
+        targetQty = stockAvailableInSelectedUnit;
+      }
+    } else {
+      if (!isNaN(targetQty) && targetQty > stockAvailableInSelectedUnit) {
+        alert(t(
+          `Only ${stockAvailableInSelectedUnit} ${item?.unit || 'unit(s)'} available in stock!`,
+          `තොගයේ ඇත්තේ ${stockAvailableInSelectedUnit} ${item?.unit || ''} ක් පමණි!`
+        ));
+        targetQty = stockAvailableInSelectedUnit;
+      }
     }
 
-    setCartItems((prev) => prev.map((i) => i.productId === productId ? { ...i, qty: targetQty, total: targetQty * i.price } : i));
+    setCartItems((prev) => prev.map((i) => {
+      if (i.productId === productId) {
+        const price = i.price || 0;
+        const disc = i.discount || 0;
+        const discType = i.discountType || 'amount';
+        const safeQtyForTotal = Math.max(0, targetQty);
+        const gross = safeQtyForTotal * price;
+        const discAmt = discType === 'percent' ? gross * (disc / 100) : disc;
+        return { ...i, qty: targetQty, total: Math.max(0, gross - discAmt) };
+      }
+      return i;
+    }));
   };
 
   const availableCustomerCreditNotes = React.useMemo(() => {
@@ -3827,7 +4142,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
       const finalCustomerName = isGuest 
         ? (guestName.trim() && guestName.trim() !== 'Guest Customer' ? guestName.trim() : 'Guest Customer')
-        : (selectedCustomer?.name || 'Guest Customer');
+        : (selectedCustomer?.name || (guestName.trim() && guestName.trim() !== 'Guest Customer' ? guestName.trim() : 'Guest Customer'));
       const finalCustomerPhone = isGuest ? guestPhone.trim() : (selectedCustomer?.phone || '');
       const finalCustomerAddress = isGuest ? guestAddress.trim() : (selectedCustomer?.address || '');
 
@@ -3877,6 +4192,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         invoiceNo: saleRecord?.invoice_no || saleRecord?.invoiceNo || newOrderData.invoice_no,
         customer_id: newOrderData.customer_id || '',
         customerName: finalCustomerName,
+        customer_name: finalCustomerName,
         customerPhone: finalCustomerPhone,
         customer_phone: finalCustomerPhone,
         customerAddress: finalCustomerAddress,
@@ -3904,17 +4220,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       };
       setLastOrder(completedOrder);
       setShowReceipt(true);
-      setCartItems([]);
-      setSelectedCustomer(null);
-      setIsGuest(false); 
-      setGuestName('Guest Customer');
-      setGuestPhone('');
-      setGuestAddress('');
-      setTransportationFee(0);
-      setDiscount(0);
-      setPaymentMethod('Cash');
-      setCreditNoteApplied('');
-      setSelectedCreditNoteCode('');
+      resetNewSale();
       fetchData(); 
       fetchCreditNotes();
     } catch (error: any) {
@@ -3948,11 +4254,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       if (error) throw error;
       
       alert(t("Bill put on hold successfully!", "බිල්පත තාවකාලිකව රඳවා ගන්නා ලදී!"));
-      setCartItems([]);
-      setSelectedCustomer(null);
-      setIsGuest(false);
-      setGuestName('Guest Customer');
-      setDiscount(0);
+      resetNewSale();
       setHoldNameInput('');
       setShowHoldNameModal(false);
       fetchHeldBills();
@@ -4238,7 +4540,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       <div className="flex justify-between items-center flex-wrap gap-4 bg-white/95 backdrop-blur-sm p-4 rounded-3xl border border-slate-200/80 shadow-xl shadow-slate-100/30 animate-in fade-in duration-500">
         <div className="flex gap-1.5 bg-slate-100/60 p-1.5 rounded-2xl w-fit border border-slate-200/40 overflow-x-auto max-w-full custom-scrollbar">
           <button 
-            onClick={() => setTab('new')} 
+            onClick={() => {
+              resetNewSale();
+              setTab('new');
+            }} 
             className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'new' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
           >
             <ShoppingCartIcon className="w-4 h-4" />
@@ -4400,12 +4705,24 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
             {/* Inventory Search & Cart */}
             <div className="bg-white rounded-2xl border-l-4 border-l-amber-500 border-y border-r border-slate-100 shadow-xl shadow-slate-100/40 p-6 text-left hover:shadow-2xl hover:shadow-slate-200/40 transition-all duration-300 transform hover:-translate-y-0.5">
-              <h3 className="text-sm font-black text-slate-800 mb-5 flex items-center gap-2.5 uppercase tracking-wider">
-                <div className="w-8 h-8 bg-amber-50 rounded-xl flex items-center justify-center border border-amber-100/60 shadow-sm">
-                  <ShoppingCartIcon className="w-4 h-4 text-amber-500" />
-                </div>
-                {t('Inventory Search & Items', 'තොග සෙවීම සහ භාණ්ඩ')}
-              </h3>
+              <div className="flex justify-between items-center mb-5">
+                <h3 className="text-sm font-black text-slate-800 flex items-center gap-2.5 uppercase tracking-wider">
+                  <div className="w-8 h-8 bg-amber-50 rounded-xl flex items-center justify-center border border-amber-100/60 shadow-sm">
+                    <ShoppingCartIcon className="w-4 h-4 text-amber-500" />
+                  </div>
+                  {t('Inventory Search & Items', 'තොග සෙවීම සහ භාණ්ඩ')}
+                </h3>
+                {cartItems.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={resetNewSale}
+                    className="text-[10px] font-black uppercase tracking-wider text-rose-600 bg-rose-50 hover:bg-rose-100 px-3.5 py-2 rounded-xl transition-all border border-rose-200/60 shadow-sm flex items-center gap-1.5 active:scale-95"
+                  >
+                    <Trash2Icon className="w-3.5 h-3.5" />
+                    {t('Clear Cart / New Order', 'කාට් එක හිස් කරන්න / අලුත් ඇණවුමක්')}
+                  </button>
+                )}
+              </div>
               
               <div className="relative">
                 <div className="flex items-center gap-3 bg-slate-50/50 hover:bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus-within:border-amber-500 focus-within:ring-1 focus-within:ring-amber-500 transition-all duration-200 shadow-inner">
@@ -4534,8 +4851,15 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                                 ? selectedOpt.price 
                                                 : (prod.price / newRate);
                                               
-                                              const baseQty = item.qty / (item.conversionRate || 1);
-                                              const newQty = Math.round((baseQty * newRate) * 100000) / 100000;
+                                              const baseStock = Number(prod.stock) || 0;
+                                              const maxStockInNewUnit = Math.round((baseStock * newRate) * 100000) / 100000;
+                                              
+                                              let newQty = item.qty || 1;
+                                              if (newQty > maxStockInNewUnit) {
+                                                alert(t(`Only ${maxStockInNewUnit} ${newUnit} available in stock!`, `තොගයේ ඇත්තේ ${maxStockInNewUnit} ${newUnit} ක් පමණි!`));
+                                                newQty = Math.max(1, maxStockInNewUnit);
+                                              }
+                                              
                                               setCartItems(prev => prev.map(i => 
                                                 i.productId === item.productId 
                                                   ? { 
@@ -5488,8 +5812,15 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                                 ? selectedOpt.price 
                                                 : (prod.price / newRate);
                                               
-                                              const baseQty = item.qty / (item.conversionRate || 1);
-                                              const newQty = Math.round((baseQty * newRate) * 100000) / 100000;
+                                              const baseStock = Number(prod.stock) || 0;
+                                              const maxStockInNewUnit = Math.round((baseStock * newRate) * 100000) / 100000;
+                                              
+                                              let newQty = item.qty || 1;
+                                              if (newQty > maxStockInNewUnit) {
+                                                alert(t(`Only ${maxStockInNewUnit} ${newUnit} available in stock!`, `තොගයේ ඇත්තේ ${maxStockInNewUnit} ${newUnit} ක් පමණි!`));
+                                                newQty = Math.max(1, maxStockInNewUnit);
+                                              }
+
                                               setCreditCartItems(prev => prev.map(i => 
                                                 i.productId === item.productId 
                                                   ? { 
@@ -5920,7 +6251,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       )}
 
       {/* Interactive Receipt Preview Modal */}
-      <Modal isOpen={showReceipt} onClose={() => setShowReceipt(false)} title={t('Transaction Verified', 'ගනුදෙනුව තහවුරු කරන ලදී')} size="lg">
+      <Modal isOpen={showReceipt} onClose={() => { setShowReceipt(false); resetNewSale(); }} title={t('Transaction Verified', 'ගනුදෙනුව තහවුරු කරන ලදී')} size="lg">
         {lastOrder && (
           <div className="space-y-4 p-4 text-center animate-in zoom-in duration-300">
             <div className="flex items-center justify-between border-b border-gray-100 pb-3">
@@ -5956,7 +6287,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
             <div className="pt-2">
               <button 
-                onClick={() => setShowReceipt(false)} 
+                onClick={() => { setShowReceipt(false); resetNewSale(); }} 
                 className="w-full bg-gray-100 text-gray-500 py-3.5 rounded-xl font-black uppercase tracking-widest text-[10px] hover:bg-gray-200 transition-colors"
               >
                 {t('Dismiss', 'ඉවත් කරන්න')}
@@ -6196,7 +6527,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
               : numTaxValue;
             const quoteGrandTotal = Math.max(0, netAfterDiscount + numTransportationFee + quoteTaxAmount);
 
-            const handleSaveQuotation = async (shouldPrint: boolean = false) => {
+            const handleSaveQuotation = async (action: 'save' | 'print' | 'pdf' = 'save') => {
               if (!quoteCustomerName.trim()) {
                 return alert(t('Please enter or select customer name.', 'කරුණාකර පාරිභෝගිකයාගේ නම ඇතුළත් කරන්න.'));
               }
@@ -6238,8 +6569,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                   if (error) throw error;
                 }
 
-                if (shouldPrint) {
-                  const htmlContent = generateQuotePrintHTML({ ...payload, created_at: new Date().toISOString() }, isSinhala, shopSettings);
+                const savedQuote = { ...payload, created_at: new Date().toISOString() };
+
+                if (action === 'print') {
+                  const htmlContent = generateQuotePrintHTML(savedQuote, isSinhala, shopSettings);
                   const iframe = document.createElement('iframe');
                   iframe.style.position = 'fixed';
                   iframe.style.right = '0';
@@ -6261,6 +6594,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                       if (document.body.contains(iframe)) document.body.removeChild(iframe);
                     }, 1000);
                   }, 300);
+                } else if (action === 'pdf') {
+                  await handleDownloadQuotePDF(savedQuote);
                 }
 
                 alert(t(`Quotation ${payload.quote_no} saved successfully!`, `මිල ගණන් පත්‍රය ${payload.quote_no} සාර්ථකව සුරකින ලදී!`));
@@ -6659,10 +6994,21 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                           <button
                             type="button"
                             disabled={isLoading}
-                            onClick={() => handleSaveQuotation(true)}
-                            className="px-6 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:brightness-110 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider transition-all shadow-md"
+                            onClick={() => handleSaveQuotation('print')}
+                            className="px-5 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:brightness-110 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider transition-all shadow-md flex items-center gap-1.5"
                           >
+                            <PrinterIcon className="w-4 h-4" />
                             {t('Save & Print', 'සුරකින්න සහ මුද්‍රණය කරන්න')}
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={isLoading}
+                            onClick={() => handleSaveQuotation('pdf')}
+                            className="px-5 py-2.5 bg-gradient-to-r from-red-600 to-red-700 hover:brightness-110 text-white font-black rounded-xl text-xs uppercase tracking-wider transition-all shadow-md flex items-center gap-1.5"
+                          >
+                            <DownloadIcon className="w-4 h-4" />
+                            {t('Save & PDF', 'සුරකින්න සහ PDF')}
                           </button>
                         </div>
                       </div>
@@ -6755,6 +7101,15 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                 title={t('Print Quote', 'මුද්‍රණය කරන්න')}
                               >
                                 <PrinterIcon className="w-4 h-4 text-amber-500" />
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadQuotePDF(quote)}
+                                className="p-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl border border-red-200/50 transition-colors"
+                                title={t('Download PDF', 'PDF බාගත කරන්න')}
+                              >
+                                <DownloadIcon className="w-4 h-4 text-red-600" />
                               </button>
 
                               <button
@@ -7884,6 +8239,22 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                   <ReceiptIcon className="w-3.5 h-3.5" />
                                   {t('Preview', 'පෙරදසුන')}
                                 </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handlePrintReturnReceipt(sr)}
+                                  className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg border border-slate-200/50 transition-colors"
+                                  title={t('Print Sales Return', 'ආපසු මුද්‍රණය')}
+                                >
+                                  <PrinterIcon className="w-3.5 h-3.5 text-amber-500" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDownloadReturnPDF(sr)}
+                                  className="p-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg border border-red-200/50 transition-colors"
+                                  title={t('Download Sales Return PDF', 'ආපසු PDF බාගත කරන්න')}
+                                >
+                                  <DownloadIcon className="w-3.5 h-3.5 text-red-600" />
+                                </button>
                                 {sr.status !== 'voided' && (
                                   <button
                                     type="button"
@@ -8128,6 +8499,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                   className="bg-[#DAA520] hover:bg-[#B8860B] text-white px-4 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-2 transition-all uppercase tracking-widest"
                 >
                   <PrinterIcon className="w-4 h-4" /> {t('Print', 'මුද්‍රණය කරන්න')}
+                </button>
+                <button 
+                  onClick={() => handleDownloadReturnPDF(selectedReturnPreview)} 
+                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-2 transition-all uppercase tracking-widest"
+                >
+                  <DownloadIcon className="w-4 h-4" /> {t('PDF', 'PDF')}
                 </button>
               </div>
             </div>
@@ -8409,6 +8786,15 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
               >
                 <PrinterIcon className="w-4 h-4" />
                 {t('Print Quotation', 'මුද්‍රණය කරන්න')}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleDownloadQuotePDF(selectedQuotePreview)}
+                className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white font-black rounded-xl text-xs uppercase tracking-wider shadow-md flex items-center gap-1.5"
+              >
+                <DownloadIcon className="w-4 h-4" />
+                {t('Download PDF', 'PDF බාගත කරන්න')}
               </button>
             </div>
           </div>

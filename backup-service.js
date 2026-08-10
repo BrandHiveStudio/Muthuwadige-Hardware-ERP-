@@ -313,7 +313,6 @@ const performBackup = async (fromDate = null, toDate = null) => {
     let transactions = await database.all('SELECT * FROM transactions');
     let stockAdjustments = await database.all('SELECT * FROM stock_adjustments');
     let quotations = await database.all('SELECT * FROM quotations');
-    let deliveryNotes = await database.all('SELECT * FROM delivery_notes');
 
     const profiles = await database.all('SELECT * FROM profiles');
     
@@ -377,7 +376,6 @@ const performBackup = async (fromDate = null, toDate = null) => {
       purchaseOrders = purchaseOrders.filter(po => isWithinDateRange(po.created_at));
       stockAdjustments = stockAdjustments.filter(sa => isWithinDateRange(sa.created_at));
       quotations = quotations.filter(q => isWithinDateRange(q.created_at));
-      deliveryNotes = deliveryNotes.filter(dn => isWithinDateRange(dn.created_at));
     }
 
     // Scan all dates to find min and max date when fromDate and/or toDate are not provided
@@ -516,40 +514,74 @@ const performBackup = async (fromDate = null, toDate = null) => {
       return (p.stock || 0) < minStock;
     });
 
+    // Payment Method Breakdown
+    let cashAmount = 0;
+    let cardAmount = 0;
+    let creditAmount = 0;
+    let bankTransferAmount = 0;
+
+    sales.filter(s => s.status?.toUpperCase() !== 'CANCELLED').forEach(s => {
+      const amt = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
+      const rawMethod = (s.payment_method || s.paymentMethod || '').toString().trim();
+      const methodLower = rawMethod.toLowerCase();
+      const statusStr = (s.status || '').toString();
+
+      if (methodLower === 'card') {
+        cardAmount += amt;
+      } else if (methodLower === 'bank transfer' || methodLower === 'bank' || methodLower === 'banktransfer' || methodLower === 'online') {
+        bankTransferAmount += amt;
+      } else if (methodLower === 'credit' || statusStr === 'Non Paid' || statusStr === 'Non-Paid' || statusStr === 'pending') {
+        creditAmount += amt;
+      } else {
+        cashAmount += amt;
+      }
+    });
+    const paymentTotal = cashAmount + cardAmount + creditAmount + bankTransferAmount;
+
     const overviewRows = [
-      ["HARDWARE SHOP ACCOUNT DASHBOARD", "", "", "", "", "", "", "", ""],
+      ["MUTHUWADIGE HARDWARE - BUSINESS & ACCOUNTING BACKUP REPORT", "", "", "", "", "", "", "", ""],
       ["", "", "", "", "", "", "", "", ""],
-      ["Month Start", "Month End", "", "", "", "", "", "", ""],
+      ["Report Start Date", "Report End Date", "", "", "", "", "", "", ""],
       [finalStart, finalEnd, "", "", "", "", "", "", ""],
       ["", "", "", "", "", "", "", "", ""],
-      ["Total Sales", "", "", "", "", "", "", "", ""],
+      ["KEY BUSINESS METRICS (ERP SUMMARY)", "", "", "", "", "", "", "", ""],
+      ["Total Sales Revenue", "", "", "", "", "", "", "", ""],
       ["Cash Received", "", "", "", "", "", "", "", ""],
-      ["Customer Credit\nOutstanding", "", "", "", "", "", "", "", ""],
+      ["Customer Credit Outstanding", "", "", "", "", "", "", "", ""],
       ["Total Purchases", "", "", "", "", "", "", "", ""],
       ["Net Profit", "", "", "", "", "", "", "", ""],
       ["Total Stock Value", "", "", "", "", "", "", "", ""],
       ["", "", "", "", "", "", "", "", ""],
-      ["Useful Notes", "", "", "", "", "", "", "", ""],
-      ["Use Sales sheet for daily sales and customer payments.", "", "", "", "", "", "", "", ""],
-      ["Use Purchases sheet for supplier bills and payments.", "", "", "", "", "", "", "", ""],
-      ["Use Stock sheet to track opening stock, purchases, sales and current balance.", "", "", "", "", "", "", "", ""],
-      ["Dashboard updates automatically using current month transactions.", "", "", "", "", "", "", "", ""]
+      ["PAYMENT METHOD BREAKDOWN", "", "", "", "", "", "", "", ""],
+      ["Cash Amount", "", "", "", "", "", "", "", ""],
+      ["Card Amount", "", "", "", "", "", "", "", ""],
+      ["Credit Amount", "", "", "", "", "", "", "", ""],
+      ["Bank Transfer Amount", "", "", "", "", "", "", "", ""],
+      ["Total Payment Methods", "", "", "", "", "", "", "", ""],
+      ["", "", "", "", "", "", "", "", ""],
+      ["REMARKS & USEFUL NOTES", "", "", "", "", "", "", "", ""],
+      ["• Sales sheet contains daily invoices, customer payments, and payment methods.", "", "", "", "", "", "", "", ""],
+      ["• Inventory Stock sheet provides real-time stock quantities and market valuations.", "", "", "", "", "", "", "", ""],
+      ["• Accounting Ledger contains all business expense and income transaction records.", "", "", "", "", "", "", "", ""],
+      ["• Report figures are generated directly from Muthuwadige Hardware ERP.", "", "", "", "", "", "", "", ""]
     ];
 
     const wsOverview = XLSX.utils.aoa_to_sheet(overviewRows);
     wsOverview['!cols'] = [
-      { wch: 30 }, { wch: 20 }, { wch: 5 }, 
+      { wch: 34 }, { wch: 24 }, { wch: 5 }, 
       { wch: 15 }, { wch: 15 }, { wch: 15 }, 
       { wch: 15 }, { wch: 15 }, { wch: 15 }
     ];
 
     wsOverview['!merges'] = [
       { s: { r: 0, c: 0 }, e: { r: 1, c: 8 } },
-      { s: { r: 12, c: 0 }, e: { r: 12, c: 8 } },
+      { s: { r: 5, c: 0 }, e: { r: 5, c: 8 } },
       { s: { r: 13, c: 0 }, e: { r: 13, c: 8 } },
-      { s: { r: 14, c: 0 }, e: { r: 14, c: 8 } },
-      { s: { r: 15, c: 0 }, e: { r: 15, c: 8 } },
-      { s: { r: 16, c: 0 }, e: { r: 16, c: 8 } }
+      { s: { r: 20, c: 0 }, e: { r: 20, c: 8 } },
+      { s: { r: 21, c: 0 }, e: { r: 21, c: 8 } },
+      { s: { r: 22, c: 0 }, e: { r: 22, c: 8 } },
+      { s: { r: 23, c: 0 }, e: { r: 23, c: 8 } },
+      { s: { r: 24, c: 0 }, e: { r: 24, c: 8 } }
     ];
 
     // Set dynamic date cell values as numbers formatted as yyyy-mm-dd
@@ -557,42 +589,56 @@ const performBackup = async (fromDate = null, toDate = null) => {
     wsOverview['B4'] = { t: 'n', v: getExcelDecimalDate(finalEnd), z: 'yyyy-mm-dd' };
 
     // Set dynamic formulas with initial pre-calculated values
-    wsOverview['B6'] = { t: 'n', v: valB6, f: "SUMIFS('Sales & Invoices'!K:K, 'Sales & Invoices'!Q:Q, \">=\"&A4, 'Sales & Invoices'!Q:Q, \"<=\"&B4, 'Sales & Invoices'!N:N, \"<>CANCELLED\")", z: '#,##0.00' };
-    wsOverview['B7'] = { t: 'n', v: valB7, f: "B6-B8", z: '#,##0.00' };
-    wsOverview['B8'] = { t: 'n', v: valB8, f: "SUMIFS('Sales & Invoices'!M:M, 'Sales & Invoices'!Q:Q, \">=\"&A4, 'Sales & Invoices'!Q:Q, \"<=\"&B4, 'Sales & Invoices'!N:N, \"<>CANCELLED\")", z: '#,##0.00' };
-    wsOverview['B9'] = { t: 'n', v: valB9, f: "SUMIFS('Purchase Orders'!G:G, 'Purchase Orders'!J:J, \">=\"&A4, 'Purchase Orders'!J:J, \"<=\"&B4, 'Purchase Orders'!H:H, \"<>CANCELLED\")", z: '#,##0.00' };
-    wsOverview['B10'] = { t: 'n', v: valB11, f: "B6-SUMIFS('Sales & Invoices'!T:T, 'Sales & Invoices'!Q:Q, \">=\"&A4, 'Sales & Invoices'!Q:Q, \"<=\"&B4, 'Sales & Invoices'!N:N, \"<>CANCELLED\")", z: '#,##0.00' };
-    wsOverview['B11'] = { t: 'n', v: valB12, f: "SUM('Inventory Stock'!O:O)", z: '#,##0.00' };
+    wsOverview['B7'] = { t: 'n', v: valB6, f: "SUMIFS('Sales & Invoices'!G:G, 'Sales & Invoices'!L:L, \">=\"&A4, 'Sales & Invoices'!L:L, \"<=\"&B4, 'Sales & Invoices'!J:J, \"<>CANCELLED\")", z: '#,##0.00' };
+    wsOverview['B8'] = { t: 'n', v: valB7, f: "B7-B9", z: '#,##0.00' };
+    wsOverview['B9'] = { t: 'n', v: valB8, f: "SUMIFS('Sales & Invoices'!I:I, 'Sales & Invoices'!L:L, \">=\"&A4, 'Sales & Invoices'!L:L, \"<=\"&B4, 'Sales & Invoices'!J:J, \"<>CANCELLED\")", z: '#,##0.00' };
+    wsOverview['B10'] = { t: 'n', v: valB9, f: "SUMIFS('Purchase Orders'!D:D, 'Purchase Orders'!G:G, \">=\"&A4, 'Purchase Orders'!G:G, \"<=\"&B4, 'Purchase Orders'!E:E, \"<>CANCELLED\")", z: '#,##0.00' };
+    wsOverview['B11'] = { t: 'n', v: valB11, f: "B7-SUMIFS('Sales & Invoices'!O:O, 'Sales & Invoices'!L:L, \">=\"&A4, 'Sales & Invoices'!L:L, \"<=\"&B4, 'Sales & Invoices'!J:J, \"<>CANCELLED\")", z: '#,##0.00' };
+    wsOverview['B12'] = { t: 'n', v: valB12, f: "SUM('Inventory Stock'!I:I)", z: '#,##0.00' };
+
+    wsOverview['B15'] = { t: 'n', v: cashAmount, z: '#,##0.00' };
+    wsOverview['B16'] = { t: 'n', v: cardAmount, z: '#,##0.00' };
+    wsOverview['B17'] = { t: 'n', v: creditAmount, z: '#,##0.00' };
+    wsOverview['B18'] = { t: 'n', v: bankTransferAmount, z: '#,##0.00' };
+    wsOverview['B19'] = { t: 'n', v: paymentTotal, f: "SUM(B15:B18)", z: '#,##0.00' };
 
     // 1. Inventory Stock Sheet
     const structuredInventory = products.map(p => ({
-      "Product ID": p.id,
-      "Product SKU": p.sku || '---',
       "Item Name": p.name,
       "Category": p.category || 'Other',
       "Base Retail Price (Rs.)": p.price || 0,
       "Base Cost Price (Rs.)": p.cost_price || 0,
       "Current Stock Level": p.stock || 0,
       "Measurement Unit": p.unit || 'pcs',
-      "Min Stock Threshold": p.min_stock !== undefined ? p.min_stock : 10,
       "Brand": p.brand || '',
       "Supplier Entity": p.supplier || '',
-      "Barcode": p.barcode || '',
-      "Serial Number": p.serial_no || '',
-      "Batch Code": p.batch_code || '',
       "Total Cost Value (Rs.)": (p.stock || 0) * (p.cost_price || 0),
       "Total Market Value (Rs.)": (p.stock || 0) * (p.price || 0)
     }));
+    if (structuredInventory.length > 0) {
+      const costValSum = products.reduce((sum, p) => sum + ((p.stock || 0) * (p.cost_price || 0)), 0);
+      const marketValSum = products.reduce((sum, p) => sum + ((p.stock || 0) * (p.price || 0)), 0);
+      structuredInventory.push({
+        "Item Name": "TOTAL",
+        "Category": "",
+        "Base Retail Price (Rs.)": null,
+        "Base Cost Price (Rs.)": null,
+        "Current Stock Level": null,
+        "Measurement Unit": "",
+        "Brand": "",
+        "Supplier Entity": "",
+        "Total Cost Value (Rs.)": costValSum,
+        "Total Market Value (Rs.)": marketValSum
+      });
+    }
     const wsInventoryHeaders = [
-      "Product ID", "Product SKU", "Item Name", "Category", 
-      "Base Retail Price (Rs.)", "Base Cost Price (Rs.)", "Current Stock Level", 
-      "Measurement Unit", "Min Stock Threshold", "Brand", "Supplier Entity", 
-      "Barcode", "Serial Number", "Batch Code", "Total Cost Value (Rs.)", 
-      "Total Market Value (Rs.)"
+      "Item Name", "Category", "Base Retail Price (Rs.)", "Base Cost Price (Rs.)", 
+      "Current Stock Level", "Measurement Unit", "Brand", "Supplier Entity", 
+      "Total Cost Value (Rs.)", "Total Market Value (Rs.)"
     ];
     const wsInventory = createWorksheet(structuredInventory, wsInventoryHeaders);
     setColWidths(wsInventory, structuredInventory, wsInventoryHeaders);
-    applyTableStyles(wsInventory, "581C87");
+    applyTableStyles(wsInventory, "1E3A8A");
 
     // 2. Sales Orders Sheet
     const structuredSales = sales.map(s => {
@@ -605,22 +651,17 @@ const performBackup = async (fromDate = null, toDate = null) => {
       } catch (e) {}
 
       return {
-        "Sale ID": s.id,
         "Invoice Number": s.invoice_no,
-        "Customer ID": s.customer_id || '',
         "Customer Name": s.customer_name || 'Guest Customer',
-        "Products Sold (Text)": itemsList,
-        "Sold Items (JSON)": typeof s.items === 'string' ? s.items : JSON.stringify(s.items),
+        "Products Sold": itemsList,
         "Subtotal (Rs.)": s.subtotal || 0,
         "Discount (Rs.)": s.discount || 0,
         "Tax Amount (Rs.)": s.tax || 0,
-        "Tax Rate (%)": `${s.tax_rate || 0}%`,
         "Total Amount (Rs.)": s.total_amount || 0,
         "Payment Received (Rs.)": s.status?.toLowerCase() === 'paid' ? (s.total_amount || 0) : (s.payment_received || 0),
         "Outstanding Balance (Rs.)": s.status?.toLowerCase() === 'paid' ? 0 : Math.max(0, (s.total_amount || 0) - (s.payment_received || 0)),
         "Payment Status": s.status ? s.status.toUpperCase() : 'PAID',
         "Payment Method": s.payment_method || 'Cash',
-        "Logged Cashier": s.user_id || '---',
         "Checkout Date & Time": getExcelDecimalDate(s.created_at) || '---',
         "Due Date": getExcelDecimalDate(s.due_date) || '---',
         "Credit Period (Days)": s.credit_period_days || 0,
@@ -660,42 +701,77 @@ const performBackup = async (fromDate = null, toDate = null) => {
         })()
       };
     });
+
+    if (structuredSales.length > 0) {
+      const subtotalSum = sales.reduce((sum, s) => sum + (s.subtotal || 0), 0);
+      const discountSum = sales.reduce((sum, s) => sum + (s.discount || 0), 0);
+      const taxSum = sales.reduce((sum, s) => sum + (s.tax || 0), 0);
+      const totalSum = sales.reduce((sum, s) => sum + (s.total_amount || 0), 0);
+      const receivedSum = sales.reduce((sum, s) => sum + (s.status?.toLowerCase() === 'paid' ? (s.total_amount || 0) : (s.payment_received || 0)), 0);
+      const balanceSum = sales.reduce((sum, s) => sum + (s.status?.toLowerCase() === 'paid' ? 0 : Math.max(0, (s.total_amount || 0) - (s.payment_received || 0))), 0);
+      
+      structuredSales.push({
+        "Invoice Number": "TOTAL",
+        "Customer Name": "",
+        "Products Sold": "",
+        "Subtotal (Rs.)": subtotalSum,
+        "Discount (Rs.)": discountSum,
+        "Tax Amount (Rs.)": taxSum,
+        "Total Amount (Rs.)": totalSum,
+        "Payment Received (Rs.)": receivedSum,
+        "Outstanding Balance (Rs.)": balanceSum,
+        "Payment Status": "",
+        "Payment Method": "",
+        "Checkout Date & Time": "",
+        "Due Date": "",
+        "Credit Period (Days)": "",
+        "Cost of Goods Sold (Rs.)": totalCostOfSales
+      });
+    }
+
     const wsSalesHeaders = [
-      "Sale ID", "Invoice Number", "Customer ID", "Customer Name", 
-      "Products Sold (Text)", "Sold Items (JSON)", "Subtotal (Rs.)", 
-      "Discount (Rs.)", "Tax Amount (Rs.)", "Tax Rate (%)", "Total Amount (Rs.)", 
+      "Invoice Number", "Customer Name", "Products Sold", "Subtotal (Rs.)", 
+      "Discount (Rs.)", "Tax Amount (Rs.)", "Total Amount (Rs.)", 
       "Payment Received (Rs.)", "Outstanding Balance (Rs.)", "Payment Status", 
-      "Payment Method", "Logged Cashier", "Checkout Date & Time", "Due Date", 
+      "Payment Method", "Checkout Date & Time", "Due Date", 
       "Credit Period (Days)", "Cost of Goods Sold (Rs.)"
     ];
     const wsSales = createWorksheet(structuredSales, wsSalesHeaders);
     setColWidths(wsSales, structuredSales, wsSalesHeaders);
-    applyTableStyles(wsSales, "581C87");
+    applyTableStyles(wsSales, "1E3A8A");
 
     // 3. Transactions Sheet
     const structuredTransactions = transactions.map(t => ({
-      "Transaction ID": t.id,
       "Record Date": getExcelDecimalDate(t.date) || '---',
       "Flow Type": t.type ? t.type.toUpperCase() : 'INCOME',
       "Finance Category": t.category || 'Other',
       "Description Details": t.description,
       "Reference Invoice / PO": t.reference || '---',
       "Transaction Value (Rs.)": t.amount || 0,
-      "Cashier Staff ID": t.user_id || '---',
       "System Log Date": getExcelDecimalDate(t.created_at) || '---'
     }));
+    if (structuredTransactions.length > 0) {
+      const transSum = transactions.reduce((sum, t) => sum + (t.amount || 0), 0);
+      structuredTransactions.push({
+        "Record Date": "TOTAL",
+        "Flow Type": "",
+        "Finance Category": "",
+        "Description Details": "",
+        "Reference Invoice / PO": "",
+        "Transaction Value (Rs.)": transSum,
+        "System Log Date": ""
+      });
+    }
     const wsTransactionsHeaders = [
-      "Transaction ID", "Record Date", "Flow Type", "Finance Category", 
-      "Description Details", "Reference Invoice / PO", "Transaction Value (Rs.)", 
-      "Cashier Staff ID", "System Log Date"
+      "Record Date", "Flow Type", "Finance Category", "Description Details", 
+      "Reference Invoice / PO", "Transaction Value (Rs.)", "System Log Date"
     ];
     const wsTransactions = createWorksheet(structuredTransactions, wsTransactionsHeaders);
     setColWidths(wsTransactions, structuredTransactions, wsTransactionsHeaders);
-    applyTableStyles(wsTransactions, "581C87");
+    applyTableStyles(wsTransactions, "1E3A8A");
 
     // 4. Customers Sheet
     const structuredCustomers = customers.map(c => ({
-      "Customer ID": c.id,
       "Customer Name": c.name,
       "Email": c.email || '',
       "Phone Number": c.phone || '—',
@@ -706,17 +782,15 @@ const performBackup = async (fromDate = null, toDate = null) => {
       "Registered Date": getExcelDecimalDate(c.created_at) || '---'
     }));
     const wsCustomersHeaders = [
-      "Customer ID", "Customer Name", "Email", "Phone Number", 
-      "Address", "NIC Number", "Loyalty Points", "Total Purchases (Rs.)", 
-      "Registered Date"
+      "Customer Name", "Email", "Phone Number", "Address", 
+      "NIC Number", "Loyalty Points", "Total Purchases (Rs.)", "Registered Date"
     ];
     const wsCustomers = createWorksheet(structuredCustomers, wsCustomersHeaders);
     setColWidths(wsCustomers, structuredCustomers, wsCustomersHeaders);
-    applyTableStyles(wsCustomers, "581C87");
+    applyTableStyles(wsCustomers, "1E3A8A");
 
     // 5. Employees Sheet
     const structuredEmployees = employees.map(e => ({
-      "Staff ID": e.id,
       "Full Name": e.name,
       "Designated Role": e.role,
       "Department": e.department,
@@ -728,31 +802,27 @@ const performBackup = async (fromDate = null, toDate = null) => {
       "Date of Joining": getExcelDecimalDate(e.join_date) || '---'
     }));
     const wsEmployeesHeaders = [
-      "Staff ID", "Full Name", "Designated Role", "Department", 
-      "Email Address", "Phone Number", "Salary (Rs.)", "Active Status", 
+      "Full Name", "Designated Role", "Department", "Email Address", 
+      "Phone Number", "Salary (Rs.)", "Active Status", 
       "Attendance Percentage (%)", "Date of Joining"
     ];
     const wsEmployees = createWorksheet(structuredEmployees, wsEmployeesHeaders);
     setColWidths(wsEmployees, structuredEmployees, wsEmployeesHeaders);
-    applyTableStyles(wsEmployees, "581C87");
+    applyTableStyles(wsEmployees, "1E3A8A");
 
     // 6. User Profiles Sheet
     const structuredProfiles = profiles.map(pr => ({
-      "Profile ID": pr.id,
       "User Full Name": pr.name,
       "User Email": pr.email,
       "Access Privilege Level": pr.role ? pr.role.toUpperCase() : 'CASHIER',
-      "Profile Avatar": pr.avatar || '',
-      "User Password": pr.password || '123456',
       "Created Date": getExcelDecimalDate(pr.created_at) || '---'
     }));
     const wsProfilesHeaders = [
-      "Profile ID", "User Full Name", "User Email", "Access Privilege Level", 
-      "Profile Avatar", "User Password", "Created Date"
+      "User Full Name", "User Email", "Access Privilege Level", "Created Date"
     ];
     const wsProfiles = createWorksheet(structuredProfiles, wsProfilesHeaders);
     setColWidths(wsProfiles, structuredProfiles, wsProfilesHeaders);
-    applyTableStyles(wsProfiles, "581C87");
+    applyTableStyles(wsProfiles, "1E3A8A");
 
     // 7. System Settings Sheet
     const structuredSettings = settings.map(set => ({
@@ -764,23 +834,18 @@ const performBackup = async (fromDate = null, toDate = null) => {
       "Tax Rate (%)": set.tax_rate,
       "Backup Email": set.backup_email,
       "Weekly Auto-Backup": set.backup_enabled ? "ENABLED" : "DISABLED",
-      "Logo Path Base64": set.logo_path || '',
-      "Printer Config JSON": typeof set.printer_settings === 'object' ? JSON.stringify(set.printer_settings) : set.printer_settings || '',
-      "Branch Config JSON": typeof set.branch_settings === 'object' ? JSON.stringify(set.branch_settings) : set.branch_settings || '',
       "Last Synced Time": getExcelDecimalDate(set.updated_at) || '---'
     }));
     const wsSettingsHeaders = [
       "Shop Name", "Address", "Phone", "Email", "Currency", "Tax Rate (%)", 
-      "Backup Email", "Weekly Auto-Backup", "Logo Path Base64", "Printer Config JSON", 
-      "Branch Config JSON", "Last Synced Time"
+      "Backup Email", "Weekly Auto-Backup", "Last Synced Time"
     ];
     const wsSettings = createWorksheet(structuredSettings, wsSettingsHeaders);
     setColWidths(wsSettings, structuredSettings, wsSettingsHeaders);
-    applyTableStyles(wsSettings, "581C87");
+    applyTableStyles(wsSettings, "1E3A8A");
 
     // 8. Suppliers Sheet
     const structuredSuppliers = suppliers.map(s => ({
-      "Supplier ID": s.id,
       "Supplier Name": s.name,
       "Email Address": s.email || '---',
       "Phone Number": s.phone || '---',
@@ -790,12 +855,12 @@ const performBackup = async (fromDate = null, toDate = null) => {
       "Registered Date": getExcelDecimalDate(s.created_at) || '---'
     }));
     const wsSuppliersHeaders = [
-      "Supplier ID", "Supplier Name", "Email Address", "Phone Number", 
-      "Address", "Credit Terms", "Payable Balance (Rs.)", "Registered Date"
+      "Supplier Name", "Email Address", "Phone Number", "Address", 
+      "Credit Terms", "Payable Balance (Rs.)", "Registered Date"
     ];
     const wsSuppliers = createWorksheet(structuredSuppliers, wsSuppliersHeaders);
     setColWidths(wsSuppliers, structuredSuppliers, wsSuppliersHeaders);
-    applyTableStyles(wsSuppliers, "581C87");
+    applyTableStyles(wsSuppliers, "1E3A8A");
 
     // 9. Purchase Orders Sheet
     const structuredPO = purchaseOrders.map(po => {
@@ -807,31 +872,37 @@ const performBackup = async (fromDate = null, toDate = null) => {
         }
       } catch(e) {}
       return {
-        "PO ID": po.id,
         "PO Number": po.po_no,
-        "Supplier ID": po.supplier_id || '---',
         "Supplier Name": po.supplier_name,
-        "PO Items (Text)": poItems,
-        "PO Items (JSON)": typeof po.items === 'string' ? po.items : JSON.stringify(po.items),
+        "PO Items": poItems,
         "Total Amount (Rs.)": po.total || 0,
         "PO Status": po.status ? po.status.toUpperCase() : 'PENDING',
         "Due Date": getExcelDecimalDate(po.due_date) || '---',
         "Created Date": getExcelDecimalDate(po.created_at) || '---'
       };
     });
+    if (structuredPO.length > 0) {
+      const poSum = purchaseOrders.reduce((sum, po) => sum + (po.total || 0), 0);
+      structuredPO.push({
+        "PO Number": "TOTAL",
+        "Supplier Name": "",
+        "PO Items": "",
+        "Total Amount (Rs.)": poSum,
+        "PO Status": "",
+        "Due Date": "",
+        "Created Date": ""
+      });
+    }
     const wsPOHeaders = [
-      "PO ID", "PO Number", "Supplier ID", "Supplier Name", 
-      "PO Items (Text)", "PO Items (JSON)", "Total Amount (Rs.)", 
+      "PO Number", "Supplier Name", "PO Items", "Total Amount (Rs.)", 
       "PO Status", "Due Date", "Created Date"
     ];
     const wsPO = createWorksheet(structuredPO, wsPOHeaders);
     setColWidths(wsPO, structuredPO, wsPOHeaders);
-    applyTableStyles(wsPO, "581C87");
+    applyTableStyles(wsPO, "1E3A8A");
 
     // 10. Stock Adjustments Sheet
     const structuredAdjustments = stockAdjustments.map(sa => ({
-      "Adjustment ID": sa.id,
-      "Product ID": sa.product_id,
       "Product Name": sa.product_name,
       "Old Quantity": sa.old_qty || 0,
       "New Quantity": sa.new_qty || 0,
@@ -841,51 +912,29 @@ const performBackup = async (fromDate = null, toDate = null) => {
       "Timestamp": getExcelDecimalDate(sa.created_at) || '---'
     }));
     const wsAdjustmentsHeaders = [
-      "Adjustment ID", "Product ID", "Product Name", "Old Quantity", 
-      "New Quantity", "Adjustment Type", "Reason Details", "Staff Email", 
-      "Timestamp"
+      "Product Name", "Old Quantity", "New Quantity", "Adjustment Type", 
+      "Reason Details", "Staff Email", "Timestamp"
     ];
     const wsAdjustments = createWorksheet(structuredAdjustments, wsAdjustmentsHeaders);
     setColWidths(wsAdjustments, structuredAdjustments, wsAdjustmentsHeaders);
-    applyTableStyles(wsAdjustments, "581C87");
+    applyTableStyles(wsAdjustments, "1E3A8A");
 
     // 11. Quotations Sheet
     const structuredQuotes = quotations.map(q => ({
-      "Quotation ID": q.id,
       "Quotation Number": q.quote_no,
       "Customer Name": q.customer_name,
-      "Items (JSON)": typeof q.items === 'string' ? q.items : JSON.stringify(q.items),
       "Total Amount (Rs.)": q.total || 0,
       "Created Date": getExcelDecimalDate(q.created_at) || '---'
     }));
     const wsQuotesHeaders = [
-      "Quotation ID", "Quotation Number", "Customer Name", "Items (JSON)", 
-      "Total Amount (Rs.)", "Created Date"
+      "Quotation Number", "Customer Name", "Total Amount (Rs.)", "Created Date"
     ];
     const wsQuotes = createWorksheet(structuredQuotes, wsQuotesHeaders);
     setColWidths(wsQuotes, structuredQuotes, wsQuotesHeaders);
-    applyTableStyles(wsQuotes, "581C87");
+    applyTableStyles(wsQuotes, "1E3A8A");
 
-    // 12. Delivery Notes Sheet
-    const structuredDN = deliveryNotes.map(dn => ({
-      "DN ID": dn.id,
-      "DN Number": dn.dn_no,
-      "Customer Name": dn.customer_name,
-      "Items (JSON)": typeof dn.items === 'string' ? dn.items : JSON.stringify(dn.items),
-      "Reference Invoice": dn.reference_invoice,
-      "Created Date": getExcelDecimalDate(dn.created_at) || '---'
-    }));
-    const wsDNHeaders = [
-      "DN ID", "DN Number", "Customer Name", "Items (JSON)", 
-      "Reference Invoice", "Created Date"
-    ];
-    const wsDN = createWorksheet(structuredDN, wsDNHeaders);
-    setColWidths(wsDN, structuredDN, wsDNHeaders);
-    applyTableStyles(wsDN, "581C87");
-
-    // 13. Branches Sheet
+    // 12. Branches Sheet
     const structuredBranches = branches.map(b => ({
-      "Branch ID": b.id,
       "Branch Name": b.name,
       "Branch Code": b.code,
       "Address": b.address || '---',
@@ -893,12 +942,11 @@ const performBackup = async (fromDate = null, toDate = null) => {
       "Created Date": getExcelDecimalDate(b.created_at) || '---'
     }));
     const wsBranchesHeaders = [
-      "Branch ID", "Branch Name", "Branch Code", "Address", 
-      "Phone Number", "Created Date"
+      "Branch Name", "Branch Code", "Address", "Phone Number", "Created Date"
     ];
     const wsBranches = createWorksheet(structuredBranches, wsBranchesHeaders);
     setColWidths(wsBranches, structuredBranches, wsBranchesHeaders);
-    applyTableStyles(wsBranches, "581C87");
+    applyTableStyles(wsBranches, "1E3A8A");
 
     styleOverviewSheet(wsOverview);
 
@@ -908,14 +956,13 @@ const performBackup = async (fromDate = null, toDate = null) => {
     XLSX.utils.book_append_sheet(wb, wsSales, "Sales & Invoices");
     XLSX.utils.book_append_sheet(wb, wsTransactions, "Accounting Ledger");
     XLSX.utils.book_append_sheet(wb, wsCustomers, "Customers");
-    XLSX.utils.book_append_sheet(wb, wsEmployees, "Employees");
-    XLSX.utils.book_append_sheet(wb, wsProfiles, "User Profiles");
-    XLSX.utils.book_append_sheet(wb, wsSettings, "System Settings");
     XLSX.utils.book_append_sheet(wb, wsSuppliers, "Suppliers Directory");
     XLSX.utils.book_append_sheet(wb, wsPO, "Purchase Orders");
     XLSX.utils.book_append_sheet(wb, wsAdjustments, "Stock Adjustments");
     XLSX.utils.book_append_sheet(wb, wsQuotes, "Quotations");
-    XLSX.utils.book_append_sheet(wb, wsDN, "Delivery Notes");
+    XLSX.utils.book_append_sheet(wb, wsEmployees, "Employees");
+    XLSX.utils.book_append_sheet(wb, wsProfiles, "User Profiles");
+    XLSX.utils.book_append_sheet(wb, wsSettings, "System Settings");
     XLSX.utils.book_append_sheet(wb, wsBranches, "Branches");
 
     if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir);
@@ -1018,6 +1065,37 @@ const performBackup = async (fromDate = null, toDate = null) => {
           </div>
         </div>
 
+        <!-- Payment Method Breakdown Section -->
+        <div style="background:#ffffff;padding:24px 28px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0;border-top:1px solid #f1f5f9;">
+          <h2 style="margin:0 0 16px 0;color:#0f172a;font-size:15px;font-weight:800;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #f1f5f9;padding-bottom:12px;">💳 Payment Method Breakdown</h2>
+          <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px 20px;">
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <tbody>
+                <tr>
+                  <td style="padding:8px 0;color:#334155;font-weight:600;">💵 Cash:</td>
+                  <td style="padding:8px 0;font-weight:800;color:#0f172a;text-align:right;">Rs. ${cashAmount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;color:#334155;font-weight:600;">💳 Card:</td>
+                  <td style="padding:8px 0;font-weight:800;color:#0f172a;text-align:right;">Rs. ${cardAmount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;color:#334155;font-weight:600;">📜 Credit:</td>
+                  <td style="padding:8px 0;font-weight:800;color:#0f172a;text-align:right;">Rs. ${creditAmount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 0;color:#334155;font-weight:600;">🏦 Bank Transfer:</td>
+                  <td style="padding:8px 0;font-weight:800;color:#0f172a;text-align:right;">Rs. ${bankTransferAmount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                </tr>
+                <tr style="border-top:2px dashed #cbd5e1;">
+                  <td style="padding:10px 0 2px 0;color:#0f172a;font-weight:800;font-size:14px;">Total:</td>
+                  <td style="padding:10px 0 2px 0;font-weight:900;color:#0f172a;font-size:15px;text-align:right;">Rs. ${paymentTotal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <!-- Secondary Stats: Inventory, Credit, Suppliers -->
         <div style="background:#ffffff;padding:0 28px 28px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0;">
           <h2 style="margin:0 0 16px 0;color:#0f172a;font-size:15px;font-weight:800;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #f1f5f9;padding-bottom:12px;">📋 Detailed Business Statistics</h2>
@@ -1094,7 +1172,18 @@ const performBackup = async (fromDate = null, toDate = null) => {
       from: gmailUser,
       to: rawSettings?.backup_email || 'sanojhardware@gmail.com',
       subject: `Hardware System Backup - ${dateStr}`,
-      text: `Automated backup created on ${new Date().toLocaleString()}. Please find the attached Excel backup.`,
+      text: `Automated backup created on ${new Date().toLocaleString()}.
+
+Payment Method Breakdown:
+----------------------------
+Cash: Rs. ${cashAmount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+Card: Rs. ${cardAmount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+Credit: Rs. ${creditAmount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+Bank Transfer: Rs. ${bankTransferAmount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+----------------------------
+Total: Rs. ${paymentTotal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+
+Please find attached the Excel database backup.`,
       html,
       attachments: [{ filename: fileName, path: filePath }]
     });

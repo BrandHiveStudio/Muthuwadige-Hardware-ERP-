@@ -183,8 +183,9 @@ export function Sidebar({
                     <button
                       key={item.id}
                       onClick={() => {
-                        if (item.id === 'sales' && setSalesTab) {
-                          setSalesTab('new');
+                        if (item.id === 'sales') {
+                          if (setSalesTab) setSalesTab('new');
+                          window.dispatchEvent(new Event('reset-new-sale'));
                         }
                         setCurrentPage(item.id);
                         onClose(); // Auto close on mobile
