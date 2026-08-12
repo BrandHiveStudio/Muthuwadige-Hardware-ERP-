@@ -1,8 +1,5 @@
 const getDefaultApiUrl = () => {
   if (typeof window !== 'undefined') {
-    // If loaded in a web browser pointing to our Express server (e.g. on a phone or client browser)
-    // window.location.origin will be 'http://<host-ip>:5001' or similar.
-    // If the protocol is http/https and it is not a Vite dev port (starts with 517), use the current window origin!
     const { protocol, port, origin } = window.location;
     if ((protocol === 'http:' || protocol === 'https:') && !port.startsWith('517')) {
       return `${origin}/api`;
@@ -26,7 +23,7 @@ export let BASE_URL = API_URL.replace(/\/api$/, '');
 
 export const setApiUrl = (newUrl: string | null) => {
   if (newUrl) {
-    const cleanUrl = newUrl.replace(/\/$/, ''); // strip trailing slash
+    const cleanUrl = newUrl.replace(/\/$/, '');
     localStorage.setItem('erp_host_address', cleanUrl);
     API_URL = `${cleanUrl}/api`;
   } else {
@@ -35,6 +32,30 @@ export const setApiUrl = (newUrl: string | null) => {
   }
   BASE_URL = API_URL.replace(/\/api$/, '');
 };
+
+// Robust fetch helper with configurable timeout & automatic abort controller handling
+export async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 15000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: options.signal || controller.signal
+    });
+    return res;
+  } catch (err: any) {
+    if (err.name === 'AbortError' || controller.signal?.aborted) {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s. Please check server connection.`);
+    }
+    if (err.message && err.message.toLowerCase().includes('failed to fetch')) {
+      throw new Error('Server connection error. Please verify the host server is running.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function handleError(res: Response, fallback: string): Promise<never> {
   let message = fallback;
@@ -54,7 +75,7 @@ async function handleError(res: Response, fallback: string): Promise<never> {
 export const api = {
   auth: {
     login: async (email: string, password?: string) => {
-      const res = await fetch(`${API_URL}/auth/login`, {
+      const res = await fetchWithTimeout(`${API_URL}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -85,7 +106,7 @@ export const api = {
       return { data, error: null };
     },
     register: async (email: string, password?: string, name?: string, role?: string) => {
-      const res = await fetch(`${API_URL}/auth/register`, {
+      const res = await fetchWithTimeout(`${API_URL}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password, name, role })
@@ -116,13 +137,13 @@ export const api = {
       return { data, error: null };
     },
     getUser: async () => {
-      // Mock session retrieval for frontend user parsing
       const localUserStr = localStorage.getItem('erp_user');
       if (localUserStr) {
-        const user = JSON.parse(localUserStr);
-        return { data: { user }, error: null };
+        try {
+          const user = JSON.parse(localUserStr);
+          return { data: { user }, error: null };
+        } catch (_) {}
       }
-      // If none set, fallback to a default admin for developer comfort
       const defaultUser = { id: 'u2', email: 'admin@hardware.com', role: 'admin', name: 'Steven Clark' };
       return { data: { user: defaultUser }, error: null };
     }
@@ -130,12 +151,12 @@ export const api = {
 
   products: {
     getAll: async () => {
-      const res = await fetch(`${API_URL}/products`);
+      const res = await fetchWithTimeout(`${API_URL}/products`);
       if (!res.ok) await handleError(res, 'Failed to fetch inventory products');
       return res.json();
     },
     save: async (data: any, id?: string) => {
-      const res = await fetch(`${API_URL}/products${id ? `/${id}` : ''}`, {
+      const res = await fetchWithTimeout(`${API_URL}/products${id ? `/${id}` : ''}`, {
         method: id ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -144,7 +165,7 @@ export const api = {
       return res.json();
     },
     delete: async (id: string) => {
-      const res = await fetch(`${API_URL}/products/${id}`, { method: 'DELETE' });
+      const res = await fetchWithTimeout(`${API_URL}/products/${id}`, { method: 'DELETE' });
       if (!res.ok) await handleError(res, 'Failed to delete product from database');
       return res.json();
     }
@@ -152,12 +173,12 @@ export const api = {
 
   customers: {
     getAll: async () => {
-      const res = await fetch(`${API_URL}/customers`);
+      const res = await fetchWithTimeout(`${API_URL}/customers`);
       if (!res.ok) throw new Error('Failed to fetch customers');
       return res.json();
     },
     save: async (data: any, id?: string) => {
-      const res = await fetch(`${API_URL}/customers${id ? `/${id}` : ''}`, {
+      const res = await fetchWithTimeout(`${API_URL}/customers${id ? `/${id}` : ''}`, {
         method: id ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -166,7 +187,7 @@ export const api = {
       return res.json();
     },
     delete: async (id: string) => {
-      const res = await fetch(`${API_URL}/customers/${id}`, { method: 'DELETE' });
+      const res = await fetchWithTimeout(`${API_URL}/customers/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to remove customer');
       return res.json();
     }
@@ -174,12 +195,12 @@ export const api = {
 
   suppliers: {
     getAll: async () => {
-      const res = await fetch(`${API_URL}/suppliers`);
+      const res = await fetchWithTimeout(`${API_URL}/suppliers`);
       if (!res.ok) throw new Error('Failed to fetch suppliers');
       return res.json();
     },
     save: async (data: any, id?: string) => {
-      const res = await fetch(`${API_URL}/suppliers${id ? `/${id}` : ''}`, {
+      const res = await fetchWithTimeout(`${API_URL}/suppliers${id ? `/${id}` : ''}`, {
         method: id ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -188,7 +209,7 @@ export const api = {
       return res.json();
     },
     delete: async (id: string) => {
-      const res = await fetch(`${API_URL}/suppliers/${id}`, { method: 'DELETE' });
+      const res = await fetchWithTimeout(`${API_URL}/suppliers/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to remove supplier');
       return res.json();
     }
@@ -196,24 +217,28 @@ export const api = {
 
   sales: {
     getAll: async () => {
-      const res = await fetch(`${API_URL}/sales`);
+      const res = await fetchWithTimeout(`${API_URL}/sales`);
       if (!res.ok) throw new Error('Failed to fetch sales history');
       return res.json();
     },
     save: async (data: any) => {
-      const res = await fetch(`${API_URL}/sales`, {
+      const res = await fetchWithTimeout(`${API_URL}/sales`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
       });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Local POS checkout failed');
+        let message = 'Local POS checkout failed';
+        try {
+          const err = await res.json();
+          message = err.error || message;
+        } catch (_) {}
+        throw new Error(message);
       }
       return res.json();
     },
     markAsPaid: async (id: string) => {
-      const res = await fetch(`${API_URL}/sales/${id}`, {
+      const res = await fetchWithTimeout(`${API_URL}/sales/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'paid' })
@@ -222,7 +247,7 @@ export const api = {
       return res.json();
     },
     void: async (id: string, userEmail: string) => {
-      const res = await fetch(`${API_URL}/sales/${id}/void`, {
+      const res = await fetchWithTimeout(`${API_URL}/sales/${id}/void`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_email: userEmail })
@@ -231,25 +256,43 @@ export const api = {
       return res.json();
     },
     delete: async (id: string) => {
-      const res = await fetch(`${API_URL}/sales/${id}`, { method: 'DELETE' });
+      const res = await fetchWithTimeout(`${API_URL}/sales/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to delete sale from database');
       return res.json();
     },
     returns: {
       getAll: async () => {
-        const res = await fetch(`${API_URL}/sales/returns`);
+        const res = await fetchWithTimeout(`${API_URL}/sales/returns`);
         if (!res.ok) throw new Error('Failed to fetch sales returns history');
         return res.json();
       },
       process: async (data: any) => {
-        const res = await fetch(`${API_URL}/sales/returns`, {
+        const res = await fetchWithTimeout(`${API_URL}/sales/returns`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(data)
         });
         if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.error || 'Failed to process sales return');
+          let message = 'Failed to process sales return';
+          try {
+            const err = await res.json();
+            message = err.error || message;
+          } catch (_) {}
+          throw new Error(message);
+        }
+        return res.json();
+      },
+      delete: async (id: string) => {
+        const res = await fetchWithTimeout(`${API_URL}/sales/returns/${id}`, {
+          method: 'DELETE'
+        });
+        if (!res.ok) {
+          let message = 'Failed to delete sales return';
+          try {
+            const err = await res.json();
+            message = err.error || message;
+          } catch (_) {}
+          throw new Error(message);
         }
         return res.json();
       }
@@ -258,12 +301,12 @@ export const api = {
 
   purchaseOrders: {
     getAll: async () => {
-      const res = await fetch(`${API_URL}/purchase-orders`);
+      const res = await fetchWithTimeout(`${API_URL}/purchase-orders`);
       if (!res.ok) throw new Error('Failed to fetch purchase orders');
       return res.json();
     },
     save: async (data: any) => {
-      const res = await fetch(`${API_URL}/purchase-orders`, {
+      const res = await fetchWithTimeout(`${API_URL}/purchase-orders`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -272,7 +315,7 @@ export const api = {
       return res.json();
     },
     receive: async (id: string) => {
-      const res = await fetch(`${API_URL}/purchase-orders/${id}`, {
+      const res = await fetchWithTimeout(`${API_URL}/purchase-orders/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'received' })
@@ -281,7 +324,7 @@ export const api = {
       return res.json();
     },
     delete: async (id: string) => {
-      const res = await fetch(`${API_URL}/purchase-orders/${id}`, { method: 'DELETE' });
+      const res = await fetchWithTimeout(`${API_URL}/purchase-orders/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to delete purchase order from database');
       return res.json();
     }
@@ -289,12 +332,12 @@ export const api = {
 
   employees: {
     getAll: async () => {
-      const res = await fetch(`${API_URL}/employees`);
+      const res = await fetchWithTimeout(`${API_URL}/employees`);
       if (!res.ok) throw new Error('Failed to load employee profiles');
       return res.json();
     },
     save: async (data: any, id?: string) => {
-      const res = await fetch(`${API_URL}/employees${id ? `/${id}` : ''}`, {
+      const res = await fetchWithTimeout(`${API_URL}/employees${id ? `/${id}` : ''}`, {
         method: id ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -303,7 +346,7 @@ export const api = {
       return res.json();
     },
     delete: async (id: string) => {
-      const res = await fetch(`${API_URL}/employees/${id}`, { method: 'DELETE' });
+      const res = await fetchWithTimeout(`${API_URL}/employees/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to delete staff member');
       return res.json();
     }
@@ -311,12 +354,12 @@ export const api = {
 
   transactions: {
     getAll: async () => {
-      const res = await fetch(`${API_URL}/transactions`);
+      const res = await fetchWithTimeout(`${API_URL}/transactions`);
       if (!res.ok) throw new Error('Failed to fetch financial ledger');
       return res.json();
     },
     save: async (data: any) => {
-      const res = await fetch(`${API_URL}/transactions`, {
+      const res = await fetchWithTimeout(`${API_URL}/transactions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -325,7 +368,7 @@ export const api = {
       return res.json();
     },
     delete: async (id: string) => {
-      const res = await fetch(`${API_URL}/transactions/${id}`, { method: 'DELETE' });
+      const res = await fetchWithTimeout(`${API_URL}/transactions/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to remove transaction record');
       return res.json();
     }
@@ -333,12 +376,12 @@ export const api = {
 
   settings: {
     get: async () => {
-      const res = await fetch(`${API_URL}/settings`);
+      const res = await fetchWithTimeout(`${API_URL}/settings`);
       if (!res.ok) throw new Error('Failed to load shop settings');
       return res.json();
     },
     save: async (data: any) => {
-      const res = await fetch(`${API_URL}/settings`, {
+      const res = await fetchWithTimeout(`${API_URL}/settings`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -350,12 +393,12 @@ export const api = {
 
   profiles: {
     getAll: async () => {
-      const res = await fetch(`${API_URL}/profiles`);
+      const res = await fetchWithTimeout(`${API_URL}/profiles`);
       if (!res.ok) throw new Error('Failed to fetch user profiles');
       return res.json();
     },
     save: async (data: any, id: string) => {
-      const res = await fetch(`${API_URL}/profiles/${id}`, {
+      const res = await fetchWithTimeout(`${API_URL}/profiles/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -364,7 +407,7 @@ export const api = {
       return res.json();
     },
     changePassword: async (id: string, password?: string) => {
-      const res = await fetch(`${API_URL}/profiles/${id}/password`, {
+      const res = await fetchWithTimeout(`${API_URL}/profiles/${id}/password`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password })
@@ -373,7 +416,7 @@ export const api = {
       return res.json();
     },
     delete: async (id: string) => {
-      const res = await fetch(`${API_URL}/profiles/${id}`, { method: 'DELETE' });
+      const res = await fetchWithTimeout(`${API_URL}/profiles/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to delete staff user profile');
       return res.json();
     }
@@ -381,12 +424,12 @@ export const api = {
 
   auditLogs: {
     getAll: async () => {
-      const res = await fetch(`${API_URL}/audit_logs`);
+      const res = await fetchWithTimeout(`${API_URL}/audit_logs`);
       if (!res.ok) throw new Error('Failed to fetch audit logs');
       return res.json();
     },
     log: async (userEmail: string, action: string, details: string) => {
-      const res = await fetch(`${API_URL}/audit_logs`, {
+      const res = await fetchWithTimeout(`${API_URL}/audit_logs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_email: userEmail, action, details })
@@ -398,17 +441,17 @@ export const api = {
 
   quotations: {
     getAll: async () => {
-      const res = await fetch(`${API_URL}/quotations`);
+      const res = await fetchWithTimeout(`${API_URL}/quotations`);
       if (!res.ok) throw new Error('Failed to fetch quotations');
       return res.json();
     },
     getNextNumber: async () => {
-      const res = await fetch(`${API_URL}/quotations/next-number`);
+      const res = await fetchWithTimeout(`${API_URL}/quotations/next-number`);
       if (!res.ok) throw new Error('Failed to fetch next quotation number');
       return res.json();
     },
     save: async (data: any) => {
-      const res = await fetch(`${API_URL}/quotations`, {
+      const res = await fetchWithTimeout(`${API_URL}/quotations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -417,7 +460,7 @@ export const api = {
       return res.json();
     },
     delete: async (id: string) => {
-      const res = await fetch(`${API_URL}/quotations/${id}`, { method: 'DELETE' });
+      const res = await fetchWithTimeout(`${API_URL}/quotations/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to delete quotation');
       return res.json();
     }
@@ -425,12 +468,12 @@ export const api = {
 
   deliveryNotes: {
     getAll: async () => {
-      const res = await fetch(`${API_URL}/delivery_notes`);
+      const res = await fetchWithTimeout(`${API_URL}/delivery_notes`);
       if (!res.ok) throw new Error('Failed to fetch delivery notes');
       return res.json();
     },
     save: async (data: any) => {
-      const res = await fetch(`${API_URL}/delivery_notes`, {
+      const res = await fetchWithTimeout(`${API_URL}/delivery_notes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -439,7 +482,7 @@ export const api = {
       return res.json();
     },
     delete: async (id: string) => {
-      const res = await fetch(`${API_URL}/delivery_notes/${id}`, { method: 'DELETE' });
+      const res = await fetchWithTimeout(`${API_URL}/delivery_notes/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to delete delivery note');
       return res.json();
     }
@@ -448,40 +491,48 @@ export const api = {
   creditNotes: {
     getAll: async () => {
       try {
-        const res = await fetch(`${API_URL}/credit-notes`);
+        const res = await fetchWithTimeout(`${API_URL}/credit-notes`, {}, 8000);
         if (res.ok) return res.json();
       } catch (e) {}
-      const res = await fetch(`${API_URL}/sales/credit-notes`);
+      const res = await fetchWithTimeout(`${API_URL}/sales/credit-notes`);
       if (!res.ok) throw new Error('Failed to fetch credit notes');
       return res.json();
     },
     redeem: async (code: string, amountApplied: number, invoiceNo?: string) => {
-      const res = await fetch(`${API_URL}/credit-notes/redeem`, {
+      const res = await fetchWithTimeout(`${API_URL}/credit-notes/redeem`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, amountApplied, invoiceNo })
       });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to redeem credit note');
+        let message = 'Failed to redeem credit note';
+        try {
+          const err = await res.json();
+          message = err.error || message;
+        } catch (_) {}
+        throw new Error(message);
       }
       return res.json();
     },
     getUsageHistory: async (code?: string) => {
       const url = code ? `${API_URL}/credit-notes/${code}/usage` : `${API_URL}/credit-notes/usage`;
-      const res = await fetch(url);
+      const res = await fetchWithTimeout(url);
       if (!res.ok) throw new Error('Failed to fetch credit note usage history');
       return res.json();
     },
     refundCash: async (code: string, reason?: string, userEmail?: string) => {
-      const res = await fetch(`${API_URL}/credit-notes/refund-cash`, {
+      const res = await fetchWithTimeout(`${API_URL}/credit-notes/refund-cash`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, reason, userEmail })
       });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to process cash refund for credit note');
+        let message = 'Failed to process cash refund for credit note';
+        try {
+          const err = await res.json();
+          message = err.error || message;
+        } catch (_) {}
+        throw new Error(message);
       }
       return res.json();
     }
@@ -489,12 +540,12 @@ export const api = {
 
   stockAdjustments: {
     getAll: async () => {
-      const res = await fetch(`${API_URL}/stock_adjustments`);
+      const res = await fetchWithTimeout(`${API_URL}/stock_adjustments`);
       if (!res.ok) throw new Error('Failed to fetch stock adjustments');
       return res.json();
     },
     create: async (data: any) => {
-      const res = await fetch(`${API_URL}/stock_adjustments`, {
+      const res = await fetchWithTimeout(`${API_URL}/stock_adjustments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -504,4 +555,3 @@ export const api = {
     }
   }
 };
-

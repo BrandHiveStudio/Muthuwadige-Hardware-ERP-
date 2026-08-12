@@ -1,4 +1,4 @@
-import { api, API_URL } from './api';
+import { api, API_URL, fetchWithTimeout } from './api';
 
 // This is a plug-and-play adapter that mimics the official Supabase Client.
 // It intercepts all queries from the app and routes them to our local SQLite Express Server.
@@ -39,7 +39,7 @@ const fetchTable = async (table: string, type?: string, filter?: { col: string; 
     } else if (table === 'credit_notes') {
       data = await api.creditNotes.getAll();
     } else {
-      const res = await fetch(`${API_URL}/${table}`);
+      const res = await fetchWithTimeout(`${API_URL}/${table}`);
       if (res.ok) data = await res.json();
     }
 
@@ -81,7 +81,7 @@ const insertTable = async (table: string, payload: any) => {
     } else if (table === 'sales_returns') {
       result = await api.sales.returns.process(payload);
     } else {
-      const res = await fetch(`${API_URL}/${table}`, {
+      const res = await fetchWithTimeout(`${API_URL}/${table}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -111,7 +111,7 @@ const updateTable = async (table: string, payload: any, val: any) => {
         result = await api.sales.markAsPaid(val);
       } else {
         // Fallback or full update not supported yet
-        const res = await fetch(`${API_URL}/sales/${val}`, {
+        const res = await fetchWithTimeout(`${API_URL}/sales/${val}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -122,7 +122,7 @@ const updateTable = async (table: string, payload: any, val: any) => {
       if (payload.status === 'received') {
         result = await api.purchaseOrders.receive(val);
       } else {
-        const res = await fetch(`${API_URL}/purchase-orders/${val}`, {
+        const res = await fetchWithTimeout(`${API_URL}/purchase-orders/${val}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -136,7 +136,7 @@ const updateTable = async (table: string, payload: any, val: any) => {
     } else if (table === 'system_settings') {
       result = await api.settings.save(payload);
     } else {
-      const res = await fetch(`${API_URL}/${table}/${val}`, {
+      const res = await fetchWithTimeout(`${API_URL}/${table}/${val}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -171,7 +171,7 @@ const deleteTable = async (table: string, val: any) => {
     } else if (table === 'purchase_orders') {
       result = await api.purchaseOrders.delete(val);
     } else {
-      const res = await fetch(`${API_URL}/${table}/${val}`, { method: 'DELETE' });
+      const res = await fetchWithTimeout(`${API_URL}/${table}/${val}`, { method: 'DELETE' });
       if (res.ok) result = await res.json();
     }
 

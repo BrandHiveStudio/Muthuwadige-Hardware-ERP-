@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { createRoot } from 'react-dom/client';
 import {
   SearchIcon,
   PlusIcon,
@@ -23,7 +24,7 @@ import { Modal } from '../components/Modal';
 import { notify } from '../components/Notifications';
 import { supabase } from '../lib/supabaseClient';
 import { useCurrency } from '../context/CurrencyContext';
-import { api, API_URL } from '../lib/api'; 
+import { api, API_URL, fetchWithTimeout } from '../lib/api'; 
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { SaleOrder, SaleItem, Customer, Product, Quotation, DeliveryNote, SalesReturn, CreditNote, CreditNoteUsage } from '../types';
@@ -68,6 +69,15 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
     const title = isSi ? 'මිල ගණන් පත්‍රය' : 'QUOTATION';
     
     const items = typeof quote.items === 'string' ? JSON.parse(quote.items) : (quote.items || []);
+    const productDiscounts = items.reduce((sum: number, i: any) => {
+      const gross = (i.qty || 0) * (i.price || 0);
+      const discVal = Number(i.discount || 0);
+      const discType = i.discountType || 'amount';
+      const discAmt = (discType === 'percent' || discType === 'percentage') ? (gross * discVal / 100) : discVal;
+      return sum + discAmt;
+    }, 0);
+    const grossSubtotal = items.reduce((sum: number, i: any) => sum + ((i.qty || 0) * (i.price || 0)), 0);
+
     const itemsRows = items.map((i: any) => {
       let trackingInfo = '';
       if (i.serialNo || i.batchCode) {
@@ -76,11 +86,19 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
         if (i.batchCode) parts.push(`Batch: ${i.batchCode}`);
         trackingInfo = `<div style="font-size: 10px; font-weight: normal; color: #6b7280; margin-top: 1px;">${parts.join(' | ')}</div>`;
       }
+      const gross = (i.qty || 0) * (i.price || 0);
+      const discVal = Number(i.discount || 0);
+      const discType = i.discountType || 'amount';
+      const discAmt = (discType === 'percent' || discType === 'percentage') ? (gross * discVal / 100) : discVal;
+      const lineTotal = i.total !== undefined ? i.total : Math.max(0, gross - discAmt);
+      const discInfo = discAmt > 0 ? `<div style="font-size: 10px; font-weight: normal; color: #16a34a; margin-top: 1px;">Disc: -${discType === 'percent' || discType === 'percentage' ? discVal + '%' : symbolStr + ' ' + formatNum(discVal)} (-${symbolStr} ${formatNum(discAmt)})</div>` : '';
+
       return `
         <tr style="border-bottom: 1px dashed #e5e7eb;">
           <td colspan="2" style="padding: 5px 0 2px 0; font-weight: bold; text-align: left; color: #1f2937; font-size: 13px;">
             ${i.productName}
             ${trackingInfo}
+            ${discInfo}
           </td>
         </tr>
         <tr style="border-bottom: 1px dashed #e5e7eb;">
@@ -88,7 +106,7 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
             ${i.qty} x ${symbolStr} ${formatNum(i.price)}
           </td>
           <td style="padding: 2px 0 6px 0; text-align: right; color: #1f2937; font-weight: bold; font-size: 13px;">
-            ${symbolStr} ${formatNum(i.total)}
+            ${symbolStr} ${formatNum(lineTotal)}
           </td>
         </tr>
       `;
@@ -302,6 +320,42 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
             </table>
             
             <table class="summary-table">
+              ${grossSubtotal !== quote.total ? `
+              <tr>
+                <td>${isSi ? 'උප එකතුව:' : 'Subtotal:'}</td>
+                <td class="value">${symbolStr} ${formatNum(grossSubtotal)}</td>
+              </tr>
+              ` : ''}
+              ${productDiscounts > 0 ? `
+              <tr style="color: #16a34a;">
+                <td>${isSi ? 'භාණ්ඩ වට්ටම්:' : 'Product Savings:'}</td>
+                <td class="value" style="color: #16a34a;">-${symbolStr} ${formatNum(productDiscounts)}</td>
+              </tr>
+              ` : ''}
+              ${quote.discount_amount && quote.discount_amount > 0 ? `
+              <tr style="color: #dc2626;">
+                <td>${isSi ? 'අමතර වට්ටම්:' : 'Additional Discount:'}</td>
+                <td class="value" style="color: #dc2626;">-${symbolStr} ${formatNum(quote.discount_amount)}</td>
+              </tr>
+              ` : ''}
+              ${(productDiscounts + (quote.discount_amount || 0)) > 0 ? `
+              <tr style="font-weight: bold; color: #16a34a;">
+                <td>${isSi ? 'මුළු ඉතිරිය / වට්ටම:' : 'Total Savings / Discount:'}</td>
+                <td class="value" style="color: #16a34a;">-${symbolStr} ${formatNum(productDiscounts + (quote.discount_amount || 0))}</td>
+              </tr>
+              ` : ''}
+              ${quote.transportation_fee && quote.transportation_fee > 0 ? `
+              <tr>
+                <td>${isSi ? 'ප්‍රවාහන ගාස්තු:' : 'Transportation:'}</td>
+                <td class="value">+${symbolStr} ${formatNum(quote.transportation_fee)}</td>
+              </tr>
+              ` : ''}
+              ${quote.tax_amount && quote.tax_amount > 0 ? `
+              <tr>
+                <td>${isSi ? 'බදු:' : 'Tax:'}</td>
+                <td class="value">+${symbolStr} ${formatNum(quote.tax_amount)}</td>
+              </tr>
+              ` : ''}
               <tr class="total-row">
                 <td>${isSi ? 'මුළු එකතුව:' : 'Total Amount:'}</td>
                 <td class="value">${symbolStr} ${formatNum(quote.total)}</td>
@@ -347,6 +401,16 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
   const signeeLabel = isSi ? 'බලයලත් අත්සන' : 'Authorized Signee';
 
   const items = typeof quote.items === 'string' ? JSON.parse(quote.items) : (quote.items || []);
+  const productDiscounts = items.reduce((sum: number, i: any) => {
+    const gross = (i.qty || 0) * (i.price || 0);
+    const discVal = Number(i.discount || 0);
+    const discType = i.discountType || 'amount';
+    const discAmt = (discType === 'percent' || discType === 'percentage') ? (gross * discVal / 100) : discVal;
+    return sum + discAmt;
+  }, 0);
+  const grossSubtotal = items.reduce((sum: number, i: any) => sum + ((i.qty || 0) * (i.price || 0)), 0);
+
+  const discColLabel = isSi ? 'වට්ටම' : 'Discount';
   const itemsRows = items.map((i: any) => {
     let trackingInfo = '';
     if (i.serialNo || i.batchCode) {
@@ -355,6 +419,13 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
       if (i.batchCode) parts.push(`Batch: ${i.batchCode}`);
       trackingInfo = `<div style="font-size: 9px; font-weight: normal; color: #9ca3af; margin-top: 2px;">${parts.join(' | ')}</div>`;
     }
+    const gross = (i.qty || 0) * (i.price || 0);
+    const discVal = Number(i.discount || 0);
+    const discType = i.discountType || 'amount';
+    const discAmt = (discType === 'percent' || discType === 'percentage') ? (gross * discVal / 100) : discVal;
+    const lineTotal = i.total !== undefined ? i.total : Math.max(0, gross - discAmt);
+    const discStr = discAmt > 0 ? (discType === 'percent' || discType === 'percentage' ? `-${discVal}%` : `-${symbolStr} ${formatNum(discVal)}`) : '-';
+
     return `
       <tr style="border-bottom: 1px solid #e5e7eb;">
         <td style="padding: 12px 15px; font-weight: 700; text-align: left; color: #464646;">
@@ -363,7 +434,8 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
         </td>
         <td style="padding: 12px 15px; text-align: center; color: #4b5563;">${i.qty}</td>
         <td style="padding: 12px 15px; text-align: right; color: #4b5563;">${symbolStr} ${formatNum(i.price)}</td>
-        <td style="padding: 12px 15px; text-align: right; color: #464646; font-weight: 700;">${symbolStr} ${formatNum(i.total)}</td>
+        <td style="padding: 12px 15px; text-align: right; color: #16a34a; font-weight: 600;">${discStr}</td>
+        <td style="padding: 12px 15px; text-align: right; color: #464646; font-weight: 700;">${symbolStr} ${formatNum(lineTotal)}</td>
       </tr>
     `;
   }).join('');
@@ -607,9 +679,10 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
               <thead>
                 <tr>
                   <th style="text-align: left;">${descCol}</th>
-                  <th style="width: 80px; text-align: center;">${qtyCol}</th>
-                  <th style="width: 120px; text-align: right;">${priceCol}</th>
-                  <th style="width: 140px; text-align: right;">${totalCol}</th>
+                  <th style="width: 70px; text-align: center;">${qtyCol}</th>
+                  <th style="width: 110px; text-align: right;">${priceCol}</th>
+                  <th style="width: 100px; text-align: right;">${discColLabel}</th>
+                  <th style="width: 130px; text-align: right;">${totalCol}</th>
                 </tr>
               </thead>
               <tbody>
@@ -620,6 +693,42 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
           
           <div class="totals-section">
             <div class="totals-box">
+              ${grossSubtotal !== quote.total ? `
+              <div class="total-row" style="color: #6b7280;">
+                <span>${isSi ? 'උප එකතුව:' : 'Subtotal:'}</span>
+                <span>${symbolStr} ${formatNum(grossSubtotal)}</span>
+              </div>
+              ` : ''}
+              ${productDiscounts > 0 ? `
+              <div class="total-row" style="color: #16a34a;">
+                <span>${isSi ? 'භාණ්ඩ වට්ටම්:' : 'Product Savings:'}</span>
+                <span>-${symbolStr} ${formatNum(productDiscounts)}</span>
+              </div>
+              ` : ''}
+              ${quote.discount_amount && quote.discount_amount > 0 ? `
+              <div class="total-row" style="color: #dc2626;">
+                <span>${isSi ? 'අමතර වට්ටම්:' : 'Additional Discount:'}</span>
+                <span>-${symbolStr} ${formatNum(quote.discount_amount)}</span>
+              </div>
+              ` : ''}
+              ${(productDiscounts + (quote.discount_amount || 0)) > 0 ? `
+              <div class="total-row" style="font-weight: 700; color: #16a34a; border-top: 1px dashed #e5e7eb; margin-top: 4px; padding-top: 6px;">
+                <span>${isSi ? 'මුළු ඉතිරිය / වට්ටම:' : 'Total Savings / Discount:'}</span>
+                <span>-${symbolStr} ${formatNum(productDiscounts + (quote.discount_amount || 0))}</span>
+              </div>
+              ` : ''}
+              ${quote.transportation_fee && quote.transportation_fee > 0 ? `
+              <div class="total-row" style="color: #2563eb;">
+                <span>${isSi ? 'ප්‍රවාහන ගාස්තු:' : 'Transportation:'}</span>
+                <span>+${symbolStr} ${formatNum(quote.transportation_fee)}</span>
+              </div>
+              ` : ''}
+              ${quote.tax_amount && quote.tax_amount > 0 ? `
+              <div class="total-row" style="color: #d97706;">
+                <span>${isSi ? 'බදු:' : 'Tax:'}</span>
+                <span>+${symbolStr} ${formatNum(quote.tax_amount)}</span>
+              </div>
+              ` : ''}
               <div class="total-row grand-total">
                 <span>${totalDueLabel}</span>
                 <span>${symbolStr} ${formatNum(quote.total)}</span>
@@ -2573,6 +2682,165 @@ function CreditNoteReceiptPreview({ creditNoteRecord, isSinhala }: { creditNoteR
   );
 }
 
+// Quotation Preview Component
+function QuotationPreview({ quote, isSinhala, shopSettings }: { quote: any; isSinhala: boolean; shopSettings: any }) {
+  const symbol = isSinhala ? 'රු.' : 'Rs.';
+  const convert = (num: number) => num || 0;
+
+  const rawItems = typeof quote.items === 'string'
+    ? safeParseJson(quote.items, [])
+    : (Array.isArray(quote.items) ? quote.items : []);
+
+  return (
+    <div id="quotation-preview-container" className="p-6 space-y-6 max-w-3xl mx-auto bg-white rounded-3xl text-left border border-slate-200 shadow-sm font-sans">
+      {/* Business Header */}
+      <div className="flex justify-between items-start border-b border-slate-200 pb-5 flex-wrap gap-4">
+        <div className="flex items-center gap-4">
+          <img
+            src={shopSettings?.logo_path || './images/logo.png'}
+            alt="Shop Logo"
+            className="w-16 h-16 object-contain"
+            onError={(e: any) => { e.target.style.display = 'none'; }}
+          />
+          <div>
+            <h3 className="text-base font-black text-slate-900 uppercase tracking-wide">{shopSettings?.shop_name || 'Hardware & ERP Store'}</h3>
+            <p className="text-xs font-semibold text-slate-500">{shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</p>
+            <p className="text-xs font-bold text-slate-600">Tel: {shopSettings?.phone || '077 076 076 7'}</p>
+          </div>
+        </div>
+
+        <div className="text-right">
+          <span className="px-3 py-1 bg-amber-100 text-amber-900 font-black text-xs rounded-full uppercase tracking-wider block mb-1">
+            {isSinhala ? 'මිල ගණන් පූර්ව දර්ශනය' : 'Quotation Preview'}
+          </span>
+          <div className="text-sm font-black font-mono text-amber-600">{quote.quote_no || quote.quoteNo}</div>
+          <div className="text-xs font-bold text-slate-400">Date: {new Date(quote.created_at || Date.now()).toLocaleDateString()}</div>
+          <div className="text-xs font-black text-emerald-600 mt-1">Validity: {quote.validity_period || '30 Days'}</div>
+        </div>
+      </div>
+
+      {/* Customer Details Card */}
+      <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div>
+          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">{isSinhala ? 'පාරිභෝගිකයා' : 'Customer Name'}</span>
+          <span className="text-xs font-black text-slate-800">{quote.customer_name || quote.customerName || 'Guest Customer'}</span>
+        </div>
+        <div>
+          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">{isSinhala ? 'දුරකථන අංකය' : 'Phone Number'}</span>
+          <span className="text-xs font-bold text-slate-700">{quote.customer_phone || quote.customerPhone || 'N/A'}</span>
+        </div>
+        <div>
+          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">{isSinhala ? 'ලිපිනය' : 'Address'}</span>
+          <span className="text-xs font-bold text-slate-700">{quote.customer_address || quote.customerAddress || 'N/A'}</span>
+        </div>
+      </div>
+
+      {/* Product Items Table */}
+      <div className="overflow-x-auto rounded-2xl border border-slate-200">
+        <table className="w-full text-xs text-left border-collapse">
+          <thead>
+            <tr className="bg-slate-100 border-b border-slate-200 font-black text-slate-700 uppercase tracking-wider text-[10px]">
+              <th className="p-3">#</th>
+              <th className="p-3">{isSinhala ? 'භාණ්ඩ විස්තරය' : 'Product Description'}</th>
+              <th className="p-3 text-center">{isSinhala ? 'ප්‍රමාණය' : 'Qty'}</th>
+              <th className="p-3 text-right">{isSinhala ? 'ඒකක මිල' : 'Unit Price'}</th>
+              <th className="p-3 text-right">{isSinhala ? 'වට්ටම' : 'Discount'}</th>
+              <th className="p-3 text-right">{isSinhala ? 'එකතුව' : 'Line Total'}</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {rawItems.map((item: any, idx: number) => {
+              const gross = (item.qty || 0) * (item.price || 0);
+              const discVal = Number(item.discount || 0);
+              const discType = item.discountType || 'amount';
+              const discAmt = (discType === 'percent' || discType === 'percentage') ? (gross * discVal / 100) : discVal;
+              const lineTotal = item.total !== undefined ? item.total : Math.max(0, gross - discAmt);
+              const discDisplay = discAmt > 0 
+                ? ((discType === 'percent' || discType === 'percentage') ? `-${discVal}%` : `-${symbol} ${convert(discVal).toLocaleString()}`)
+                : '-';
+
+              return (
+                <tr key={idx} className="hover:bg-slate-50">
+                  <td className="p-3 font-mono font-bold text-slate-400">{idx + 1}</td>
+                  <td className="p-3 font-bold text-slate-800">
+                    {item.productName || item.name}
+                    {item.unit && <span className="ml-1.5 px-1.5 py-0.5 bg-amber-50 text-amber-800 text-[9px] font-bold rounded">{item.unit}</span>}
+                    {(item.barcode || item.sku) && <div className="text-[9px] font-mono text-slate-400">Code: {item.barcode || item.sku}</div>}
+                  </td>
+                  <td className="p-3 text-center font-black text-slate-700">{item.qty}</td>
+                  <td className="p-3 text-right font-semibold text-slate-600">{symbol} {convert(item.price).toLocaleString()}</td>
+                  <td className="p-3 text-right font-bold text-emerald-600">{discDisplay}</td>
+                  <td className="p-3 text-right font-black text-slate-900">{symbol} {convert(lineTotal).toLocaleString()}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Financial Summary */}
+      {(() => {
+        const productDiscounts = rawItems.reduce((sum: number, item: any) => {
+          const gross = (item.qty || 0) * (item.price || 0);
+          const discVal = Number(item.discount || 0);
+          const discType = item.discountType || 'amount';
+          const discAmt = (discType === 'percent' || discType === 'percentage') ? (gross * discVal / 100) : discVal;
+          return sum + discAmt;
+        }, 0);
+        const grossSubtotal = rawItems.reduce((sum: number, item: any) => sum + ((item.qty || 0) * (item.price || 0)), 0);
+        const totalSavings = productDiscounts + Number(quote.discount_amount || 0);
+
+        return (
+          <div className="flex justify-end">
+            <div className="w-full md:w-80 bg-amber-50/70 p-4 rounded-2xl border border-amber-200/80 space-y-1.5 text-xs font-bold">
+              {grossSubtotal > 0 && (
+                <div className="flex justify-between text-slate-600">
+                  <span>{isSinhala ? 'උප එකතුව:' : 'Subtotal:'}</span>
+                  <span>{symbol} {convert(grossSubtotal).toLocaleString()}</span>
+                </div>
+              )}
+              {productDiscounts > 0 && (
+                <div className="flex justify-between text-emerald-600">
+                  <span>{isSinhala ? 'භාණ්ඩ වට්ටම්:' : 'Product Savings:'}</span>
+                  <span>-{symbol} {convert(productDiscounts).toLocaleString()}</span>
+                </div>
+              )}
+              {quote.discount_amount && quote.discount_amount > 0 && (
+                <div className="flex justify-between text-rose-600">
+                  <span>{isSinhala ? 'අමතර වට්ටම්:' : 'Additional Discount:'}</span>
+                  <span>-{symbol} {convert(quote.discount_amount).toLocaleString()}</span>
+                </div>
+              )}
+              {totalSavings > 0 && (
+                <div className="flex justify-between text-emerald-700 font-black border-t border-dashed border-amber-200 pt-1.5 pb-0.5">
+                  <span>{isSinhala ? 'මුළු ඉතිරිය / වට්ටම:' : 'Total Savings / Discount:'}</span>
+                  <span>-{symbol} {convert(totalSavings).toLocaleString()}</span>
+                </div>
+              )}
+              {quote.transportation_fee && quote.transportation_fee > 0 && (
+                <div className="flex justify-between text-blue-600">
+                  <span>{isSinhala ? 'ප්‍රවාහන ගාස්තු:' : 'Transportation:'}</span>
+                  <span>+{symbol} {convert(quote.transportation_fee).toLocaleString()}</span>
+                </div>
+              )}
+              {quote.tax_amount && quote.tax_amount > 0 && (
+                <div className="flex justify-between text-amber-800">
+                  <span>{isSinhala ? 'බදු:' : 'Tax:'}</span>
+                  <span>+{symbol} {convert(quote.tax_amount).toLocaleString()}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-sm font-black text-amber-950 border-t border-amber-300 pt-2 mt-1">
+                <span>{isSinhala ? 'මුළු එකතුව:' : 'Grand Total:'}</span>
+                <span className="text-amber-600">{symbol} {convert(quote.total).toLocaleString()}</span>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
 interface SalesProps {
   userRole?: string;
   initialTab?: Tab;
@@ -3159,31 +3427,31 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     if (!returnRecord) return;
     try {
       setIsLoading(true);
-      const htmlContent = generateReturnPrintHTML(returnRecord, shopSettings, isSinhala);
-      const cleanHtml = htmlContent.replace(/window\.print\(\);?/g, '');
 
-      const iframe = document.createElement('iframe');
-      iframe.style.position = 'fixed';
-      iframe.style.left = '-9999px';
-      iframe.style.top = '-9999px';
-      iframe.style.width = '210mm';
-      iframe.style.height = '297mm';
-      iframe.style.border = '0';
-      iframe.style.visibility = 'hidden';
-      document.body.appendChild(iframe);
+      let targetElement = document.getElementById('return-receipt-preview');
+      let tempContainer: HTMLElement | null = null;
+      let root: any = null;
 
-      const doc = iframe.contentWindow?.document || iframe.contentDocument;
-      if (!doc) throw new Error('Failed to create iframe document');
+      if (!targetElement) {
+        tempContainer = document.createElement('div');
+        tempContainer.style.position = 'fixed';
+        tempContainer.style.left = '-9999px';
+        tempContainer.style.top = '0';
+        tempContainer.style.width = '672px';
+        tempContainer.style.background = '#ffffff';
+        tempContainer.style.zIndex = '-9999';
+        document.body.appendChild(tempContainer);
 
-      doc.open();
-      doc.write(cleanHtml);
-      doc.close();
+        root = createRoot(tempContainer);
+        root.render(<ReturnReceiptPreview returnRecord={returnRecord} isSinhala={isSinhala} />);
+        
+        await new Promise((r) => setTimeout(r, 250));
+        targetElement = tempContainer.querySelector('#return-receipt-preview') || tempContainer;
+      }
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      if (!targetElement) throw new Error('Failed to render return receipt preview');
 
-      const targetElement = (doc.querySelector('.receipt-container') || doc.body) as HTMLElement;
-
-      const canvas = await html2canvas(targetElement, {
+      const canvas = await html2canvas(targetElement as HTMLElement, {
         scale: 3,
         useCORS: true,
         allowTaint: true,
@@ -3191,46 +3459,35 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         logging: false
       });
 
-      if (document.body.contains(iframe)) {
-        document.body.removeChild(iframe);
+      if (root && tempContainer) {
+        root.unmount();
+        if (document.body.contains(tempContainer)) {
+          document.body.removeChild(tempContainer);
+        }
       }
 
       const imgData = canvas.toDataURL('image/png');
-      const printerConfig = shopSettings?.printer_settings 
-        ? (typeof shopSettings.printer_settings === 'object' 
-            ? shopSettings.printer_settings 
-            : (() => { try { return JSON.parse(shopSettings.printer_settings); } catch(e) { return {}; } })())
-        : {};
-      const is80mm = printerConfig?.paperSize === '80mm';
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
 
-      let pdf: jsPDF;
-      if (is80mm) {
-        const pdfWidth = 80;
-        const imgWidth = 80;
-        const imgHeight = (canvas.height * imgWidth) / canvas.width;
-        pdf = new jsPDF('p', 'mm', [80, Math.max(120, imgHeight)]);
-        pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+      const imgWidth = 190;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      const xPos = (pdfWidth - imgWidth) / 2;
+
+      if (imgHeight <= pdfHeight - 20) {
+        pdf.addImage(imgData, 'PNG', xPos, 10, imgWidth, imgHeight);
       } else {
-        pdf = new jsPDF('p', 'mm', 'a4');
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = pdf.internal.pageSize.getHeight();
-        const imgWidth = pdfWidth;
-        const imgHeight = (canvas.height * pdfWidth) / canvas.width;
+        let heightLeft = imgHeight;
+        let position = 10;
+        pdf.addImage(imgData, 'PNG', xPos, position, imgWidth, imgHeight);
+        heightLeft -= pdfHeight;
 
-        if (imgHeight <= pdfHeight) {
-          pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
-        } else {
-          let heightLeft = imgHeight;
-          let position = 0;
-          pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        while (heightLeft > 0) {
+          position = heightLeft - imgHeight;
+          pdf.addPage();
+          pdf.addImage(imgData, 'PNG', xPos, position, imgWidth, imgHeight);
           heightLeft -= pdfHeight;
-
-          while (heightLeft > 0) {
-            position = heightLeft - imgHeight;
-            pdf.addPage();
-            pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-            heightLeft -= pdfHeight;
-          }
         }
       }
 
@@ -3422,6 +3679,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   const [creditCustomerNIC, setCreditCustomerNIC] = useState('');
 
   const processCreditSale = async () => {
+    if (isCreditLoading || isLoading) return;
     if (!creditCustomerName.trim()) {
       return alert(t("Please enter a customer name.", "කරුණාකර පාරිභෝගිකයාගේ නම ඇතුළත් කරන්න."));
     }
@@ -3478,9 +3736,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
             total_purchases: 0
           };
           const { data: newCust } = await supabase.from('customers').insert([newCustPayload]).select().single();
-          if (newCust) {
+          if (newCust && newCust.id) {
             customerId = newCust.id;
-            finalCustomerName = newCust.name;
+            finalCustomerName = newCust.name || newCustPayload.name || finalCustomerName;
           }
         } catch (e) {
           console.warn("Failed to auto-register customer, proceeding with manual details:", e);
@@ -3600,7 +3858,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
   const fetchNextQuoteNumber = async () => {
     try {
-      const res = await fetch(`${API_URL}/quotations/next-number`);
+      const res = await fetchWithTimeout(`${API_URL}/quotations/next-number`);
       if (res.ok) {
         const data = await res.json();
         if (data.nextNumber) setQuoteNo(data.nextNumber);
@@ -3611,13 +3869,23 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   };
 
   const fetchData = async () => {
+    const fetchStart = Date.now();
+    console.log('[START] Sales Data Fetch & Sync');
     setIsLoading(true);
     try {
       const { data: prodData } = await supabase.from('products').select('*');
       if (prodData) setProducts(prodData);
 
       const { data: custData } = await supabase.from('customers').select('*');
-      if (custData) setCustomers(custData);
+      const custIdMap = new Map<string, any>();
+      const custNameMap = new Map<string, any>();
+      if (custData) {
+        setCustomers(custData);
+        custData.forEach((c: any) => {
+          if (c.id) custIdMap.set(c.id, c);
+          if (c.name) custNameMap.set(c.name.toLowerCase().trim(), c);
+        });
+      }
 
       const { data: salesData } = await supabase
         .from('sales')
@@ -3626,10 +3894,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       
       if (salesData) {
         const mappedOrders = salesData.map((s: any) => {
-          const matchedCust = custData?.find((c: any) => 
-            (s.customer_id && c.id === s.customer_id) || 
-            (s.customer_name && c.name && c.name.toLowerCase() === s.customer_name.toLowerCase())
-          );
+          const matchedCust = (s.customer_id ? custIdMap.get(s.customer_id) : null) || 
+            (s.customer_name ? custNameMap.get(s.customer_name.toLowerCase().trim()) : null);
+
           const validName = (s.customerName && s.customerName.trim() && s.customerName !== 'Guest Customer' && s.customerName !== 'Guest')
             ? s.customerName.trim()
             : ((s.customer_name && s.customer_name.trim() && s.customer_name !== 'Guest Customer' && s.customer_name !== 'Guest')
@@ -3675,7 +3942,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       }
 
       try {
-        const qRes = await fetch(`${API_URL}/quotations`);
+        const qRes = await fetchWithTimeout(`${API_URL}/quotations`);
         if (qRes.ok) {
           const qJson = await qRes.json();
           setQuotes(qJson || []);
@@ -3689,7 +3956,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       }
 
       try {
-        const nRes = await fetch(`${API_URL}/quotations/next-number`);
+        const nRes = await fetchWithTimeout(`${API_URL}/quotations/next-number`);
         if (nRes.ok) {
           const nJson = await nRes.json();
           if (nJson.nextNumber) setQuoteNo(nJson.nextNumber);
@@ -3705,6 +3972,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       console.error("Error fetching data:", error);
     } finally {
       setIsLoading(false);
+      console.log(`[END] Sales Data Fetch & Sync - ${Date.now() - fetchStart}ms`);
     }
   };
 
@@ -3728,56 +3996,82 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
   useEffect(() => { fetchData(); }, [tab]);
 
-  // Download Receipt via html2canvas as a PNG/PDF depending on selected language
+  // Download Sales Receipt PDF using the exact Preview design
   const downloadReceiptPDF = async (order: SaleOrder) => {
-    const element = document.getElementById('receipt-preview');
-    if (!element) {
-      alert(t("Receipt preview element not found!", "ඉන්වොයිස් පෙරදසුන හමු නොවීය!"));
-      return;
-    }
-
+    if (!order) return;
     try {
-      // Temporarily scroll to top of preview so html2canvas captures entire height without clipping if scrolled
-      const parentContainer = element.parentElement;
-      const originalScrollTop = parentContainer ? parentContainer.scrollTop : 0;
-      if (parentContainer) parentContainer.scrollTop = 0;
+      setIsLoading(true);
 
-      // Render the HTML element to canvas with high resolution scale
-      const canvas = await html2canvas(element, {
-        scale: 3, // scale up for high definition sharp text
-        useCORS: true, // handle logo loading correctly
+      let targetElement = document.getElementById('receipt-preview');
+      let tempContainer: HTMLElement | null = null;
+      let root: any = null;
+
+      if (!targetElement) {
+        tempContainer = document.createElement('div');
+        tempContainer.style.position = 'fixed';
+        tempContainer.style.left = '-9999px';
+        tempContainer.style.top = '0';
+        tempContainer.style.width = '672px';
+        tempContainer.style.background = '#ffffff';
+        tempContainer.style.zIndex = '-9999';
+        document.body.appendChild(tempContainer);
+
+        root = createRoot(tempContainer);
+        root.render(<ReceiptPreview order={order} isSinhala={isSinhala} customers={customers} salesReturns={salesReturnsList} />);
+        
+        await new Promise((r) => setTimeout(r, 250));
+        targetElement = tempContainer.querySelector('#receipt-preview') || tempContainer;
+      }
+
+      if (!targetElement) throw new Error('Failed to render receipt preview');
+
+      const canvas = await html2canvas(targetElement as HTMLElement, {
+        scale: 3,
+        useCORS: true,
         allowTaint: true,
         backgroundColor: '#ffffff',
         logging: false
       });
 
-      // Restore scroll position
-      if (parentContainer) parentContainer.scrollTop = originalScrollTop;
+      if (root && tempContainer) {
+        root.unmount();
+        if (document.body.contains(tempContainer)) {
+          document.body.removeChild(tempContainer);
+        }
+      }
 
       const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
 
-      if (!isSinhala) {
-        // When English is selected, enable PDF download functionality
-        const pdf = new jsPDF('p', 'mm', 'a4');
-        const imgWidth = 190; // Page width minus margins
-        const pageHeight = pdf.internal.pageSize.getHeight();
-        const imgHeight = (canvas.height * imgWidth) / canvas.width;
-        let position = 10; // Start with a small top margin
+      const imgWidth = 190;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      const xPos = (pdfWidth - imgWidth) / 2;
 
-        pdf.addImage(imgData, 'PNG', 10, position, imgWidth, imgHeight);
-        pdf.save(`Invoice_${order.invoiceNo}.pdf`);
+      if (imgHeight <= pdfHeight - 20) {
+        pdf.addImage(imgData, 'PNG', xPos, 10, imgWidth, imgHeight);
       } else {
-        // Fallback to high-quality PNG image for Sinhala to preserve all complex Sinhala glyphs perfectly
-        const link = document.createElement('a');
-        link.download = `Invoice_${order.invoiceNo}.png`;
-        link.href = imgData;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        let heightLeft = imgHeight;
+        let position = 10;
+        pdf.addImage(imgData, 'PNG', xPos, position, imgWidth, imgHeight);
+        heightLeft -= pdfHeight;
+
+        while (heightLeft > 0) {
+          position = heightLeft - imgHeight;
+          pdf.addPage();
+          pdf.addImage(imgData, 'PNG', xPos, position, imgWidth, imgHeight);
+          heightLeft -= pdfHeight;
+        }
       }
+
+      const invNo = order.invoiceNo || order.invoice_no || 'Bill';
+      pdf.save(`Invoice_${invNo}.pdf`);
     } catch (err: any) {
-      console.error("Failed to download receipt:", err);
+      console.error("Failed to download receipt PDF:", err);
       alert(t("Failed to download receipt: ", "ඉන්වොයිසිය බාගත කිරීමට අපොහොසත් විය: ") + (err?.message || err));
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -3809,38 +4103,36 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     }, 300);
   };
 
-  // Download Quotation PDF using the exact same layout and details as Print/Preview version
+  // Download Quotation PDF using exact Preview layout and styling
   const handleDownloadQuotePDF = async (quote: any) => {
     if (!quote) return;
     try {
       setIsLoading(true);
-      const htmlContent = generateQuotePrintHTML(quote, isSinhala, shopSettings);
-      const cleanHtml = htmlContent.replace(/window\.print\(\);?/g, '');
 
-      const iframe = document.createElement('iframe');
-      iframe.style.position = 'fixed';
-      iframe.style.left = '-9999px';
-      iframe.style.top = '-9999px';
-      iframe.style.width = '210mm';
-      iframe.style.height = '297mm';
-      iframe.style.border = '0';
-      iframe.style.visibility = 'hidden';
-      document.body.appendChild(iframe);
+      let targetElement = document.getElementById('quotation-preview-container');
+      let tempContainer: HTMLElement | null = null;
+      let root: any = null;
 
-      const doc = iframe.contentWindow?.document || iframe.contentDocument;
-      if (!doc) {
-        throw new Error('Failed to create iframe document');
+      if (!targetElement) {
+        tempContainer = document.createElement('div');
+        tempContainer.style.position = 'fixed';
+        tempContainer.style.left = '-9999px';
+        tempContainer.style.top = '0';
+        tempContainer.style.width = '750px';
+        tempContainer.style.background = '#ffffff';
+        tempContainer.style.zIndex = '-9999';
+        document.body.appendChild(tempContainer);
+
+        root = createRoot(tempContainer);
+        root.render(<QuotationPreview quote={quote} isSinhala={isSinhala} shopSettings={shopSettings} />);
+        
+        await new Promise((r) => setTimeout(r, 250));
+        targetElement = tempContainer.querySelector('#quotation-preview-container') || tempContainer;
       }
 
-      doc.open();
-      doc.write(cleanHtml);
-      doc.close();
+      if (!targetElement) throw new Error('Failed to render quotation preview');
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      const targetElement = (doc.querySelector('.invoice-container') || doc.querySelector('.receipt-container') || doc.body) as HTMLElement;
-
-      const canvas = await html2canvas(targetElement, {
+      const canvas = await html2canvas(targetElement as HTMLElement, {
         scale: 3,
         useCORS: true,
         allowTaint: true,
@@ -3848,46 +4140,35 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         logging: false
       });
 
-      if (document.body.contains(iframe)) {
-        document.body.removeChild(iframe);
+      if (root && tempContainer) {
+        root.unmount();
+        if (document.body.contains(tempContainer)) {
+          document.body.removeChild(tempContainer);
+        }
       }
 
       const imgData = canvas.toDataURL('image/png');
-      const printerConfig = shopSettings?.printer_settings 
-        ? (typeof shopSettings.printer_settings === 'object' 
-            ? shopSettings.printer_settings 
-            : (() => { try { return JSON.parse(shopSettings.printer_settings); } catch(e) { return {}; } })())
-        : {};
-      const is80mm = printerConfig?.paperSize === '80mm';
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
 
-      let pdf: jsPDF;
-      if (is80mm) {
-        const pdfWidth = 80;
-        const imgWidth = 80;
-        const imgHeight = (canvas.height * imgWidth) / canvas.width;
-        pdf = new jsPDF('p', 'mm', [80, Math.max(120, imgHeight)]);
-        pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+      const imgWidth = 190;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      const xPos = (pdfWidth - imgWidth) / 2;
+
+      if (imgHeight <= pdfHeight - 20) {
+        pdf.addImage(imgData, 'PNG', xPos, 10, imgWidth, imgHeight);
       } else {
-        pdf = new jsPDF('p', 'mm', 'a4');
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = pdf.internal.pageSize.getHeight();
-        const imgWidth = pdfWidth;
-        const imgHeight = (canvas.height * pdfWidth) / canvas.width;
+        let heightLeft = imgHeight;
+        let position = 10;
+        pdf.addImage(imgData, 'PNG', xPos, position, imgWidth, imgHeight);
+        heightLeft -= pdfHeight;
 
-        if (imgHeight <= pdfHeight) {
-          pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
-        } else {
-          let heightLeft = imgHeight;
-          let position = 0;
-          pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        while (heightLeft > 0) {
+          position = heightLeft - imgHeight;
+          pdf.addPage();
+          pdf.addImage(imgData, 'PNG', xPos, position, imgWidth, imgHeight);
           heightLeft -= pdfHeight;
-
-          while (heightLeft > 0) {
-            position = heightLeft - imgHeight;
-            pdf.addPage();
-            pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-            heightLeft -= pdfHeight;
-          }
         }
       }
 
@@ -3900,21 +4181,137 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     }
   };
 
-  const filteredProducts = products.filter(
-    (p) =>
-      (p.name.toLowerCase().includes(productSearch.toLowerCase()) || 
-       (p.sku && p.sku.toLowerCase().includes(productSearch.toLowerCase())) ||
-       (p.barcode && p.barcode.toLowerCase().includes(productSearch.toLowerCase()))) &&
-      productSearch.length > 0
-  );
+  const filteredProducts = useMemo(() => {
+    const q = productSearch.trim().toLowerCase();
+    if (!q) return [];
+    return products.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) || 
+        (p.sku && p.sku.toLowerCase().includes(q)) ||
+        (p.barcode && p.barcode.toLowerCase().includes(q))
+    );
+  }, [products, productSearch]);
 
-  const creditFilteredProducts = products.filter(
-    (p) =>
-      (p.name.toLowerCase().includes(creditProductSearch.toLowerCase()) || 
-       (p.sku && p.sku.toLowerCase().includes(creditProductSearch.toLowerCase())) ||
-       (p.barcode && p.barcode.toLowerCase().includes(creditProductSearch.toLowerCase()))) &&
-      creditProductSearch.length > 0
-  );
+  const creditFilteredProducts = useMemo(() => {
+    const q = creditProductSearch.trim().toLowerCase();
+    if (!q) return [];
+    return products.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) || 
+        (p.sku && p.sku.toLowerCase().includes(q)) ||
+        (p.barcode && p.barcode.toLowerCase().includes(q))
+    );
+  }, [products, creditProductSearch]);
+
+  const allCatalogSelectables = useMemo(() => {
+    const selectables: Array<{
+      key: string;
+      productId: string;
+      displayName: string;
+      mainProductName: string;
+      subItemName?: string;
+      category: string;
+      price: number;
+      unit: string;
+      conversionRate: number;
+      barcode?: string;
+      sku?: string;
+      isSubItem: boolean;
+      stock: number;
+    }> = [];
+
+    (products || []).forEach((p: any) => {
+      const mainPrice = Number(p.sellingPrice || p.price || 0);
+      const mainUnit = p.unit || 'pcs';
+      const mainCategory = p.category || 'General';
+
+      selectables.push({
+        key: `main_${p.id}`,
+        productId: p.id,
+        displayName: p.name,
+        mainProductName: p.name,
+        category: mainCategory,
+        price: mainPrice,
+        unit: mainUnit,
+        conversionRate: 1,
+        barcode: p.barcode || '',
+        sku: p.sku || '',
+        isSubItem: false,
+        stock: Number(p.stock || 0)
+      });
+
+      const unitOpts = getUnitOptions(p);
+      unitOpts.forEach((opt) => {
+        if (opt.unit.toLowerCase() !== mainUnit.toLowerCase()) {
+          selectables.push({
+            key: `sub_${p.id}_${opt.unit}`,
+            productId: p.id,
+            displayName: `${p.name} (${opt.unit})`,
+            mainProductName: p.name,
+            subItemName: opt.unit,
+            category: mainCategory,
+            price: Number(opt.price) || (mainPrice / (opt.conversionRate || 1)),
+            unit: opt.unit,
+            conversionRate: Number(opt.conversionRate) || 1,
+            barcode: p.barcode || '',
+            sku: p.sku || '',
+            isSubItem: true,
+            stock: Number(p.stock || 0)
+          });
+        }
+      });
+
+      const explicitSubItems = Array.isArray(p.subItems) ? p.subItems : (Array.isArray(p.sub_items) ? p.sub_items : (Array.isArray(p.variants) ? p.variants : []));
+      explicitSubItems.forEach((sub: any, sIdx: number) => {
+        selectables.push({
+          key: `explicit_sub_${p.id}_${sIdx}`,
+          productId: p.id,
+          displayName: `${p.name} - ${sub.name || sub.title || sub.unit || 'Sub-Item'}`,
+          mainProductName: p.name,
+          subItemName: sub.name || sub.title || sub.unit,
+          category: mainCategory,
+          price: Number(sub.price || sub.sellingPrice || mainPrice),
+          unit: sub.unit || mainUnit,
+          conversionRate: Number(sub.conversionRate || 1),
+          barcode: sub.barcode || p.barcode || '',
+          sku: sub.sku || p.sku || '',
+          isSubItem: true,
+          stock: Number(sub.stock || p.stock || 0)
+        });
+      });
+    });
+
+    return selectables;
+  }, [products]);
+
+  const matchingQuoteSelectables = useMemo(() => {
+    const qStr = quoteSearch.trim().toLowerCase();
+    if (!qStr) return allCatalogSelectables;
+    return allCatalogSelectables.filter(item => 
+      (item.barcode && item.barcode.trim().toLowerCase().includes(qStr)) ||
+      item.mainProductName.toLowerCase().includes(qStr) ||
+      item.displayName.toLowerCase().includes(qStr) ||
+      (item.subItemName && item.subItemName.toLowerCase().includes(qStr)) ||
+      (item.sku && item.sku.toLowerCase().includes(qStr))
+    );
+  }, [allCatalogSelectables, quoteSearch]);
+
+  const matchingExchangeSelectables = useMemo(() => {
+    const exQuery = exchangeProductSearch.trim().toLowerCase();
+    return allCatalogSelectables.filter(item => {
+      if (exchangeCategoryFilter !== 'All' && item.category.toLowerCase() !== exchangeCategoryFilter.toLowerCase()) {
+        return false;
+      }
+      if (!exQuery) return true;
+      return (
+        (item.barcode && item.barcode.trim().toLowerCase().includes(exQuery)) ||
+        item.mainProductName.toLowerCase().includes(exQuery) ||
+        item.displayName.toLowerCase().includes(exQuery) ||
+        (item.subItemName && item.subItemName.toLowerCase().includes(exQuery)) ||
+        (item.sku && item.sku.toLowerCase().includes(exQuery))
+      );
+    });
+  }, [allCatalogSelectables, exchangeProductSearch, exchangeCategoryFilter]);
 
   const addToCart = (product: Product) => {
     const stockAvailable = Number(product.stock) || 0;
@@ -4358,61 +4755,104 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     }
   };
 
-  const normalizeStatus = (status?: string) => (status || '').toLowerCase();
-  const filteredOrders = orders.filter((o) => {
-    const search = historySearch.toLowerCase();
-    const matchSearch = (o.invoiceNo || '').toLowerCase().includes(search) || 
-                        (o.customerName || '').toLowerCase().includes(search);
-    const matchStatus = statusFilter === 'all' || normalizeStatus(o.status) === statusFilter.toLowerCase();
-    
-    const sDate = o.created_at 
-      ? new Date(o.created_at).toLocaleDateString('sv-SE') 
-      : (o.date || '').split('T')[0];
-    const matchDate = (!salesHistoryFromDate || sDate >= salesHistoryFromDate) && 
-                      (!salesHistoryToDate || sDate <= salesHistoryToDate);
+  const handleDeleteSalesReturn = async (returnId: string) => {
+    if (!window.confirm(t('Are you sure you want to delete this sales return bill? This action cannot be undone.', 'මෙම ආපසු භාරගැනීමේ රසීදුව මකා දැමීමට ඔබට විශ්වාසද? මෙම ක්‍රියාව ආපසු හැරවිය නොහැක.'))) {
+      return;
+    }
 
-    return matchSearch && matchStatus && matchDate;
-  });
+    setIsLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/sales/returns/${returnId}`, {
+        method: 'DELETE'
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to delete sales return bill');
+      }
+
+      try {
+        await supabase.from('sales_returns').delete().eq('id', returnId);
+      } catch (e) {}
+
+      setSalesReturnsList((prev) => prev.filter((sr) => sr.id !== returnId));
+      if (selectedReturnPreview && selectedReturnPreview.id === returnId) {
+        setShowReturnPreviewModal(false);
+        setSelectedReturnPreview(null);
+      }
+      alert(t('Sales Return bill deleted successfully!', 'ආපසු භාරගැනීමේ රසීදුව සාර්ථකව මකා දමන ලදී!'));
+      fetchSalesReturns();
+      fetchData();
+    } catch (err: any) {
+      alert(t('Failed to delete sales return: ', 'ආපසු භාරගැනීම මකා දැමීමට නොහැකි විය: ') + err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const normalizeStatus = (status?: string) => (status || '').toLowerCase();
+  
+  const filteredOrders = useMemo(() => {
+    const search = historySearch.toLowerCase().trim();
+    const targetStatus = statusFilter.toLowerCase();
+    return orders.filter((o) => {
+      const matchSearch = !search || 
+                          (o.invoiceNo || '').toLowerCase().includes(search) || 
+                          (o.customerName || '').toLowerCase().includes(search);
+      const matchStatus = statusFilter === 'all' || normalizeStatus(o.status) === targetStatus;
+      
+      const sDate = o.created_at ? o.created_at.slice(0, 10) : (o.date || '').slice(0, 10);
+      const matchDate = (!salesHistoryFromDate || sDate >= salesHistoryFromDate) && 
+                        (!salesHistoryToDate || sDate <= salesHistoryToDate);
+
+      return matchSearch && matchStatus && matchDate;
+    });
+  }, [orders, historySearch, statusFilter, salesHistoryFromDate, salesHistoryToDate]);
 
   const isCreditOrder = (o: SaleOrder) => 
     o.payment_method === 'Credit' || 
     (o as any).is_credit === true || 
     (o.status === 'Non Paid' && o.payment_method !== 'Cash' && o.payment_method !== 'Card' && o.payment_method !== 'Bank Transfer');
 
-  const creditOrders = orders.filter((o) => isCreditOrder(o));
+  const creditOrders = useMemo(() => orders.filter((o) => isCreditOrder(o)), [orders]);
 
-  const filteredCreditOrders = orders.filter(o => {
-    if (!isCreditOrder(o)) return false;
-    
-    const sDate = o.created_at 
-      ? new Date(o.created_at).toLocaleDateString('sv-SE') 
-      : (o.date || '').split('T')[0];
-    const matchDate = (!creditHistoryFromDate || sDate >= creditHistoryFromDate) && 
-                      (!creditHistoryToDate || sDate <= creditHistoryToDate);
-    
+  const filteredCreditOrders = useMemo(() => {
     const query = creditSearchQuery.toLowerCase().trim();
-    const matchSearch = !query || 
-      (o.invoiceNo || '').toLowerCase().includes(query) || 
-      (o.customerName || '').toLowerCase().includes(query) || 
-      (o.items && o.items.some((it: any) => (it.productName || it.name || '').toLowerCase().includes(query)));
-    
-    return matchDate && matchSearch;
-  });
+    return orders.filter(o => {
+      if (!isCreditOrder(o)) return false;
+      
+      const sDate = o.created_at ? o.created_at.slice(0, 10) : (o.date || '').slice(0, 10);
+      const matchDate = (!creditHistoryFromDate || sDate >= creditHistoryFromDate) && 
+                        (!creditHistoryToDate || sDate <= creditHistoryToDate);
+      
+      const matchSearch = !query || 
+        (o.invoiceNo || '').toLowerCase().includes(query) || 
+        (o.customerName || '').toLowerCase().includes(query) || 
+        (o.items && o.items.some((it: any) => (it.productName || it.name || '').toLowerCase().includes(query)));
+      
+      return matchDate && matchSearch;
+    });
+  }, [orders, creditHistoryFromDate, creditHistoryToDate, creditSearchQuery]);
 
-  const creditSubFiltered = filteredCreditOrders.filter(o => {
-    const isOverdue = o.status === 'Non Paid' && o.due_date && new Date(o.due_date) < new Date();
-    if (creditSubView === 'unpaid') return o.status === 'Non Paid';
-    if (creditSubView === 'overdue') return isOverdue;
-    if (creditSubView === 'paid') return o.status === 'Paid';
-    return true;
-  });
+  const creditSubFiltered = useMemo(() => {
+    const now = new Date();
+    return filteredCreditOrders.filter(o => {
+      const isOverdue = o.status === 'Non Paid' && o.due_date && new Date(o.due_date) < now;
+      if (creditSubView === 'unpaid') return o.status === 'Non Paid';
+      if (creditSubView === 'overdue') return isOverdue;
+      if (creditSubView === 'paid') return o.status === 'Paid';
+      return true;
+    });
+  }, [filteredCreditOrders, creditSubView]);
 
-  const unpaidCreditOrders = creditOrders.filter(o => o.status === 'Non Paid');
-  const paidCreditOrders = creditOrders.filter(o => o.status === 'Paid');
-  const totalOutstanding = unpaidCreditOrders.reduce((sum, o) => sum + (o.total || 0), 0);
-  const overdueCreditOrders = unpaidCreditOrders.filter(o => o.due_date && new Date(o.due_date) < new Date());
-  const totalOverdue = overdueCreditOrders.reduce((sum, o) => sum + (o.total || 0), 0);
-  const totalCollected = paidCreditOrders.reduce((sum, o) => sum + (o.total || 0), 0);
+  const unpaidCreditOrders = useMemo(() => creditOrders.filter(o => o.status === 'Non Paid'), [creditOrders]);
+  const paidCreditOrders = useMemo(() => creditOrders.filter(o => o.status === 'Paid'), [creditOrders]);
+  const totalOutstanding = useMemo(() => unpaidCreditOrders.reduce((sum, o) => sum + (o.total || 0), 0), [unpaidCreditOrders]);
+  const overdueCreditOrders = useMemo(() => {
+    const now = new Date();
+    return unpaidCreditOrders.filter(o => o.due_date && new Date(o.due_date) < now);
+  }, [unpaidCreditOrders]);
+  const totalOverdue = useMemo(() => overdueCreditOrders.reduce((sum, o) => sum + (o.total || 0), 0), [overdueCreditOrders]);
+  const totalCollected = useMemo(() => paidCreditOrders.reduce((sum, o) => sum + (o.total || 0), 0), [paidCreditOrders]);
   const totalCreditVolume = totalOutstanding + totalCollected;
   const collectionRate = totalCreditVolume > 0 ? (totalCollected / totalCreditVolume) * 100 : 0;
 
@@ -6393,87 +6833,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
           {/* Quotation Container (Unified Sub-Items & Barcode Search Engine) */}
           {(() => {
-            const allQuoteSelectables: Array<{
-              key: string;
-              productId: string;
-              displayName: string;
-              mainProductName: string;
-              subItemName?: string;
-              category: string;
-              price: number;
-              unit: string;
-              conversionRate: number;
-              barcode?: string;
-              sku?: string;
-              isSubItem: boolean;
-              stock: number;
-            }> = [];
-
-            (products || []).forEach((p: any) => {
-              const mainPrice = Number(p.sellingPrice || p.price || 0);
-              const mainUnit = p.unit || 'pcs';
-              const mainCategory = p.category || 'General';
-
-              // 1. Base Main Product
-              allQuoteSelectables.push({
-                key: `qmain_${p.id}`,
-                productId: p.id,
-                displayName: p.name,
-                mainProductName: p.name,
-                category: mainCategory,
-                price: mainPrice,
-                unit: mainUnit,
-                conversionRate: 1,
-                barcode: p.barcode || '',
-                sku: p.sku || '',
-                isSubItem: false,
-                stock: Number(p.stock || 0)
-              });
-
-              // 2. Sub-Units / Unit Options (Sand Cube/Half-Cube/Wheelbarrow, etc.)
-              const unitOpts = getUnitOptions(p);
-              unitOpts.forEach((opt) => {
-                if (opt.unit.toLowerCase() !== mainUnit.toLowerCase()) {
-                  allQuoteSelectables.push({
-                    key: `qsub_${p.id}_${opt.unit}`,
-                    productId: p.id,
-                    displayName: `${p.name} (${opt.unit})`,
-                    mainProductName: p.name,
-                    subItemName: opt.unit,
-                    category: mainCategory,
-                    price: Number(opt.price) || (mainPrice / (opt.conversionRate || 1)),
-                    unit: opt.unit,
-                    conversionRate: Number(opt.conversionRate) || 1,
-                    barcode: p.barcode || '',
-                    sku: p.sku || '',
-                    isSubItem: true,
-                    stock: Number(p.stock || 0)
-                  });
-                }
-              });
-
-              // 3. Explicit subItems / variants array
-              const explicitSubItems = Array.isArray(p.subItems) ? p.subItems : (Array.isArray(p.sub_items) ? p.sub_items : (Array.isArray(p.variants) ? p.variants : []));
-              explicitSubItems.forEach((sub: any, sIdx: number) => {
-                allQuoteSelectables.push({
-                  key: `qexplicit_sub_${p.id}_${sIdx}`,
-                  productId: p.id,
-                  displayName: `${p.name} - ${sub.name || sub.title || sub.unit || 'Sub-Item'}`,
-                  mainProductName: p.name,
-                  subItemName: sub.name || sub.title || sub.unit,
-                  category: mainCategory,
-                  price: Number(sub.price || sub.sellingPrice || mainPrice),
-                  unit: sub.unit || mainUnit,
-                  conversionRate: Number(sub.conversionRate || 1),
-                  barcode: sub.barcode || p.barcode || '',
-                  sku: sub.sku || p.sku || '',
-                  isSubItem: true,
-                  stock: Number(sub.stock || p.stock || 0)
-                });
-              });
-            });
-
-            const handleAddSelectableToQuoteCart = (item: typeof allQuoteSelectables[0]) => {
+            const handleAddSelectableToQuoteCart = (item: typeof matchingQuoteSelectables[0]) => {
               setQuoteCart(prev => {
                 const existingIdx = prev.findIndex(i => i.productId === item.productId && (i.unit || '').toLowerCase() === item.unit.toLowerCase());
                 if (existingIdx >= 0) {
@@ -6499,33 +6859,30 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
               });
             };
 
-            const qStr = quoteSearch.trim().toLowerCase();
-            const matchingQuoteSelectables = allQuoteSelectables.filter(item => {
-              if (!qStr) return true;
-              return (
-                (item.barcode && item.barcode.trim().toLowerCase().includes(qStr)) ||
-                item.mainProductName.toLowerCase().includes(qStr) ||
-                item.displayName.toLowerCase().includes(qStr) ||
-                (item.subItemName && item.subItemName.toLowerCase().includes(qStr)) ||
-                (item.sku && item.sku.toLowerCase().includes(qStr)) ||
-                item.category.toLowerCase().includes(qStr)
-              );
-            });
-
             // Financial Calculations
             const numDiscountValue = Number(quoteDiscountValue || 0);
             const numTransportationFee = Number(quoteTransportationFee || 0);
             const numTaxValue = Number(quoteTaxValue || 0);
 
-            const quoteSubtotal = quoteCart.reduce((sum, item) => sum + (item.qty * item.price), 0);
-            const quoteDiscountAmount = quoteDiscountType === 'percentage' 
-              ? (quoteSubtotal * numDiscountValue / 100) 
+            const quoteGrossSubtotal = quoteCart.reduce((sum, item) => sum + (item.qty * item.price), 0);
+            const quoteProductDiscounts = quoteCart.reduce((sum, item) => {
+              const gross = item.qty * item.price;
+              const discVal = Number(item.discount || 0);
+              const discType = item.discountType || 'amount';
+              const discAmt = (discType === 'percent') ? (gross * discVal / 100) : discVal;
+              return sum + discAmt;
+            }, 0);
+            const quoteNetItemSubtotal = Math.max(0, quoteGrossSubtotal - quoteProductDiscounts);
+
+            const quoteOverallDiscountAmount = quoteDiscountType === 'percentage' 
+              ? (quoteNetItemSubtotal * numDiscountValue / 100) 
               : numDiscountValue;
-            const netAfterDiscount = Math.max(0, quoteSubtotal - quoteDiscountAmount);
+            const netAfterOverallDiscount = Math.max(0, quoteNetItemSubtotal - quoteOverallDiscountAmount);
             const quoteTaxAmount = quoteTaxType === 'percentage' 
-              ? (netAfterDiscount * numTaxValue / 100) 
+              ? (netAfterOverallDiscount * numTaxValue / 100) 
               : numTaxValue;
-            const quoteGrandTotal = Math.max(0, netAfterDiscount + numTransportationFee + quoteTaxAmount);
+            const quoteGrandTotal = Math.max(0, netAfterOverallDiscount + numTransportationFee + quoteTaxAmount);
+            const quoteTotalSavings = quoteProductDiscounts + quoteOverallDiscountAmount;
 
             const handleSaveQuotation = async (action: 'save' | 'print' | 'pdf' = 'save') => {
               if (!quoteCustomerName.trim()) {
@@ -6542,10 +6899,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                 customer_address: quoteCustomerAddress,
                 validity_period: quoteValidityPeriod || '30 Days',
                 items: quoteCart,
-                subtotal: quoteSubtotal,
+                subtotal: quoteGrossSubtotal,
                 discount_type: quoteDiscountType,
                 discount_value: numDiscountValue,
-                discount_amount: quoteDiscountAmount,
+                discount_amount: quoteOverallDiscountAmount,
                 transportation_fee: numTransportationFee,
                 tax_amount: quoteTaxAmount,
                 total: quoteGrandTotal,
@@ -6729,7 +7086,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                             setQuoteSearch(val);
                             if (val.trim()) {
                               const q = val.trim().toLowerCase();
-                              const exactMatch = allQuoteSelectables.find(i => i.barcode && i.barcode.trim().toLowerCase() === q);
+                              const exactMatch = matchingQuoteSelectables.find(i => i.barcode && i.barcode.trim().toLowerCase() === q);
                               if (exactMatch) {
                                 handleAddSelectableToQuoteCart(exactMatch);
                                 setQuoteSearch('');
@@ -6809,6 +7166,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                               <th className="px-3 py-2.5">{t('Item Description', 'භාණ්ඩය')}</th>
                               <th className="px-3 py-2.5 text-center w-24">{t('Qty', 'ප්‍රමාණය')}</th>
                               <th className="px-3 py-2.5 text-right w-28">{t('Unit Price', 'ඒකක මිල')}</th>
+                              <th className="px-3 py-2.5 text-right w-36">{t('Discount', 'වට්ටම්')}</th>
                               <th className="px-3 py-2.5 text-right w-28">{t('Line Total', 'එකතුව')}</th>
                               <th className="px-3 py-2.5 text-center w-12"></th>
                             </tr>
@@ -6816,96 +7174,124 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                           <tbody className="divide-y divide-slate-100">
                             {quoteCart.length === 0 ? (
                               <tr>
-                                <td colSpan={5} className="py-12 text-center text-slate-400 font-bold italic">
+                                <td colSpan={6} className="py-12 text-center text-slate-400 font-bold italic">
                                   {t('No items added yet. Search or scan barcode on the left to add products.', 'තවමත් භාණ්ඩ එකතු කර නොමැත.')}
                                 </td>
                               </tr>
                             ) : (
-                              quoteCart.map((item, idx) => (
-                                <tr key={`${item.productId}_${item.unit}_${idx}`} className="hover:bg-slate-50/60 transition-colors">
-                                  <td className="px-3 py-2.5 font-bold text-slate-800">
-                                    {item.productName}
-                                    {item.unit && <span className="ml-1.5 px-1.5 py-0.5 bg-amber-50 text-amber-800 border border-amber-200 rounded text-[9px] font-bold">{item.unit}</span>}
-                                  </td>
-                                  <td className="px-3 py-2.5 text-center">
-                                    <input
-                                      type="number"
-                                      min={1}
-                                      value={item.qty}
-                                      onChange={(e) => {
-                                        const newQty = Math.max(1, parseFloat(e.target.value) || 1);
-                                        const updated = [...quoteCart];
-                                        updated[idx].qty = newQty;
-                                        updated[idx].total = newQty * updated[idx].price;
-                                        setQuoteCart(updated);
-                                      }}
-                                      className="w-16 text-center border border-slate-300 rounded-lg px-2 py-1 font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
-                                    />
-                                  </td>
-                                  <td className="px-3 py-2.5 text-right font-bold text-slate-700">
-                                    <input
-                                      type="number"
-                                      min={0}
-                                      value={item.price}
-                                      onChange={(e) => {
-                                        const newPrice = Math.max(0, parseFloat(e.target.value) || 0);
-                                        const updated = [...quoteCart];
-                                        updated[idx].price = newPrice;
-                                        updated[idx].total = updated[idx].qty * newPrice;
-                                        setQuoteCart(updated);
-                                      }}
-                                      className="w-24 text-right border border-slate-300 rounded-lg px-2 py-1 font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
-                                    />
-                                  </td>
-                                  <td className="px-3 py-2.5 text-right font-black text-amber-700">
-                                    {symbol} {convert(item.total).toLocaleString()}
-                                  </td>
-                                  <td className="px-3 py-2.5 text-center">
-                                    <button
-                                      type="button"
-                                      onClick={() => setQuoteCart(prev => prev.filter((_, i) => i !== idx))}
-                                      className="text-rose-500 hover:text-rose-700 font-bold text-xs"
-                                    >
-                                      ✕
-                                    </button>
-                                  </td>
-                                </tr>
-                              ))
+                              quoteCart.map((item, idx) => {
+                                const gross = item.qty * item.price;
+                                const discVal = item.discount || 0;
+                                const normType = item.discountType || 'amount';
+                                const discAmt = normType === 'percent' ? (gross * discVal / 100) : discVal;
+                                const rowTotal = item.total !== undefined ? item.total : Math.max(0, gross - discAmt);
+
+                                return (
+                                  <tr key={`${item.productId}_${item.unit}_${idx}`} className="hover:bg-slate-50/60 transition-colors">
+                                    <td className="px-3 py-2.5 font-bold text-slate-800">
+                                      {item.productName}
+                                      {item.unit && <span className="ml-1.5 px-1.5 py-0.5 bg-amber-50 text-amber-800 border border-amber-200 rounded text-[9px] font-bold">{item.unit}</span>}
+                                    </td>
+                                    <td className="px-3 py-2.5 text-center">
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        value={item.qty}
+                                        onChange={(e) => {
+                                          const newQty = Math.max(1, parseFloat(e.target.value) || 1);
+                                          const updated = [...quoteCart];
+                                          updated[idx].qty = newQty;
+                                          const itemGross = newQty * updated[idx].price;
+                                          const itemDiscVal = updated[idx].discount || 0;
+                                          const itemNormType = updated[idx].discountType || 'amount';
+                                          const itemDiscAmt = itemNormType === 'percent' ? (itemGross * itemDiscVal / 100) : itemDiscVal;
+                                          updated[idx].total = Math.max(0, itemGross - itemDiscAmt);
+                                          setQuoteCart(updated);
+                                        }}
+                                        className="w-16 text-center border border-slate-300 rounded-lg px-2 py-1 font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
+                                      />
+                                    </td>
+                                    <td className="px-3 py-2.5 text-right font-bold text-slate-700">
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        value={item.price}
+                                        onChange={(e) => {
+                                          const newPrice = Math.max(0, parseFloat(e.target.value) || 0);
+                                          const updated = [...quoteCart];
+                                          updated[idx].price = newPrice;
+                                          const itemGross = updated[idx].qty * newPrice;
+                                          const itemDiscVal = updated[idx].discount || 0;
+                                          const itemNormType = updated[idx].discountType || 'amount';
+                                          const itemDiscAmt = itemNormType === 'percent' ? (itemGross * itemDiscVal / 100) : itemDiscVal;
+                                          updated[idx].total = Math.max(0, itemGross - itemDiscAmt);
+                                          setQuoteCart(updated);
+                                        }}
+                                        className="w-24 text-right border border-slate-300 rounded-lg px-2 py-1 font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
+                                      />
+                                    </td>
+                                    <td className="px-3 py-2.5 text-right font-bold text-slate-700">
+                                      <div className="flex gap-1 items-center justify-end">
+                                        <select
+                                          value={item.discountType || 'amount'}
+                                          onChange={(e) => {
+                                            const newDiscType = e.target.value as 'percent' | 'amount';
+                                            const updated = [...quoteCart];
+                                            updated[idx].discountType = newDiscType;
+                                            const itemGross = updated[idx].qty * updated[idx].price;
+                                            const itemDiscVal = updated[idx].discount || 0;
+                                            const itemDiscAmt = newDiscType === 'percent' ? (itemGross * itemDiscVal / 100) : itemDiscVal;
+                                            updated[idx].total = Math.max(0, itemGross - itemDiscAmt);
+                                            setQuoteCart(updated);
+                                          }}
+                                          className="bg-slate-100 text-[10px] font-bold text-slate-700 px-1 py-1 rounded border border-slate-200 outline-none"
+                                        >
+                                          <option value="amount">Rs.</option>
+                                          <option value="percent">%</option>
+                                        </select>
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          value={item.discount !== undefined && item.discount !== null ? item.discount : ''}
+                                          placeholder="0"
+                                          onChange={(e) => {
+                                            const newDiscVal = Math.max(0, parseFloat(e.target.value) || 0);
+                                            const updated = [...quoteCart];
+                                            updated[idx].discount = newDiscVal;
+                                            const itemGross = updated[idx].qty * updated[idx].price;
+                                            const itemNormType = updated[idx].discountType || 'amount';
+                                            const itemDiscAmt = itemNormType === 'percent' ? (itemGross * newDiscVal / 100) : newDiscVal;
+                                            updated[idx].total = Math.max(0, itemGross - itemDiscAmt);
+                                            setQuoteCart(updated);
+                                          }}
+                                          className="w-16 text-right border border-slate-300 rounded-lg px-1.5 py-1 font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
+                                        />
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-2.5 text-right font-black text-amber-700">
+                                      {symbol} {convert(rowTotal).toLocaleString()}
+                                    </td>
+                                    <td className="px-3 py-2.5 text-center">
+                                      <button
+                                        type="button"
+                                        onClick={() => setQuoteCart(prev => prev.filter((_, i) => i !== idx))}
+                                        className="text-rose-500 hover:text-rose-700 font-bold text-xs"
+                                      >
+                                        ✕
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })
                             )}
                           </tbody>
                         </table>
                       </div>
 
-                      {/* Additional Charges Section (Discount, Transportation, Tax) */}
+                      {/* Additional Charges Section (Transportation, Tax) */}
                       <div className="mt-4 pt-4 border-t border-slate-200/80 bg-slate-50/70 p-4 rounded-xl space-y-3">
-                        <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('Optional Charges & Adjustments:', 'අමතර ගාස්තු සහ වට්ටම්:')}</div>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                          {/* Discount */}
-                          <div className="bg-white p-2.5 rounded-xl border border-slate-200 space-y-1">
-                            <label className="text-[10px] font-bold text-slate-600 block">{t('Discount', 'වට්ටම')}</label>
-                            <div className="flex gap-1">
-                              <select
-                                value={quoteDiscountType}
-                                onChange={(e) => setQuoteDiscountType(e.target.value as any)}
-                                className="bg-slate-100 text-xs font-bold text-slate-700 px-1.5 py-1 rounded border border-slate-200 outline-none"
-                              >
-                                <option value="amount">Rs.</option>
-                                <option value="percentage">%</option>
-                              </select>
-                              <input
-                                type="number"
-                                min={0}
-                                placeholder="0"
-                                value={quoteDiscountValue}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setQuoteDiscountValue(val === '' ? '' : Math.max(0, parseFloat(val) || 0));
-                                }}
-                                className="w-full px-2 py-1 border border-slate-200 rounded text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
-                              />
-                            </div>
-                          </div>
-
+                        <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('Optional Charges & Adjustments:', 'අමතර ගාස්තු:')}</div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           {/* Transportation Fee */}
                           <div className="bg-white p-2.5 rounded-xl border border-slate-200 space-y-1">
                             <label className="text-[10px] font-bold text-slate-600 block">{t('Transportation Fee (Rs.)', 'ප්‍රවාහන ගාස්තු')}</label>
@@ -6953,8 +7339,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                       {/* Financial Summary & Actions */}
                       <div className="border-t border-slate-200 pt-4 mt-4 flex justify-between items-center flex-wrap gap-4 bg-amber-50/50 p-4 rounded-xl border border-amber-200/60">
                         <div className="space-y-1 text-xs font-bold">
-                          <div className="text-slate-500">{t('Subtotal:', 'උප එකතුව:')} <span className="text-slate-800">{symbol} {convert(quoteSubtotal).toLocaleString()}</span></div>
-                          {quoteDiscountAmount > 0 && <div className="text-rose-600">{t('Discount:', 'වට්ටම:')} -{symbol} {convert(quoteDiscountAmount).toLocaleString()}</div>}
+                          <div className="text-slate-500">{t('Subtotal (Gross):', 'උප එකතුව:')} <span className="text-slate-800">{symbol} {convert(quoteGrossSubtotal).toLocaleString()}</span></div>
+                          {quoteProductDiscounts > 0 && (
+                            <div className="text-emerald-700 font-black border-t border-dashed border-amber-300/80 pt-1">
+                              {t('Total Savings / Discount:', 'මුළු ඉතිරිය / වට්ටම:')} <span className="text-emerald-700">-{symbol} {convert(quoteProductDiscounts).toLocaleString()}</span>
+                            </div>
+                          )}
                           {numTransportationFee > 0 && <div className="text-blue-600">{t('Transportation:', 'ප්‍රවාහන ගාස්තු:')} +{symbol} {convert(numTransportationFee).toLocaleString()}</div>}
                           {quoteTaxAmount > 0 && <div className="text-amber-700">{t('Tax:', 'බදු:')} +{symbol} {convert(quoteTaxAmount).toLocaleString()}</div>}
                           <div className="text-sm font-black text-amber-900 border-t border-amber-200 pt-1">
@@ -6974,10 +7364,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                 customer_address: quoteCustomerAddress,
                                 validity_period: quoteValidityPeriod,
                                 items: quoteCart,
-                                subtotal: quoteSubtotal,
+                                subtotal: quoteGrossSubtotal,
                                 discount_type: quoteDiscountType,
                                 discount_value: numDiscountValue,
-                                discount_amount: quoteDiscountAmount,
+                                discount_amount: quoteOverallDiscountAmount,
                                 transportation_fee: numTransportationFee,
                                 tax_amount: quoteTaxAmount,
                                 total: quoteGrandTotal,
@@ -7694,92 +8084,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
                   {/* EXCHANGE SECTION (When returnMethod === 'Exchange') */}
                   {returnMethod === 'Exchange' && (() => {
-                    // Build full list of main products and sub-items/unit variants
-                    const allSelectables: Array<{
-                      key: string;
-                      productId: string;
-                      displayName: string;
-                      mainProductName: string;
-                      subItemName?: string;
-                      category: string;
-                      price: number;
-                      unit: string;
-                      conversionRate: number;
-                      barcode?: string;
-                      sku?: string;
-                      isSubItem: boolean;
-                      stock: number;
-                    }> = [];
+                    const categoriesList = ['All', ...Array.from(new Set(allCatalogSelectables.map(i => i.category).filter(Boolean)))];
 
-                    (products || []).forEach((p: any) => {
-                      const mainPrice = Number(p.sellingPrice || p.price || 0);
-                      const mainUnit = p.unit || 'pcs';
-                      const mainCategory = p.category || 'General';
-
-                      // 1. Base Main Product
-                      allSelectables.push({
-                        key: `main_${p.id}`,
-                        productId: p.id,
-                        displayName: p.name,
-                        mainProductName: p.name,
-                        category: mainCategory,
-                        price: mainPrice,
-                        unit: mainUnit,
-                        conversionRate: 1,
-                        barcode: p.barcode || '',
-                        sku: p.sku || '',
-                        isSubItem: false,
-                        stock: Number(p.stock || 0)
-                      });
-
-                      // 2. Sub-Units / Unit Options from measureDetails or conversions
-                      const unitOpts = getUnitOptions(p);
-                      unitOpts.forEach((opt) => {
-                        if (opt.unit.toLowerCase() !== mainUnit.toLowerCase()) {
-                          allSelectables.push({
-                            key: `sub_${p.id}_${opt.unit}`,
-                            productId: p.id,
-                            displayName: `${p.name} (${opt.unit})`,
-                            mainProductName: p.name,
-                            subItemName: opt.unit,
-                            category: mainCategory,
-                            price: Number(opt.price) || (mainPrice / (opt.conversionRate || 1)),
-                            unit: opt.unit,
-                            conversionRate: Number(opt.conversionRate) || 1,
-                            barcode: p.barcode || '',
-                            sku: p.sku || '',
-                            isSubItem: true,
-                            stock: Number(p.stock || 0)
-                          });
-                        }
-                      });
-
-                      // 3. Explicit subItems / variants array if defined
-                      const explicitSubItems = Array.isArray(p.subItems) ? p.subItems : (Array.isArray(p.sub_items) ? p.sub_items : (Array.isArray(p.variants) ? p.variants : []));
-                      explicitSubItems.forEach((sub: any, sIdx: number) => {
-                        allSelectables.push({
-                          key: `explicit_sub_${p.id}_${sIdx}`,
-                          productId: p.id,
-                          displayName: `${p.name} - ${sub.name || sub.title || sub.unit || 'Sub-Item'}`,
-                          mainProductName: p.name,
-                          subItemName: sub.name || sub.title || sub.unit,
-                          category: mainCategory,
-                          price: Number(sub.price || sub.sellingPrice || mainPrice),
-                          unit: sub.unit || mainUnit,
-                          conversionRate: Number(sub.conversionRate || 1),
-                          barcode: sub.barcode || p.barcode || '',
-                          sku: sub.sku || p.sku || '',
-                          isSubItem: true,
-                          stock: Number(sub.stock || p.stock || 0)
-                        });
-                      });
-                    });
-
-                    // Unique categories list
-                    const categoriesList = ['All', ...Array.from(new Set(allSelectables.map(i => i.category).filter(Boolean)))];
-
-                    // Helper to add item to exchange cart
-                    const handleAddSelectableToCart = (item: typeof allSelectables[0]) => {
+                    const handleAddSelectableToCart = (item: typeof matchingExchangeSelectables[0]) => {
                       setExchangeCartItems(prev => {
                         const existingIdx = prev.findIndex(i => i.productId === item.productId && (i.unit || '').toLowerCase() === item.unit.toLowerCase());
                         if (existingIdx >= 0) {
@@ -7805,23 +8112,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                       });
                     };
 
-                    const exQuery = exchangeProductSearch.trim().toLowerCase();
-
-                    // Search filtering
-                    const matchingSelectables = allSelectables.filter(item => {
-                      if (exchangeCategoryFilter !== 'All' && item.category.toLowerCase() !== exchangeCategoryFilter.toLowerCase()) {
-                        return false;
-                      }
-                      if (!exQuery) return true;
-                      return (
-                        (item.barcode && item.barcode.trim().toLowerCase().includes(exQuery)) ||
-                        item.mainProductName.toLowerCase().includes(exQuery) ||
-                        item.displayName.toLowerCase().includes(exQuery) ||
-                        (item.subItemName && item.subItemName.toLowerCase().includes(exQuery)) ||
-                        (item.sku && item.sku.toLowerCase().includes(exQuery)) ||
-                        item.category.toLowerCase().includes(exQuery)
-                      );
-                    });
+                    const matchingSelectables = matchingExchangeSelectables;
 
                     return (
                       <div className="bg-emerald-50/50 border border-emerald-200 rounded-2xl p-4 space-y-4 animate-in fade-in duration-300">
@@ -7859,7 +8150,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                 // Immediate Barcode scan auto-add
                                 if (val.trim()) {
                                   const qStr = val.trim().toLowerCase();
-                                  const exactMatch = allSelectables.find(i => i.barcode && i.barcode.trim().toLowerCase() === qStr);
+                                  const exactMatch = allCatalogSelectables.find(i => i.barcode && i.barcode.trim().toLowerCase() === qStr);
                                   if (exactMatch) {
                                     handleAddSelectableToCart(exactMatch);
                                     setExchangeProductSearch('');
@@ -7933,7 +8224,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                         </div>
 
                         {/* Quick Selection Grid for Main Products & Sub-Items */}
-                        {allSelectables.length > 0 && !exchangeProductSearch.trim() && (
+                        {allCatalogSelectables.length > 0 && !exchangeProductSearch.trim() && (
                           <div className="space-y-2">
                             <div className="text-[10px] font-black text-emerald-800 uppercase tracking-wider flex justify-between items-center">
                               <span>{t('Quick Pick Products & Sub-Items:', 'ඉක්මනින් තෝරාගැනීමට භාණ්ඩ:')}</span>
@@ -8269,6 +8560,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                     {t('Void', 'අවලංගු')}
                                   </button>
                                 )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteSalesReturn(sr.id)}
+                                  className="p-1.5 bg-rose-50 hover:bg-rose-600 text-rose-600 hover:text-white rounded-lg border border-rose-200/50 transition-colors"
+                                  title={t('Delete Sales Return Bill', 'ආපසු රසීදුව මකන්න')}
+                                >
+                                  <Trash2Icon className="w-3.5 h-3.5" />
+                                </button>
                               </td>
                             </tr>
 
@@ -8506,6 +8805,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                 >
                   <DownloadIcon className="w-4 h-4" /> {t('PDF', 'PDF')}
                 </button>
+                <button 
+                  onClick={() => handleDeleteSalesReturn(selectedReturnPreview.id)} 
+                  className="bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-2 transition-all uppercase tracking-widest"
+                >
+                  <Trash2Icon className="w-4 h-4" /> {t('Delete', 'මකන්න')}
+                </button>
               </div>
             </div>
 
@@ -8634,121 +8939,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       {/* Quotation Preview Modal */}
       {showQuotePreviewModal && selectedQuotePreview && (
         <Modal isOpen={showQuotePreviewModal} onClose={() => setShowQuotePreviewModal(false)} title={t('Quotation Preview', 'මිල ගණන් පූර්ව දර්ශනය')}>
-          <div className="p-6 space-y-6 max-w-3xl mx-auto bg-white rounded-3xl text-left">
-            {/* Business Header */}
-            <div className="flex justify-between items-start border-b border-slate-200 pb-5 flex-wrap gap-4">
-              <div className="flex items-center gap-4">
-                <img
-                  src={shopSettings?.logo_path || './images/logo.png'}
-                  alt="Shop Logo"
-                  className="w-16 h-16 object-contain"
-                  onError={(e: any) => { e.target.style.display = 'none'; }}
-                />
-                <div>
-                  <h3 className="text-base font-black text-slate-900 uppercase tracking-wide">{shopSettings?.shop_name || 'Hardware & ERP Store'}</h3>
-                  <p className="text-xs font-semibold text-slate-500">{shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</p>
-                  <p className="text-xs font-bold text-slate-600">Tel: {shopSettings?.phone || '077 076 076 7'}</p>
-                </div>
-              </div>
-
-              <div className="text-right">
-                <span className="px-3 py-1 bg-amber-100 text-amber-900 font-black text-xs rounded-full uppercase tracking-wider block mb-1">
-                  {t('Quotation Preview', 'මිල ගණන් පූර්ව දර්ශනය')}
-                </span>
-                <div className="text-sm font-black font-mono text-amber-600">{selectedQuotePreview.quote_no}</div>
-                <div className="text-xs font-bold text-slate-400">Date: {new Date(selectedQuotePreview.created_at).toLocaleDateString()}</div>
-                <div className="text-xs font-black text-emerald-600 mt-1">Validity: {selectedQuotePreview.validity_period || '30 Days'}</div>
-              </div>
-            </div>
-
-            {/* Customer Details Card */}
-            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div>
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">{t('Customer Name', 'පාරිභෝගිකයා')}</span>
-                <span className="text-xs font-black text-slate-800">{selectedQuotePreview.customer_name}</span>
-              </div>
-              <div>
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">{t('Phone Number', 'දුරකථන අංකය')}</span>
-                <span className="text-xs font-bold text-slate-700">{selectedQuotePreview.customer_phone || 'N/A'}</span>
-              </div>
-              <div>
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">{t('Address', 'ලිපිනය')}</span>
-                <span className="text-xs font-bold text-slate-700">{selectedQuotePreview.customer_address || 'N/A'}</span>
-              </div>
-            </div>
-
-            {/* Product Items Table */}
-            <div className="overflow-x-auto rounded-2xl border border-slate-200">
-              <table className="w-full text-xs text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-100 border-b border-slate-200 font-black text-slate-700 uppercase tracking-wider text-[10px]">
-                    <th className="p-3">#</th>
-                    <th className="p-3">{t('Product Description', 'භාණ්ඩ විස්තරය')}</th>
-                    <th className="p-3 text-center">{t('Qty', 'ප්‍රමාණය')}</th>
-                    <th className="p-3 text-right">{t('Unit Price', 'ඒකක මිල')}</th>
-                    <th className="p-3 text-right">{t('Line Total', 'එකතුව')}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {(() => {
-                    const rawItems = typeof selectedQuotePreview.items === 'string'
-                      ? safeParseJson(selectedQuotePreview.items, [])
-                      : (Array.isArray(selectedQuotePreview.items) ? selectedQuotePreview.items : []);
-
-                    return rawItems.map((item: any, idx: number) => (
-                      <tr key={idx} className="hover:bg-slate-50">
-                        <td className="p-3 font-mono font-bold text-slate-400">{idx + 1}</td>
-                        <td className="p-3 font-bold text-slate-800">
-                          {item.productName || item.name}
-                          {item.unit && <span className="ml-1.5 px-1.5 py-0.5 bg-amber-50 text-amber-800 text-[9px] font-bold rounded">{item.unit}</span>}
-                          {(item.barcode || item.sku) && <div className="text-[9px] font-mono text-slate-400">Code: {item.barcode || item.sku}</div>}
-                        </td>
-                        <td className="p-3 text-center font-black text-slate-700">{item.qty}</td>
-                        <td className="p-3 text-right font-semibold text-slate-600">{symbol} {convert(item.price).toLocaleString()}</td>
-                        <td className="p-3 text-right font-black text-slate-900">{symbol} {convert(item.total).toLocaleString()}</td>
-                      </tr>
-                    ));
-                  })()}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Financial Summary */}
-            <div className="flex justify-end">
-              <div className="w-full md:w-72 bg-amber-50/70 p-4 rounded-2xl border border-amber-200/80 space-y-1.5 text-xs font-bold">
-                {selectedQuotePreview.subtotal && selectedQuotePreview.subtotal > 0 && selectedQuotePreview.subtotal !== selectedQuotePreview.total && (
-                  <div className="flex justify-between text-slate-600">
-                    <span>{t('Subtotal:', 'උප එකතුව:')}</span>
-                    <span>{symbol} {convert(selectedQuotePreview.subtotal).toLocaleString()}</span>
-                  </div>
-                )}
-                {selectedQuotePreview.discount_amount && selectedQuotePreview.discount_amount > 0 && (
-                  <div className="flex justify-between text-rose-600">
-                    <span>{t('Discount:', 'වට්ටම:')}</span>
-                    <span>-{symbol} {convert(selectedQuotePreview.discount_amount).toLocaleString()}</span>
-                  </div>
-                )}
-                {selectedQuotePreview.transportation_fee && selectedQuotePreview.transportation_fee > 0 && (
-                  <div className="flex justify-between text-blue-600">
-                    <span>{t('Transportation:', 'ප්‍රවාහන ගාස්තු:')}</span>
-                    <span>+{symbol} {convert(selectedQuotePreview.transportation_fee).toLocaleString()}</span>
-                  </div>
-                )}
-                {selectedQuotePreview.tax_amount && selectedQuotePreview.tax_amount > 0 && (
-                  <div className="flex justify-between text-amber-800">
-                    <span>{t('Tax:', 'බදු:')}</span>
-                    <span>+{symbol} {convert(selectedQuotePreview.tax_amount).toLocaleString()}</span>
-                  </div>
-                )}
-                <div className="flex justify-between text-sm font-black text-amber-950 border-t border-amber-300 pt-2 mt-1">
-                  <span>{t('Grand Total:', 'මුළු එකතුව:')}</span>
-                  <span className="text-amber-600">{symbol} {convert(selectedQuotePreview.total).toLocaleString()}</span>
-                </div>
-              </div>
-            </div>
+          <div className="p-2 bg-white rounded-3xl text-left">
+            <QuotationPreview quote={selectedQuotePreview} isSinhala={isSinhala} shopSettings={shopSettings} />
 
             {/* Modal Footer Actions */}
-            <div className="flex justify-end gap-3 border-t border-slate-100 pt-4">
+            <div className="flex justify-end gap-3 border-t border-slate-100 pt-4 mt-4 px-4">
               <button
                 type="button"
                 onClick={() => setShowQuotePreviewModal(false)}
