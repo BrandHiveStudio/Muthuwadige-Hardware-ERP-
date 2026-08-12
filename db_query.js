@@ -3,7 +3,7 @@ import { open } from 'sqlite';
 import path from 'path';
 import os from 'os';
 
-const DB_FILE = path.join(os.homedir(), 'AppData', 'Roaming', 'magic-patterns-vite-template', 'hardware.db');
+const DB_FILE = path.join(os.homedir(), 'AppData', 'Roaming', 'ERP-Template', 'hardware.db');
 
 async function dump() {
   console.log('Connecting to:', DB_FILE);

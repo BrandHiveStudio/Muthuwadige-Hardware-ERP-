@@ -9,7 +9,7 @@ const __dirname = path.dirname(__filename);
 
 const workspaceDbPath = path.join(__dirname, '..', 'hardware.db');
 const backupsDir = path.join(__dirname, '..', 'backups');
-const appDataDbPath = path.join(os.homedir(), 'AppData', 'Roaming', 'magic-patterns-vite-template', 'hardware.db');
+const appDataDbPath = path.join(os.homedir(), 'AppData', 'Roaming', 'ERP-Template', 'hardware.db');
 
 if (!fs.existsSync(backupsDir)) {
   fs.mkdirSync(backupsDir, { recursive: true });
