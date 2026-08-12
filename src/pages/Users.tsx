@@ -10,7 +10,7 @@ import {
   LockIcon
 } from 'lucide-react';
 import { getPermissions, savePermissions } from '../utils/permissions';
-import { API_URL } from '../lib/api';
+import { API_URL, fetchWithTimeout } from '../lib/api';
 
 const FEATURES_LIST = [
   { feature: 'Dashboard', key: 'dashboard' },
@@ -70,7 +70,7 @@ export function Users() {
     // Initialize matrix from custom permissions loaded from DB
     let perms = getPermissions();
     try {
-      const res = await fetch(`${API_URL}/permissions`);
+      const res = await fetchWithTimeout(`${API_URL}/permissions`, {}, 8000);
       if (res.ok) {
         const dbPerms = await res.json();
         if (dbPerms && Object.keys(dbPerms).length > 0) {
@@ -188,17 +188,21 @@ export function Users() {
       alert("Password must be at least 6 characters.");
       return;
     }
-    const res = await fetch(`${API_URL}/profiles/${resetPasswordUser.id}/password`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: newPassword })
-    });
-    if (res.ok) {
-      alert(`Password reset successfully for ${resetPasswordUser.name}!`);
-      setShowResetPasswordModal(false);
-      setNewPassword('');
-    } else {
-      alert("Failed to reset password.");
+    try {
+      const res = await fetchWithTimeout(`${API_URL}/profiles/${resetPasswordUser.id}/password`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: newPassword })
+      });
+      if (res.ok) {
+        alert(`Password reset successfully for ${resetPasswordUser.name}!`);
+        setShowResetPasswordModal(false);
+        setNewPassword('');
+      } else {
+        alert("Failed to reset password.");
+      }
+    } catch (e: any) {
+      alert("Failed to reset password: " + (e?.message || e));
     }
   };
 

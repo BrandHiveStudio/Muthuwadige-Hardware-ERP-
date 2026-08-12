@@ -75,13 +75,17 @@ const wipeDatabase = (dbPath, label) => {
       }
     });
 
-    // Vacuum database
+    // Vacuum database & truncate WAL log
     db.run(`VACUUM`, (err) => {
       if (err) {
         console.error('  ❌ VACUUM error:', err.message);
       } else {
         console.log('  ✓ Database VACUUM complete');
       }
+    });
+
+    db.run(`PRAGMA wal_checkpoint(TRUNCATE)`, (err) => {
+      if (!err) console.log('  ✓ SQLite WAL journal truncated');
     });
   });
 

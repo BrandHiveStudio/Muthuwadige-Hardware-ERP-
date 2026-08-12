@@ -1,5 +1,5 @@
 import type { UserRole, PageName } from '../types';
-import { API_URL } from '../lib/api';
+import { API_URL, fetchWithTimeout } from '../lib/api';
 
 export const defaultPermissions: Record<UserRole, PageName[]> = {
   super_admin: [
@@ -37,11 +37,11 @@ export const savePermissions = (perms: Record<UserRole, PageName[]>) => {
   window.dispatchEvent(new Event('permissions-updated'));
 
   // Persist to local SQLite server
-  fetch(`${API_URL}/permissions`, {
+  fetchWithTimeout(`${API_URL}/permissions`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(perms)
-  }).catch(err => console.error("Failed to persist custom permissions to SQLite database:", err));
+  }, 8000).catch(err => console.error("Failed to persist custom permissions to SQLite database:", err));
 };
 
 // Use Proxy so ROLE_PERMISSIONS can be imported and accessed as an object dynamically

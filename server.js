@@ -31,16 +31,11 @@ try {
       backupsDir = path.join(appDataPath, 'backups');
       envPath = path.join(appDataPath, '.env');
 
-      // Auto-migrate database: copy initial/existing hardware.db to AppData userData folder if not already present
-      const bundledDb = path.join(__dirname, 'hardware.db');
-      if (!fs.existsSync(DB_FILE) && fs.existsSync(bundledDb)) {
-        try {
-          fs.copyFileSync(bundledDb, DB_FILE);
-          console.log('✅ SQLite Database successfully initialized in AppData:', DB_FILE);
-        } catch (err) {
-          console.error('❌ Failed to copy SQLite Database to writable AppData path:', err);
-        }
-      }
+      // In production packaged mode: DB_FILE is located in Electron userData directory.
+      // On fresh installation (when DB_FILE does not exist), initializeDatabase() programmatically
+      // creates a clean SQLite database with full schema and default configurations (without dev/test data).
+      // Existing user databases are untouched and preserved with 0 data loss.
+      console.log('📂 Production Electron database path:', DB_FILE);
 
       // Auto-migrate env config: copy/restore .env from bundled code or dev workspace to AppData folder
       const bundledEnv = path.join(__dirname, '.env');
@@ -167,6 +162,17 @@ const LEGACY_PRODUCT_SKUS = [
   'WG-001',
   'CG-001'
 ];
+
+export async function checkpointWal() {
+  if (db) {
+    try {
+      await db.exec('PRAGMA wal_checkpoint(FULL);');
+      console.log('✅ SQLite WAL Checkpoint executed successfully.');
+    } catch (err) {
+      console.error('❌ Failed to execute WAL Checkpoint:', err);
+    }
+  }
+}
 
 async function ensureSuperAdminProfile() {
   const existing = await db.get('SELECT * FROM profiles WHERE id = ?', [SUPER_ADMIN.id]);

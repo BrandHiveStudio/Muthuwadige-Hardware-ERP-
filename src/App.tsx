@@ -16,7 +16,7 @@ import { Finance } from './pages/Finance';
 import { AuditLogs } from './pages/AuditLogs';
 import { CurrencyProvider } from './context/CurrencyContext';
 import { ROLE_PERMISSIONS } from './utils/permissions'; 
-import { API_URL } from './lib/api';
+import { API_URL, fetchWithTimeout } from './lib/api';
 import type { User, PageName } from './types';
 import { Notifications, notify } from './components/Notifications';
 import { Trash2, AlertTriangle, CheckCircle, HelpCircle, MessageSquare } from 'lucide-react';
@@ -55,11 +55,10 @@ export function App() {
     return () => window.removeEventListener('settings-updated', fetchSettings);
   }, []);
 
-  // Load custom permissions from the local server to sync with the SQLite database
   useEffect(() => {
     const fetchPermissions = async () => {
       try {
-        const res = await fetch(`${API_URL}/permissions`);
+        const res = await fetchWithTimeout(`${API_URL}/permissions`, {}, 8000);
         if (res.ok) {
           const perms = await res.json();
           localStorage.setItem('custom_permissions', JSON.stringify(perms));

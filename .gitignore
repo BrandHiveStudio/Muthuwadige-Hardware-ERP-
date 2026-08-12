@@ -26,6 +26,8 @@ dist-ssr
 # Sensitive / Local files
 .env
 hardware.db
+*.db-wal
+*.db-shm
 scratch/
 build/
 release-dist/

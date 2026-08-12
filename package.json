@@ -71,7 +71,6 @@
       "preload.js",
       "server.js",
       "backup-service.js",
-      "hardware.db",
       "public/**/*",
       "build/**/*",
       ".env"

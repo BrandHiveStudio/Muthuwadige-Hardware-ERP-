@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { EyeIcon, EyeOffIcon, AlertCircleIcon, ShieldCheckIcon, GiftIcon, ThumbsUpIcon, Loader2Icon, SettingsIcon, XIcon, CheckIcon } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient'; 
-import { setApiUrl, API_URL } from '../lib/api';
+import { setApiUrl, API_URL, fetchWithTimeout } from '../lib/api';
 import type { User } from '../types';
 
 interface AuthProps {
@@ -38,7 +38,7 @@ export function Auth({ onLogin }: AuthProps) {
     setIsLoading(true);
 
     try {
-      const res = await fetch(`${API_URL}/auth/forgot-password`, {
+      const res = await fetchWithTimeout(`${API_URL}/auth/forgot-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: resetEmail.trim() })
@@ -82,7 +82,7 @@ export function Auth({ onLogin }: AuthProps) {
     setIsLoading(true);
 
     try {
-      const res = await fetch(`${API_URL}/auth/reset-password`, {
+      const res = await fetchWithTimeout(`${API_URL}/auth/reset-password`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -155,7 +155,7 @@ export function Auth({ onLogin }: AuthProps) {
     setConnectionTestResult(null);
     
     try {
-      const res = await fetch(`${cleanAddress}/api/settings`);
+      const res = await fetchWithTimeout(`${cleanAddress}/api/settings`, {}, 5000);
       if (res.ok) {
         setConnectionTestResult({ 
           success: true, 

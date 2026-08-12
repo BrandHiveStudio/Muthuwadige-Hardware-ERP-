@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { API_URL } from '../lib/api';
+import { API_URL, fetchWithTimeout } from '../lib/api';
 
 const CurrencyContext = createContext<any>(null);
 
@@ -12,7 +12,7 @@ export const CurrencyProvider = ({ children }: { children: React.ReactNode }) =>
   useEffect(() => {
     const fetchSystemCurrency = async () => {
       try {
-        const res = await fetch(`${API_URL}/settings`);
+        const res = await fetchWithTimeout(`${API_URL}/settings`, {}, 8000);
         if (res.ok) {
           const settings = await res.json();
           if (settings.currency) {

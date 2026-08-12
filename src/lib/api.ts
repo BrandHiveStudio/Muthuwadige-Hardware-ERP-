@@ -5,7 +5,7 @@ const getDefaultApiUrl = () => {
       return `${origin}/api`;
     }
   }
-  return (import.meta.env as any).VITE_API_URL || 'http://localhost:5001/api';
+  return (import.meta.env as any)?.VITE_API_URL || 'http://localhost:5001/api';
 };
 
 const getStoredHost = () => {
@@ -38,14 +38,27 @@ export async function fetchWithTimeout(url: string, options: RequestInit = {}, t
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+  let callerAbortHandler: (() => void) | null = null;
+  if (options.signal) {
+    if (options.signal.aborted) {
+      controller.abort();
+    } else {
+      callerAbortHandler = () => controller.abort();
+      options.signal.addEventListener('abort', callerAbortHandler);
+    }
+  }
+
   try {
     const res = await fetch(url, {
       ...options,
-      signal: options.signal || controller.signal
+      signal: controller.signal
     });
     return res;
   } catch (err: any) {
     if (err.name === 'AbortError' || controller.signal?.aborted) {
+      if (options.signal?.aborted) {
+        throw new Error('Request was cancelled.');
+      }
       throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s. Please check server connection.`);
     }
     if (err.message && err.message.toLowerCase().includes('failed to fetch')) {
@@ -54,6 +67,9 @@ export async function fetchWithTimeout(url: string, options: RequestInit = {}, t
     throw err;
   } finally {
     clearTimeout(timer);
+    if (options.signal && callerAbortHandler) {
+      options.signal.removeEventListener('abort', callerAbortHandler);
+    }
   }
 }
 

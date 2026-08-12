@@ -3172,7 +3172,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
   const fetchSalesReturns = async () => {
     try {
-      const res = await fetch(`${API_URL}/sales/returns`);
+      const res = await fetchWithTimeout(`${API_URL}/sales/returns`, {}, 8000);
       if (res.ok) {
         const data = await res.json();
         setSalesReturnsList(data || []);
@@ -3184,7 +3184,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
   const fetchCreditNotes = async () => {
     try {
-      const res = await fetch(`${API_URL}/credit-notes`);
+      const res = await fetchWithTimeout(`${API_URL}/credit-notes`, {}, 8000);
       if (res.ok) {
         const data = await res.json();
         setCreditNotesList(data || []);
@@ -3192,7 +3192,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       }
     } catch (e) {}
     try {
-      const res = await fetch(`${API_URL}/sales/credit-notes`);
+      const res = await fetchWithTimeout(`${API_URL}/sales/credit-notes`, {}, 8000);
       if (res.ok) {
         const data = await res.json();
         setCreditNotesList(data || []);
@@ -4712,7 +4712,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       const { data: { user } } = await supabase.auth.getUser();
       const userEmail = user?.email || 'sanojhardware@gmail.com';
       
-      const res = await fetch(`${API_URL}/sales/${orderId}/void`, {
+      const res = await fetchWithTimeout(`${API_URL}/sales/${orderId}/void`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_email: userEmail })
@@ -4736,7 +4736,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     try {
       setIsLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
-      const res = await fetch(`${API_URL}/sales/returns/${returnId}/void`, {
+      const res = await fetchWithTimeout(`${API_URL}/sales/returns/${returnId}/void`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user_email: user?.email || 'system' })
@@ -4762,7 +4762,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
     setIsLoading(true);
     try {
-      const res = await fetch(`${API_URL}/sales/returns/${returnId}`, {
+      const res = await fetchWithTimeout(`${API_URL}/sales/returns/${returnId}`, {
         method: 'DELETE'
       });
       if (!res.ok) {
@@ -6911,7 +6911,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
               try {
                 setIsLoading(true);
-                const res = await fetch(`${API_URL}/quotations`, {
+                const res = await fetchWithTimeout(`${API_URL}/quotations`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify(payload)
@@ -7852,7 +7852,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                 try {
                   setIsLoading(true);
                   const { data: { user } } = await supabase.auth.getUser();
-                  const res = await fetch(`${API_URL}/sales/returns`, {
+                  const res = await fetchWithTimeout(`${API_URL}/sales/returns`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
