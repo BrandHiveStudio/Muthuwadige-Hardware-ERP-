@@ -75,6 +75,11 @@ const wipeDatabase = (dbPath, label) => {
       }
     });
 
+    // Wipe audit logs completely
+    db.run(`DELETE FROM audit_logs`, (err) => {
+      if (!err) console.log('  ✓ Wiped all audit logs');
+    });
+
     // Vacuum database & truncate WAL log
     db.run(`VACUUM`, (err) => {
       if (err) {

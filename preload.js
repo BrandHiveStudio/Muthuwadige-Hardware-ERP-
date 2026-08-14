@@ -1,14 +1,14 @@
-const { contextBridge, shell } = require('electron');
+const { contextBridge, ipcRenderer } = require('electron');
 
 console.log('⚡ Muthuwadige Hardware ERP Preload initialized.');
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  openExternal: (url) => {
-    try {
-      return shell.openExternal(url);
-    } catch (e) {
-      console.warn('Failed to open external URL via shell, falling back to window.open', e);
-      return null;
-    }
+  openExternalUrl: async (url) => {
+    console.log('[WhatsApp] 3. Preload openExternalUrl called with:', url);
+    return await ipcRenderer.invoke('open-external-url', url);
+  },
+  openExternal: async (url) => {
+    console.log('[WhatsApp] 3. Preload openExternal called with:', url);
+    return await ipcRenderer.invoke('open-external-url', url);
   }
 });

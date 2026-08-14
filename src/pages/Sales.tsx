@@ -28,6 +28,7 @@ import { api, API_URL, fetchWithTimeout } from '../lib/api';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { SaleOrder, SaleItem, Customer, Product, Quotation, DeliveryNote, SalesReturn, CreditNote, CreditNoteUsage } from '../types';
+import { formatStock } from '../utils/formatters';
 import { sinhalaFontBase64 } from '../utils/sinhalaFontBase64';
 
 const safeParseJson = (data: any, fallback: any = []) => {
@@ -2395,6 +2396,36 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
             <span>{isSinhala ? 'ගෙවිය යුතු මුළු මුදල:' : 'Total Amount:'}</span>
             <span className="text-base font-black">{symbol} {formatNum(order.total_amount !== undefined ? order.total_amount : order.total)}</span>
           </div>
+          {(() => {
+            const method = (order.payment_method || (order as any).paymentMethod || '').toString().toLowerCase().trim();
+            const status = (order.status || '').toString().toLowerCase().trim();
+            const isCredit = method === 'credit' || method === 'credit sale' || (order as any).is_credit === true || status === 'non paid' || status === 'non-paid' || status === 'partially paid' || status === 'partially settled' || status === 'fully settled';
+            
+            if (!isCredit) return null;
+
+            const totalAmt = Number(order.total_amount !== undefined ? order.total_amount : order.total);
+            const paidAmt = Number(order.payment_received || 0);
+            const remBal = Math.max(0, totalAmt - paidAmt);
+            const isSettled = remBal <= 0.01;
+            return (
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 space-y-1.5 mt-2 text-xs text-left">
+                <div className="flex justify-between font-bold text-emerald-700">
+                  <span>{isSinhala ? 'දැනට ගෙවා ඇති මුදල:' : 'Amount Paid So Far:'}</span>
+                  <span className="font-black">{symbol} {formatNum(paidAmt)}</span>
+                </div>
+                <div className="flex justify-between font-bold text-rose-700">
+                  <span>{isSinhala ? 'ගෙවීමට ඇති ඉතිරි ශේෂය:' : 'Remaining Balance Owed:'}</span>
+                  <span className="font-black">{symbol} {formatNum(remBal)}</span>
+                </div>
+                <div className="flex justify-between items-center text-[10px] font-black uppercase pt-1 border-t border-slate-200">
+                  <span className="text-slate-500">{isSinhala ? 'ණය ගෙවීමේ තත්ත්වය:' : 'Payment Status:'}</span>
+                  <span className={`px-2 py-0.5 rounded ${isSettled ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                    {isSettled ? (isSinhala ? 'සම්පූර්ණයෙන්ම පියවා ඇත' : 'Fully Settled') : (isSinhala ? 'කොටසක් පියවා ඇත' : 'Partially Settled')}
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
       
@@ -3126,8 +3157,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   const [salesReturnsList, setSalesReturnsList] = useState<SalesReturn[]>([]);
   const [creditNotesList, setCreditNotesList] = useState<CreditNote[]>([]);
   const [returnSearchQuery, setReturnSearchQuery] = useState('');
+  const [showBillSearchResults, setShowBillSearchResults] = useState(true);
   const [returnProductSearch, setReturnProductSearch] = useState('');
   const [targetReturnInvoice, setTargetReturnInvoice] = useState<SaleOrder | null>(null);
+  const [includeReturnDiscount, setIncludeReturnDiscount] = useState<boolean>(true);
+  const [includeReturnTax, setIncludeReturnTax] = useState<boolean>(true);
+  const [includeReturnTransport, setIncludeReturnTransport] = useState<boolean>(true);
   const [returnQtys, setReturnQtys] = useState<Record<string, number>>({});
   const [returnMethod, setReturnMethod] = useState<'Cash Refund' | 'Exchange' | 'Credit Note'>('Cash Refund');
   const [returnReason, setReturnReason] = useState('');
@@ -3156,6 +3191,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   const [showCreditNoteUsageModal, setShowCreditNoteUsageModal] = useState(false);
   const [creditNoteUsageLogs, setCreditNoteUsageLogs] = useState<CreditNoteUsage[]>([]);
   const [loadingCNUsage, setLoadingCNUsage] = useState(false);
+
+
 
   const fetchCreditNoteUsage = async (code?: string) => {
     setLoadingCNUsage(true);
@@ -4002,7 +4039,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     try {
       setIsLoading(true);
 
-      let targetElement = document.getElementById('receipt-preview');
+      let targetElement = document.getElementById('credit-preview-modal-content') || document.getElementById('receipt-preview');
       let tempContainer: HTMLElement | null = null;
       let root: any = null;
 
@@ -4066,7 +4103,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       }
 
       const invNo = order.invoiceNo || order.invoice_no || 'Bill';
-      pdf.save(`Invoice_${invNo}.pdf`);
+      const isCreditOrder = ((order.payment_method || '').toLowerCase() === 'credit' || order.status === 'Non Paid' || order.status === 'Partially Settled' || order.status === 'Fully Settled' || (order as any).is_credit);
+      const pdfFileName = isCreditOrder ? `Credit_Statement_${invNo}.pdf` : `Invoice_${invNo}.pdf`;
+      pdf.save(pdfFileName);
     } catch (err: any) {
       console.error("Failed to download receipt PDF:", err);
       alert(t("Failed to download receipt: ", "ඉන්වොයිසිය බාගත කිරීමට අපොහොසත් විය: ") + (err?.message || err));
@@ -4815,6 +4854,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
   const creditOrders = useMemo(() => orders.filter((o) => isCreditOrder(o)), [orders]);
 
+  
+
+
+
   const filteredCreditOrders = useMemo(() => {
     const query = creditSearchQuery.toLowerCase().trim();
     return orders.filter(o => {
@@ -5234,7 +5277,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                             <div className="flex items-center gap-2">
                               <span className="text-[9px] font-mono text-slate-400 uppercase tracking-wider">SKU: {p.sku || 'N/A'}</span>
                               <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg ${stockBadge}`}>
-                                {t('Stock', 'තොගය')}: {p.stock} {p.unit}
+                                {t('Stock', 'තොගය')}: {formatStock(p.stock, p.unit)} {p.unit}
                               </span>
                             </div>
                           </div>
@@ -5354,12 +5397,33 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                   </button>
                                   <input 
                                     type="number" 
-                                    min={0.5} 
+                                    min={0} 
                                     step="any"
                                     max={maxStockInUnit} 
                                     value={item.qty === 0 ? '' : item.qty} 
-                                    onChange={(e) => updateQty(item.productId, e.target.value === '' ? 0 : Math.min(maxStockInUnit, parseFloat(e.target.value) || 0))} 
-                                    className="w-16 text-center bg-transparent border-0 font-bold text-slate-800 outline-none select-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+                                    onFocus={(e) => e.target.select()}
+                                    onChange={(e) => {
+                                      const valStr = e.target.value;
+                                      if (valStr === '') {
+                                        updateQty(item.productId, 0);
+                                      } else {
+                                        const val = parseFloat(valStr);
+                                        if (!isNaN(val) && val >= 0) {
+                                          updateQty(item.productId, Math.min(maxStockInUnit, val));
+                                        }
+                                      }
+                                    }}
+                                    onBlur={() => {
+                                      if (!item.qty || item.qty <= 0) {
+                                        updateQty(item.productId, 1, true);
+                                      }
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        (e.target as HTMLElement).blur();
+                                      }
+                                    }}
+                                    className="w-16 text-center bg-transparent border-0 font-bold text-slate-800 outline-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
                                   />
                                   <button
                                     type="button"
@@ -6194,7 +6258,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                             <div className="flex items-center gap-2">
                               <span className="text-[9px] font-mono text-slate-400 uppercase tracking-wider">SKU: {p.sku || 'N/A'}</span>
                               <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg ${stockBadge}`}>
-                                {t('Stock', 'තොගය')}: {p.stock} {p.unit}
+                                {t('Stock', 'තොගය')}: {formatStock(p.stock, p.unit)} {p.unit}
                               </span>
                             </div>
                           </div>
@@ -6315,12 +6379,33 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                   </button>
                                   <input 
                                     type="number" 
-                                    min={0.5} 
+                                    min={0} 
                                     step="any"
                                     max={maxStockInUnit} 
                                     value={item.qty === 0 ? '' : item.qty} 
-                                    onChange={(e) => updateCreditQty(itemIdx, e.target.value === '' ? 0 : Math.min(maxStockInUnit, parseFloat(e.target.value) || 0))} 
-                                    className="w-16 text-center bg-transparent border-0 font-bold text-slate-800 outline-none select-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+                                    onFocus={(e) => e.target.select()}
+                                    onChange={(e) => {
+                                      const valStr = e.target.value;
+                                      if (valStr === '') {
+                                        updateCreditQty(itemIdx, 0);
+                                      } else {
+                                        const val = parseFloat(valStr);
+                                        if (!isNaN(val) && val >= 0) {
+                                          updateCreditQty(itemIdx, Math.min(maxStockInUnit, val));
+                                        }
+                                      }
+                                    }}
+                                    onBlur={() => {
+                                      if (!item.qty || item.qty <= 0) {
+                                        updateCreditQty(itemIdx, 1, true);
+                                      }
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        (e.target as HTMLElement).blur();
+                                      }
+                                    }}
+                                    className="w-16 text-center bg-transparent border-0 font-bold text-slate-800 outline-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
                                   />
                                   <button
                                     type="button"
@@ -6557,7 +6642,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                       <th className="px-4 py-4">{t('Invoice', 'ඉන්වොයිසිය')}</th>
                       <th className="px-4 py-4">{t('Customer', 'පාරිභෝගිකයා')}</th>
                       <th className="px-4 py-4">{t('Description', 'විස්තරය')}</th>
-                      <th className="px-4 py-4 text-right">{t('Sub Total', 'උප එකතුව')}</th>
+                      <th className="px-4 py-4 text-right">{t('Total Amount', 'මුළු මුදල')}</th>
+                      <th className="px-4 py-4 text-right">{t('Paid Amount', 'ගෙවූ මුදල')}</th>
+                      <th className="px-4 py-4 text-right">{t('Remaining Bal', 'ඉතිරි ශේෂය')}</th>
                       <th className="px-4 py-4">{t('Due Date', 'ගෙවිය යුතු දිනය')}</th>
                       <th className="px-4 py-4 text-center">{t('Status', 'තත්ත්වය')}</th>
                       <th className="px-4 py-4 text-center">{t('Actions', 'ක්‍රියාකාරකම්')}</th>
@@ -6565,7 +6652,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {orders.filter(o => {
-                        const isCredit = o.status === 'Non Paid' || o.status === 'Paid';
+                        const method = (o.payment_method || (o as any).paymentMethod || '').toString().toLowerCase().trim();
+                        const status = (o.status || '').toString().toLowerCase().trim();
+                        const isCredit = method === 'credit' || method === 'credit sale' || (o as any).is_credit === true || status === 'non paid' || status === 'non-paid' || status === 'partially paid' || status === 'partially settled' || status === 'pending';
                         if (!isCredit) return false;
                         if (creditHistoryFromDate && new Date(o.date) < new Date(creditHistoryFromDate)) return false;
                         if (creditHistoryToDate && new Date(o.date) > new Date(creditHistoryToDate + 'T23:59:59')) return false;
@@ -6578,7 +6667,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                       </tr>
                     ) : (
                       orders.filter(o => {
-                        const isCredit = o.status === 'Non Paid' || o.status === 'Paid';
+                        const method = (o.payment_method || (o as any).paymentMethod || '').toString().toLowerCase().trim();
+                        const status = (o.status || '').toString().toLowerCase().trim();
+                        const isCredit = method === 'credit' || method === 'credit sale' || (o as any).is_credit === true || status === 'non paid' || status === 'non-paid' || status === 'partially paid' || status === 'partially settled' || status === 'pending';
                         if (!isCredit) return false;
                         if (creditHistoryFromDate && new Date(o.date) < new Date(creditHistoryFromDate)) return false;
                         if (creditHistoryToDate && new Date(o.date) > new Date(creditHistoryToDate + 'T23:59:59')) return false;
@@ -6606,7 +6697,18 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                             <td className="px-4 py-4 font-black text-[#464646]">{order.invoiceNo}</td>
                             <td className="px-4 py-4 font-bold text-[#464646]">{order.customerName}</td>
                             <td className="px-4 py-4 text-gray-500 font-semibold">{productDesc}</td>
-                            <td className="px-4 py-4 text-right font-black text-[#DAA520]">{symbol} {convert(order.total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            {(() => {
+                              const invTotal = Number(order.total_amount !== undefined ? order.total_amount : order.total);
+                              const paidAmt = Number(order.payment_received || 0);
+                              const remBal = Math.max(0, invTotal - paidAmt);
+                              return (
+                                <>
+                                  <td className="px-4 py-4 text-right font-black text-slate-800">{symbol} {convert(invTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                  <td className="px-4 py-4 text-right font-black text-emerald-600">{symbol} {convert(paidAmt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                  <td className="px-4 py-4 text-right font-black text-rose-600">{symbol} {convert(remBal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                </>
+                              );
+                            })()}
                             <td className="px-4 py-4 font-bold text-[#464646]">
                               <div>{order.due_date ? new Date(order.due_date).toLocaleDateString() : '—'}</div>
                               {isOverdue && (
@@ -6616,11 +6718,19 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                               )}
                             </td>
                             <td className="px-4 py-4 text-center">
-                              <span className={`px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest ${
-                                order.status === 'Paid' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
-                              }`}>
-                                {order.status === 'Paid' || order.status === 'paid' ? t('Paid', 'ගෙවන ලද') : order.status === 'Non Paid' ? t('Non Paid', 'නොගෙවූ') : order.status}
-                              </span>
+                              {(() => {
+                                const invTotal = Number(order.total_amount !== undefined ? order.total_amount : order.total);
+                                const paidAmt = Number(order.payment_received || 0);
+                                const remBal = Math.max(0, invTotal - paidAmt);
+                                const isSettled = remBal <= 0.01;
+                                return (
+                                  <span className={`px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest ${
+                                    isSettled ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'
+                                  }`}>
+                                    {isSettled ? t('Fully Settled', 'සම්පූර්ණයෙන්ම පියවා ඇත') : t('Partially Settled', 'කොටසක් පියවා ඇත')}
+                                  </span>
+                                );
+                              })()}
                             </td>
                             <td className="px-4 py-4">
                               <div className="flex items-center justify-center gap-1.5">
@@ -6685,125 +6795,6 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                   </tbody>
                 </table>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Interactive Receipt Preview Modal */}
-      <Modal isOpen={showReceipt} onClose={() => { setShowReceipt(false); resetNewSale(); }} title={t('Transaction Verified', 'ගනුදෙනුව තහවුරු කරන ලදී')} size="lg">
-        {lastOrder && (
-          <div className="space-y-4 p-4 text-center animate-in zoom-in duration-300">
-            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-emerald-50 text-emerald-500 rounded-lg flex items-center justify-center border border-emerald-100 shadow-inner">
-                  <CheckCircleIcon className="w-5 h-5" />
-                </div>
-                <div className="text-left">
-                  <h4 className="font-black text-sm text-[#464646]">{t('Success!', 'සාර්ථකයි!')}</h4>
-                  <p className="text-[10px] text-gray-400 font-bold">{t('Invoice created successfully', 'ඉන්වොයිසිය සාර්ථකව සාදන ලදී')}</p>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <button 
-                  onClick={() => handlePrintReceipt(lastOrder)} 
-                  className="bg-[#DAA520] hover:bg-[#B8860B] text-white px-4 py-2 rounded-xl text-xs font-black shadow-md shadow-[#DAA520]/20 flex items-center gap-2 transition-all uppercase tracking-widest"
-                >
-                  <PrinterIcon className="w-4 h-4" /> {t('Print', 'මුද්‍රණය කරන්න')}
-                </button>
-                <button 
-                  onClick={() => downloadReceiptPDF(lastOrder)} 
-                  className="bg-[#464646] hover:bg-[#333333] text-white px-4 py-2 rounded-xl text-xs font-black shadow-md shadow-[#464646]/20 flex items-center gap-2 transition-all uppercase tracking-widest"
-                >
-                  <DownloadIcon className="w-4 h-4" /> PDF
-                </button>
-              </div>
-            </div>
-
-            {/* Premium Receipt Preview Rendering */}
-            <div className="max-h-[60vh] overflow-y-auto pr-1">
-              <ReceiptPreview order={lastOrder} isSinhala={isSinhala} customers={customers} salesReturns={salesReturnsList} />
-            </div>
-
-            <div className="pt-2">
-              <button 
-                onClick={() => { setShowReceipt(false); resetNewSale(); }} 
-                className="w-full bg-gray-100 text-gray-500 py-3.5 rounded-xl font-black uppercase tracking-widest text-[10px] hover:bg-gray-200 transition-colors"
-              >
-                {t('Dismiss', 'ඉවත් කරන්න')}
-              </button>
-            </div>
-          </div>
-        )}
-      </Modal>
-
-      {showHoldNameModal && (
-        <div className="fixed inset-0 bg-[#464646]/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
-          <form 
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleHoldBill(holdNameInput);
-            }} 
-            className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-6 space-y-4 animate-in zoom-in-95"
-          >
-            <div className="flex justify-between items-center text-left">
-              <h3 className="font-black text-lg text-[#464646] uppercase tracking-wider">{t('Hold Invoice (Park)', 'බිල්පත රඳවා තබන්න')}</h3>
-              <button type="button" onClick={() => setShowHoldNameModal(false)} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 transition-colors"><XIcon className="w-5 h-5" /></button>
-            </div>
-            <div className="text-left">
-              <label className="block text-[10px] font-black text-gray-400 uppercase mb-1.5 tracking-widest">{t('Enter Hold Name / Table #', 'රඳවා ගැනීමේ නම / අංකය')}</label>
-              <input 
-                type="text" 
-                required 
-                autoFocus 
-                className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm font-bold text-[#464646] outline-none focus:ring-2 focus:ring-[#DAA520]" 
-                value={holdNameInput} 
-                onChange={e => setHoldNameInput(e.target.value)} 
-                placeholder="e.g. Table 4, Nalaka's order" 
-              />
-            </div>
-            <div className="flex gap-3 pt-2">
-              <button type="button" onClick={() => setShowHoldNameModal(false)} className="flex-1 py-3 font-black text-gray-500 hover:bg-gray-100 rounded-xl uppercase tracking-widest text-[10px] transition-colors">{t('Cancel', 'අවලංගු කරන්න')}</button>
-              <button type="submit" className="flex-[2] py-3 font-black bg-[#DAA520] hover:bg-[#B8860B] text-white rounded-xl shadow-lg shadow-[#DAA520]/20 uppercase tracking-widest text-[10px] transition-all">{t('Park Bill', 'බිල රඳවන්න')}</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {showHeldBillsModal && (
-        <div className="fixed inset-0 bg-[#464646]/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg p-6 space-y-4 animate-in zoom-in-95 text-left">
-            <div className="flex justify-between items-center">
-              <h3 className="font-black text-lg text-[#464646] uppercase tracking-wider">{t('Parked Invoices', 'රඳවා ඇති බිල්පත්')}</h3>
-              <button type="button" onClick={() => setShowHeldBillsModal(false)} className="p-2 hover:bg-gray-100 rounded-full text-gray-400 transition-colors"><XIcon className="w-5 h-5" /></button>
-            </div>
-            
-            <div className="max-h-80 overflow-y-auto divide-y divide-gray-100 pr-1">
-              {heldBills.length === 0 ? (
-                <div className="py-12 text-center text-gray-400 font-bold text-sm">
-                  {t('No bills currently parked.', 'රඳවා තැබූ බිල්පත් කිසිවක් නැත.')}
-                </div>
-              ) : (
-                heldBills.map(hold => (
-                  <div key={hold.id} className="flex items-center justify-between py-4 first:pt-0 last:pb-0 hover:bg-gray-50/50 transition-all rounded-lg px-2">
-                    <div>
-                      <h4 className="font-black text-slate-800 text-sm font-mono">{hold.hold_name}</h4>
-                      <p className="text-[10px] text-gray-400 font-bold mt-1">
-                        {hold.customer_name} • {JSON.parse(hold.items || '[]').length} items • {new Date(hold.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-sm font-black text-[#DAA520]">{symbol} {convert(hold.total_amount).toLocaleString()}</span>
-                      <button 
-                        onClick={() => handleRetrieveHoldBill(hold)}
-                        className="px-4 py-2 bg-[#DAA520] hover:bg-[#B8860B] text-white rounded-lg text-[10px] font-black uppercase tracking-widest transition-all shadow-sm"
-                      >
-                        {t('Load', 'ලෝඩ්')}
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
             </div>
           </div>
         </div>
@@ -7195,10 +7186,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                     <td className="px-3 py-2.5 text-center">
                                       <input
                                         type="number"
-                                        min={1}
-                                        value={item.qty}
+                                        min={0}
+                                        step="any"
+                                        value={item.qty === 0 ? '' : item.qty}
+                                        onFocus={(e) => e.target.select()}
                                         onChange={(e) => {
-                                          const newQty = Math.max(1, parseFloat(e.target.value) || 1);
+                                          const valStr = e.target.value;
+                                          const newQty = valStr === '' ? 0 : Math.max(0, parseFloat(valStr) || 0);
                                           const updated = [...quoteCart];
                                           updated[idx].qty = newQty;
                                           const itemGross = newQty * updated[idx].price;
@@ -7207,6 +7201,23 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                           const itemDiscAmt = itemNormType === 'percent' ? (itemGross * itemDiscVal / 100) : itemDiscVal;
                                           updated[idx].total = Math.max(0, itemGross - itemDiscAmt);
                                           setQuoteCart(updated);
+                                        }}
+                                        onBlur={() => {
+                                          if (!item.qty || item.qty <= 0) {
+                                            const updated = [...quoteCart];
+                                            updated[idx].qty = 1;
+                                            const itemGross = 1 * updated[idx].price;
+                                            const itemDiscVal = updated[idx].discount || 0;
+                                            const itemNormType = updated[idx].discountType || 'amount';
+                                            const itemDiscAmt = itemNormType === 'percent' ? (itemGross * itemDiscVal / 100) : itemDiscVal;
+                                            updated[idx].total = Math.max(0, itemGross - itemDiscAmt);
+                                            setQuoteCart(updated);
+                                          }
+                                        }}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') {
+                                            (e.target as HTMLElement).blur();
+                                          }
                                         }}
                                         className="w-16 text-center border border-slate-300 rounded-lg px-2 py-1 font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
                                       />
@@ -7558,6 +7569,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                   value={returnSearchQuery}
                   onChange={(e) => {
                     setReturnSearchQuery(e.target.value);
+                    setShowBillSearchResults(true);
+                  }}
+                  onFocus={() => {
+                    if (returnSearchQuery.trim().length >= 1) {
+                      setShowBillSearchResults(true);
+                    }
                   }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
@@ -7614,13 +7631,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                           initialQtys[item.productId] = isMatch ? 1 : 0; 
                         });
                         setReturnQtys(initialQtys);
+                        setShowBillSearchResults(false);
                       }
                     }
                   }}
                   className="bg-transparent text-sm font-bold text-slate-800 outline-none w-full placeholder-slate-400 py-1"
                 />
                 {returnSearchQuery && (
-                  <button type="button" onClick={() => setReturnSearchQuery('')} className="text-slate-400 hover:text-slate-600 text-xs font-bold px-1">✕</button>
+                  <button type="button" onClick={() => { setReturnSearchQuery(''); setShowBillSearchResults(true); }} className="text-slate-400 hover:text-slate-600 text-xs font-bold px-1">✕</button>
                 )}
                 <button
                   type="button"
@@ -7673,6 +7691,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                         initialQtys[item.productId] = isMatch ? 1 : 0; 
                       });
                       setReturnQtys(initialQtys);
+                      setShowBillSearchResults(false);
                     }
                   }}
                   className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-amber-400 font-black rounded-xl text-xs uppercase tracking-wider transition-all shadow-md flex items-center gap-1 shrink-0"
@@ -7683,7 +7702,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
               </div>
 
               {/* Display ALL Bills Associated with Barcode / Product Search Query */}
-              {returnSearchQuery.trim().length >= 1 && (() => {
+              {showBillSearchResults && returnSearchQuery.trim().length >= 1 && (() => {
                 const q = returnSearchQuery.trim().toLowerCase();
 
                 const matchedProdIds = new Set(
@@ -7763,6 +7782,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                 initialQtys[item.productId] = isMatch ? 1 : 0; 
                               });
                               setReturnQtys(initialQtys);
+                              setShowBillSearchResults(false);
                             }}
                             className={`p-3 rounded-xl transition-all cursor-pointer border flex justify-between items-center group ${isCurrentlySelected ? 'bg-amber-100/90 border-amber-400 shadow-sm' : 'bg-slate-50/70 hover:bg-amber-50/70 border-slate-200 hover:border-amber-300'}`}
                           >
@@ -7803,28 +7823,59 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
             {/* Selected Invoice Return Details */}
             {targetReturnInvoice && (() => {
-              // Calculate already returned quantities map for this invoice across active returns
+              // Helper to generate a unique invoice line item key (using lineId or invoiceNo + lineIndex)
+              const getItemLineKey = (item: any, idx?: number) => {
+                if (item.lineId || item.line_id) return `${targetReturnInvoice.invoiceNo}_${item.lineId || item.line_id}`;
+                const pId = item.productId || item.product_id || '';
+                const uKey = (item.unit || '').toLowerCase().trim();
+                const lineIdx = item.lineIndex !== undefined ? item.lineIndex : idx;
+                return lineIdx !== undefined ? `${targetReturnInvoice.invoiceNo}_line_${lineIdx}` : `${targetReturnInvoice.invoiceNo}_${pId}_${uKey}`;
+              };
+
+              // Calculate already returned quantities map per line item for this invoice across active returns
               const alreadyReturnedMap: Record<string, number> = {};
               salesReturnsList
                 .filter(sr => sr.status !== 'voided' && (sr.invoiceNo === targetReturnInvoice.invoiceNo || sr.invoice_no === targetReturnInvoice.invoiceNo))
                 .forEach(sr => {
                   const items = Array.isArray(sr.returnedItems) ? sr.returnedItems : safeParseJson(sr.returnedItems, []);
-                  items.forEach((ri: any) => {
-                    const pId = ri.productId || ri.product_id;
-                    alreadyReturnedMap[pId] = (alreadyReturnedMap[pId] || 0) + Number(ri.qty || 0);
+                  items.forEach((ri: any, riIdx: number) => {
+                    const lKey = getItemLineKey(ri, ri.lineIndex !== undefined ? ri.lineIndex : riIdx);
+                    alreadyReturnedMap[lKey] = (alreadyReturnedMap[lKey] || 0) + Number(ri.qty || 0);
                   });
                 });
 
               const targetItems = Array.isArray(targetReturnInvoice.items) ? targetReturnInvoice.items : safeParseJson(targetReturnInvoice.items, []);
 
               const itemsToReturn = targetItems
-                .filter((item: any) => (returnQtys[item.productId] || 0) > 0)
-                .map((item: any) => ({
-                  ...item,
-                  qty: returnQtys[item.productId]
-                }));
+                .filter((item: any, idx: number) => {
+                  const lKey = getItemLineKey(item, idx);
+                  const qtyVal = returnQtys[lKey] !== undefined ? returnQtys[lKey] : 0;
+                  return qtyVal > 0;
+                })
+                .map((item: any, idx: number) => {
+                  const lKey = getItemLineKey(item, idx);
+                  const qtyVal = returnQtys[lKey] !== undefined ? returnQtys[lKey] : 0;
+                  return {
+                    ...item,
+                    lineId: lKey,
+                    lineIndex: idx,
+                    qty: qtyVal
+                  };
+                });
 
-              const returnTotalValue = itemsToReturn.reduce((sum: number, i: any) => sum + (i.qty * i.price), 0);
+              const origSubtotal = Number(targetReturnInvoice.subtotal !== undefined ? targetReturnInvoice.subtotal : ((targetReturnInvoice as any).subTotal || 0)) || 1;
+              const origDiscount = Number(targetReturnInvoice.discount || 0);
+              const origTax = Number(targetReturnInvoice.tax || 0);
+              const origTransportFee = Number(targetReturnInvoice.transportation_fee !== undefined ? targetReturnInvoice.transportation_fee : ((targetReturnInvoice as any).transportationFee || 0));
+
+              const returnedProductsSubtotal = itemsToReturn.reduce((sum: number, i: any) => sum + (i.qty * (i.price || 0)), 0);
+              const returnRatio = Math.min(1, Math.max(0, returnedProductsSubtotal / origSubtotal));
+
+              const applicableDiscount = includeReturnDiscount ? (origDiscount * returnRatio) : 0;
+              const applicableTax = includeReturnTax ? (origTax * returnRatio) : 0;
+              const applicableTransport = includeReturnTransport ? (origTransportFee * (returnedProductsSubtotal > 0 ? 1 : 0)) : 0;
+
+              const returnTotalValue = Math.max(0, returnedProductsSubtotal - applicableDiscount + applicableTax + applicableTransport);
               const exchangeTotalValue = exchangeCartItems.reduce((sum: number, i: any) => sum + (i.qty * i.price), 0);
               const netExchangeBalance = exchangeTotalValue - returnTotalValue;
 
@@ -7938,12 +7989,141 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                         setTargetReturnInvoice(null);
                         setReturnQtys({});
                         setExchangeCartItems([]);
+                        setShowBillSearchResults(true);
+                        if (returnSearchInputRef.current) returnSearchInputRef.current.focus();
                       }}
                       className="text-xs font-bold text-slate-400 hover:text-slate-600 underline"
                     >
                       {t('Clear / Change Invoice', 'වෙනත් ඉන්වොයිසියක්')}
                     </button>
                   </div>
+
+                  {/* Complete Original Bill Pricing Details Card */}
+                  {(() => {
+                    const method = (targetReturnInvoice.payment_method || (targetReturnInvoice as any).paymentMethod || '').toString().toLowerCase().trim();
+                    const status = (targetReturnInvoice.status || '').toString().toLowerCase().trim();
+                    const isCreditBill = method === 'credit' || method === 'credit sale' || (targetReturnInvoice as any).is_credit === true || status === 'non paid' || status === 'non-paid' || status === 'partially paid' || status === 'partially settled';
+
+                    const origSubtotal = Number(targetReturnInvoice.subtotal !== undefined ? targetReturnInvoice.subtotal : ((targetReturnInvoice as any).subTotal || 0));
+                    const origDiscount = Number(targetReturnInvoice.discount || 0);
+                    const origTax = Number(targetReturnInvoice.tax || 0);
+                    const origTransportFee = Number(targetReturnInvoice.transportation_fee !== undefined ? targetReturnInvoice.transportation_fee : (targetReturnInvoice.transportationFee || 0));
+                    const origBillTotal = Number(targetReturnInvoice.total_amount !== undefined ? targetReturnInvoice.total_amount : (targetReturnInvoice.total || 0));
+                    
+                    let origPaidAmount = 0;
+                    if (isCreditBill) {
+                      origPaidAmount = Number(targetReturnInvoice.payment_received || 0);
+                    } else {
+                      origPaidAmount = targetReturnInvoice.payment_received !== undefined && targetReturnInvoice.payment_received !== null && Number(targetReturnInvoice.payment_received) > 0
+                        ? Number(targetReturnInvoice.payment_received)
+                        : origBillTotal;
+                    }
+                    const origOutstanding = Math.max(0, origBillTotal - origPaidAmount);
+
+                    return (
+                      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
+                        <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5 border-b border-slate-100 pb-2">
+                          <span>📊</span> {t('Original Bill Pricing & Payment Details', 'මුල් ඉන්වොයිසියේ මිල ගණන් සහ ගෙවීම් විස්තර')}
+                        </h5>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 text-xs">
+                          {/* 1. Subtotal */}
+                          <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 flex flex-col justify-between">
+                            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">{t('Subtotal', 'උප එකතුව')}</span>
+                            <span className="font-black text-slate-700 text-sm mt-1">{symbol} {convert(origSubtotal).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                          </div>
+
+                          {/* 2. Selectable Discount */}
+                          <label className={`p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between select-none ${includeReturnDiscount ? 'bg-amber-50/90 border-amber-300 ring-2 ring-amber-500/20' : 'bg-slate-50/60 border-slate-200 opacity-50'}`}>
+                            <div className="flex justify-between items-center">
+                              <span className="text-[9px] font-black text-amber-800 uppercase tracking-widest block">{t('Discount', 'වට්ටම')}</span>
+                              <input
+                                type="checkbox"
+                                checked={includeReturnDiscount}
+                                onChange={(e) => setIncludeReturnDiscount(e.target.checked)}
+                                className="w-3.5 h-3.5 text-amber-600 rounded border-gray-300 focus:ring-amber-500 cursor-pointer"
+                              />
+                            </div>
+                            <div className="mt-1 flex items-baseline justify-between">
+                              <span className={`font-black text-sm ${includeReturnDiscount ? 'text-amber-600' : 'text-slate-400 line-through'}`}>
+                                -{symbol} {convert(origDiscount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                              </span>
+                            </div>
+                            <span className="text-[8px] font-bold text-amber-800/70 mt-0.5">
+                              {includeReturnDiscount ? t('✓ Included', '✓ ඇතුළත්') : t('✗ Excluded', '✗ ඉවත් කර ඇත')}
+                            </span>
+                          </label>
+
+                          {/* 3. Selectable Tax */}
+                          <label className={`p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between select-none ${includeReturnTax ? 'bg-emerald-50/90 border-emerald-300 ring-2 ring-emerald-500/20' : 'bg-slate-50/60 border-slate-200 opacity-50'}`}>
+                            <div className="flex justify-between items-center">
+                              <span className="text-[9px] font-black text-emerald-800 uppercase tracking-widest block">{t('Tax', 'බදු')}</span>
+                              <input
+                                type="checkbox"
+                                checked={includeReturnTax}
+                                onChange={(e) => setIncludeReturnTax(e.target.checked)}
+                                className="w-3.5 h-3.5 text-emerald-600 rounded border-gray-300 focus:ring-emerald-500 cursor-pointer"
+                              />
+                            </div>
+                            <div className="mt-1 flex items-baseline justify-between">
+                              <span className={`font-black text-sm ${includeReturnTax ? 'text-emerald-700' : 'text-slate-400 line-through'}`}>
+                                +{symbol} {convert(origTax).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                              </span>
+                            </div>
+                            <span className="text-[8px] font-bold text-emerald-800/70 mt-0.5">
+                              {includeReturnTax ? t('✓ Included', '✓ ඇතුළත්') : t('✗ Excluded', '✗ ඉවත් කර ඇත')}
+                            </span>
+                          </label>
+
+                          {/* 4. Selectable Transport Fee */}
+                          <label className={`p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between select-none ${includeReturnTransport ? 'bg-blue-50/90 border-blue-300 ring-2 ring-blue-500/20' : 'bg-slate-50/60 border-slate-200 opacity-50'}`}>
+                            <div className="flex justify-between items-center">
+                              <span className="text-[9px] font-black text-blue-800 uppercase tracking-widest block">{t('Transport Fee', 'ප්‍රවාහන ගාස්තු')}</span>
+                              <input
+                                type="checkbox"
+                                checked={includeReturnTransport}
+                                onChange={(e) => setIncludeReturnTransport(e.target.checked)}
+                                className="w-3.5 h-3.5 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer"
+                              />
+                            </div>
+                            <div className="mt-1 flex items-baseline justify-between">
+                              <span className={`font-black text-sm ${includeReturnTransport ? 'text-blue-700' : 'text-slate-400 line-through'}`}>
+                                +{symbol} {convert(origTransportFee).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                              </span>
+                            </div>
+                            <span className="text-[8px] font-bold text-blue-800/70 mt-0.5">
+                              {includeReturnTransport ? t('✓ Included', '✓ ඇතුළත්') : t('✗ Excluded', '✗ ඉවත් කර ඇත')}
+                            </span>
+                          </label>
+
+                          {/* 5. Final Bill Total */}
+                          <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 flex flex-col justify-between">
+                            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest block">{t('Final Bill Total', 'අවසාන මුළු එකතුව')}</span>
+                            <span className="font-black text-slate-900 text-sm mt-1">{symbol} {convert(origBillTotal).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                          </div>
+
+                          {/* 6. Paid Amount */}
+                          <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 flex flex-col justify-between">
+                            <span className="text-[9px] font-black text-emerald-600 uppercase tracking-widest block">{t('Paid Amount', 'ගෙවූ මුදල')}</span>
+                            <span className="font-black text-emerald-600 text-sm mt-1">{symbol} {convert(origPaidAmount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                          </div>
+
+                          {/* 7. Outstanding / Credit */}
+                          <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 flex flex-col justify-between">
+                            <span className="text-[9px] font-black text-rose-500 uppercase tracking-widest block">{t('Outstanding / Credit', 'හිඟ / ණය මුදල')}</span>
+                            <span className={`font-black text-sm mt-1 ${isCreditBill ? 'text-rose-600' : 'text-slate-400'}`}>
+                              {symbol} {convert(origOutstanding).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </span>
+                          </div>
+
+                          {/* 8. Applicable Refund */}
+                          <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-200 shadow-sm flex flex-col justify-between">
+                            <span className="text-[9px] font-black text-amber-800 uppercase tracking-widest block">{t('Applicable Refund', 'අදාළ ආපසු ගෙවීම')}</span>
+                            <span className="font-black text-amber-700 text-sm mt-1">{symbol} {convert(returnTotalValue).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {/* Return Product Search Input within Loaded Invoice (Barcode / Name Scanner Support) */}
                   <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3 space-y-2">
@@ -8016,14 +8196,15 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {targetItems.map((item: any) => {
+                        {targetItems.map((item: any, idx: number) => {
+                          const lKey = getItemLineKey(item, idx);
                           const origQty = Number(item.qty || 0);
-                          const prevReturned = alreadyReturnedMap[item.productId] || 0;
+                          const prevReturned = alreadyReturnedMap[lKey] || 0;
                           const maxReturn = Math.max(0, origQty - prevReturned);
-                          const currReturn = returnQtys[item.productId] || 0;
+                          const currReturn = returnQtys[lKey] || 0;
                           const itemRefund = currReturn * item.price;
                           return (
-                            <tr key={item.productId} className={`hover:bg-slate-50/50 ${maxReturn === 0 ? 'bg-slate-50/60 opacity-60' : ''}`}>
+                            <tr key={lKey} className={`hover:bg-slate-50/50 ${maxReturn === 0 ? 'bg-slate-50/60 opacity-60' : ''}`}>
                               <td className="px-4 py-3 font-black text-slate-800 text-xs">
                                 {item.productName}
                                 {item.barcode && <span className="block text-[10px] font-mono font-normal text-slate-400">Barcode: {item.barcode}</span>}
@@ -8043,7 +8224,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                   value={currReturn || ''}
                                   onChange={(e) => {
                                     const val = Math.min(maxReturn, Math.max(0, parseFloat(e.target.value) || 0));
-                                    setReturnQtys(prev => ({ ...prev, [item.productId]: val }));
+                                    setReturnQtys(prev => ({ ...prev, [lKey]: val }));
                                   }}
                                   className="w-20 px-2 py-1 text-center bg-white border border-slate-300 rounded-lg font-bold text-slate-800 text-xs outline-none focus:border-amber-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
                                 />
@@ -8781,7 +8962,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
           title={t('Return Receipt Preview', 'ආපසු භාරගැනීමේ රසීදු පෙරදසුන')} 
           size="lg"
         >
-          <div className="space-y-4 p-4 text-center animate-in zoom-in duration-300">
+          <div id="credit-preview-modal-content" className="space-y-4 p-4 text-center bg-white animate-in zoom-in duration-300">
             <div className="flex items-center justify-between border-b border-gray-100 pb-3">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 bg-amber-50 text-amber-600 rounded-lg flex items-center justify-center border border-amber-200">
@@ -8838,7 +9019,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
           title={t('Credit Note Preview', 'ණය සටහන් පෙරදසුන')} 
           size="lg"
         >
-          <div className="space-y-4 p-4 text-center animate-in zoom-in duration-300">
+          <div id="credit-preview-modal-content" className="space-y-4 p-4 text-center bg-white animate-in zoom-in duration-300">
             <div className="flex items-center justify-between border-b border-gray-100 pb-3">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 bg-amber-50 text-amber-600 rounded-lg flex items-center justify-center border border-amber-200">
@@ -9113,8 +9294,117 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         </Modal>
       )}
 
+
+
+      {/* Interactive Order & Credit Receipt Preview Modal */}
+      {showReceipt && lastOrder && (
+        <Modal 
+          isOpen={showReceipt} 
+          onClose={() => setShowReceipt(false)} 
+          title={t('Credit & Transaction Preview', 'ගනුදෙනු සහ ණය තොරතුරු පෙරදසුන')} 
+          size="lg"
+        >
+          <div id="credit-preview-modal-content" className="space-y-4 p-4 text-center bg-white animate-in zoom-in duration-300">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-amber-50 text-[#DAA520] rounded-lg flex items-center justify-center border border-amber-200 shadow-inner">
+                  <ReceiptIcon className="w-5 h-5" />
+                </div>
+                <div className="text-left">
+                  <h4 className="font-black text-sm text-[#464646]">
+                    {((lastOrder.payment_method || '').toLowerCase() === 'credit' || lastOrder.status === 'Non Paid' || lastOrder.status === 'Partially Settled' || lastOrder.status === 'Fully Settled' || (lastOrder as any).is_credit)
+                      ? t('Credit Transaction & History Details', 'ණය ගනුදෙනු සහ පියවීම් විස්තර')
+                      : t('Sales Receipt Preview', 'විකුණුම් රසීදු පෙරදසුන')}
+                  </h4>
+                  <p className="text-[10px] text-gray-400 font-bold">Invoice: {lastOrder.invoiceNo}</p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => handlePrintReceipt(lastOrder)} 
+                  className="bg-[#DAA520] hover:bg-[#B8860B] text-white px-4 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-2 transition-all uppercase tracking-widest"
+                >
+                  <PrinterIcon className="w-4 h-4" /> {t('Print', 'මුද්‍රණය කරන්න')}
+                </button>
+                <button 
+                  onClick={() => downloadReceiptPDF(lastOrder)} 
+                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-2 transition-all uppercase tracking-widest"
+                >
+                  <DownloadIcon className="w-4 h-4" /> {t('Download PDF', 'PDF බාගත කරන්න')}
+                </button>
+              </div>
+            </div>
+
+            {/* Credit Accounts Overview Card */}
+            {((lastOrder.payment_method || '').toLowerCase() === 'credit' || lastOrder.status === 'Non Paid' || lastOrder.status === 'Partially Settled' || lastOrder.status === 'Fully Settled' || (lastOrder as any).is_credit) && (() => {
+              const totalAmt = Number(lastOrder.total_amount !== undefined ? lastOrder.total_amount : lastOrder.total);
+              const paidAmt = Number(lastOrder.payment_received || 0);
+              const remBal = Math.max(0, totalAmt - paidAmt);
+              const isSettled = remBal <= 0.01;
+              const statusText = isSettled ? 'Fully Settled' : 'Partially Settled';
+
+              const orderReturns = salesReturnsList.filter(sr => sr.status !== 'voided' && (sr.invoiceNo === lastOrder.invoiceNo || sr.invoice_no === lastOrder.invoiceNo));
+
+              return (
+                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-left space-y-3 my-2">
+                  <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+                    <span className="text-xs font-black text-slate-700 uppercase tracking-wider">💳 Credit Account Summary</span>
+                    <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${isSettled ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                      {isSettled ? t('Fully Settled', 'සම්පූර්ණයෙන්ම පියවා ඇත') : t('Partially Settled', 'කොටසක් පියවා ඇත')}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                    <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Invoice Amount</span>
+                      <span className="font-black text-slate-800">{symbol} {convert(totalAmt).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Amount Paid</span>
+                      <span className="font-black text-emerald-600">{symbol} {convert(paidAmt).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Outstanding Amount</span>
+                      <span className="font-black text-rose-600">{symbol} {convert(remBal).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Remaining Balance</span>
+                      <span className="font-black text-slate-900">{symbol} {convert(remBal).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    </div>
+                  </div>
+
+                  {orderReturns.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-slate-200">
+                      <span className="text-[10px] font-black text-amber-800 uppercase tracking-wider block mb-1">Associated Returns / Credit Notes:</span>
+                      {orderReturns.map((r, rIdx) => (
+                        <div key={rIdx} className="text-[11px] font-bold text-slate-700 bg-white p-2 rounded-lg border border-slate-200 flex justify-between">
+                          <span>Return #{r.returnNo || r.id} ({r.returnMethod})</span>
+                          <span className="text-rose-600">-{symbol} {convert(r.returnAmount || 0).toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            <div className="max-h-[60vh] overflow-y-auto pr-1">
+              <ReceiptPreview order={lastOrder} isSinhala={isSinhala} customers={customers} salesReturns={salesReturnsList} />
+            </div>
+
+            <div className="pt-2">
+              <button 
+                onClick={() => setShowReceipt(false)} 
+                className="w-full bg-gray-100 text-gray-500 py-3 rounded-xl font-black uppercase tracking-widest text-xs hover:bg-gray-200 transition-colors"
+              >
+                {t('Close Preview', 'වසා දමන්න')}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
     </div>
+
   );
 }
-
-export default Sales;

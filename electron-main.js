@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, shell, ipcMain } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -82,6 +82,25 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
+});
+
+ipcMain.handle('open-external-url', async (event, url) => {
+  console.log('[WhatsApp] 4. IPC open-external-url received in main process:', url);
+  if (!url || typeof url !== 'string') {
+    throw new Error('Invalid URL provided');
+  }
+  if (!url.startsWith('https://') && !url.startsWith('http://') && !url.startsWith('wa.me')) {
+    throw new Error('Unsupported URL protocol');
+  }
+  try {
+    console.log('[WhatsApp] 5. Executing shell.openExternal(url)');
+    await shell.openExternal(url);
+    console.log('[WhatsApp] 6. shell.openExternal completed successfully');
+    return { success: true };
+  } catch (err) {
+    console.error('[WhatsApp] 6. Error executing shell.openExternal:', err);
+    throw err;
+  }
 });
 
 // Quit when all windows are closed, except on macOS

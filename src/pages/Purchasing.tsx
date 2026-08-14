@@ -457,7 +457,31 @@ export function Purchasing() {
                             {poItems.map((item) => (
                                 <tr key={item.productId} className="group hover:bg-teal-50/20 transition-colors">
                                     <td className="py-4 px-6 font-black text-slate-800">{item.productName}</td>
-                                    <td className="py-4 text-center"><input type="number" min={1} value={item.qty} onChange={(e) => updateItem(item.productId, 'qty', parseInt(e.target.value) || 1)} className="w-16 text-center border border-slate-200 bg-white rounded-lg py-1.5 font-bold text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none" /></td>
+                                    <td className="py-4 text-center">
+                                      <input 
+                                        type="number" 
+                                        min={0} 
+                                        step="any"
+                                        value={item.qty === 0 ? '' : item.qty} 
+                                        onFocus={(e) => e.target.select()}
+                                        onChange={(e) => {
+                                          const valStr = e.target.value;
+                                          const val = valStr === '' ? 0 : Math.max(0, parseFloat(valStr) || 0);
+                                          updateItem(item.productId, 'qty', val);
+                                        }}
+                                        onBlur={() => {
+                                          if (!item.qty || item.qty <= 0) {
+                                            updateItem(item.productId, 'qty', 1);
+                                          }
+                                        }}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') {
+                                            (e.target as HTMLElement).blur();
+                                          }
+                                        }}
+                                        className="w-16 text-center border border-slate-200 bg-white rounded-lg py-1.5 font-bold text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none" 
+                                      />
+                                    </td>
                                     <td className="py-4 text-right"><input type="number" step="0.01" value={item.costPrice === 0 ? '' : item.costPrice} onChange={(e) => updateItem(item.productId, 'costPrice', parseFloat(e.target.value) || 0)} className="w-24 text-right border border-slate-200 bg-white rounded-lg py-1.5 px-3 font-bold text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none" /></td>
                                     <td className="py-4 text-right font-black text-[#DAA520] px-6">{symbol} {convert(item.total).toLocaleString()}</td>
                                     <td className="py-4 text-center px-4">

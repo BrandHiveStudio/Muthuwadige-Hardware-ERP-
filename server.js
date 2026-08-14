@@ -531,11 +531,11 @@ async function initializeDatabase() {
     )
   `);
 
-  // 8. Create Persistent Transactions Table
+  // 8. Create Transactions Table
   await db.exec(`
     CREATE TABLE IF NOT EXISTS transactions (
       id TEXT PRIMARY KEY,
-      type TEXT, -- 'income' | 'expense'
+      type TEXT, -- 'income' | 'expense' | 'contra_revenue'
       category TEXT,
       description TEXT,
       amount REAL,
@@ -545,6 +545,11 @@ async function initializeDatabase() {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // Auto-migrate historical Sales Return transactions from 'expense' to 'contra_revenue'
+  try {
+    await db.run("UPDATE transactions SET type = 'contra_revenue' WHERE (category = 'Sales Return' OR category = 'Exchange Refund' OR category LIKE 'Sales Return%') AND type = 'expense'");
+  } catch (e) {}
 
   // 9. Create Suppliers Table
   await db.exec(`
@@ -1958,10 +1963,127 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
 
     styleOverviewSheet(wsOverview);
 
+    // --- CREDIT CUSTOMERS SHEET ---
+    const salesReturnsList = await db.all('SELECT * FROM sales_returns ORDER BY created_at DESC');
+    const creditPaymentsList = await db.all('SELECT * FROM credit_payments ORDER BY payment_date DESC');
+
+    let creditSalesList = sales.filter(s => {
+      const isCredit = s.status === 'Non Paid' || s.status === 'Partially Paid' || s.status === 'Partially Settled' || s.status === 'Pending' || (s.payment_method && s.payment_method.toLowerCase() === 'credit');
+      const rem = Math.max(0, (s.total_amount || 0) - (s.payment_received || 0));
+      return isCredit && rem > 0;
+    });
+
+    const totOutstandingAll = creditSalesList.reduce((sum, s) => sum + Math.max(0, (s.total_amount || 0) - (s.payment_received || 0)), 0);
+    const totOverdueAll = creditSalesList.filter(s => s.due_date && new Date(s.due_date) < new Date()).reduce((sum, s) => sum + Math.max(0, (s.total_amount || 0) - (s.payment_received || 0)), 0);
+
+    const structuredCreditCustomers = creditSalesList.map(s => {
+      const totalAmt = Number(s.total_amount || 0);
+      const paidAmt = Number(s.payment_received || 0);
+      const outstandingAmt = Math.max(0, totalAmt - paidAmt);
+      const isOverdue = s.due_date && new Date(s.due_date) < new Date();
+      return {
+        "Customer": s.customer_name || 'Walk-in Credit Customer',
+        "Invoice Number": s.invoice_no,
+        "Invoice Date": s.created_at ? s.created_at.slice(0, 10) : (s.date || '---'),
+        "Invoice Amount": totalAmt,
+        "Amount Paid": paidAmt,
+        "Outstanding Amount": outstandingAmt,
+        "Due Date": s.due_date ? s.due_date.slice(0, 10) : '---',
+        "Payment Status": outstandingAmt <= 0 ? "Fully Settled" : "Partially Settled",
+        "Payment History": paidAmt > 0 ? `Paid Rs. ${paidAmt.toLocaleString()}` : "No payments recorded",
+        "Total Outstanding": totOutstandingAll,
+        "Total Overdue": totOverdueAll
+      };
+    });
+    const wsCCHeaders = ["Customer", "Invoice Number", "Invoice Date", "Invoice Amount", "Amount Paid", "Outstanding Amount", "Due Date", "Payment Status", "Payment History", "Total Outstanding", "Total Overdue"];
+    const wsCreditCustomers = createWorksheet(structuredCreditCustomers, wsCCHeaders);
+    setColWidths(wsCreditCustomers, structuredCreditCustomers, wsCCHeaders);
+    applyTableStyles(wsCreditCustomers, "B8860B");
+
+    // --- CUSTOMER STATEMENT SHEET ---
+    const statementEntries = [];
+    sales.forEach(s => {
+      statementEntries.push({
+        "Customer": s.customer_name || 'Walk-in Customer',
+        "Transaction Date": s.created_at ? s.created_at.slice(0, 10) : (s.date || '---'),
+        "Invoice / Reference #": s.invoice_no,
+        "Transaction Type": "Credit Sale",
+        "Credit Sales": Number(s.total_amount || 0),
+        "Payments": Number(s.payment_received || 0),
+        "Returns / Credit Notes": 0,
+        "Remaining Balance": Math.max(0, Number(s.total_amount || 0) - Number(s.payment_received || 0))
+      });
+    });
+
+    salesReturnsList.forEach(sr => {
+      statementEntries.push({
+        "Customer": sr.customer_name || 'Walk-in Customer',
+        "Transaction Date": sr.created_at ? sr.created_at.slice(0, 10) : '---',
+        "Invoice / Reference #": sr.return_no || sr.invoice_no,
+        "Transaction Type": `Sales Return (${sr.return_method || 'Refund'})`,
+        "Credit Sales": 0,
+        "Payments": 0,
+        "Returns / Credit Notes": Number(sr.return_amount || 0),
+        "Remaining Balance": 0
+      });
+    });
+
+    const wsCSHeaders = ["Customer", "Transaction Date", "Invoice / Reference #", "Transaction Type", "Credit Sales", "Payments", "Returns / Credit Notes", "Remaining Balance"];
+    // const wsCustomerStatement = createWorksheet(statementEntries, wsCSHeaders);
+    // setColWidths(wsCustomerStatement, statementEntries, wsCSHeaders);
+    // applyTableStyles(wsCustomerStatement, "1E3A8A");
+
+    // --- SALES RETURNS SHEET ---
+    const structuredSalesReturns = salesReturnsList.map(sr => {
+      let returnedProd = '---';
+      let returnedQty = 0;
+      try {
+        const items = typeof sr.returned_items === 'string' ? JSON.parse(sr.returned_items) : sr.returned_items;
+        if (Array.isArray(items) && items.length > 0) {
+          returnedProd = items.map(i => i.productName || i.name).join(', ');
+          returnedQty = items.reduce((sum, i) => sum + (Number(i.qty) || 0), 0);
+        }
+      } catch (e) {}
+
+      let exchangeProd = 'N/A';
+      let exchangeAmt = Number(sr.exchange_amount || 0);
+      try {
+        const xItems = typeof sr.exchange_items === 'string' ? JSON.parse(sr.exchange_items) : sr.exchange_items;
+        if (Array.isArray(xItems) && xItems.length > 0) {
+          exchangeProd = xItems.map(i => i.productName || i.name).join(', ');
+        }
+      } catch (e) {}
+
+      return {
+        "Return ID": sr.return_no || sr.id,
+        "Original Invoice Number": sr.invoice_no,
+        "Return Date": sr.created_at ? sr.created_at.slice(0, 10) : '---',
+        "Customer": sr.customer_name || 'Walk-in Customer',
+        "Return Type": sr.return_method || 'Cash Refund',
+        "Product": returnedProd,
+        "Quantity": returnedQty,
+        "Return Amount": Number(sr.return_amount || 0),
+        "Payment/Refund Amount": Number(sr.total_refunded || sr.customer_paid || 0),
+        "Payment Method": sr.return_method === 'Exchange' ? 'Exchange Balance' : (sr.return_method || 'Cash'),
+        "Replacement Product (for Exchange)": exchangeProd,
+        "Replacement Amount": exchangeAmt,
+        "Difference": Number(sr.balance_amount || 0),
+        "Credit Note Number (for Credit Note)": sr.credit_note_no || 'N/A',
+        "Notes": sr.reason || '---'
+      };
+    });
+    const wsSRHeaders = ["Return ID", "Original Invoice Number", "Return Date", "Customer", "Return Type", "Product", "Quantity", "Return Amount", "Payment/Refund Amount", "Payment Method", "Replacement Product (for Exchange)", "Replacement Amount", "Difference", "Credit Note Number (for Credit Note)", "Notes"];
+    const wsSalesReturns = createWorksheet(structuredSalesReturns, wsSRHeaders);
+    setColWidths(wsSalesReturns, structuredSalesReturns, wsSRHeaders);
+    applyTableStyles(wsSalesReturns, "991B1B");
+
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, wsOverview, "Dashboard");
     XLSX.utils.book_append_sheet(wb, wsInventory, "Inventory Stock");
     XLSX.utils.book_append_sheet(wb, wsSales, "Sales & Invoices");
+    XLSX.utils.book_append_sheet(wb, wsCreditCustomers, "Credit Customers");
+    // // XLSX.utils.book_append_sheet(wb, wsCustomerStatement, "Customer Statement"); // Removed per user request // Removed per user request
+    XLSX.utils.book_append_sheet(wb, wsSalesReturns, "Sales Returns");
     XLSX.utils.book_append_sheet(wb, wsTransactions, "Accounting Ledger");
     XLSX.utils.book_append_sheet(wb, wsCustomers, "Customers");
     XLSX.utils.book_append_sheet(wb, wsSuppliers, "Suppliers Directory");
@@ -2621,6 +2743,19 @@ app.put('/api/suppliers/:id', async (req, res) => {
       'UPDATE suppliers SET name = ?, email = ?, phone = ?, address = ?, credit_terms = ?, payable_balance = ?, nic = ? WHERE id = ?',
       [name, email, phone, address, credit_terms, payable_balance, nic, id]
     );
+
+    // Sync supplier_phone (and supplier name if changed) across all matching products in Inventory!
+    // The supplier name is the identifier for matching.
+    const oldSupplierName = (existing.name || '').trim();
+    const newSupplierName = (name || '').trim();
+
+    if (oldSupplierName || newSupplierName) {
+      await db.run(
+        'UPDATE products SET supplier_phone = ?, supplier = ? WHERE LOWER(TRIM(supplier)) = LOWER(TRIM(?)) OR LOWER(TRIM(supplier)) = LOWER(TRIM(?))',
+        [phone || '', newSupplierName || oldSupplierName, oldSupplierName, newSupplierName]
+      );
+    }
+
     await logAudit(s.user_email || 'system', 'SUPPLIER_UPDATED', `Supplier ${name} details were updated.`);
     res.json({ success: true });
   } catch (err) {
@@ -3019,9 +3154,11 @@ app.post('/api/sales/:id/void', async (req, res) => {
 
     const items = JSON.parse(sale.items);
     for (const item of items) {
+      const convRate = Number(item.conversionRate) || 1;
+      const baseQtyRestock = convRate > 0 ? (Number(item.qty || 0) / convRate) : Number(item.qty || 0);
       await db.run(
         'UPDATE products SET stock = stock + ? WHERE id = ?',
-        [item.qty * (item.conversionRate || 1), item.productId]
+        [baseQtyRestock, item.productId]
       );
     }
 
@@ -3140,31 +3277,50 @@ app.post('/api/sales/returns', async (req, res) => {
     const originalItems = safeParseJson(sale.items, []);
     const activeReturns = await db.all('SELECT returned_items FROM sales_returns WHERE invoice_no = ? AND status = ?', [invoiceNo, 'active']);
     
-    // Map cumulative returned quantities per productId
+    // Map cumulative returned quantities per unique invoice line item (invoiceNo + lineId or lineIndex)
+    const getInvoiceLineKey = (i, defaultIdx) => {
+      if (i.lineId || i.line_id) return `${invoiceNo}_${i.lineId || i.line_id}`;
+      const pId = i.productId || i.product_id || i.id || '';
+      const uKey = (i.unit || '').toLowerCase().trim();
+      const idxStr = i.lineIndex !== undefined ? i.lineIndex : defaultIdx;
+      return idxStr !== undefined ? `${invoiceNo}_line_${idxStr}` : `${invoiceNo}_${pId}_${uKey}`;
+    };
+
     const alreadyReturnedMap = {};
     activeReturns.forEach(r => {
       const rItems = safeParseJson(r.returned_items, []);
-      rItems.forEach(ri => {
-        const pId = ri.productId || ri.product_id;
-        alreadyReturnedMap[pId] = (alreadyReturnedMap[pId] || 0) + Number(ri.qty || 0);
+      rItems.forEach((ri, riIdx) => {
+        const key = getInvoiceLineKey(ri, ri.lineIndex !== undefined ? ri.lineIndex : riIdx);
+        alreadyReturnedMap[key] = (alreadyReturnedMap[key] || 0) + Number(ri.qty || 0);
       });
     });
 
-    // Validate that current return qtys do not exceed remaining returnable qty
-    for (const item of returnedItems) {
+    // Validate that current return qtys do not exceed remaining returnable qty per unique invoice line
+    for (let idx = 0; idx < returnedItems.length; idx++) {
+      const item = returnedItems[idx];
       const pId = item.productId || item.product_id;
-      const origItem = originalItems.find(i => (i.productId || i.id || i.product_id) === pId);
+      const uKey = (item.unit || '').toLowerCase().trim();
+      const lineKey = getInvoiceLineKey(item, item.lineIndex !== undefined ? item.lineIndex : idx);
+
+      const origItem = (item.lineIndex !== undefined && originalItems[item.lineIndex])
+        ? originalItems[item.lineIndex]
+        : (originalItems.find(i => (i.lineId && (i.lineId === item.lineId || i.lineId === item.line_id))) ||
+           originalItems.find(i => (i.productId || i.id || i.product_id) === pId && (i.unit || '').toLowerCase().trim() === uKey) ||
+           originalItems.find(i => (i.productId || i.id || i.product_id) === pId));
+
       if (!origItem) {
         await safeRollback(db);
-        return res.status(400).json({ error: `Product ${item.productName || pId} was not in the original invoice.` });
+        return res.status(400).json({ error: `Line item ${item.productName || pId} (${item.unit || ''}) was not found in original invoice.` });
       }
+
       const origQty = Number(origItem.qty || 0);
-      const alreadyReturnedQty = alreadyReturnedMap[pId] || 0;
+      const alreadyReturnedQty = alreadyReturnedMap[lineKey] !== undefined ? alreadyReturnedMap[lineKey] : 0;
       const remainingQty = origQty - alreadyReturnedQty;
+
       if (Number(item.qty || 0) > remainingQty + 0.0001) {
         await safeRollback(db);
         return res.status(400).json({ 
-          error: `Cannot return ${item.qty} of ${item.productName}. Maximum remaining returnable quantity is ${remainingQty}.` 
+          error: `Cannot return ${item.qty} ${item.unit || ''} of ${item.productName}. Maximum remaining returnable quantity for this invoice line is ${remainingQty}.` 
         });
       }
     }
@@ -3197,20 +3353,33 @@ app.post('/api/sales/returns', async (req, res) => {
       ]
     );
 
-    // 3. Restock returned items
+    // 3. Restock returned items (preserving original sale conversion rate)
     for (const item of returnedItems) {
+      const pId = item.productId || item.product_id;
+      const uKey = (item.unit || '').toLowerCase().trim();
+      const origItem = originalItems.find(i => 
+        (i.lineId && (i.lineId === item.lineId || i.lineId === item.line_id)) ||
+        ((i.productId || i.id || i.product_id) === pId && (i.unit || '').toLowerCase().trim() === uKey)
+      ) || originalItems.find(i => (i.productId || i.id || i.product_id) === pId);
+
+      const convRate = Number(item.conversionRate) || Number(origItem?.conversionRate) || 1;
+      const rawBaseRestock = convRate > 0 ? (Number(item.qty || 0) / convRate) : Number(item.qty || 0);
+      const baseQtyRestock = Math.round(rawBaseRestock * 1000000) / 1000000;
       await db.run(
         'UPDATE products SET stock = stock + ? WHERE id = ?',
-        [Number(item.qty || 0) * (Number(item.conversionRate) || 1), item.productId || item.product_id]
+        [baseQtyRestock, pId]
       );
     }
 
     // 4. Handle Exchange items stock deduction
     if (returnMethod === 'Exchange' && exchangeItems.length > 0) {
       for (const exItem of exchangeItems) {
+        const convRate = Number(exItem.conversionRate) || 1;
+        const rawBaseDeduction = convRate > 0 ? (Number(exItem.qty || 0) / convRate) : Number(exItem.qty || 0);
+        const baseQtyDeduction = Math.round(rawBaseDeduction * 1000000) / 1000000;
         await db.run(
           'UPDATE products SET stock = stock - ? WHERE id = ?',
-          [Number(exItem.qty || 0) * (Number(exItem.conversionRate) || 1), exItem.productId || exItem.product_id]
+          [baseQtyDeduction, exItem.productId || exItem.product_id]
         );
       }
     }
@@ -3235,7 +3404,7 @@ app.post('/api/sales/returns', async (req, res) => {
       const txId = 't_' + Date.now();
       await db.run(
         'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [txId, 'expense', 'Sales Return', `Sales Return Refund for ${invoiceNo}`, totalRefunded, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+        [txId, 'contra_revenue', 'Sales Return', `Sales Return Refund for ${invoiceNo}`, totalRefunded, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
       );
     } else if (returnMethod === 'Exchange') {
       if (customerPaid > 0) {
@@ -3248,7 +3417,7 @@ app.post('/api/sales/returns', async (req, res) => {
         const txId = 't_' + Date.now();
         await db.run(
           'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [txId, 'expense', 'Exchange Refund', `Exchange Balance Refund for ${invoiceNo}`, totalRefunded, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+          [txId, 'contra_revenue', 'Exchange Refund', `Exchange Balance Refund for ${invoiceNo}`, totalRefunded, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
         );
       }
     }
@@ -3315,18 +3484,22 @@ app.post('/api/sales/returns/:id/void', async (req, res) => {
     // 2. Re-deduct stock for returned items
     const returnedItems = safeParseJson(sr.returned_items, []);
     for (const item of returnedItems) {
+      const convRate = Number(item.conversionRate) || 1;
+      const baseQtyDeduction = convRate > 0 ? (Number(item.qty || 0) / convRate) : Number(item.qty || 0);
       await db.run(
         'UPDATE products SET stock = stock - ? WHERE id = ?',
-        [Number(item.qty || 0) * (Number(item.conversionRate) || 1), item.productId || item.product_id]
+        [baseQtyDeduction, item.productId || item.product_id]
       );
     }
 
     // 3. Re-add stock for exchange items if applicable
     const exchangeItems = safeParseJson(sr.exchange_items, []);
     for (const item of exchangeItems) {
+      const convRate = Number(item.conversionRate) || 1;
+      const baseQtyRestock = convRate > 0 ? (Number(item.qty || 0) / convRate) : Number(item.qty || 0);
       await db.run(
         'UPDATE products SET stock = stock + ? WHERE id = ?',
-        [Number(item.qty || 0) * (Number(item.conversionRate) || 1), item.productId || item.product_id]
+        [baseQtyRestock, item.productId || item.product_id]
       );
     }
 
@@ -3388,17 +3561,21 @@ app.delete('/api/sales/returns/:id', async (req, res) => {
     if (sr.status !== 'voided') {
       const returnedItems = safeParseJson(sr.returned_items, []);
       for (const item of returnedItems) {
+        const convRate = Number(item.conversionRate) || 1;
+        const baseQtyDeduction = convRate > 0 ? (Number(item.qty || 0) / convRate) : Number(item.qty || 0);
         await db.run(
           'UPDATE products SET stock = stock - ? WHERE id = ?',
-          [Number(item.qty || 0) * (Number(item.conversionRate) || 1), item.productId || item.product_id]
+          [baseQtyDeduction, item.productId || item.product_id]
         );
       }
 
       const exchangeItems = safeParseJson(sr.exchange_items, []);
       for (const item of exchangeItems) {
+        const convRate = Number(item.conversionRate) || 1;
+        const baseQtyRestock = convRate > 0 ? (Number(item.qty || 0) / convRate) : Number(item.qty || 0);
         await db.run(
           'UPDATE products SET stock = stock + ? WHERE id = ?',
-          [Number(item.qty || 0) * (Number(item.conversionRate) || 1), item.productId || item.product_id]
+          [baseQtyRestock, item.productId || item.product_id]
         );
       }
 
@@ -4726,6 +4903,33 @@ app.get('/api/system/network-info', (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Open external URLs (WhatsApp, browser links) via OS shell
+app.post('/api/open-url', (req, res) => {
+  const { url } = req.body || {};
+  if (!url || typeof url !== 'string') {
+    return res.status(400).json({ error: 'Valid URL is required' });
+  }
+
+  // Security check: only allow http, https, and wa.me protocols
+  if (!url.startsWith('https://') && !url.startsWith('http://') && !url.startsWith('wa.me')) {
+    return res.status(400).json({ error: 'Unsupported URL protocol' });
+  }
+
+  const cmd = process.platform === 'win32'
+    ? `start "" "${url.replace(/"/g, '""')}"`
+    : process.platform === 'darwin'
+    ? `open "${url}"`
+    : `xdg-open "${url}"`;
+
+  exec(cmd, (err) => {
+    if (err) {
+      console.error("Failed to launch URL via OS shell:", err);
+      return res.status(500).json({ error: err.message });
+    }
+    res.json({ success: true });
+  });
 });
 
 // Serve static React production build files from the 'dist' directory

@@ -125,7 +125,7 @@ export interface Employee {
 
 export interface Transaction {
   id: string;
-  type: 'income' | 'expense';
+  type: 'income' | 'expense' | 'contra_revenue' | 'sales_return';
   category: string;
   description: string;
   amount: number;

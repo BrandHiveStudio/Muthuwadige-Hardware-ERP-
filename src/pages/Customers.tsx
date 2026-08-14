@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import {
   SearchIcon,
@@ -161,6 +161,7 @@ export function Customers() {
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [allSales, setAllSales] = useState<SaleOrder[]>([]);
+  const [allReturns, setAllReturns] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -194,31 +195,83 @@ export function Customers() {
     settledInvoices: { invoiceNo: string; amount: number }[];
   } | null>(null);
 
+  // Map cumulative active return amounts per invoice
+  const returnedAmountMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    allReturns
+      .filter(r => r.status !== 'voided')
+      .forEach(r => {
+        const invNo = r.invoice_no || r.invoiceNo;
+        if (invNo) {
+          map[invNo] = (map[invNo] || 0) + Number(r.return_amount || r.returnAmount || 0);
+        }
+      });
+    return map;
+  }, [allReturns]);
+
+  // Helper to determine if an invoice is an actual CREDIT sale
+  const isCreditSale = (s: any) => {
+    const method = (s.payment_method || s.paymentMethod || '').toString().toLowerCase().trim();
+    const status = (s.status || '').toString().toLowerCase().trim();
+
+    // Normal cash, card, or bank transfer sales are NEVER credit sales
+    if (method === 'cash' || method === 'card' || method === 'bank transfer' || method === 'online' || method === 'pos') {
+      return false;
+    }
+
+    if (method === 'credit' || method === 'credit sale' || (s as any).is_credit === true) {
+      return true;
+    }
+
+    if ((status === 'non paid' || status === 'non-paid' || status === 'pending' || status === 'partially paid' || status === 'partially settled' || status === 'fully settled') && 
+        method !== 'cash' && method !== 'card' && method !== 'bank transfer') {
+      return true;
+    }
+
+    return false;
+  };
+
   const customerBalances = customers.map(customer => {
     const unpaidSales = allSales.filter(s => {
-      const statusLower = s.status?.toLowerCase();
-      const isUnpaid = s.customer_id === customer.id && 
-        (statusLower === 'non paid' || statusLower === 'non-paid' || statusLower === 'pending' || statusLower === 'partially returned' || statusLower === 'fully returned' || !s.status);
-      if (!isUnpaid) return false;
+      if (s.customer_id !== customer.id) return false;
+
+      // Must be an actual CREDIT sale (Cash sales with returns are excluded)
+      if (!isCreditSale(s)) return false;
+
+      // Calculate net invoice total after returns
+      const invNo = s.invoice_no || s.invoiceNo;
+      const originalTotal = Number(s.total_amount || s.total || 0);
+      const returnedAmount = returnedAmountMap[invNo] || 0;
+      const effectiveTotal = Math.max(0, originalTotal - returnedAmount);
+      const alreadyPaid = Number(s.payment_received || 0);
+      const outstanding = Math.max(0, effectiveTotal - alreadyPaid);
+
+      // If remaining credit balance is zero (fully paid or fully returned), exclude invoice
+      if (outstanding <= 0.001) return false;
 
       // Filter by selected date range
       const saleDate = s.created_at || s.date || '';
-      const dateOnly = saleDate.substring(0, 10); // get YYYY-MM-DD
+      const dateOnly = saleDate.substring(0, 10);
       
       if (fromDate && dateOnly < fromDate) return false;
       if (toDate && dateOnly > toDate) return false;
 
       return true;
     });
+
     const totalOutstanding = unpaidSales.reduce((sum, s) => {
-      const invoiceTotal = s.total_amount || s.total || 0;
-      const alreadyPaid = s.payment_received || 0;
-      return sum + Math.max(0, invoiceTotal - alreadyPaid);
+      const invNo = s.invoice_no || s.invoiceNo;
+      const originalTotal = Number(s.total_amount || s.total || 0);
+      const returnedAmount = returnedAmountMap[invNo] || 0;
+      const effectiveTotal = Math.max(0, originalTotal - returnedAmount);
+      const alreadyPaid = Number(s.payment_received || 0);
+      return sum + Math.max(0, effectiveTotal - alreadyPaid);
     }, 0);
+
     return {
       ...customer,
       unpaidSales,
-      totalOutstanding
+      totalOutstanding: Math.round(totalOutstanding * 100) / 100
     };
   });
 
@@ -303,7 +356,7 @@ export function Customers() {
         const alreadyPaid = sale ? (sale.payment_received || 0) : 0;
         const paidThisTime = Math.max(0, saleTotal - alreadyPaid);
 
-        await supabase.from('sales').update({ status: 'Paid', payment_received: saleTotal }).eq('id', id);
+        await supabase.from('sales').update({ status: 'Fully Settled', payment_received: saleTotal }).eq('id', id);
 
         // Record income transaction for Cash Book / Finance / Dashboard
         await supabase.from('transactions').insert([{
@@ -342,7 +395,7 @@ export function Customers() {
 
         if (remainingToPay >= remainingOnNext) {
           // Fully covers it
-          await supabase.from('sales').update({ status: 'Paid', payment_received: nextTotal }).eq('id', nextInvoice.id);
+          await supabase.from('sales').update({ status: 'Fully Settled', payment_received: nextTotal }).eq('id', nextInvoice.id);
           settledInvoicesInfo.push({ invoiceNo: nextInvoice.invoice_no || nextInvoice.invoiceNo || nextInvoice.id, amount: remainingOnNext });
           invoicesFullySettled.push(nextInvoice.id);
 
@@ -372,7 +425,7 @@ export function Customers() {
           remainingToPay = remainingToPay - remainingOnNext;
         } else {
           // Partial payment on this invoice — store partial amount, status remains Non Paid
-          await supabase.from('sales').update({ status: 'Non Paid', payment_received: newPaid }).eq('id', nextInvoice.id);
+          await supabase.from('sales').update({ status: 'Partially Settled', payment_received: newPaid }).eq('id', nextInvoice.id);
           settledInvoicesInfo.push({ invoiceNo: nextInvoice.invoice_no || nextInvoice.invoiceNo || nextInvoice.id, amount: remainingToPay });
 
           const remainingBal = Math.max(0, nextTotal - newPaid);
@@ -723,7 +776,7 @@ export function Customers() {
         const alreadyPaid = sale ? (sale.payment_received || 0) : 0;
         const paidThisTime = Math.max(0, saleTotal - alreadyPaid);
 
-        await supabase.from('sales').update({ status: 'Paid', payment_received: saleTotal }).eq('id', id);
+        await supabase.from('sales').update({ status: 'Fully Settled', payment_received: saleTotal }).eq('id', id);
 
         // Record income transaction for Cash Book / Finance / Dashboard
         await supabase.from('transactions').insert([{
@@ -795,6 +848,7 @@ export function Customers() {
         .order('name', { ascending: true });
       
       const { data: salesData } = await supabase.from('sales').select('*');
+      const { data: returnsData } = await supabase.from('sales_returns').select('*');
 
       const { data: settingsData } = await supabase.from('system_settings').select('*').single();
       if (settingsData) setShopSettings(settingsData);
@@ -809,6 +863,7 @@ export function Customers() {
         setCustomers(mappedCustomers);
       }
       if (salesData) setAllSales(salesData);
+      if (returnsData) setAllReturns(returnsData);
     } catch (error) {
       console.error("Error loading customers:", error);
     } finally {
@@ -1849,20 +1904,32 @@ export function Customers() {
                           </p>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <div className="font-black text-slate-900">
-                          {sale.payment_received && sale.payment_received > 0 ? (
-                            <div>
-                              <span className="text-[10px] text-slate-400 line-through mr-1.5">{symbol}{convert(sale.total_amount || sale.total || 0).toLocaleString()}</span>
-                              <span>{symbol}{convert((sale.total_amount || sale.total || 0) - sale.payment_received).toLocaleString()}</span>
+                      <div className="text-right text-xs">
+                        {(() => {
+                          const saleTotal = Number(sale.total_amount || sale.total || 0);
+                          const paidAmt = Number(sale.payment_received || 0);
+                          const remBal = Math.max(0, saleTotal - paidAmt);
+                          return (
+                            <div className="space-y-0.5">
+                              <div className="text-slate-500 font-semibold text-[11px]">Total: <span className="font-bold text-slate-800">{symbol}{convert(saleTotal).toLocaleString()}</span></div>
+                              {paidAmt > 0 && (
+                                <div className="text-emerald-600 font-bold text-[11px]">Paid: <span className="font-black">{symbol}{convert(paidAmt).toLocaleString()}</span></div>
+                              )}
+                              <div className="text-rose-600 font-black text-xs">Remaining: {symbol}{convert(remBal).toLocaleString()}</div>
                             </div>
-                          ) : (
-                            <span>{symbol}{convert(sale.total_amount || sale.total || 0).toLocaleString()}</span>
-                          )}
-                        </div>
-                        <span className="inline-block text-[9px] font-black uppercase text-red-500 bg-red-50 px-2 py-0.5 rounded mt-1">
-                          {t("Unpaid", "නොගෙවූ")}
-                        </span>
+                          );
+                        })()}
+                        {(() => {
+                          const saleTotal = sale.total_amount || sale.total || 0;
+                          const paidAmt = sale.payment_received || 0;
+                          const rem = Math.max(0, saleTotal - paidAmt);
+                          const isFullySettled = rem <= 0.01;
+                          return (
+                            <span className={`inline-block text-[9px] font-black uppercase px-2 py-0.5 rounded mt-1 ${isFullySettled ? 'text-emerald-700 bg-emerald-50' : 'text-amber-700 bg-amber-50'}`}>
+                              {isFullySettled ? t('Fully Settled', 'සම්පූර්ණයෙන්ම පියවා ඇත') : t('Partially Settled', 'කොටසක් පියවා ඇත')}
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
                   );

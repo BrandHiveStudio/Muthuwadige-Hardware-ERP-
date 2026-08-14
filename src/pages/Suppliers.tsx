@@ -158,6 +158,9 @@ export function Suppliers() {
       }
 
       fetchData();
+      window.dispatchEvent(new CustomEvent('suppliers-updated'));
+      window.dispatchEvent(new CustomEvent('refresh-inventory'));
+      window.dispatchEvent(new CustomEvent('refresh-dashboard'));
       setShowAddModal(false);
     } catch (error: any) {
       setToast({ message: "Error saving supplier: " + error.message, type: 'error' });
@@ -185,27 +188,57 @@ export function Suppliers() {
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
-        const bstr = evt.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
+        const buffer = evt.target?.result as ArrayBuffer;
+        if (!buffer) {
+          setToast({ message: "Failed to read file.", type: 'error' });
+          return;
+        }
+
+        const data = new Uint8Array(buffer);
+        const wb = XLSX.read(data, { type: 'array', raw: false });
+        if (!wb.SheetNames || wb.SheetNames.length === 0) {
+          setToast({ message: "Invalid or corrupt file: No sheets found.", type: 'error' });
+          return;
+        }
+
         const wsname = wb.SheetNames[0];
         const ws = wb.Sheets[wsname];
-        const rawRows = XLSX.utils.sheet_to_json(ws) as any[];
+        const rawRows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false }) as any[];
 
-        if (rawRows.length === 0) {
-          setToast({ message: "The Excel file contains no records.", type: 'error' });
+        if (!rawRows || rawRows.length === 0) {
+          setToast({ message: "The selected file contains no records.", type: 'error' });
           return;
         }
 
         setIsLoading(true);
+
+        // Fetch existing suppliers to prevent duplicates
+        const { data: existingData } = await supabase.from('suppliers').select('*');
+        const existingSuppliers: Supplier[] = existingData ? existingData.map((s: any) => ({
+          id: s.id,
+          name: (s.name || '').toString().trim(),
+          email: (s.email || '').toString().trim(),
+          phone: (s.phone || '').toString().trim(),
+          address: (s.address || '').toString().trim(),
+          creditTerms: s.creditTerms || s.credit_terms || 'Net 30',
+          payableBalance: s.payableBalance !== undefined ? s.payableBalance : s.payable_balance || 0,
+          nic: (s.nic || '').toString().trim(),
+          createdAt: s.createdAt || s.created_at || ''
+        })) : [];
+
+        const existingNames = new Set(existingSuppliers.map(s => s.name.toLowerCase()));
+        const existingPhones = new Set(existingSuppliers.map(s => s.phone).filter(p => p.length > 0));
+        const existingNics = new Set(existingSuppliers.map(s => (s.nic || '').toLowerCase()).filter(n => n.length > 0));
+
         let imported = 0;
-        let errors = 0;
+        let skipped = 0;
+        let failed = 0;
 
         const getValueByKeys = (rowObj: any, possibleKeys: string[]) => {
           const keys = Object.keys(rowObj);
-          for (const key of possibleKeys) {
-            const matchedKey = keys.find(
-              k => k.toLowerCase().replace(/[\s_.-]/g, '') === key.toLowerCase().replace(/[\s_.-]/g, '')
-            );
+          for (const pKey of possibleKeys) {
+            const targetClean = pKey.toLowerCase().replace(/[\s_.-]/g, '');
+            const matchedKey = keys.find(k => k.toLowerCase().replace(/[\s_.-]/g, '') === targetClean);
             if (matchedKey && rowObj[matchedKey] !== undefined && rowObj[matchedKey] !== null) {
               return rowObj[matchedKey];
             }
@@ -214,13 +247,39 @@ export function Suppliers() {
         };
 
         for (const row of rawRows) {
-          const name = getValueByKeys(row, ['name', 'suppliername', 'company', 'vendor']).toString().trim();
-          const phone = getValueByKeys(row, ['phone', 'supplierphone', 'contact', 'mobile']).toString().trim();
-          const address = getValueByKeys(row, ['address', 'supplieraddress', 'location']).toString().trim();
-          const nic = getValueByKeys(row, ['nic', 'nationalid', 'idnumber']).toString().trim();
+          const rawName = getValueByKeys(row, ['supplier', 'suppliername', 'supplier name', 'name', 'company', 'vendor']);
+          const name = rawName !== undefined && rawName !== null ? String(rawName).trim() : '';
 
-          if (!name) {
-            errors++;
+          const rawPhone = getValueByKeys(row, ['phonenumber', 'phone number', 'phone', 'supplierphone', 'contact', 'mobile', 'tel', 'telephone']);
+          let phone = rawPhone !== undefined && rawPhone !== null ? String(rawPhone).trim() : '';
+          if (/^\d{9}$/.test(phone)) {
+            phone = '0' + phone;
+          }
+
+          const rawNic = getValueByKeys(row, ['nic', 'nicnumber', 'nic number', 'nationalid', 'idnumber', 'nicno']);
+          const nic = rawNic !== undefined && rawNic !== null ? String(rawNic).trim() : '';
+
+          const rawAddress = getValueByKeys(row, ['address', 'supplieraddress', 'location']);
+          const address = rawAddress !== undefined && rawAddress !== null ? String(rawAddress).trim() : '';
+
+          // Validate row: Supplier name must be at least 2 characters
+          if (!name || name.length < 2) {
+            skipped++;
+            continue;
+          }
+
+          const nameLower = name.toLowerCase();
+          const phoneLower = phone;
+          const nicLower = nic.toLowerCase();
+
+          // Deduplication check
+          const isDuplicate = 
+            existingNames.has(nameLower) ||
+            (phoneLower !== '' && existingPhones.has(phoneLower)) ||
+            (nicLower !== '' && existingNics.has(nicLower));
+
+          if (isDuplicate) {
+            skipped++;
             continue;
           }
 
@@ -235,20 +294,34 @@ export function Suppliers() {
           };
 
           const { error } = await supabase.from('suppliers').insert([dbPayload]);
-          if (error) errors++;
-          else imported++;
+          if (error) {
+            failed++;
+          } else {
+            imported++;
+            existingNames.add(nameLower);
+            if (phoneLower) existingPhones.add(phoneLower);
+            if (nicLower) existingNics.add(nicLower);
+          }
         }
 
-        setToast({ message: `Successfully imported ${imported} suppliers!`, type: 'success' });
-        fetchData();
+        setToast({ 
+          message: `Import complete: ${imported} imported, ${skipped} skipped (duplicates/invalid), ${failed} failed.`, 
+          type: imported > 0 ? 'success' : (skipped > 0 || failed > 0 ? 'error' : 'success') 
+        });
+
+        await fetchData();
+        window.dispatchEvent(new CustomEvent('suppliers-updated'));
+        window.dispatchEvent(new CustomEvent('refresh-inventory'));
+        window.dispatchEvent(new CustomEvent('refresh-dashboard'));
       } catch (err: any) {
-        setToast({ message: "Excel parse failed: " + err.message, type: 'error' });
+        setToast({ message: "Import failed: " + err.message, type: 'error' });
       } finally {
         setIsLoading(false);
         if (e.target) e.target.value = '';
       }
     };
-    reader.readAsBinaryString(file);
+
+    reader.readAsArrayBuffer(file);
   };
 
   const allFilteredSelected = filtered.length > 0 && filtered.every((s) => selectedSupplierIds.includes(s.id));
@@ -326,13 +399,13 @@ export function Suppliers() {
           ref={fileInputRef}
           onChange={handleImportExcel}
           className="hidden"
-          accept=".xlsx, .xls"
+          accept=".xlsx, .xls, .csv"
         />
         <button 
           onClick={() => fileInputRef.current?.click()} 
           className="flex items-center justify-center gap-2 bg-[#464646] hover:bg-[#363636] text-white px-6 py-2 rounded-xl text-sm font-black uppercase tracking-widest transition-all shadow-lg"
         >
-          <PlusIcon className="w-4 h-4" /> Import Excel
+          <PlusIcon className="w-4 h-4" /> Import Suppliers
         </button>
         <button onClick={openAdd} className="flex items-center justify-center gap-2 bg-[#DAA520] hover:bg-[#B8860B] text-white px-6 py-2 rounded-xl text-sm font-black uppercase tracking-widest transition-all shadow-lg shadow-[#DAA520]/20">
           <PlusIcon className="w-4 h-4" /> Add Supplier

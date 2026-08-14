@@ -35,6 +35,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { supabase } from '../lib/supabaseClient';
 import { useCurrency } from '../context/CurrencyContext';
+import { formatStock } from '../utils/formatters';
 const isDecimalUnit = (unit: string | undefined): boolean => {
   if (!unit) return false;
   const PREDEFINED_UNITS = ['pcs', 'kg', 'g', 'liters', 'ml', 'meters', 'boxes', 'packets', 'rolls', 'bundles'];
@@ -128,6 +129,7 @@ export function Reports() {
   const [transactions, setTransactions] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
+  const [salesReturns, setSalesReturns] = useState<any[]>([]);
   const [shopName, setShopName] = useState('MUTHUWADIGE HARDWARE');
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
@@ -138,11 +140,13 @@ export function Reports() {
     const { data: tData } = await supabase.from('transactions').select('*');
     const { data: cData } = await supabase.from('customers').select('*');
     const { data: supData } = await supabase.from('suppliers').select('*');
+    const { data: srData } = await supabase.from('sales_returns').select('*');
     if (sData) setSales(sData);
     if (pData) setProducts(pData);
     if (tData) setTransactions(tData);
     if (cData) setCustomers(cData);
     if (supData) setSuppliers(supData);
+    if (srData) setSalesReturns(srData);
   };
 
   const fetchSettings = async () => {
@@ -160,8 +164,16 @@ export function Reports() {
     fetchData();
     fetchSettings();
     window.addEventListener('settings-updated', fetchSettings);
-    return () => window.removeEventListener('settings-updated', fetchSettings);
+    window.addEventListener('focus', fetchData);
+    return () => {
+      window.removeEventListener('settings-updated', fetchSettings);
+      window.removeEventListener('focus', fetchData);
+    };
   }, []);
+
+  useEffect(() => {
+    fetchData();
+  }, [tab]);
 
   // --- RANGE PRESETS EVALUATION ---
   const [rangeType, setRangeType] = useState<'custom' | 'day' | 'month'>('custom');
@@ -195,9 +207,145 @@ export function Reports() {
     return true;
   });
 
+  const filteredSalesReturns = salesReturns.filter(r => {
+    if (r.status === 'voided' || r.status === 'cancelled') return false;
+    const rDate = safeGetDateString(r.created_at || r.return_date || r.date);
+    if (effectiveFromDate && rDate < effectiveFromDate) return false;
+    if (effectiveToDate && rDate > effectiveToDate) return false;
+    return true;
+  });
+
+  const getSaleSellingSubtotal = (s: any) => {
+    const tot = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
+    const tax = Number(s.tax || 0);
+    const trans = Number(s.transportation_fee || s.transportationFee || 0);
+    return Math.max(0, tot - tax - trans);
+  };
+
+  const getReturnSellingSubtotal = (r: any) => {
+    const retAmt = Number(r.return_amount !== undefined ? r.return_amount : (r.returnAmount !== undefined ? r.returnAmount : (r.amount || 0)));
+    const retTax = Number(r.tax || 0);
+    const retTrans = Number(r.transportation_fee || r.transportationFee || 0);
+    if (retAmt > 0) {
+      return Math.max(0, retAmt - retTax - retTrans);
+    }
+    let rawItems = r.items || r.returnedItems || r.returned_items || [];
+    let items: any[] = [];
+    try {
+      items = typeof rawItems === 'string' ? JSON.parse(rawItems) : rawItems;
+    } catch(e) {}
+    if (Array.isArray(items) && items.length > 0) {
+      return items.reduce((sum: number, it: any) => {
+        const itemQty = Number(it.qty || 0);
+        const itemPrice = Number(it.price || it.unitPrice || 0);
+        const itemDisc = Number(it.discount || 0);
+        return sum + (itemQty * itemPrice - itemDisc);
+      }, 0);
+    }
+    return 0;
+  };
+
   // --- SALES CALCULATIONS ---
-  const totalSalesRevenue = filteredSales.filter(o => o.status?.toLowerCase() === 'paid').reduce((sum, o) => sum + Number(o.total_amount || o.total || 0), 0);
-  const paidOrders = filteredSales.filter(o => o.status?.toLowerCase() === 'paid').length;
+  const rawCashCollected = filteredSales.reduce((sum, s) => {
+    const statusLower = (s.status || '').toString().toLowerCase().trim();
+    if (statusLower === 'cancelled' || statusLower === 'voided') return sum;
+
+    const method = (s.payment_method || s.paymentMethod || '').toString().toLowerCase().trim();
+    const isCredit = method === 'credit' || method === 'credit sale' || (s as any).is_credit === true;
+
+    if (isCredit) {
+      // Credit sales: count ONLY actual cash received via settlements/payments (NEVER count unsettled credit amounts)
+      return sum + Number(s.payment_received || 0);
+    } else {
+      const paid = s.payment_received !== undefined && s.payment_received !== null && Number(s.payment_received) > 0
+        ? Number(s.payment_received)
+        : Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
+      return sum + paid;
+    }
+  }, 0);
+
+  // Robust helper to extract refund cash outflow from exchange returns
+  const getExchangeRefundAmount = (r: any) => {
+    const totRef = Number(r.total_refunded !== undefined && r.total_refunded !== null ? r.total_refunded : (r.totalRefunded || 0));
+    if (totRef > 0) return totRef;
+
+    const balAmt = Number(r.balance_amount !== undefined && r.balance_amount !== null ? r.balance_amount : (r.balanceAmount || 0));
+    if (balAmt < 0) return Math.abs(balAmt);
+
+    const refAmt = Number(r.refund_amount !== undefined && r.refund_amount !== null ? r.refund_amount : (r.refundAmount || 0));
+    if (refAmt > 0) return refAmt;
+
+    const retAmt = Number(r.return_amount !== undefined ? r.return_amount : (r.returnAmount || 0));
+    const exAmt = Number(r.exchange_amount !== undefined ? r.exchange_amount : (r.exchangeAmount || 0));
+    if (retAmt > exAmt && exAmt > 0) {
+      return retAmt - exAmt;
+    }
+
+    return 0;
+  };
+
+  // Cash Refund outflows (including Cash Refund returns & Exchange refunds paid to customer)
+  const cashRefundsTotal = filteredSalesReturns.reduce((sum, r) => {
+    const statusLower = (r.status || '').toString().toLowerCase().trim();
+    if (statusLower === 'voided' || statusLower === 'cancelled') return sum;
+    const type = (r.return_type || r.returnType || r.returnMethod || r.return_method || r.type || '').toString().toLowerCase().trim();
+
+    if (type === 'cash refund' || type === 'cash' || type === 'cash_refund') {
+      const refundAmt = Number(r.refund_amount !== undefined && r.refund_amount !== null && Number(r.refund_amount) > 0
+        ? r.refund_amount
+        : (r.total_refunded !== undefined && r.total_refunded !== null && Number(r.total_refunded) > 0
+          ? r.total_refunded
+          : (r.return_amount !== undefined ? r.return_amount : (r.returnAmount || 0))));
+      return sum + refundAmt;
+    }
+
+    if (type === 'exchange') {
+      return sum + getExchangeRefundAmount(r);
+    }
+
+    return sum;
+  }, 0);
+
+  // Cash Inflows from Exchange returns (where customer pays additional balance)
+  const exchangeCashInflowsTotal = filteredSalesReturns.reduce((sum, r) => {
+    const statusLower = (r.status || '').toString().toLowerCase().trim();
+    if (statusLower === 'voided' || statusLower === 'cancelled') return sum;
+    const type = (r.return_type || r.returnType || r.returnMethod || r.return_method || r.type || '').toString().toLowerCase().trim();
+
+    if (type === 'exchange') {
+      const paidAmt = Number(r.customer_paid !== undefined ? r.customer_paid : (r.customerPaid !== undefined ? r.customerPaid : 0));
+      const changeGiven = Number(r.change_given !== undefined ? r.change_given : (r.changeGiven !== undefined ? r.changeGiven : 0));
+      const netPaid = Math.max(0, paidAmt - changeGiven);
+      return sum + netPaid;
+    }
+    return sum;
+  }, 0);
+
+  const totalCashCollected = Math.max(0, rawCashCollected + exchangeCashInflowsTotal - cashRefundsTotal);
+
+  // 2. Total Revenue: Selling Price / Subtotal only (Excludes Tax & Transport)
+  const grossSalesSellingRevenue = filteredSales.reduce((sum, s) => {
+    const statusLower = (s.status || '').toString().toLowerCase().trim();
+    if (statusLower === 'cancelled' || statusLower === 'voided') return sum;
+    return sum + getSaleSellingSubtotal(s);
+  }, 0);
+
+  const cashRefundSellingRevenue = filteredSalesReturns.reduce((sum, r) => {
+    if (r.status === 'voided' || r.status === 'Voided' || r.status === 'cancelled') return sum;
+    const type = (r.return_type || r.returnType || r.returnMethod || r.return_method || r.type || '').toString().toLowerCase().trim();
+    if (type === 'cash refund' || type === 'cash' || type === 'cash_refund') {
+      return sum + getReturnSellingSubtotal(r);
+    }
+    return sum;
+  }, 0);
+
+  const totalSalesRevenue = Math.max(0, grossSalesSellingRevenue - cashRefundSellingRevenue);
+  const paidOrders = filteredSales.filter(o => {
+    if (o.status === 'cancelled' || o.status === 'Cancelled') return false;
+    const rem = Math.max(0, Number(o.total_amount !== undefined ? o.total_amount : (o.total || 0)) - Number(o.payment_received || 0));
+    const statusLower = (o.status || '').toLowerCase();
+    return statusLower === 'paid' || statusLower === 'fully settled' || rem <= 0.01;
+  }).length;
 
   // Daily Sales logic to ensure data maps to chart
   const dailySalesData = filteredSales.reduce((acc: any[], sale) => {
@@ -330,6 +478,13 @@ export function Reports() {
     return months;
   };
 
+  const isSalesReturnTrans = (t: any) => {
+    if (!t) return false;
+    const type = (t.type || '').toLowerCase();
+    const cat = (t.category || '').toLowerCase();
+    return type === 'contra_revenue' || type === 'sales_return' || cat.startsWith('sales return') || cat === 'exchange refund';
+  };
+
   const financialChartData = getLast6MonthsReports();
   filteredTransactions.forEach((trans) => {
     const tDate = new Date(trans.date);
@@ -340,6 +495,8 @@ export function Reports() {
       const amount = Number(trans.amount || 0);
       if (trans.type === 'income') {
         match.revenue += amount;
+      } else if (isSalesReturnTrans(trans)) {
+        match.revenue -= amount;
       } else if (trans.type === 'expense') {
         match.expenses += amount;
       }
@@ -347,37 +504,84 @@ export function Reports() {
   });
 
   const totalIncome = filteredTransactions.filter(t => t.type?.toLowerCase() === 'income').reduce((sum, t) => sum + Number(t.amount || 0), 0);
-  const totalExpenses = filteredTransactions.filter(t => t.type?.toLowerCase() === 'expense').reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  const totalSalesReturns = filteredTransactions.filter(t => isSalesReturnTrans(t)).reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  const netRevenue = Math.max(0, totalIncome - totalSalesReturns);
+  const totalExpenses = filteredTransactions.filter(t => t.type?.toLowerCase() === 'expense' && !isSalesReturnTrans(t)).reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
+  // 3. Net Profit: Net Selling Revenue - Net Item Costs (Profit Reversal = Selling Price - Cost Price)
   const totalSalesProfit = (() => {
-    let totalRevenue = 0;
-    let totalItemCost = 0;
-    
+    let grossSellingRev = 0;
+    let grossCostVal = 0;
+
     filteredSales.forEach(o => {
-      const statusLower = (o.status || '').toLowerCase();
-      if (statusLower !== 'cancelled') {
-        totalRevenue += Number(o.total_amount || o.total || 0);
-        
+      const statusLower = (o.status || '').toString().toLowerCase().trim();
+      if (statusLower !== 'cancelled' && statusLower !== 'voided') {
+        grossSellingRev += getSaleSellingSubtotal(o);
+
         let items: any[] = [];
         try {
           items = typeof o.items === 'string' ? JSON.parse(o.items) : o.items || [];
         } catch(e) {}
-        
+
         if (Array.isArray(items)) {
           items.forEach(it => {
             const product = products.find(p => p.id === it.productId);
             const cost = getItemUnitCost(product, it.unit, it.conversionRate);
             const qty = Number(it.qty || 0);
-            totalItemCost += qty * cost;
+            grossCostVal += qty * cost;
           });
         }
       }
     });
-    
-    return totalRevenue - totalItemCost;
+
+    let returnedSellingRev = 0;
+    let returnedCostVal = 0;
+
+    filteredSalesReturns.forEach(r => {
+      if (r.status === 'voided' || r.status === 'Voided' || r.status === 'cancelled') return;
+      const type = (r.return_type || r.returnType || r.returnMethod || r.return_method || r.type || '').toString().toLowerCase().trim();
+      if (type === 'cash refund' || type === 'cash' || type === 'cash_refund') {
+        returnedSellingRev += getReturnSellingSubtotal(r);
+
+        let rawItems = r.items || r.returnedItems || r.returned_items || [];
+        let items: any[] = [];
+        try {
+          items = typeof rawItems === 'string' ? JSON.parse(rawItems) : rawItems;
+        } catch(e) {}
+
+        if (Array.isArray(items)) {
+          items.forEach(it => {
+            const product = products.find(p => p.id === it.productId);
+            const cost = getItemUnitCost(product, it.unit, it.conversionRate);
+            const qty = Number(it.qty || 0);
+            returnedCostVal += qty * cost;
+          });
+        }
+      }
+    });
+
+    const netSellingRev = grossSellingRev - returnedSellingRev;
+    const netCostVal = grossCostVal - returnedCostVal;
+    return netSellingRev - netCostVal;
   })();
 
-  const totalReceivables = filteredSales.filter(s => s.status === 'Non Paid' || s.status === 'pending' || s.status === 'Non-Paid').reduce((sum, s) => sum + Number(s.total_amount || s.total || 0), 0);
+  const totalReceivables = filteredSales.reduce((sum, s) => {
+    if (s.status === 'cancelled' || s.status === 'Cancelled') return sum;
+    const method = (s.payment_method || s.paymentMethod || '').toString().toLowerCase().trim();
+    const status = (s.status || '').toString().toLowerCase().trim();
+
+    if (method === 'cash' || method === 'card' || method === 'bank transfer' || method === 'online' || method === 'pos') {
+      return sum;
+    }
+
+    const isCredit = method === 'credit' || method === 'credit sale' || status === 'non paid' || status === 'non-paid' || status === 'partially paid' || status === 'partially settled' || status === 'pending' || (s as any).is_credit === true;
+    if (!isCredit) return sum;
+
+    const invTotal = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
+    const paidAmt = Number(s.payment_received || 0);
+    const remaining = Math.max(0, invTotal - paidAmt);
+    return sum + remaining;
+  }, 0);
   const totalPayables = suppliers.reduce((sum, s) => sum + Number(s.payable_balance || 0), 0);
 
   // Cashier Closing Shift Report (Daily breakdowns)
@@ -786,7 +990,7 @@ export function Reports() {
                   <DollarSignIcon className="w-4 h-4" />
                 </div>
               </div>
-              <p className="text-3xl font-black text-white tracking-tight">{formatCurrency(totalSalesRevenue)}</p>
+              <p className="text-3xl font-black text-white tracking-tight">{formatCurrency(totalCashCollected)}</p>
             </div>
 
             {/* Card 2: Net Profit */}
@@ -1091,7 +1295,7 @@ export function Reports() {
                     <p className="text-[10px] text-slate-500 font-bold uppercase mt-0.5">{item.sku} • {getCategoryTranslation(item.category)}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm font-black text-red-650">{item.stock} left</p>
+                    <p className="text-sm font-black text-red-650">{formatStock(item.stock, item.unit)} left</p>
                     <p className="text-[9px] text-slate-400 font-bold">Min Target: {item.min_stock || item.minStock || 5}</p>
                   </div>
                 </div>
@@ -1160,7 +1364,7 @@ export function Reports() {
                           {p.name}
                           <p className="text-[10px] font-bold text-slate-400 uppercase mt-0.5">{p.sku} • {getCategoryTranslation(p.category)}</p>
                         </td>
-                        <td className="px-4 py-3 text-center text-slate-600 font-bold">{p.stock}</td>
+                        <td className="px-4 py-3 text-center text-slate-600 font-bold">{formatStock(p.stock, (p as any).unit)}</td>
                         <td className="px-4 py-3 text-right font-black text-emerald-600">+{p.sold}</td>
                       </tr>
                     ))}
@@ -1205,7 +1409,7 @@ export function Reports() {
                           {p.name}
                           <p className="text-[10px] font-bold text-slate-400 uppercase mt-0.5">{p.sku} • {getCategoryTranslation(p.category)}</p>
                         </td>
-                        <td className="px-4 py-3 text-center text-slate-600 font-bold">{p.stock}</td>
+                        <td className="px-4 py-3 text-center text-slate-600 font-bold">{formatStock(p.stock, (p as any).unit)}</td>
                         <td className="px-4 py-3 text-right font-black text-slate-500">{p.sold}</td>
                       </tr>
                     ))}
@@ -1230,15 +1434,15 @@ export function Reports() {
             <div className="bg-gradient-to-br from-emerald-500 via-emerald-600 to-teal-600 rounded-3xl p-6 shadow-[0_12px_30px_rgba(16,185,129,0.2)] hover:-translate-y-1.5 hover:shadow-[0_20px_45px_rgba(16,185,129,0.35)] transition-all duration-300 relative overflow-hidden group">
               <div className="absolute -top-10 -right-10 w-32 h-32 bg-white/10 rounded-full blur-xl group-hover:scale-125 transition-transform duration-500" />
               <div className="flex items-center justify-between mb-4">
-                <p className="text-[10px] text-emerald-100 font-extrabold uppercase tracking-widest mb-1.5">{t('Total Income', 'මුළු ආදායම')}</p>
+                <p className="text-[10px] text-emerald-100 font-extrabold uppercase tracking-widest mb-1.5">{t('Net Income', 'ශුද්ධ ආදායම')}</p>
                 <div className="p-2.5 bg-white/15 text-white rounded-2xl ring-4 ring-white/10 group-hover:scale-110 transition-all duration-300">
                   <ArrowUpRightIcon className="w-4 h-4" />
                 </div>
               </div>
-              <p className="text-3xl font-black text-white tracking-tight">{formatCurrency(totalIncome)}</p>
+              <p className="text-3xl font-black text-white tracking-tight">{formatCurrency(netRevenue)}</p>
               <p className="text-[10px] text-emerald-100/90 font-medium mt-3.5 flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
-                {t('All positive transactions', 'සියලුම ලැබීම් එකතුව')}
+                {t('Net cash inflows after returns', 'ආපසු ගෙවීම් বাদ කළ පසු ශුද්ධ ආදායම')}
               </p>
             </div>
 
@@ -1280,7 +1484,7 @@ export function Reports() {
                   <ActivityIcon className="w-4 h-4" />
                 </div>
               </div>
-              <p className="text-3xl font-black text-white tracking-tight">{formatCurrency(totalIncome - totalExpenses)}</p>
+              <p className="text-3xl font-black text-white tracking-tight">{formatCurrency(netRevenue - totalExpenses)}</p>
               <p className="text-[10px] text-indigo-100/90 font-medium mt-3.5 flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
                 {t('Inflow minus outflow position', 'ලැබීම් සහ ගෙවීම් අතර වෙනස')}

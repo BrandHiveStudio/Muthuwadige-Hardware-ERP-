@@ -950,12 +950,126 @@ const performBackup = async (fromDate = null, toDate = null) => {
     setColWidths(wsBranches, structuredBranches, wsBranchesHeaders);
     applyTableStyles(wsBranches, "1E3A8A");
 
+    // --- CREDIT CUSTOMERS SHEET ---
+    let creditSalesList = sales.filter(s => {
+      const isCredit = s.status === 'Non Paid' || s.status === 'Partially Paid' || s.status === 'Pending' || (s.payment_method && s.payment_method.toLowerCase() === 'credit');
+      const rem = Math.max(0, (s.total_amount || 0) - (s.payment_received || 0));
+      return isCredit && rem > 0;
+    });
+
+    const totOutstandingAll = creditSalesList.reduce((sum, s) => sum + Math.max(0, (s.total_amount || 0) - (s.payment_received || 0)), 0);
+    const totOverdueAll = creditSalesList.filter(s => s.due_date && new Date(s.due_date) < new Date()).reduce((sum, s) => sum + Math.max(0, (s.total_amount || 0) - (s.payment_received || 0)), 0);
+
+    const structuredCreditCustomers = creditSalesList.map(s => {
+      const totalAmt = Number(s.total_amount || 0);
+      const paidAmt = Number(s.payment_received || 0);
+      const outstandingAmt = Math.max(0, totalAmt - paidAmt);
+      const isOverdue = s.due_date && new Date(s.due_date) < new Date();
+      return {
+        "Customer": s.customer_name || 'Walk-in Credit Customer',
+        "Invoice Number": s.invoice_no,
+        "Invoice Date": s.created_at ? s.created_at.slice(0, 10) : (s.date || '---'),
+        "Invoice Amount": totalAmt,
+        "Amount Paid": paidAmt,
+        "Outstanding Amount": outstandingAmt,
+        "Due Date": s.due_date ? s.due_date.slice(0, 10) : '---',
+        "Payment Status": outstandingAmt <= 0 ? "Paid" : paidAmt > 0 ? (isOverdue ? "Partially Paid (Overdue)" : "Partially Paid") : (isOverdue ? "Non Paid (Overdue)" : "Non Paid"),
+        "Payment History": paidAmt > 0 ? `Paid Rs. ${paidAmt.toLocaleString()}` : "No payments recorded",
+        "Total Outstanding": totOutstandingAll,
+        "Total Overdue": totOverdueAll
+      };
+    });
+    const wsCCHeaders = ["Customer", "Invoice Number", "Invoice Date", "Invoice Amount", "Amount Paid", "Outstanding Amount", "Due Date", "Payment Status", "Payment History", "Total Outstanding", "Total Overdue"];
+    const wsCreditCustomers = createWorksheet(structuredCreditCustomers, wsCCHeaders);
+    setColWidths(wsCreditCustomers, structuredCreditCustomers, wsCCHeaders);
+    applyTableStyles(wsCreditCustomers, "B8860B");
+
+    // --- CUSTOMER STATEMENT SHEET ---
+    const statementEntries = [];
+    sales.forEach(s => {
+      statementEntries.push({
+        "Customer": s.customer_name || 'Walk-in Customer',
+        "Transaction Date": s.created_at ? s.created_at.slice(0, 10) : (s.date || '---'),
+        "Invoice / Reference #": s.invoice_no,
+        "Transaction Type": "Credit Sale",
+        "Credit Sales": Number(s.total_amount || 0),
+        "Payments": Number(s.payment_received || 0),
+        "Returns / Credit Notes": 0,
+        "Remaining Balance": Math.max(0, Number(s.total_amount || 0) - Number(s.payment_received || 0))
+      });
+    });
+
+    salesReturns.forEach(sr => {
+      statementEntries.push({
+        "Customer": sr.customer_name || 'Walk-in Customer',
+        "Transaction Date": sr.created_at ? sr.created_at.slice(0, 10) : '---',
+        "Invoice / Reference #": sr.return_no || sr.invoice_no,
+        "Transaction Type": `Sales Return (${sr.return_method || 'Refund'})`,
+        "Credit Sales": 0,
+        "Payments": 0,
+        "Returns / Credit Notes": Number(sr.return_amount || 0),
+        "Remaining Balance": 0
+      });
+    });
+
+    const wsCSHeaders = ["Customer", "Transaction Date", "Invoice / Reference #", "Transaction Type", "Credit Sales", "Payments", "Returns / Credit Notes", "Remaining Balance"];
+    const wsCustomerStatement = createWorksheet(statementEntries, wsCSHeaders);
+    setColWidths(wsCustomerStatement, statementEntries, wsCSHeaders);
+    applyTableStyles(wsCustomerStatement, "1E3A8A");
+
+    // --- SALES RETURNS SHEET ---
+    const structuredSalesReturns = salesReturns.map(sr => {
+      let returnedProd = '---';
+      let returnedQty = 0;
+      try {
+        const items = typeof sr.returned_items === 'string' ? JSON.parse(sr.returned_items) : sr.returned_items;
+        if (Array.isArray(items) && items.length > 0) {
+          returnedProd = items.map(i => i.productName || i.name).join(', ');
+          returnedQty = items.reduce((sum, i) => sum + (Number(i.qty) || 0), 0);
+        }
+      } catch (e) {}
+
+      let exchangeProd = 'N/A';
+      let exchangeAmt = Number(sr.exchange_amount || 0);
+      try {
+        const xItems = typeof sr.exchange_items === 'string' ? JSON.parse(sr.exchange_items) : sr.exchange_items;
+        if (Array.isArray(xItems) && xItems.length > 0) {
+          exchangeProd = xItems.map(i => i.productName || i.name).join(', ');
+        }
+      } catch (e) {}
+
+      return {
+        "Return ID": sr.return_no || sr.id,
+        "Original Invoice Number": sr.invoice_no,
+        "Return Date": sr.created_at ? sr.created_at.slice(0, 10) : '---',
+        "Customer": sr.customer_name || 'Walk-in Customer',
+        "Return Type": sr.return_method || 'Cash Refund',
+        "Product": returnedProd,
+        "Quantity": returnedQty,
+        "Return Amount": Number(sr.return_amount || 0),
+        "Payment/Refund Amount": Number(sr.total_refunded || sr.customer_paid || 0),
+        "Payment Method": sr.return_method === 'Exchange' ? 'Exchange Balance' : (sr.return_method || 'Cash'),
+        "Replacement Product (for Exchange)": exchangeProd,
+        "Replacement Amount": exchangeAmt,
+        "Difference": Number(sr.balance_amount || 0),
+        "Credit Note Number (for Credit Note)": sr.credit_note_no || 'N/A',
+        "Notes": sr.reason || '---'
+      };
+    });
+    const wsSRHeaders = ["Return ID", "Original Invoice Number", "Return Date", "Customer", "Return Type", "Product", "Quantity", "Return Amount", "Payment/Refund Amount", "Payment Method", "Replacement Product (for Exchange)", "Replacement Amount", "Difference", "Credit Note Number (for Credit Note)", "Notes"];
+    const wsSalesReturns = createWorksheet(structuredSalesReturns, wsSRHeaders);
+    setColWidths(wsSalesReturns, structuredSalesReturns, wsSRHeaders);
+    applyTableStyles(wsSalesReturns, "991B1B");
+
     styleOverviewSheet(wsOverview);
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, wsOverview, "Dashboard");
     XLSX.utils.book_append_sheet(wb, wsInventory, "Inventory Stock");
     XLSX.utils.book_append_sheet(wb, wsSales, "Sales & Invoices");
+    XLSX.utils.book_append_sheet(wb, wsCreditCustomers, "Credit Customers");
+    // // XLSX.utils.book_append_sheet(wb, wsCustomerStatement, "Customer Statement"); // Removed per user request // Removed per user request
+    XLSX.utils.book_append_sheet(wb, wsSalesReturns, "Sales Returns");
     XLSX.utils.book_append_sheet(wb, wsTransactions, "Accounting Ledger");
     XLSX.utils.book_append_sheet(wb, wsCustomers, "Customers");
     XLSX.utils.book_append_sheet(wb, wsSuppliers, "Suppliers Directory");

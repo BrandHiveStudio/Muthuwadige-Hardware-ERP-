@@ -44,7 +44,7 @@ export function Finance() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState<'all' | 'income' | 'expense'>('all');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'income' | 'expense' | 'contra_revenue' | 'sales_return'>('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [showAddModal, setShowAddModal] = useState(false);
   const [viewVoucher, setViewVoucher] = useState<Transaction | null>(null);
@@ -86,11 +86,21 @@ export function Finance() {
 
   const convert = (val: number) => val;
 
+  const isSalesReturnTrans = (t: any) => {
+    if (!t) return false;
+    const type = (t.type || '').toLowerCase();
+    const cat = (t.category || '').toLowerCase();
+    return type === 'contra_revenue' || type === 'sales_return' || cat.startsWith('sales return') || cat === 'exchange refund';
+  };
+
   const filtered = transactions.filter((t) => {
     const matchesSearch = t.description.toLowerCase().includes(search.toLowerCase()) || 
                           t.reference.toLowerCase().includes(search.toLowerCase()) ||
                           t.category.toLowerCase().includes(search.toLowerCase());
-    const matchesType = typeFilter === 'all' || t.type === typeFilter;
+    const matchesType = typeFilter === 'all' || 
+                        t.type === typeFilter ||
+                        (typeFilter === 'contra_revenue' && isSalesReturnTrans(t)) ||
+                        (typeFilter === 'expense' && t.type === 'expense' && !isSalesReturnTrans(t));
     const matchesCategory = categoryFilter === 'all' || 
                             t.category === categoryFilter ||
                             (categoryFilter === 'Purchase' && t.category === 'Purchases');
@@ -106,8 +116,10 @@ export function Finance() {
   });
 
   const totalIncome = filtered.filter(t => t.type === 'income').reduce((sum, t) => sum + (t.amount || 0), 0);
-  const totalExpense = filtered.filter(t => t.type === 'expense').reduce((sum, t) => sum + (t.amount || 0), 0);
-  const cashBalance = totalIncome - totalExpense;
+  const totalSalesReturns = filtered.filter(t => isSalesReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  const netSalesIncome = totalIncome - totalSalesReturns;
+  const totalExpense = filtered.filter(t => t.type === 'expense' && !isSalesReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  const cashBalance = netSalesIncome - totalExpense;
 
   const openAdd = () => {
     setFormData(emptyTransaction);
@@ -470,15 +482,15 @@ export function Finance() {
           <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-xl group-hover:scale-110 transition-transform duration-500"></div>
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-black text-white/80 uppercase tracking-widest">Total Cash In (Income)</p>
-              <p className="text-3xl font-black text-white mt-1.5">{symbol} {convert(totalIncome).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+              <p className="text-[10px] font-black text-white/80 uppercase tracking-widest">Net Cash In (Income)</p>
+              <p className="text-3xl font-black text-white mt-1.5">{symbol} {convert(netSalesIncome).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
             </div>
             <div className="w-12 h-12 bg-white/20 text-white rounded-xl flex items-center justify-center shadow-lg">
               <ArrowUpRightIcon className="w-6 h-6" />
             </div>
           </div>
           <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-white/95">
-            <span>Sales & inbound revenue</span>
+            <span>Gross Inflow: {symbol} {convert(totalIncome).toLocaleString(undefined, { minimumFractionDigits: 2 })} | Refunds: -{symbol} {convert(totalSalesReturns).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
           </div>
         </div>
 
@@ -512,6 +524,7 @@ export function Finance() {
             <option value="all">All Flow Types</option>
             <option value="income">Income (+)</option>
             <option value="expense">Expense (-)</option>
+            <option value="contra_revenue">Contra-Revenue / Return (-)</option>
           </select>
 
           <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className="px-4 py-2.5 border border-slate-200 bg-white rounded-xl text-sm font-bold text-[#464646] outline-none cursor-pointer">
@@ -597,9 +610,13 @@ export function Finance() {
                     <td className="px-6 py-4 text-slate-600 font-bold">{t.date}</td>
                     <td className="px-6 py-4">
                       <span className={`px-2.5 py-1 text-[9px] font-black rounded-lg uppercase tracking-wider ${
-                        t.type === 'income' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-red-50 text-red-500 border border-red-100'
+                        t.type === 'income' 
+                          ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' 
+                          : isSalesReturnTrans(t)
+                          ? 'bg-amber-50 text-amber-600 border border-amber-100'
+                          : 'bg-red-50 text-red-500 border border-red-100'
                       }`}>
-                        {t.type}
+                        {isSalesReturnTrans(t) ? 'Contra-Revenue' : t.type}
                       </span>
                     </td>
                     <td className="px-6 py-4">
@@ -610,7 +627,7 @@ export function Finance() {
                     <td className="px-6 py-4 font-black text-slate-800">{t.description}</td>
                     <td className="px-6 py-4 font-mono font-bold text-slate-500">{t.reference}</td>
                     <td className="px-6 py-4 text-right font-black">
-                      <span className={t.type === 'income' ? 'text-emerald-600' : 'text-red-500'}>
+                      <span className={t.type === 'income' ? 'text-emerald-600' : isSalesReturnTrans(t) ? 'text-amber-600' : 'text-red-500'}>
                         {t.type === 'income' ? '+' : '-'} {symbol} {convert(t.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                       </span>
                     </td>

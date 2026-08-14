@@ -19,6 +19,7 @@ import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabaseClient';
 import { api, API_URL } from '../lib/api';
 import type { Product } from '../types';
+import { formatStock } from '../utils/formatters';
 
 const categories = [
   'All',
@@ -490,6 +491,18 @@ export function Inventory() {
   useEffect(() => {
     fetchProducts();
     fetchSuppliers();
+
+    const handleRefresh = () => {
+      fetchProducts();
+      fetchSuppliers();
+    };
+
+    window.addEventListener('suppliers-updated', handleRefresh);
+    window.addEventListener('refresh-inventory', handleRefresh);
+    return () => {
+      window.removeEventListener('suppliers-updated', handleRefresh);
+      window.removeEventListener('refresh-inventory', handleRefresh);
+    };
   }, []);
 
   useEffect(() => {
@@ -1064,7 +1077,7 @@ export function Inventory() {
                       <td className="px-6 py-4 text-right font-bold text-gray-400">{symbol} {convert(product.costPrice).toLocaleString()}</td>
                       <td className="px-6 py-4 text-center">
                         <div className="flex flex-col items-center">
-                          <span className={`font-black text-base ${isLow ? 'text-red-500' : 'text-slate-800'}`}>{product.stock}</span>
+                          <span className={`font-black text-base ${isLow ? 'text-red-500' : 'text-slate-800'}`}>{formatStock(product.stock, product.unit)}</span>
                           <span className="text-gray-400 text-[9px] uppercase font-black tracking-widest">
                             {t(product.unit, unitTranslations[product.unit] || product.unit)}
                           </span>
@@ -1393,7 +1406,7 @@ export function Inventory() {
         <div className="space-y-5">
           <div className="bg-gray-50 rounded-2xl p-5 text-center border border-gray-100 shadow-inner">
             <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">{t('Available Now', 'දැන් ලබාගත හැක')}</p>
-            <p className="text-3xl font-black text-[#464646]">{stockProduct?.stock} <span className="text-sm text-gray-400 uppercase tracking-widest">{t(stockProduct?.unit || '', unitTranslations[stockProduct?.unit || ''] || stockProduct?.unit || '')}</span></p>
+            <p className="text-3xl font-black text-[#464646]">{formatStock(stockProduct?.stock, stockProduct?.unit)} <span className="text-sm text-gray-400 uppercase tracking-widest">{t(stockProduct?.unit || '', unitTranslations[stockProduct?.unit || ''] || stockProduct?.unit || '')}</span></p>
             {(() => {
               if (!stockProduct) return null;
               const conversions = getProductConversions(stockProduct);

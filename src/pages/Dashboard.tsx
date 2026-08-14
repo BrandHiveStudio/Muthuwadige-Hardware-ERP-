@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
+import { API_URL } from '../lib/api';
+import { formatStock } from '../utils/formatters';
 import {
   DollarSignIcon,
   ShoppingCartIcon,
@@ -168,39 +170,69 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     }
   };
 
-  const handleWhatsAppAlert = (item: any) => {
-    const supplierName = item.supplier;
-    let phone = item.supplierPhone || item.supplier_phone;
+  const handleWhatsAppAlert = async (item: any) => {
+    if (!item) return;
+
+    console.log('[WhatsApp] 1. Button clicked for product:', item.name);
+
+    const supplierName = item.supplier || item.supplier_name || item.supplierName;
+    let phone = item.supplierPhone || item.supplier_phone || item.supplierPhoneNo || item.supplier_phone_no;
     
     if (!phone && supplierName) {
-      const s = suppliers.find((supplier: any) => supplier.name.toLowerCase() === supplierName.toLowerCase());
-      if (s && s.phone) {
-        phone = s.phone;
+      const s = (suppliers || []).find((sup: any) => 
+        (sup.name && sup.name.trim().toLowerCase() === String(supplierName).trim().toLowerCase()) ||
+        (sup.id && item.supplier_id && sup.id === item.supplier_id)
+      );
+      if (s && (s.phone || s.phone_no)) {
+        phone = s.phone || s.phone_no;
       }
     }
     
-    if (!phone) {
-      alert(`No phone number found for supplier "${supplierName || 'N/A'}".`);
+    if (!phone || !String(phone).trim()) {
+      const errorMsg = "Supplier WhatsApp number is not available.";
+      console.warn('[WhatsApp] Error:', errorMsg);
+      alert(errorMsg);
       return;
     }
     
-    // Construct WhatsApp message
-    const message = `Stock Alert: Product "${item.name}" (SKU: ${item.sku}) is low on stock. Current stock is ${item.stock} left. Please restock soon!`;
-    let cleanPhone = phone.replace(/[\s_.-]/g, '');
+    // Construct professional reorder WhatsApp message
+    const currentStockFormatted = `${formatStock(item.stock, item.unit)} ${item.unit || 'PCS'}`;
+    const minStockVal = item.minStock !== undefined ? item.minStock : item.min_stock !== undefined ? item.min_stock : 10;
+    const minStockFormatted = `${minStockVal} ${item.unit || 'PCS'}`;
+
+    const message = `Hello, we need to reorder ${item.name}. Current stock is ${currentStockFormatted} and the minimum stock level is ${minStockFormatted}. Please let us know the availability and price.`;
+    
+    // Normalize phone number (0712345678 -> 94712345678, 712345678 -> 94712345678, 94712345678 -> 94712345678)
+    let cleanPhone = String(phone).replace(/[\s_\.\-\(\)\+]/g, '').trim();
     if (cleanPhone.startsWith('0')) {
       cleanPhone = '94' + cleanPhone.substring(1);
     } else if (cleanPhone.startsWith('7')) {
       cleanPhone = '94' + cleanPhone;
-    } else if (cleanPhone.startsWith('+')) {
-      cleanPhone = cleanPhone.substring(1);
     }
     cleanPhone = cleanPhone.replace(/[^0-9]/g, '');
+
+    if (!cleanPhone) {
+      const errorMsg = "Supplier WhatsApp number is not available.";
+      console.warn('[WhatsApp] Error:', errorMsg);
+      alert(errorMsg);
+      return;
+    }
+
     const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
-    const electronAPI = (window as any).electronAPI;
-    if (electronAPI && typeof electronAPI.openExternal === 'function') {
-      electronAPI.openExternal(url);
-    } else {
-      window.open(url, '_blank');
+    console.log('[WhatsApp] 2. URL generated:', url);
+
+    try {
+      const electronAPI = (window as any).electronAPI;
+      if (electronAPI && typeof electronAPI.openExternalUrl === 'function') {
+        await electronAPI.openExternalUrl(url);
+      } else if (electronAPI && typeof electronAPI.openExternal === 'function') {
+        await electronAPI.openExternal(url);
+      } else {
+        throw new Error("Electron API interface (window.electronAPI.openExternalUrl) is not available at runtime.");
+      }
+    } catch (err: any) {
+      console.error('[WhatsApp] 6. Error opening WhatsApp URL:', err);
+      alert(`Failed to open WhatsApp: ${err.message || err}`);
     }
   };
 
@@ -282,9 +314,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       const todayRevenue = salesToday.reduce((acc, curr) => acc + (curr.total_amount || curr.total || 0), 0) + todayReturnsAdjustment;
       const todayOrders = salesToday.length;
 
-      // 2. Fetch Customers
+      // 2. Fetch Customers & Suppliers
       const { data: custData } = await supabase.from('customers').select('*');
       const customerCount = custData ? custData.length : 0;
+
+      const { data: suppData } = await supabase.from('suppliers').select('*');
+      if (suppData) setSuppliers(suppData);
 
       // 3. Fetch Products & calculate Stock Alerts
       const { data: products } = await supabase.from('products').select('*');
@@ -442,17 +477,25 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       }, 0);
       setTodayProfit(todayRevenueVal - todayItemCostVal);
 
-      // Calculate Cash Drawable Balance: Total Revenue - Non-Paid Credit Orders - Cash Refunds
-      let totalRevenueVal = 0;
-      let nonPaidCreditVal = 0;
+      // Calculate Actual Cash Collected Balance: (Sales Cash + Credit Payments) - Cash Refunds
+      let totalCashCollectedVal = 0;
       if (allSales && allSales.length > 0) {
         allSales.forEach((sale: any) => {
-          const statusLower = (sale.status || '').toLowerCase();
+          const statusLower = (sale.status || '').toString().toLowerCase().trim();
           if (statusLower !== 'cancelled' && statusLower !== 'voided') {
-            const amt = Number(sale.total_amount || sale.total || 0);
-            totalRevenueVal += amt;
-            if (statusLower === 'non paid' || statusLower === 'non-paid') {
-              nonPaidCreditVal += amt;
+            const method = (sale.payment_method || sale.paymentMethod || '').toString().toLowerCase().trim();
+            const isCredit = method === 'credit' || method === 'credit sale' || sale.is_credit === true;
+            if (isCredit) {
+              totalCashCollectedVal += Number(sale.payment_received || 0);
+            } else {
+              if (statusLower === 'fully returned' || statusLower === 'returned' || statusLower === 'partially returned') {
+                totalCashCollectedVal += Number(sale.payment_received || 0);
+              } else {
+                const paid = sale.payment_received !== undefined && sale.payment_received !== null && Number(sale.payment_received) > 0
+                  ? Number(sale.payment_received)
+                  : Number(sale.total_amount !== undefined ? sale.total_amount : (sale.total || 0));
+                totalCashCollectedVal += paid;
+              }
             }
           }
         });
@@ -461,24 +504,15 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       let totalRefundsVal = 0;
       if (allReturns && allReturns.length > 0) {
         allReturns.forEach((ret: any) => {
-          if (ret.status === 'voided' || ret.status === 'Voided') return;
-          const method = ret.returnMethod || ret.return_method;
-          if (method === 'Cash Refund') {
-            totalRefundsVal += Number(ret.totalRefunded !== undefined ? ret.totalRefunded : (ret.total_refunded || 0));
-          } else if (method === 'Exchange') {
-            const rawItems = ret.returnedItems || ret.returned_items;
-            const items = typeof rawItems === 'string' ? JSON.parse(rawItems) : (rawItems || []);
-            const rawExchangeItems = ret.exchangeItems || ret.exchange_items;
-            const exItems = typeof rawExchangeItems === 'string' ? JSON.parse(rawExchangeItems) : (rawExchangeItems || []);
-            const returnVal = items.reduce((s: number, i: any) => s + (i.price * i.qty), 0);
-            const exchangeVal = exItems.reduce((s: number, i: any) => s + (i.price * i.qty), 0);
-            const balanceDiff = returnVal - exchangeVal;
-            totalRefundsVal += balanceDiff;
+          if (ret.status === 'voided' || ret.status === 'Voided' || ret.status === 'cancelled') return;
+          const method = (ret.returnMethod || ret.return_method || ret.returnType || ret.return_type || '').toString().toLowerCase().trim();
+          if (method === 'cash refund' || method === 'cash' || method === 'cash_refund') {
+            totalRefundsVal += Number(ret.totalRefunded !== undefined ? ret.totalRefunded : (ret.total_refunded !== undefined ? ret.total_refunded : (ret.refund_amount !== undefined ? ret.refund_amount : (ret.return_amount !== undefined ? ret.return_amount : (ret.amount || 0)))));
           }
         });
       }
 
-      setCashBalance(totalRevenueVal - nonPaidCreditVal - totalRefundsVal);
+      setCashBalance(Math.max(0, totalCashCollectedVal - totalRefundsVal));
 
       // Fetch pending Purchase Orders for supplier alerts
       const { data: poData } = await supabase.from('purchase_orders').select('*');
@@ -924,7 +958,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                       <div className="min-w-0 flex-1 text-left">
                         <p className="text-sm font-black text-slate-800 truncate">{item.name}</p>
                         <p className="text-[9px] text-red-500 font-black uppercase tracking-widest mt-1">
-                          {item.stock} {item.unit || 'pcs'} left • Min {item.minStock !== undefined ? item.minStock : item.min_stock !== undefined ? item.min_stock : 10}
+                          {formatStock(item.stock, item.unit)} {item.unit || 'pcs'} left • Min {item.minStock !== undefined ? item.minStock : item.min_stock !== undefined ? item.min_stock : 10}
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
@@ -934,15 +968,13 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                         >
                           Reorder
                         </button>
-                        {isAdmin && (
-                          <button 
-                            onClick={() => handleWhatsAppAlert(item)}
-                            className="bg-emerald-50 text-emerald-700 text-[9px] font-black uppercase tracking-widest px-3 py-2 rounded-xl border border-emerald-200 hover:bg-emerald-600 hover:text-white hover:border-emerald-600 transition-all shadow-sm hover:shadow flex items-center gap-1"
-                            title="Send WhatsApp alert to supplier"
-                          >
-                            <MessageSquareIcon className="w-3 h-3" /> WhatsApp
-                          </button>
-                        )}
+                        <button 
+                          onClick={() => handleWhatsAppAlert(item)}
+                          className="bg-emerald-50 text-emerald-700 text-[9px] font-black uppercase tracking-widest px-3 py-2 rounded-xl border border-emerald-200 hover:bg-emerald-600 hover:text-white hover:border-emerald-600 transition-all shadow-sm hover:shadow flex items-center gap-1 cursor-pointer"
+                          title="Send WhatsApp alert to supplier"
+                        >
+                          <MessageSquareIcon className="w-3 h-3" /> WhatsApp
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -959,7 +991,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
           <div className="bg-gray-50 rounded-2xl p-6 text-center border border-gray-100 shadow-inner">
             <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Current Stock level</p>
             <p className="text-4xl font-black text-[#464646]">
-              {selectedProduct?.stock || 0} <span className="text-sm text-gray-400 uppercase tracking-widest">{selectedProduct?.unit || 'pcs'}</span>
+              {formatStock(selectedProduct?.stock, selectedProduct?.unit)} <span className="text-sm text-gray-400 uppercase tracking-widest">{selectedProduct?.unit || 'pcs'}</span>
             </p>
             <p className="text-[10px] text-red-500 font-black uppercase tracking-widest mt-2">
               Warning threshold: {selectedProduct?.minStock !== undefined ? selectedProduct.minStock : selectedProduct?.min_stock !== undefined ? selectedProduct.min_stock : 10}
