@@ -29,6 +29,7 @@ hardware.db
 *.db-wal
 *.db-shm
 scratch/
-build/
+build/*
+!build/icon.ico
 release-dist/
 backups/

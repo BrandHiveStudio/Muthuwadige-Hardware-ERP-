@@ -9,7 +9,7 @@ import nodemailer from 'nodemailer';
 import XLSX from 'xlsx-js-style';
 import fs from 'fs';
 import dotenv from 'dotenv';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import os from 'os';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -37,16 +37,13 @@ try {
       // Existing user databases are untouched and preserved with 0 data loss.
       console.log('📂 Production Electron database path:', DB_FILE);
 
-      // Auto-migrate env config: copy/restore .env from bundled code or dev workspace to AppData folder
+      // Auto-migrate env config: copy .env from bundled code to AppData folder
       const bundledEnv = path.join(__dirname, '.env');
-      const devWorkspaceEnv = 'C:\\Users\\amash\\OneDrive\\Desktop\\Hardware\\hardwarer\\.env';
       if (!fs.existsSync(envPath)) {
         try {
           if (fs.existsSync(bundledEnv)) {
             fs.copyFileSync(bundledEnv, envPath);
             console.log('✅ .env file successfully initialized in AppData:', envPath);
-          } else if (fs.existsSync(devWorkspaceEnv)) {
-            fs.copyFileSync(devWorkspaceEnv, envPath);
             console.log('✅ .env file auto-restored from workspace to AppData:', envPath);
           }
         } catch (err) {
@@ -893,6 +890,14 @@ async function initializeDatabase() {
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_credit_notes_no ON credit_notes(credit_note_no)"); } catch(e) {}
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_returns_inv ON sales_returns(invoice_no)"); } catch(e) {}
 
+  // Phase 2A: Performance optimization indexes
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(email)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_status ON sales(status)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_credit_notes_status ON credit_notes(status)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_credit_notes_customer_id ON credit_notes(customer_id)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_returns_status ON sales_returns(status)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_audit_logs_action_date ON audit_logs(action, timestamp)"); } catch(e) {}
+
   try { await db.exec("ALTER TABLE credit_notes ADD COLUMN credit_note_no TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE credit_notes ADD COLUMN code TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE credit_notes ADD COLUMN invoice_no TEXT"); } catch(e) {}
@@ -1088,1175 +1093,67 @@ Muthuwadige Hardware ERP System`;
 }
 
 const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDate = null) => {
-  // Helper to convert date string/ISO to Excel serial decimal date number
-  const getExcelDecimalDate = (dateVal) => {
-    if (!dateVal || dateVal === '---') return null;
-    let cleanStr = '';
-    if (typeof dateVal === 'string') {
-      cleanStr = dateVal.substring(0, 10);
-    } else if (dateVal instanceof Date) {
-      cleanStr = dateVal.toISOString().substring(0, 10);
-    } else {
-      cleanStr = String(dateVal).substring(0, 10);
-    }
-    
-    // Check if it matches YYYY-MM-DD
-    if (!cleanStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
-      // Fallback: try to parse it with new Date
-      const parsed = new Date(dateVal);
-      if (isNaN(parsed.getTime())) return null;
-      cleanStr = parsed.toISOString().substring(0, 10);
-    }
-    
-    // Parse the date part as UTC to ensure consistency across timezones
-    const [year, month, day] = cleanStr.split('-').map(Number);
-    const date = new Date(Date.UTC(year, month - 1, day));
-    
-    // Excel date epoch is 1899-12-30 (due to leap year bug in 1900)
-    const epoch = new Date(Date.UTC(1899, 11, 30));
-    const diff = date.getTime() - epoch.getTime();
-    return diff / (24 * 60 * 60 * 1000);
-  };
+  const workerPath = path.join(__dirname, 'backup-worker.js');
 
-  console.log("[Backup] Starting compilation of SQLite tables to Excel...");
-  let dateStr = new Date().toISOString().replace(/:/g, '-').split('.')[0];
-  if (fromDate || toDate) {
-    const fromStr = fromDate || 'Start';
-    const toStr = toDate || 'End';
-    dateStr = `${fromStr}_to_${toStr}`;
+  if (!fs.existsSync(workerPath)) {
+    console.error('❌ backup-worker.js not found at:', workerPath);
+    return { success: false, error: 'Worker script missing', message: 'Backup worker script not found' };
   }
-  const fileName = `Backup_${dateStr}.xlsx`;
-  const backupDir = backupsDir;
-  if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir);
-  const filePath = path.join(backupDir, fileName);
 
-  try {
-    const customers = await db.all('SELECT * FROM customers');
-    let sales = await db.all('SELECT * FROM sales');
-    const products = await db.all('SELECT * FROM products');
-    const profiles = await db.all('SELECT * FROM profiles');
-    const settings = [await getRuntimeSettingsSnapshot()];
-    const employees = await getRuntimeEmployeesSnapshot();
-    let transactions = await db.all('SELECT * FROM transactions');
-    const suppliers = await db.all('SELECT * FROM suppliers');
-    let purchaseOrders = await db.all('SELECT * FROM purchase_orders');
-    let stockAdjustments = await db.all('SELECT * FROM stock_adjustments');
-    let quotations = await db.all('SELECT * FROM quotations');
-    const branches = await db.all('SELECT * FROM branches');
+  // Build worker arguments
+  const args = [];
+  if (targetEmail) args.push('--email', targetEmail);
+  if (type) args.push('--type', type);
+  if (fromDate) args.push('--fromDate', fromDate);
+  if (toDate) args.push('--toDate', toDate);
 
-    const isWithinDateRange = (dateVal) => {
-      if (!fromDate && !toDate) return true;
-      if (!dateVal || dateVal === '---') return false;
-      let checkStr = '';
-      if (typeof dateVal === 'string') {
-        checkStr = dateVal.substring(0, 10);
-      } else if (dateVal instanceof Date) {
-        checkStr = dateVal.toISOString().substring(0, 10);
+  console.log(`\n📦 Spawning backup worker from main process (Main PID: ${process.pid})...`);
+  console.log(`   Worker args: ${args.length > 0 ? args.join(' ') : '(default auto backup)'}\n`);
+
+  return new Promise((resolve) => {
+    const worker = spawn(process.execPath, [workerPath, ...args], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: false,
+      env: { ...process.env }
+    });
+
+    const workerPid = worker.pid;
+    console.log(`✓ Backup worker spawned with PID: ${workerPid}`);
+
+    // Capture worker output for logging
+    worker.stdout.on('data', (data) => {
+      console.log(`[Worker ${workerPid}] ${data.toString().trim()}`);
+    });
+
+    worker.stderr.on('data', (data) => {
+      console.error(`[Worker ${workerPid}] ERROR: ${data.toString().trim()}`);
+    });
+
+    worker.on('error', (err) => {
+      console.error(`❌ Backup worker error (PID ${workerPid}):`, err.message);
+      resolve({ success: false, error: err.message, message: err.message, pid: workerPid });
+    });
+
+    worker.on('exit', (code, signal) => {
+      if (code === 0) {
+        console.log(`✅ Backup worker completed successfully (PID ${workerPid})`);
+        resolve({ success: true, pid: workerPid, message: 'Backup completed successfully' });
       } else {
-        checkStr = String(dateVal).substring(0, 10);
-      }
-      const match = checkStr.match(/^\d{4}-\d{2}-\d{2}$/);
-      if (!match) {
-        try {
-          const parsedDate = new Date(dateVal);
-          if (!isNaN(parsedDate.getTime())) {
-            checkStr = parsedDate.toISOString().substring(0, 10);
-          }
-        } catch (e) {}
-      }
-      if (fromDate && checkStr < fromDate) return false;
-      if (toDate && checkStr > toDate) return false;
-      return true;
-    };
-
-    if (fromDate || toDate) {
-      sales = sales.filter(s => isWithinDateRange(s.created_at || s.date));
-      transactions = transactions.filter(t => isWithinDateRange(t.date || t.created_at));
-      purchaseOrders = purchaseOrders.filter(po => isWithinDateRange(po.created_at));
-      stockAdjustments = stockAdjustments.filter(sa => isWithinDateRange(sa.created_at));
-      quotations = quotations.filter(q => isWithinDateRange(q.created_at));
-    }
-
-    // 1. Calculate dashboard statistics for the beautiful Overview page
-    const totalInventoryValue = products.reduce((sum, p) => sum + ((p.stock || 0) * (p.cost_price || p.price || 0)), 0);
-    const totalSalesCount = sales.length;
-    const totalSalesRevenue = sales.filter(s => s.status?.toLowerCase() !== 'cancelled').reduce((sum, s) => sum + (s.total_amount || 0), 0);
-    const totalCustomersCount = customers.length;
-    const activeEmployeesCount = employees.filter(e => e.status === 'active' || e.status === 'Active').length;
-    const lowStockItemsCount = products.filter(p => {
-      const minStock = p.min_stock !== undefined ? p.min_stock : 10;
-      return (p.stock || 0) < minStock;
-    }).length;
-
-    // Calculate total net profit
-    let totalSalesProfit = 0;
-    sales.filter(s => s.status?.toLowerCase() !== 'cancelled').forEach(s => {
-      try {
-        const items = typeof s.items === 'string' ? JSON.parse(s.items) : s.items;
-        if (Array.isArray(items)) {
-          items.forEach(it => {
-            const product = products.find(p => p.id === it.productId || p.id === it.product_id);
-            let baseCost = product ? Number(product.cost_price || 0) : 0;
-            let convRate = Number(it.conversionRate) || 1;
-            if (product && (!it.conversionRate || convRate === 1) && (it.unit && it.unit.toLowerCase() !== (product.unit || '').toLowerCase())) {
-              const measureDetailsStr = product.measure_details || product.measureDetails;
-              if (measureDetailsStr) {
-                try {
-                  const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
-                  if (parsed && Array.isArray(parsed.conversions)) {
-                    const matchedConv = parsed.conversions.find(c => (c.unit || '').toLowerCase() === it.unit.toLowerCase());
-                    if (matchedConv) {
-                      const rawVal = Number(matchedConv.kgVal) || 1;
-                      if ((product.unit || '').toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
-                        convRate = 1 / rawVal;
-                      } else {
-                        convRate = rawVal;
-                      }
-                    }
-                  }
-                } catch (e) {}
-              }
-            }
-            const unitCost = convRate > 0 ? baseCost / convRate : baseCost;
-            const price = Number(it.price || 0);
-            const qty = Number(it.qty || 0);
-            totalSalesProfit += qty * (price - unitCost);
-          });
-        }
-      } catch (err) {
-        console.warn("Failed to parse items for profit calculation", err);
+        console.error(`❌ Backup worker failed with exit code ${code} (PID ${workerPid})`);
+        resolve({ success: false, code, signal, pid: workerPid, message: `Backup worker failed with code ${code}` });
       }
     });
-
-    // Payment Method Breakdown
-    let cashAmount = 0;
-    let cardAmount = 0;
-    let creditAmount = 0;
-    let bankTransferAmount = 0;
-
-    sales.filter(s => s.status?.toUpperCase() !== 'CANCELLED').forEach(s => {
-      const amt = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
-      const rawMethod = (s.payment_method || s.paymentMethod || '').toString().trim();
-      const methodLower = rawMethod.toLowerCase();
-      const statusStr = (s.status || '').toString();
-
-      if (methodLower === 'card') {
-        cardAmount += amt;
-      } else if (methodLower === 'bank transfer' || methodLower === 'bank' || methodLower === 'banktransfer' || methodLower === 'online') {
-        bankTransferAmount += amt;
-      } else if (methodLower === 'credit' || statusStr === 'Non Paid' || statusStr === 'Non-Paid' || statusStr === 'pending') {
-        creditAmount += amt;
-      } else {
-        cashAmount += amt;
-      }
-    });
-    const paymentTotal = cashAmount + cardAmount + creditAmount + bankTransferAmount;
-
-    // Scan all dates to find min and max date when fromDate and/or toDate are not provided
-    let minDate = null;
-    let maxDate = null;
-
-    const checkDate = (d) => {
-      if (!d) return;
-      let checkStr = '';
-      if (typeof d === 'string') {
-        checkStr = d.substring(0, 10);
-      } else if (d instanceof Date) {
-        checkStr = d.toISOString().substring(0, 10);
-      } else {
-        checkStr = String(d).substring(0, 10);
-      }
-      if (checkStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
-        if (!minDate || checkStr < minDate) minDate = checkStr;
-        if (!maxDate || checkStr > maxDate) maxDate = checkStr;
-      }
-    };
-
-    sales.forEach(s => checkDate(s.created_at || s.date));
-    transactions.forEach(t => checkDate(t.date || t.created_at));
-    purchaseOrders.forEach(po => checkDate(po.created_at));
-
-    const currentMonthStart = new Date();
-    currentMonthStart.setDate(1);
-    const dateStartStr = currentMonthStart.toISOString().split('T')[0];
-    
-    const currentMonthEnd = new Date();
-    currentMonthEnd.setMonth(currentMonthEnd.getMonth() + 1);
-    currentMonthEnd.setDate(0);
-    const dateEndStr = currentMonthEnd.toISOString().split('T')[0];
-
-    const finalStart = fromDate || minDate || dateStartStr;
-    const finalEnd = toDate || maxDate || dateEndStr;
-
-    // Pre-calculate exact static values to write to B6:B12 so Excel shows correct figures immediately on open
-    const valB6 = sales.filter(s => s.status?.toUpperCase() !== 'CANCELLED').reduce((sum, s) => sum + (s.total_amount || 0), 0);
-    const valB8 = sales.filter(s => s.status?.toUpperCase() !== 'CANCELLED' && s.status?.toLowerCase() !== 'paid').reduce((sum, s) => sum + Math.max(0, (s.total_amount || 0) - (s.payment_received || 0)), 0);
-    const valB7 = valB6 - valB8; // Cash Received = Total Sales - Customer Credit Outstanding
-    const valB9 = purchaseOrders.filter(po => po.status?.toUpperCase() !== 'CANCELLED').reduce((sum, po) => sum + (po.total || 0), 0);
-    const valB10 = transactions.filter(t => t.type?.toUpperCase() === 'EXPENSE' && t.category !== 'Purchases').reduce((sum, t) => sum + (t.amount || 0), 0);
-    
-    let totalCostOfSales = 0;
-    sales.filter(s => s.status?.toUpperCase() !== 'CANCELLED').forEach(s => {
-      try {
-        const items = typeof s.items === 'string' ? JSON.parse(s.items) : s.items;
-        if (Array.isArray(items)) {
-          items.forEach(it => {
-            const product = products.find(p => p.id === it.productId || p.id === it.product_id);
-            let baseCost = product ? Number(product.cost_price || 0) : 0;
-            let convRate = Number(it.conversionRate) || 1;
-            if (product && (!it.conversionRate || convRate === 1) && (it.unit && it.unit.toLowerCase() !== (product.unit || '').toLowerCase())) {
-              const measureDetailsStr = product.measure_details || product.measureDetails;
-              if (measureDetailsStr) {
-                try {
-                  const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
-                  if (parsed && Array.isArray(parsed.conversions)) {
-                    const matchedConv = parsed.conversions.find(c => (c.unit || '').toLowerCase() === it.unit.toLowerCase());
-                    if (matchedConv) {
-                      const rawVal = Number(matchedConv.kgVal) || 1;
-                      if ((product.unit || '').toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
-                        convRate = 1 / rawVal;
-                      } else {
-                        convRate = rawVal;
-                      }
-                    }
-                  }
-                } catch (e) {}
-              }
-            }
-            const unitCost = convRate > 0 ? baseCost / convRate : baseCost;
-            const qty = Number(it.qty || 1);
-            totalCostOfSales += qty * unitCost;
-          });
-        }
-      } catch (err) {}
-    });
-    
-    const valB11 = valB6 - totalCostOfSales;
-    const valB12 = products.reduce((sum, p) => sum + ((p.stock || 0) * (p.cost_price || 0)), 0);
-
-    const overviewRows = [
-      ["MUTHUWADIGE HARDWARE - BUSINESS & ACCOUNTING BACKUP REPORT", "", "", "", "", "", "", "", ""],
-      ["", "", "", "", "", "", "", "", ""],
-      ["Report Start Date", "Report End Date", "", "", "", "", "", "", ""],
-      [finalStart, finalEnd, "", "", "", "", "", "", ""],
-      ["", "", "", "", "", "", "", "", ""],
-      ["KEY BUSINESS METRICS (ERP SUMMARY)", "", "", "", "", "", "", "", ""],
-      ["Total Sales Revenue", "", "", "", "", "", "", "", ""],
-      ["Cash Received", "", "", "", "", "", "", "", ""],
-      ["Customer Credit Outstanding", "", "", "", "", "", "", "", ""],
-      ["Total Purchases", "", "", "", "", "", "", "", ""],
-      ["Net Profit", "", "", "", "", "", "", "", ""],
-      ["Total Stock Value", "", "", "", "", "", "", "", ""],
-      ["", "", "", "", "", "", "", "", ""],
-      ["PAYMENT METHOD BREAKDOWN", "", "", "", "", "", "", "", ""],
-      ["Cash Amount", "", "", "", "", "", "", "", ""],
-      ["Card Amount", "", "", "", "", "", "", "", ""],
-      ["Credit Amount", "", "", "", "", "", "", "", ""],
-      ["Bank Transfer Amount", "", "", "", "", "", "", "", ""],
-      ["Total Payment Methods", "", "", "", "", "", "", "", ""],
-      ["", "", "", "", "", "", "", "", ""],
-      ["REMARKS & USEFUL NOTES", "", "", "", "", "", "", "", ""],
-      ["• Sales sheet contains daily invoices, customer payments, and payment methods.", "", "", "", "", "", "", "", ""],
-      ["• Inventory Stock sheet provides real-time stock quantities and market valuations.", "", "", "", "", "", "", "", ""],
-      ["• Accounting Ledger contains all business expense and income transaction records.", "", "", "", "", "", "", "", ""],
-      ["• Report figures are generated directly from Muthuwadige Hardware ERP.", "", "", "", "", "", "", "", ""]
-    ];
-
-    const wsOverview = XLSX.utils.aoa_to_sheet(overviewRows);
-    wsOverview['!cols'] = [
-      { wch: 34 }, { wch: 24 }, { wch: 5 }, 
-      { wch: 15 }, { wch: 15 }, { wch: 15 }, 
-      { wch: 15 }, { wch: 15 }, { wch: 15 }
-    ];
-
-    wsOverview['!merges'] = [
-      { s: { r: 0, c: 0 }, e: { r: 1, c: 8 } },
-      { s: { r: 5, c: 0 }, e: { r: 5, c: 8 } },
-      { s: { r: 13, c: 0 }, e: { r: 13, c: 8 } },
-      { s: { r: 20, c: 0 }, e: { r: 20, c: 8 } },
-      { s: { r: 21, c: 0 }, e: { r: 21, c: 8 } },
-      { s: { r: 22, c: 0 }, e: { r: 22, c: 8 } },
-      { s: { r: 23, c: 0 }, e: { r: 23, c: 8 } },
-      { s: { r: 24, c: 0 }, e: { r: 24, c: 8 } }
-    ];
-
-    wsOverview['A4'] = { t: 'n', v: getExcelDecimalDate(finalStart), z: 'yyyy-mm-dd' };
-    wsOverview['B4'] = { t: 'n', v: getExcelDecimalDate(finalEnd), z: 'yyyy-mm-dd' };
-
-    wsOverview['B7'] = { t: 'n', v: valB6, f: "SUMIFS('Sales & Invoices'!G:G, 'Sales & Invoices'!L:L, \">=\"&A4, 'Sales & Invoices'!L:L, \"<=\"&B4, 'Sales & Invoices'!J:J, \"<>CANCELLED\")", z: '#,##0.00' };
-    wsOverview['B8'] = { t: 'n', v: valB7, f: "B7-B9", z: '#,##0.00' };
-    wsOverview['B9'] = { t: 'n', v: valB8, f: "SUMIFS('Sales & Invoices'!I:I, 'Sales & Invoices'!L:L, \">=\"&A4, 'Sales & Invoices'!L:L, \"<=\"&B4, 'Sales & Invoices'!J:J, \"<>CANCELLED\")", z: '#,##0.00' };
-    wsOverview['B10'] = { t: 'n', v: valB9, f: "SUMIFS('Purchase Orders'!D:D, 'Purchase Orders'!G:G, \">=\"&A4, 'Purchase Orders'!G:G, \"<=\"&B4, 'Purchase Orders'!E:E, \"<>CANCELLED\")", z: '#,##0.00' };
-    wsOverview['B11'] = { t: 'n', v: valB11, f: "B7-SUMIFS('Sales & Invoices'!O:O, 'Sales & Invoices'!L:L, \">=\"&A4, 'Sales & Invoices'!L:L, \"<=\"&B4, 'Sales & Invoices'!J:J, \"<>CANCELLED\")", z: '#,##0.00' };
-    wsOverview['B12'] = { t: 'n', v: valB12, f: "SUM('Inventory Stock'!I:I)", z: '#,##0.00' };
-
-    wsOverview['B15'] = { t: 'n', v: cashAmount, z: '#,##0.00' };
-    wsOverview['B16'] = { t: 'n', v: cardAmount, z: '#,##0.00' };
-    wsOverview['B17'] = { t: 'n', v: creditAmount, z: '#,##0.00' };
-    wsOverview['B18'] = { t: 'n', v: bankTransferAmount, z: '#,##0.00' };
-    wsOverview['B19'] = { t: 'n', v: paymentTotal, f: "SUM(B15:B18)", z: '#,##0.00' };
-
-    const setColWidths = (ws, structuredData, headers) => {
-      if (!structuredData || structuredData.length === 0) {
-        if (headers) {
-          ws['!cols'] = headers.map(h => ({ wch: Math.max(h.toString().length + 6, 16) }));
-        }
-        return;
-      }
-      const keys = Object.keys(structuredData[0]);
-      ws['!cols'] = keys.map(key => {
-        let maxLen = key.toString().length;
-        structuredData.forEach(row => {
-          const val = row[key];
-          if (val !== null && val !== undefined) {
-            const valLen = val.toString().length;
-            if (valLen > maxLen) maxLen = valLen;
-          }
-        });
-        return { wch: Math.min(Math.max(maxLen + 6, 16), 55) };
-      });
-    };
-
-    const createWorksheet = (structuredData, headers) => {
-      if (!structuredData || structuredData.length === 0) {
-        return XLSX.utils.aoa_to_sheet([headers]);
-      }
-      return XLSX.utils.json_to_sheet(structuredData);
-    };
-
-    const applyTableStyles = (ws, themeColor = "1E3A8A") => {
-      const ref = ws['!ref'];
-      if (!ref) return;
-      const range = XLSX.utils.decode_range(ref);
-      const headerRow = range.s.r;
-      ws['!rows'] = ws['!rows'] || [];
-      ws['!rows'][headerRow] = { hpt: 28 };
-      const dateColIndices = [];
-      const amountColIndices = [];
-      for (let col = range.s.c; col <= range.e.c; col++) {
-        const cellRef = XLSX.utils.encode_cell({ r: headerRow, c: col });
-        const cell = ws[cellRef];
-        if (cell && cell.v) {
-          const label = String(cell.v).toLowerCase();
-          if (label.includes('date') || label.includes('time') || label.includes('timestamp')) {
-            dateColIndices.push(col);
-          }
-          if (label.includes('(rs.)') || label.includes('price') || label.includes('cost') || label.includes('subtotal') || label.includes('discount') || label.includes('tax amount') || label.includes('total amount') || label.includes('balance') || label.includes('value') || label.includes('salary')) {
-            amountColIndices.push(col);
-          }
-        }
-      }
-      for (let col = range.s.c; col <= range.e.c; col++) {
-        const cellRef = XLSX.utils.encode_cell({ r: range.s.r, c: col });
-        const cell = ws[cellRef];
-        if (cell) {
-          cell.s = {
-            font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 11 },
-            fill: { fgColor: { rgb: themeColor } }, 
-            alignment: { vertical: "center", horizontal: "center", wrapText: true },
-            border: {
-              bottom: { style: "medium", color: { rgb: "0F172A" } },
-              top: { style: "thin", color: { rgb: "94A3B8" } },
-              left: { style: "thin", color: { rgb: "94A3B8" } },
-              right: { style: "thin", color: { rgb: "94A3B8" } }
-            }
-          };
-        }
-      }
-      for (let row = range.s.r + 1; row <= range.e.r; row++) {
-        ws['!rows'][row] = { hpt: 22 };
-        const firstCellRef = XLSX.utils.encode_cell({ r: row, c: range.s.c });
-        const firstCell = ws[firstCellRef];
-        const isTotalRow = firstCell && String(firstCell.v).toUpperCase().includes("TOTAL");
-        const isEven = (row % 2 === 0);
-        for (let col = range.s.c; col <= range.e.c; col++) {
-          const cellRef = XLSX.utils.encode_cell({ r: row, c: col });
-          const cell = ws[cellRef];
-          if (cell) {
-            let alignment = "left";
-            if (typeof cell.v === 'number') {
-              alignment = "right";
-            }
-            if (dateColIndices.includes(col) && typeof cell.v === 'number') {
-              cell.z = 'yyyy-mm-dd';
-              alignment = "center";
-            }
-            if (amountColIndices.includes(col) && typeof cell.v === 'number') {
-              cell.z = '#,##0.00';
-              alignment = "right";
-            }
-            if (isTotalRow) {
-              cell.s = {
-                font: { bold: true, name: "Segoe UI", sz: 11, color: { rgb: "0F172A" } },
-                fill: { fgColor: { rgb: "E0F2FE" } },
-                alignment: { vertical: "center", horizontal: alignment },
-                border: {
-                  top: { style: "thin", color: { rgb: "0284C7" } },
-                  bottom: { style: "double", color: { rgb: "0369A1" } },
-                  left: { style: "thin", color: { rgb: "BAE6FD" } },
-                  right: { style: "thin", color: { rgb: "BAE6FD" } }
-                }
-              };
-            } else {
-              const bgColor = isEven ? "F8FAFC" : "FFFFFF";
-              cell.s = {
-                font: { name: "Segoe UI", sz: 11, color: { rgb: "1E293B" } },
-                fill: { fgColor: { rgb: bgColor } },
-                alignment: { vertical: "center", horizontal: alignment },
-                border: {
-                  bottom: { style: "thin", color: { rgb: "E2E8F0" } },
-                  top: { style: "thin", color: { rgb: "E2E8F0" } },
-                  left: { style: "thin", color: { rgb: "E2E8F0" } },
-                  right: { style: "thin", color: { rgb: "E2E8F0" } }
-                }
-              };
-            }
-          }
-        }
-      }
-    };
-
-    const styleOverviewSheet = (ws) => {
-      const ref = ws['!ref'];
-      if (!ref) return;
-      const range = XLSX.utils.decode_range(ref);
-      ws['!rows'] = ws['!rows'] || [];
-      ws['!rows'][0] = { hpt: 36 };
-      ws['!rows'][1] = { hpt: 36 };
-      for (let row = range.s.r; row <= range.e.r; row++) {
-        if (row >= 2) ws['!rows'][row] = { hpt: 24 };
-        for (let col = range.s.c; col <= range.e.c; col++) {
-          const cellRef = XLSX.utils.encode_cell({ r: row, c: col });
-          const cell = ws[cellRef];
-          if (!cell) continue;
-          cell.s = {
-            font: { name: "Segoe UI", sz: 11, color: { rgb: "1E293B" } }
-          };
-          if (row === 0 || row === 1) {
-            cell.s = {
-              font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 18 },
-              fill: { fgColor: { rgb: "1E1B4B" } },
-              alignment: { vertical: "center", horizontal: "center" }
-            };
-          }
-          else if (row === 2 && (col === 0 || col === 1)) {
-            cell.s = {
-              font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 11 },
-              fill: { fgColor: { rgb: "312E81" } },
-              alignment: { vertical: "center", horizontal: "center" }
-            };
-          }
-          else if (row === 3 && (col === 0 || col === 1)) {
-            cell.s = {
-              font: { name: "Segoe UI", sz: 11, bold: true, color: { rgb: "1E1B4B" } },
-              fill: { fgColor: { rgb: "F3E8FF" } },
-              alignment: { vertical: "center", horizontal: "center" },
-              border: {
-                bottom: { style: "thin", color: { rgb: "C084FC" } },
-                top: { style: "thin", color: { rgb: "C084FC" } },
-                left: { style: "thin", color: { rgb: "C084FC" } },
-                right: { style: "thin", color: { rgb: "C084FC" } }
-              }
-            };
-          }
-          else if ((row === 5 || row === 13) && col >= 0 && col <= 8) {
-            cell.s = {
-              font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 12 },
-              fill: { fgColor: { rgb: "312E81" } },
-              alignment: { vertical: "center", horizontal: "left" }
-            };
-          }
-          else if (((row >= 6 && row <= 11) || (row >= 14 && row <= 17)) && (col === 0 || col === 1)) {
-            const isLeftColumn = (col === 0);
-            if (isLeftColumn) {
-              cell.s = {
-                font: { bold: true, color: { rgb: "1E1B4B" }, name: "Segoe UI", sz: 11 },
-                fill: { fgColor: { rgb: "F5F3FF" } },
-                alignment: { vertical: "center", horizontal: "left" },
-                border: {
-                  bottom: { style: "thin", color: { rgb: "DDD6FE" } },
-                  top: { style: "thin", color: { rgb: "DDD6FE" } },
-                  left: { style: "thin", color: { rgb: "DDD6FE" } },
-                  right: { style: "thin", color: { rgb: "DDD6FE" } }
-                }
-              };
-            } else {
-              cell.s = {
-                font: { bold: true, name: "Segoe UI", sz: 11, color: { rgb: "0F172A" } },
-                fill: { fgColor: { rgb: "FFFFFF" } },
-                alignment: { vertical: "center", horizontal: "right" },
-                border: {
-                  bottom: { style: "thin", color: { rgb: "E2E8F0" } },
-                  top: { style: "thin", color: { rgb: "E2E8F0" } },
-                  left: { style: "thin", color: { rgb: "E2E8F0" } },
-                  right: { style: "thin", color: { rgb: "E2E8F0" } }
-                }
-              };
-            }
-          }
-          else if (row === 18 && (col === 0 || col === 1)) {
-            const isLeftColumn = (col === 0);
-            cell.s = {
-              font: { bold: true, color: { rgb: "0369A1" }, name: "Segoe UI", sz: 12 },
-              fill: { fgColor: { rgb: "E0F2FE" } },
-              alignment: { vertical: "center", horizontal: isLeftColumn ? "left" : "right" },
-              border: {
-                top: { style: "thin", color: { rgb: "0284C7" } },
-                bottom: { style: "double", color: { rgb: "0369A1" } },
-                left: { style: "thin", color: { rgb: "BAE6FD" } },
-                right: { style: "thin", color: { rgb: "BAE6FD" } }
-              }
-            };
-          }
-          else if (row === 20 && col >= 0 && col <= 8) {
-            cell.s = {
-              font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 12 },
-              fill: { fgColor: { rgb: "312E81" } },
-              alignment: { vertical: "center", horizontal: "left" }
-            };
-          }
-          else if (row >= 21 && row <= 24 && col >= 0 && col <= 8) {
-            cell.s = {
-              font: { name: "Segoe UI", sz: 10, italic: true, color: { rgb: "475569" } },
-              alignment: { vertical: "center", horizontal: "left" }
-            };
-          }
-        }
-      }
-    };
-
-    const structuredInventory = products.map(p => ({
-      "Item Name": p.name,
-      "Category": p.category || 'Other',
-      "Base Retail Price (Rs.)": p.price || 0,
-      "Base Cost Price (Rs.)": p.cost_price || 0,
-      "Current Stock Level": p.stock || 0,
-      "Measurement Unit": p.unit || 'pcs',
-      "Brand": p.brand || '',
-      "Supplier Entity": p.supplier || '',
-      "Total Cost Value (Rs.)": (p.stock || 0) * (p.cost_price || 0),
-      "Total Market Value (Rs.)": (p.stock || 0) * (p.price || 0)
-    }));
-    if (structuredInventory.length > 0) {
-      const costValSum = products.reduce((sum, p) => sum + ((p.stock || 0) * (p.cost_price || 0)), 0);
-      const marketValSum = products.reduce((sum, p) => sum + ((p.stock || 0) * (p.price || 0)), 0);
-      structuredInventory.push({
-        "Item Name": "TOTAL",
-        "Category": "",
-        "Base Retail Price (Rs.)": null,
-        "Base Cost Price (Rs.)": null,
-        "Current Stock Level": null,
-        "Measurement Unit": "",
-        "Brand": "",
-        "Supplier Entity": "",
-        "Total Cost Value (Rs.)": costValSum,
-        "Total Market Value (Rs.)": marketValSum
-      });
-    }
-    const wsInventoryHeaders = [
-      "Item Name", "Category", "Base Retail Price (Rs.)", "Base Cost Price (Rs.)", 
-      "Current Stock Level", "Measurement Unit", "Brand", "Supplier Entity", 
-      "Total Cost Value (Rs.)", "Total Market Value (Rs.)"
-    ];
-    const wsInventory = createWorksheet(structuredInventory, wsInventoryHeaders);
-    setColWidths(wsInventory, structuredInventory, wsInventoryHeaders);
-    applyTableStyles(wsInventory, "1E3A8A");
-
-    const structuredSales = sales.map(s => {
-      let itemsList = '---';
-      try {
-        const items = typeof s.items === 'string' ? JSON.parse(s.items) : s.items;
-        if (Array.isArray(items)) {
-          itemsList = items.map(it => `${it.productName || it.name || 'Item'} (x${it.qty || 1})`).join(', ');
-        }
-      } catch (e) {}
-
-      return {
-        "Invoice Number": s.invoice_no,
-        "Customer Name": s.customer_name || 'Guest Customer',
-        "Products Sold": itemsList,
-        "Subtotal (Rs.)": s.subtotal || 0,
-        "Discount (Rs.)": s.discount || 0,
-        "Tax Amount (Rs.)": s.tax || 0,
-        "Total Amount (Rs.)": s.total_amount || 0,
-        "Payment Received (Rs.)": s.status?.toLowerCase() === 'paid' ? (s.total_amount || 0) : (s.payment_received || 0),
-        "Outstanding Balance (Rs.)": s.status?.toLowerCase() === 'paid' ? 0 : Math.max(0, (s.total_amount || 0) - (s.payment_received || 0)),
-        "Payment Status": s.status ? s.status.toUpperCase() : 'PAID',
-        "Payment Method": s.payment_method || 'Cash',
-        "Checkout Date & Time": getExcelDecimalDate(s.created_at) || '---',
-        "Due Date": getExcelDecimalDate(s.due_date) || '---',
-        "Credit Period (Days)": s.credit_period_days || 0,
-        "Cost of Goods Sold (Rs.)": (() => {
-          let totalCostOfSale = 0;
-          try {
-            const items = typeof s.items === 'string' ? JSON.parse(s.items) : s.items;
-            if (Array.isArray(items)) {
-              items.forEach(it => {
-                const product = products.find(p => p.id === it.productId || p.id === it.product_id);
-                let baseCost = product ? Number(product.cost_price || 0) : 0;
-                let convRate = Number(it.conversionRate) || 1;
-                if (product && (!it.conversionRate || convRate === 1) && (it.unit && it.unit.toLowerCase() !== (product.unit || '').toLowerCase())) {
-                  const measureDetailsStr = product.measure_details || product.measureDetails;
-                  if (measureDetailsStr) {
-                    try {
-                      const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
-                      if (parsed && Array.isArray(parsed.conversions)) {
-                        const matchedConv = parsed.conversions.find(c => (c.unit || '').toLowerCase() === it.unit.toLowerCase());
-                        if (matchedConv) {
-                          const rawVal = Number(matchedConv.kgVal) || 1;
-                          if ((product.unit || '').toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
-                            convRate = 1 / rawVal;
-                          } else {
-                            convRate = rawVal;
-                          }
-                        }
-                      }
-                    } catch (e) {}
-                  }
-                }
-                const unitCost = convRate > 0 ? baseCost / convRate : baseCost;
-                const qty = Number(it.qty || 1);
-                totalCostOfSale += qty * unitCost;
-              });
-            }
-          } catch (e) {}
-          return totalCostOfSale;
-        })()
-      };
-    });
-
-    if (structuredSales.length > 0) {
-      const subtotalSum = sales.reduce((sum, s) => sum + (s.subtotal || 0), 0);
-      const discountSum = sales.reduce((sum, s) => sum + (s.discount || 0), 0);
-      const taxSum = sales.reduce((sum, s) => sum + (s.tax || 0), 0);
-      const totalSum = sales.reduce((sum, s) => sum + (s.total_amount || 0), 0);
-      const receivedSum = sales.reduce((sum, s) => sum + (s.status?.toLowerCase() === 'paid' ? (s.total_amount || 0) : (s.payment_received || 0)), 0);
-      const balanceSum = sales.reduce((sum, s) => sum + (s.status?.toLowerCase() === 'paid' ? 0 : Math.max(0, (s.total_amount || 0) - (s.payment_received || 0))), 0);
-      
-      structuredSales.push({
-        "Invoice Number": "TOTAL",
-        "Customer Name": "",
-        "Products Sold": "",
-        "Subtotal (Rs.)": subtotalSum,
-        "Discount (Rs.)": discountSum,
-        "Tax Amount (Rs.)": taxSum,
-        "Total Amount (Rs.)": totalSum,
-        "Payment Received (Rs.)": receivedSum,
-        "Outstanding Balance (Rs.)": balanceSum,
-        "Payment Status": "",
-        "Payment Method": "",
-        "Checkout Date & Time": "",
-        "Due Date": "",
-        "Credit Period (Days)": "",
-        "Cost of Goods Sold (Rs.)": totalCostOfSales
-      });
-    }
-
-    const wsSalesHeaders = [
-      "Invoice Number", "Customer Name", "Products Sold", "Subtotal (Rs.)", 
-      "Discount (Rs.)", "Tax Amount (Rs.)", "Total Amount (Rs.)", 
-      "Payment Received (Rs.)", "Outstanding Balance (Rs.)", "Payment Status", 
-      "Payment Method", "Checkout Date & Time", "Due Date", 
-      "Credit Period (Days)", "Cost of Goods Sold (Rs.)"
-    ];
-    const wsSales = createWorksheet(structuredSales, wsSalesHeaders);
-    setColWidths(wsSales, structuredSales, wsSalesHeaders);
-    applyTableStyles(wsSales, "1E3A8A");
-
-    const structuredTransactions = transactions.map(t => ({
-      "Record Date": getExcelDecimalDate(t.date) || '---',
-      "Flow Type": t.type ? t.type.toUpperCase() : 'INCOME',
-      "Finance Category": t.category || 'Other',
-      "Description Details": t.description,
-      "Reference Invoice / PO": t.reference || '---',
-      "Transaction Value (Rs.)": t.amount || 0,
-      "System Log Date": getExcelDecimalDate(t.created_at) || '---'
-    }));
-    if (structuredTransactions.length > 0) {
-      const transSum = transactions.reduce((sum, t) => sum + (t.amount || 0), 0);
-      structuredTransactions.push({
-        "Record Date": "TOTAL",
-        "Flow Type": "",
-        "Finance Category": "",
-        "Description Details": "",
-        "Reference Invoice / PO": "",
-        "Transaction Value (Rs.)": transSum,
-        "System Log Date": ""
-      });
-    }
-    const wsTransactionsHeaders = [
-      "Record Date", "Flow Type", "Finance Category", "Description Details", 
-      "Reference Invoice / PO", "Transaction Value (Rs.)", "System Log Date"
-    ];
-    const wsTransactions = createWorksheet(structuredTransactions, wsTransactionsHeaders);
-    setColWidths(wsTransactions, structuredTransactions, wsTransactionsHeaders);
-    applyTableStyles(wsTransactions, "1E3A8A");
-
-    const structuredCustomers = customers.map(c => ({
-      "Customer Name": c.name,
-      "Email": c.email || '',
-      "Phone Number": c.phone || '—',
-      "Address": c.address || '—',
-      "NIC Number": c.nic || '—',
-      "Loyalty Points": c.loyalty_points || 0,
-      "Total Purchases (Rs.)": c.total_purchases || 0,
-      "Registered Date": getExcelDecimalDate(c.created_at) || '---'
-    }));
-    const wsCustomersHeaders = [
-      "Customer Name", "Email", "Phone Number", "Address", 
-      "NIC Number", "Loyalty Points", "Total Purchases (Rs.)", "Registered Date"
-    ];
-    const wsCustomers = createWorksheet(structuredCustomers, wsCustomersHeaders);
-    setColWidths(wsCustomers, structuredCustomers, wsCustomersHeaders);
-    applyTableStyles(wsCustomers, "1E3A8A");
-
-    const structuredEmployees = employees.map(e => ({
-      "Full Name": e.name,
-      "Designated Role": e.role,
-      "Department": e.department,
-      "Email Address": e.email,
-      "Phone Number": e.phone,
-      "Salary (Rs.)": e.salary || 0,
-      "Active Status": e.status ? e.status.toUpperCase() : 'ACTIVE',
-      "Attendance Percentage (%)": `${e.attendance || 100}%`,
-      "Date of Joining": getExcelDecimalDate(e.join_date) || '---'
-    }));
-    const wsEmployeesHeaders = [
-      "Full Name", "Designated Role", "Department", "Email Address", 
-      "Phone Number", "Salary (Rs.)", "Active Status", 
-      "Attendance Percentage (%)", "Date of Joining"
-    ];
-    const wsEmployees = createWorksheet(structuredEmployees, wsEmployeesHeaders);
-    setColWidths(wsEmployees, structuredEmployees, wsEmployeesHeaders);
-    applyTableStyles(wsEmployees, "1E3A8A");
-
-    const structuredProfiles = profiles.map(pr => ({
-      "User Full Name": pr.name,
-      "User Email": pr.email,
-      "Access Privilege Level": pr.role ? pr.role.toUpperCase() : 'CASHIER',
-      "Created Date": getExcelDecimalDate(pr.created_at) || '---'
-    }));
-    const wsProfilesHeaders = [
-      "User Full Name", "User Email", "Access Privilege Level", "Created Date"
-    ];
-    const wsProfiles = createWorksheet(structuredProfiles, wsProfilesHeaders);
-    setColWidths(wsProfiles, structuredProfiles, wsProfilesHeaders);
-    applyTableStyles(wsProfiles, "1E3A8A");
-
-    const structuredSettings = settings.map(set => ({
-      "Shop Name": set.shop_name,
-      "Address": set.address,
-      "Phone": set.phone,
-      "Email": set.email,
-      "Currency": set.currency,
-      "Tax Rate (%)": set.tax_rate,
-      "Backup Email": set.backup_email,
-      "Weekly Auto-Backup": set.backup_enabled ? "ENABLED" : "DISABLED",
-      "Last Synced Time": getExcelDecimalDate(set.updated_at) || '---'
-    }));
-    const wsSettingsHeaders = [
-      "Shop Name", "Address", "Phone", "Email", "Currency", "Tax Rate (%)", 
-      "Backup Email", "Weekly Auto-Backup", "Last Synced Time"
-    ];
-    const wsSettings = createWorksheet(structuredSettings, wsSettingsHeaders);
-    setColWidths(wsSettings, structuredSettings, wsSettingsHeaders);
-    applyTableStyles(wsSettings, "1E3A8A");
-
-    const structuredSuppliers = suppliers.map(s => ({
-      "Supplier Name": s.name,
-      "Email Address": s.email || '---',
-      "Phone Number": s.phone || '---',
-      "Address": s.address || '---',
-      "Credit Terms": s.credit_terms || '---',
-      "Payable Balance (Rs.)": s.payable_balance || 0,
-      "Registered Date": getExcelDecimalDate(s.created_at) || '---'
-    }));
-    const wsSuppliersHeaders = [
-      "Supplier Name", "Email Address", "Phone Number", "Address", 
-      "Credit Terms", "Payable Balance (Rs.)", "Registered Date"
-    ];
-    const wsSuppliers = createWorksheet(structuredSuppliers, wsSuppliersHeaders);
-    setColWidths(wsSuppliers, structuredSuppliers, wsSuppliersHeaders);
-    applyTableStyles(wsSuppliers, "1E3A8A");
-
-    const structuredPO = purchaseOrders.map(po => {
-      let poItems = '---';
-      try {
-        const parsed = typeof po.items === 'string' ? JSON.parse(po.items) : po.items;
-        if (Array.isArray(parsed)) {
-          poItems = parsed.map(it => `${it.name || it.productName || 'Item'} (x${it.qty || 1})`).join(', ');
-        }
-      } catch(e) {}
-      return {
-        "PO Number": po.po_no,
-        "Supplier Name": po.supplier_name,
-        "PO Items": poItems,
-        "Total Amount (Rs.)": po.total || 0,
-        "PO Status": po.status ? po.status.toUpperCase() : 'PENDING',
-        "Due Date": getExcelDecimalDate(po.due_date) || '---',
-        "Created Date": getExcelDecimalDate(po.created_at) || '---'
-      };
-    });
-    if (structuredPO.length > 0) {
-      const poSum = purchaseOrders.reduce((sum, po) => sum + (po.total || 0), 0);
-      structuredPO.push({
-        "PO Number": "TOTAL",
-        "Supplier Name": "",
-        "PO Items": "",
-        "Total Amount (Rs.)": poSum,
-        "PO Status": "",
-        "Due Date": "",
-        "Created Date": ""
-      });
-    }
-    const wsPOHeaders = [
-      "PO Number", "Supplier Name", "PO Items", "Total Amount (Rs.)", 
-      "PO Status", "Due Date", "Created Date"
-    ];
-    const wsPO = createWorksheet(structuredPO, wsPOHeaders);
-    setColWidths(wsPO, structuredPO, wsPOHeaders);
-    applyTableStyles(wsPO, "1E3A8A");
-
-    const structuredAdjustments = stockAdjustments.map(sa => ({
-      "Product Name": sa.product_name,
-      "Old Quantity": sa.old_qty || 0,
-      "New Quantity": sa.new_qty || 0,
-      "Adjustment Type": sa.type || 'Adjustment',
-      "Reason Details": sa.reason || '---',
-      "Staff Email": sa.user_email || '---',
-      "Timestamp": getExcelDecimalDate(sa.created_at) || '---'
-    }));
-    const wsAdjustmentsHeaders = [
-      "Product Name", "Old Quantity", "New Quantity", "Adjustment Type", 
-      "Reason Details", "Staff Email", "Timestamp"
-    ];
-    const wsAdjustments = createWorksheet(structuredAdjustments, wsAdjustmentsHeaders);
-    setColWidths(wsAdjustments, structuredAdjustments, wsAdjustmentsHeaders);
-    applyTableStyles(wsAdjustments, "1E3A8A");
-
-    const structuredQuotes = quotations.map(q => ({
-      "Quotation Number": q.quote_no,
-      "Customer Name": q.customer_name,
-      "Total Amount (Rs.)": q.total || 0,
-      "Created Date": getExcelDecimalDate(q.created_at) || '---'
-    }));
-    const wsQuotesHeaders = [
-      "Quotation Number", "Customer Name", "Total Amount (Rs.)", "Created Date"
-    ];
-    const wsQuotes = createWorksheet(structuredQuotes, wsQuotesHeaders);
-    setColWidths(wsQuotes, structuredQuotes, wsQuotesHeaders);
-    applyTableStyles(wsQuotes, "1E3A8A");
-
-    const structuredBranches = branches.map(b => ({
-      "Branch Name": b.name,
-      "Branch Code": b.code,
-      "Address": b.address || '---',
-      "Phone Number": b.phone || '---',
-      "Created Date": getExcelDecimalDate(b.created_at) || '---'
-    }));
-    const wsBranchesHeaders = [
-      "Branch Name", "Branch Code", "Address", "Phone Number", "Created Date"
-    ];
-    const wsBranches = createWorksheet(structuredBranches, wsBranchesHeaders);
-    setColWidths(wsBranches, structuredBranches, wsBranchesHeaders);
-    applyTableStyles(wsBranches, "1E3A8A");
-
-    styleOverviewSheet(wsOverview);
-
-    // --- CREDIT CUSTOMERS SHEET ---
-    const salesReturnsList = await db.all('SELECT * FROM sales_returns ORDER BY created_at DESC');
-    const creditPaymentsList = await db.all('SELECT * FROM credit_payments ORDER BY payment_date DESC');
-
-    let creditSalesList = sales.filter(s => {
-      const isCredit = s.status === 'Non Paid' || s.status === 'Partially Paid' || s.status === 'Partially Settled' || s.status === 'Pending' || (s.payment_method && s.payment_method.toLowerCase() === 'credit');
-      const rem = Math.max(0, (s.total_amount || 0) - (s.payment_received || 0));
-      return isCredit && rem > 0;
-    });
-
-    const totOutstandingAll = creditSalesList.reduce((sum, s) => sum + Math.max(0, (s.total_amount || 0) - (s.payment_received || 0)), 0);
-    const totOverdueAll = creditSalesList.filter(s => s.due_date && new Date(s.due_date) < new Date()).reduce((sum, s) => sum + Math.max(0, (s.total_amount || 0) - (s.payment_received || 0)), 0);
-
-    const structuredCreditCustomers = creditSalesList.map(s => {
-      const totalAmt = Number(s.total_amount || 0);
-      const paidAmt = Number(s.payment_received || 0);
-      const outstandingAmt = Math.max(0, totalAmt - paidAmt);
-      const isOverdue = s.due_date && new Date(s.due_date) < new Date();
-      return {
-        "Customer": s.customer_name || 'Walk-in Credit Customer',
-        "Invoice Number": s.invoice_no,
-        "Invoice Date": s.created_at ? s.created_at.slice(0, 10) : (s.date || '---'),
-        "Invoice Amount": totalAmt,
-        "Amount Paid": paidAmt,
-        "Outstanding Amount": outstandingAmt,
-        "Due Date": s.due_date ? s.due_date.slice(0, 10) : '---',
-        "Payment Status": outstandingAmt <= 0 ? "Fully Settled" : "Partially Settled",
-        "Payment History": paidAmt > 0 ? `Paid Rs. ${paidAmt.toLocaleString()}` : "No payments recorded",
-        "Total Outstanding": totOutstandingAll,
-        "Total Overdue": totOverdueAll
-      };
-    });
-    const wsCCHeaders = ["Customer", "Invoice Number", "Invoice Date", "Invoice Amount", "Amount Paid", "Outstanding Amount", "Due Date", "Payment Status", "Payment History", "Total Outstanding", "Total Overdue"];
-    const wsCreditCustomers = createWorksheet(structuredCreditCustomers, wsCCHeaders);
-    setColWidths(wsCreditCustomers, structuredCreditCustomers, wsCCHeaders);
-    applyTableStyles(wsCreditCustomers, "B8860B");
-
-    // --- CUSTOMER STATEMENT SHEET ---
-    const statementEntries = [];
-    sales.forEach(s => {
-      statementEntries.push({
-        "Customer": s.customer_name || 'Walk-in Customer',
-        "Transaction Date": s.created_at ? s.created_at.slice(0, 10) : (s.date || '---'),
-        "Invoice / Reference #": s.invoice_no,
-        "Transaction Type": "Credit Sale",
-        "Credit Sales": Number(s.total_amount || 0),
-        "Payments": Number(s.payment_received || 0),
-        "Returns / Credit Notes": 0,
-        "Remaining Balance": Math.max(0, Number(s.total_amount || 0) - Number(s.payment_received || 0))
-      });
-    });
-
-    salesReturnsList.forEach(sr => {
-      statementEntries.push({
-        "Customer": sr.customer_name || 'Walk-in Customer',
-        "Transaction Date": sr.created_at ? sr.created_at.slice(0, 10) : '---',
-        "Invoice / Reference #": sr.return_no || sr.invoice_no,
-        "Transaction Type": `Sales Return (${sr.return_method || 'Refund'})`,
-        "Credit Sales": 0,
-        "Payments": 0,
-        "Returns / Credit Notes": Number(sr.return_amount || 0),
-        "Remaining Balance": 0
-      });
-    });
-
-    const wsCSHeaders = ["Customer", "Transaction Date", "Invoice / Reference #", "Transaction Type", "Credit Sales", "Payments", "Returns / Credit Notes", "Remaining Balance"];
-    // const wsCustomerStatement = createWorksheet(statementEntries, wsCSHeaders);
-    // setColWidths(wsCustomerStatement, statementEntries, wsCSHeaders);
-    // applyTableStyles(wsCustomerStatement, "1E3A8A");
-
-    // --- SALES RETURNS SHEET ---
-    const structuredSalesReturns = salesReturnsList.map(sr => {
-      let returnedProd = '---';
-      let returnedQty = 0;
-      try {
-        const items = typeof sr.returned_items === 'string' ? JSON.parse(sr.returned_items) : sr.returned_items;
-        if (Array.isArray(items) && items.length > 0) {
-          returnedProd = items.map(i => i.productName || i.name).join(', ');
-          returnedQty = items.reduce((sum, i) => sum + (Number(i.qty) || 0), 0);
-        }
-      } catch (e) {}
-
-      let exchangeProd = 'N/A';
-      let exchangeAmt = Number(sr.exchange_amount || 0);
-      try {
-        const xItems = typeof sr.exchange_items === 'string' ? JSON.parse(sr.exchange_items) : sr.exchange_items;
-        if (Array.isArray(xItems) && xItems.length > 0) {
-          exchangeProd = xItems.map(i => i.productName || i.name).join(', ');
-        }
-      } catch (e) {}
-
-      return {
-        "Return ID": sr.return_no || sr.id,
-        "Original Invoice Number": sr.invoice_no,
-        "Return Date": sr.created_at ? sr.created_at.slice(0, 10) : '---',
-        "Customer": sr.customer_name || 'Walk-in Customer',
-        "Return Type": sr.return_method || 'Cash Refund',
-        "Product": returnedProd,
-        "Quantity": returnedQty,
-        "Return Amount": Number(sr.return_amount || 0),
-        "Payment/Refund Amount": Number(sr.total_refunded || sr.customer_paid || 0),
-        "Payment Method": sr.return_method === 'Exchange' ? 'Exchange Balance' : (sr.return_method || 'Cash'),
-        "Replacement Product (for Exchange)": exchangeProd,
-        "Replacement Amount": exchangeAmt,
-        "Difference": Number(sr.balance_amount || 0),
-        "Credit Note Number (for Credit Note)": sr.credit_note_no || 'N/A',
-        "Notes": sr.reason || '---'
-      };
-    });
-    const wsSRHeaders = ["Return ID", "Original Invoice Number", "Return Date", "Customer", "Return Type", "Product", "Quantity", "Return Amount", "Payment/Refund Amount", "Payment Method", "Replacement Product (for Exchange)", "Replacement Amount", "Difference", "Credit Note Number (for Credit Note)", "Notes"];
-    const wsSalesReturns = createWorksheet(structuredSalesReturns, wsSRHeaders);
-    setColWidths(wsSalesReturns, structuredSalesReturns, wsSRHeaders);
-    applyTableStyles(wsSalesReturns, "991B1B");
-
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, wsOverview, "Dashboard");
-    XLSX.utils.book_append_sheet(wb, wsInventory, "Inventory Stock");
-    XLSX.utils.book_append_sheet(wb, wsSales, "Sales & Invoices");
-    XLSX.utils.book_append_sheet(wb, wsCreditCustomers, "Credit Customers");
-    // // XLSX.utils.book_append_sheet(wb, wsCustomerStatement, "Customer Statement"); // Removed per user request // Removed per user request
-    XLSX.utils.book_append_sheet(wb, wsSalesReturns, "Sales Returns");
-    XLSX.utils.book_append_sheet(wb, wsTransactions, "Accounting Ledger");
-    XLSX.utils.book_append_sheet(wb, wsCustomers, "Customers");
-    XLSX.utils.book_append_sheet(wb, wsSuppliers, "Suppliers Directory");
-    XLSX.utils.book_append_sheet(wb, wsPO, "Purchase Orders");
-    XLSX.utils.book_append_sheet(wb, wsAdjustments, "Stock Adjustments");
-    XLSX.utils.book_append_sheet(wb, wsQuotes, "Quotations");
-    XLSX.utils.book_append_sheet(wb, wsEmployees, "Employees");
-    XLSX.utils.book_append_sheet(wb, wsProfiles, "User Profiles");
-    XLSX.utils.book_append_sheet(wb, wsSettings, "System Settings");
-    XLSX.utils.book_append_sheet(wb, wsBranches, "Branches");
-
-    XLSX.writeFile(wb, filePath);
-
-    const gmailUser = process.env.GMAIL_USER || 'sanojhardware@gmail.com';
-    const gmailPass = process.env.GMAIL_PASS;
-
-    if (!gmailPass) {
-      console.warn("[Backup] GMAIL_PASS credentials missing in .env. Saved Excel file locally.");
-      
-      // Save success log to db
-      const id = 'b_' + Date.now();
-      await db.run(
-        'INSERT INTO backup_logs (id, file_name, file_path, status, type, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
-        [id, fileName, filePath, 'Success', type, new Date().toISOString()]
-      );
-
-      return { 
-        success: true, // Mark success since local save worked
-        message: 'GMAIL_PASS credentials missing. Excel backup successfully generated and saved locally inside backups/ folder.', 
-        path: filePath, 
-        file: fileName 
-      };
-    }
-
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user: gmailUser, pass: gmailPass }
-    });
-
-    const currSymbol = settings[0]?.currency || "Rs.";
-    const formattedCash = `${currSymbol} ${cashAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    const formattedCard = `${currSymbol} ${cardAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    const formattedCredit = `${currSymbol} ${creditAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    const formattedBank = `${currSymbol} ${bankTransferAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    const formattedTotal = `${currSymbol} ${paymentTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-    const backupHtml = `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Muthuwadige Hardware - System Backup Report</title></head>
-    <body style="margin:0;padding:0;background:#f0f4f8;font-family:'Segoe UI',Arial,Helvetica,sans-serif;">
-      <div style="max-width:680px;margin:0 auto;padding:24px 16px;">
-        <div style="background:linear-gradient(135deg,#1e293b 0%,#0f172a 60%,#1a1a2e 100%);border-radius:20px 20px 0 0;padding:36px 32px;position:relative;overflow:hidden;">
-          <div style="position:relative;">
-            <div style="display:inline-block;background:rgba(218,165,32,0.2);border:1px solid rgba(218,165,32,0.4);border-radius:12px;padding:8px 16px;margin-bottom:16px;">
-              <span style="color:#DAA520;font-size:11px;font-weight:800;letter-spacing:2px;text-transform:uppercase;">🔐 Automated Daily Backup</span>
-            </div>
-            <h1 style="margin:0;color:#ffffff;font-size:26px;font-weight:900;">${settings[0]?.shop_name || 'Muthuwadige Hardware'}</h1>
-            <p style="margin:6px 0 0 0;color:#94a3b8;font-size:13px;">${settings[0]?.address || 'No: 80, Mahahunupitiya, Negombo'} | ${settings[0]?.phone || '077 076 076 7'}</p>
-          </div>
-        </div>
-
-        <div style="background:#ffffff;padding:24px 28px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0;">
-          <h2 style="margin:0 0 16px 0;color:#0f172a;font-size:15px;font-weight:800;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #f1f5f9;padding-bottom:12px;">📊 Financial Performance Summary</h2>
-          <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:20px;">
-            <div style="background:#f8fafc;padding:14px;border-radius:10px;border:1px solid #e2e8f0;">
-              <span style="color:#64748b;font-size:11px;font-weight:700;">Total Gross Sales</span>
-              <div style="color:#0f172a;font-size:18px;font-weight:900;margin-top:4px;">${currSymbol} ${totalSalesRevenue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
-            </div>
-            <div style="background:#f0fdf4;padding:14px;border-radius:10px;border:1px solid #bbf7d0;">
-              <span style="color:#166534;font-size:11px;font-weight:700;">Net Sales Profit</span>
-              <div style="color:#15803d;font-size:18px;font-weight:900;margin-top:4px;">${currSymbol} ${totalSalesProfit.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Payment Method Breakdown Section -->
-        <div style="background:#ffffff;padding:24px 28px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0;border-top:1px solid #f1f5f9;">
-          <h2 style="margin:0 0 16px 0;color:#0f172a;font-size:15px;font-weight:800;text-transform:uppercase;letter-spacing:1px;border-bottom:2px solid #f1f5f9;padding-bottom:12px;">💳 Payment Method Breakdown</h2>
-          <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px 20px;">
-            <table style="width:100%;border-collapse:collapse;font-size:13px;">
-              <tbody>
-                <tr>
-                  <td style="padding:8px 0;color:#334155;font-weight:600;">💵 Cash:</td>
-                  <td style="padding:8px 0;font-weight:800;color:#0f172a;text-align:right;">${formattedCash}</td>
-                </tr>
-                <tr>
-                  <td style="padding:8px 0;color:#334155;font-weight:600;">💳 Card:</td>
-                  <td style="padding:8px 0;font-weight:800;color:#0f172a;text-align:right;">${formattedCard}</td>
-                </tr>
-                <tr>
-                  <td style="padding:8px 0;color:#334155;font-weight:600;">📜 Credit:</td>
-                  <td style="padding:8px 0;font-weight:800;color:#0f172a;text-align:right;">${formattedCredit}</td>
-                </tr>
-                <tr>
-                  <td style="padding:8px 0;color:#334155;font-weight:600;">🏦 Bank Transfer:</td>
-                  <td style="padding:8px 0;font-weight:800;color:#0f172a;text-align:right;">${formattedBank}</td>
-                </tr>
-                <tr style="border-top:2px dashed #cbd5e1;">
-                  <td style="padding:10px 0 2px 0;color:#0f172a;font-weight:800;font-size:14px;">Total:</td>
-                  <td style="padding:10px 0 2px 0;font-weight:900;color:#0f172a;font-size:15px;text-align:right;">${formattedTotal}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div style="background:linear-gradient(135deg,#1e293b,#0f172a);padding:20px 32px;border-radius:0 0 20px 20px;text-align:center;">
-          <p style="margin:0;color:#DAA520;font-size:12px;font-weight:800;">${settings[0]?.shop_name || 'MUTHUWADIGE HARDWARE'}</p>
-          <p style="margin:4px 0 0 0;color:#475569;font-size:11px;">Automated Backup ID: ${dateStr}</p>
-        </div>
-      </div>
-    </body></html>
-    `;
-
-    await transporter.sendMail({
-      from: gmailUser,
-      to: targetEmail || 'sanojhardware@gmail.com',
-      subject: `Muthuwadige Hardware - Automated System Backup - ${dateStr}`,
-      text: `Greetings,
-
-Please find attached the comprehensive Excel database report backup from the Muthuwadige Hardware ERP system.
-
-Summary of Business & Financial Performance:
----------------------------------------------
-📈 Total Gross Sales Revenue: ${currSymbol} ${totalSalesRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-💰 Total Net Sales Profit:   ${currSymbol} ${totalSalesProfit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-📦 Total Inventory Asset Value: ${currSymbol} ${totalInventoryValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-🛒 Total Orders Processed:   ${totalSalesCount}
-🔧 Stock Adjustments Recorded: ${stockAdjustments.length} logs
-🤝 Loyalty Registered Customers: ${totalCustomersCount}
-👔 Active Staff Members (Employees): ${activeEmployeesCount}
-
-Payment Method Breakdown:
-----------------------------
-Cash: ${formattedCash}
-Card: ${formattedCard}
-Credit: ${formattedCredit}
-Bank Transfer: ${formattedBank}
-----------------------------
-Total: ${formattedTotal}
-
-💡 Tip: Use the Excel tabs in the attached spreadsheet file to explore each database table in detail (including Inventory Stock, Stock Adjustments, Sales & Invoices, Accounting Ledger, etc.).`,
-      html: backupHtml,
-      attachments: [{ filename: fileName, path: filePath }]
-    });
-
-    console.log(`[Backup] Email successfully sent to ${targetEmail}!`);
-    
-    // Save success log to db
-    const id = 'b_' + Date.now();
-    await db.run(
-      'INSERT INTO backup_logs (id, file_name, file_path, status, type, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
-      [id, fileName, filePath, 'Success', type, new Date().toISOString()]
-    );
-
-    return { success: true, message: `Backup spreadsheet generated and emailed successfully to ${targetEmail}!`, path: filePath, file: fileName };
-  } catch (e) {
-    console.error("[Backup] Service Failed:", e);
-    // Save failed log to db
-    const id = 'b_' + Date.now();
-    try {
-      await db.run(
-        'INSERT INTO backup_logs (id, file_name, file_path, status, type, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
-        [id, fileName || 'Error_Backup', filePath || 'N/A', 'Failed', type, new Date().toISOString()]
-      );
-    } catch(dbErr) {
-      console.error("[Backup Log] Failed to save backup error log to SQLite:", dbErr);
-    }
-    return { success: false, message: e.message };
-  }
+  });
 };
+
+// OLD performBackup REPLACED WITH WORKER PATTERN ABOVE
+// THE FOLLOWING CODE WAS REMOVED TO PREVENT BLOCKING THE EXPRESS SERVER
+// Original function was 1170 lines (lines 1095-2264) and included:
+// - getExcelDecimalDate helper
+// - XLSX workbook creation
+// - Email sending via nodemailer
+// - Database logging
+// All functionality now executed in backup-worker.js child process
 
 // 🕰️ Cron Scheduler: Every 6 hours ('0 */6 * * *')
 cron.schedule('0 */6 * * *', async () => {
@@ -2278,20 +1175,26 @@ cron.schedule('0 */6 * * *', async () => {
   try {
     console.log('[Cron] Checking for overdue credit sales...');
     const overdueSales = await db.all(`
-      SELECT s.id, s.invoice_no, s.customer_name, s.total_amount, s.due_date, c.phone as customer_phone 
-      FROM sales s 
-      LEFT JOIN customers c ON s.customer_id = c.id 
+      SELECT s.id, s.invoice_no, s.customer_name, s.total_amount, s.due_date, c.phone as customer_phone
+      FROM sales s
+      LEFT JOIN customers c ON s.customer_id = c.id
       WHERE s.status = 'Non Paid' AND s.due_date IS NOT NULL AND date(s.due_date) < date('now')
     `);
 
-    for (const sale of overdueSales) {
-      // Check if reminder was already sent today (to avoid spamming)
-      const existingLog = await db.get(
-        "SELECT id FROM audit_logs WHERE action = 'AUTOMATED_WHATSAPP_REMINDER' AND details LIKE ? AND date(timestamp) = date('now')",
-        [`%${sale.invoice_no}%`]
-      );
+    // Phase 2B optimization: batch fetch all reminders sent today
+    const todayReminders = await db.all(
+      "SELECT details FROM audit_logs WHERE action = 'AUTOMATED_WHATSAPP_REMINDER' AND date(timestamp) = date('now')"
+    );
+    const reminderSet = new Set();
+    todayReminders.forEach(log => {
+      // Extract invoice number from the message format
+      const match = log.details.match(/invoice (\S+) \(/);
+      if (match) reminderSet.add(match[1]);
+    });
 
-      if (!existingLog) {
+    for (const sale of overdueSales) {
+      // Check if reminder was already sent today (using batched data)
+      if (!reminderSet.has(sale.invoice_no)) {
         const phone = sale.customer_phone || '---';
         const msg = `Automated WhatsApp reminder sent to ${sale.customer_name} (${phone}) for overdue invoice ${sale.invoice_no} (Due: ${sale.due_date}, Outstanding: Rs. ${sale.total_amount})`;
         console.log(`[AUTOMATED WHATSAPP] 📲 ${msg}`);
@@ -2874,19 +1777,28 @@ app.post('/api/sales', async (req, res) => {
     );
 
     // 3. Decrement Product Stock levels & validate available stock
+    // Phase 2B optimization: batch fetch all products at once
+    const productIds = s.items.map(item => item.productId);
+    const placeholders = productIds.map(() => '?').join(',');
+    const productsMap = new Map();
+    if (productIds.length > 0) {
+      const products = await db.all(`SELECT id, stock, name FROM products WHERE id IN (${placeholders})`, productIds);
+      products.forEach(p => productsMap.set(p.id, p));
+    }
+
     for (const item of s.items) {
       const convRate = Number(item.conversionRate) || 1;
       const baseQtyDeduction = convRate > 0 ? (Number(item.qty || 0) / convRate) : Number(item.qty || 0);
 
-      // Backend stock validation check
-      const prod = await db.get('SELECT stock, name FROM products WHERE id = ?', [item.productId]);
+      // Backend stock validation check using batched product data
+      const prod = productsMap.get(item.productId);
       if (prod) {
         const availableStock = Number(prod.stock || 0);
         if (baseQtyDeduction > availableStock + 0.0001) {
           await rollbackTxn(db, txn);
           const maxAvailableInUnit = Math.round((availableStock * convRate) * 100) / 100;
-          return res.status(400).json({ 
-            error: `Only ${maxAvailableInUnit} ${item.unit || ''} available in stock for "${prod.name}".` 
+          return res.status(400).json({
+            error: `Only ${maxAvailableInUnit} ${item.unit || ''} available in stock for "${prod.name}".`
           });
         }
       }

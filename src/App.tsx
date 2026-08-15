@@ -136,7 +136,7 @@ export function App() {
     if (currentUser) {
       fetchNotifications();
     }
-  }, [currentUser, currentPage]);
+  }, [currentUser]);
 
   const handleNotificationWhatsApp = async (productId: string) => {
     try {

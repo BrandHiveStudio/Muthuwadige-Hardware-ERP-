@@ -3,9 +3,19 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
+import readline from 'readline';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Safety check: require explicit destructive operation flag
+if (process.env.DESTRUCTIVE_OPERATION !== 'reset_all_data_for_client') {
+  console.error('❌ SAFETY LOCK: This script performs destructive database operations.');
+  console.error('To run this script, set the environment variable:');
+  console.error('  export DESTRUCTIVE_OPERATION=reset_all_data_for_client');
+  console.error('Then run: node scripts/reset_all_data_for_client.js');
+  process.exit(1);
+}
 
 const workspaceDbPath = path.join(__dirname, '..', 'hardware.db');
 const backupsDir = path.join(__dirname, '..', 'backups');
@@ -15,13 +25,27 @@ if (!fs.existsSync(backupsDir)) {
   fs.mkdirSync(backupsDir, { recursive: true });
 }
 
+// Interactive confirmation
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout
+});
+
 // 1. Create Timestamped Backup
 const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 const backupPath = path.join(backupsDir, `full_handover_reset_${timestamp}.db`);
 
+console.log('📦 Creating complete database backup before reset...');
 if (fs.existsSync(workspaceDbPath)) {
-  fs.copyFileSync(workspaceDbPath, backupPath);
-  console.log(`✅ Backup created at: ${backupPath}`);
+  try {
+    fs.copyFileSync(workspaceDbPath, backupPath);
+    const backupSize = fs.statSync(backupPath).size;
+    console.log(`✅ Backup created successfully: ${backupPath}`);
+    console.log(`   Backup size: ${(backupSize / 1024 / 1024).toFixed(2)} MB`);
+  } catch (err) {
+    console.error('❌ BACKUP FAILED - reset will not proceed:', err.message);
+    process.exit(1);
+  }
 }
 
 const wipeDatabase = (dbPath, label) => {
@@ -99,5 +123,27 @@ const wipeDatabase = (dbPath, label) => {
   });
 };
 
-wipeDatabase(workspaceDbPath, 'Workspace DB');
-wipeDatabase(appDataDbPath, 'AppData DB');
+// Interactive confirmation before reset
+console.log('\n⚠️  WARNING: This script will COMPLETELY RESET the database.');
+console.log('   All transactional and master data will be deleted.');
+console.log('   Backup has been created at:', backupPath);
+console.log('\nThe following tables will be wiped:');
+console.log('   products, sales, customers, suppliers, employees, transactions,');
+console.log('   purchase_orders, stock_adjustments, bill_holds, sales_returns,');
+console.log('   credit_notes, credit_payments, credit_note_usage, quotations,');
+console.log('   delivery_notes, audit_logs, backup_logs, branches');
+console.log('\nThis operation CANNOT be undone without restoring from backup.');
+console.log('\nType "confirm full reset" to proceed, or press Ctrl+C to cancel:');
+
+rl.question('> ', (answer) => {
+  if (answer.trim() === 'confirm full reset') {
+    console.log('\n✅ Confirmed. Proceeding with complete database reset...\n');
+    wipeDatabase(workspaceDbPath, 'Workspace DB');
+    wipeDatabase(appDataDbPath, 'AppData DB');
+    rl.close();
+  } else {
+    console.log('\n❌ Reset cancelled. No changes made.');
+    rl.close();
+    process.exit(0);
+  }
+});
