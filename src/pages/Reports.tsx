@@ -130,6 +130,7 @@ export function Reports() {
   const [customers, setCustomers] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [salesReturns, setSalesReturns] = useState<any[]>([]);
+  const [creditPayments, setCreditPayments] = useState<any[]>([]);
   const [shopName, setShopName] = useState('MUTHUWADIGE HARDWARE');
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
@@ -141,12 +142,14 @@ export function Reports() {
     const { data: cData } = await supabase.from('customers').select('*');
     const { data: supData } = await supabase.from('suppliers').select('*');
     const { data: srData } = await supabase.from('sales_returns').select('*');
+    const { data: cpData } = await supabase.from('credit_payments').select('*');
     if (sData) setSales(sData);
     if (pData) setProducts(pData);
     if (tData) setTransactions(tData);
     if (cData) setCustomers(cData);
     if (supData) setSuppliers(supData);
     if (srData) setSalesReturns(srData);
+    if (cpData) setCreditPayments(cpData);
   };
 
   const fetchSettings = async () => {
@@ -584,7 +587,7 @@ export function Reports() {
   }, 0);
   const totalPayables = suppliers.reduce((sum, s) => sum + Number(s.payable_balance || 0), 0);
 
-  // Cashier Closing Shift Report (Daily breakdowns)
+  // Cashier Closing Shift Report (Daily breakdowns & Payment Method Realization)
   const todaySales = filteredSales.filter(s => {
     if (!fromDate && !toDate && rangeType === 'custom') {
       const todayStr = getLocalDateString();
@@ -594,17 +597,64 @@ export function Reports() {
     return s.status !== 'cancelled';
   });
 
-  const salesByPaymentMethod = todaySales.reduce((acc, s) => {
-    const method = s.payment_method || s.paymentMethod || 'Cash';
-    const amt = Number(s.total_amount || s.total || 0);
-    acc[method] = (acc[method] || 0) + amt;
-    return acc;
-  }, {} as Record<string, number>);
+  const periodCreditPayments = creditPayments.filter(cp => {
+    const cpDate = safeGetDateString(cp.payment_date || cp.created_at || cp.date);
+    if (!fromDate && !toDate && rangeType === 'custom') {
+      const todayStr = getLocalDateString();
+      return cpDate === todayStr;
+    }
+    if (effectiveFromDate && cpDate < effectiveFromDate) return false;
+    if (effectiveToDate && cpDate > effectiveToDate) return false;
+    return true;
+  });
 
-  const todayCash = salesByPaymentMethod['Cash'] || 0;
-  const todayCard = salesByPaymentMethod['Card'] || 0;
-  const todayCredit = salesByPaymentMethod['Credit'] || 0;
-  const todayBank = salesByPaymentMethod['Bank Transfer'] || 0;
+  let calcCash = 0;
+  let calcCard = 0;
+  let calcCredit = 0;
+  let calcBank = 0;
+
+  // 1. Process sales originated in the reporting period
+  todaySales.forEach(s => {
+    const method = (s.payment_method || s.paymentMethod || 'Cash').toString().toLowerCase().trim();
+    const totalAmt = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
+    const paidAmt = Number(s.payment_received || 0);
+
+    const isCreditSale = method === 'credit' || method === 'credit sale' || (s as any).is_credit === true;
+
+    if (isCreditSale) {
+      // Remaining unsettled credit originated in period
+      const remainingUnpaid = Math.max(0, totalAmt - paidAmt);
+      calcCredit += remainingUnpaid;
+    } else {
+      // Direct non-credit sales
+      if (method === 'card' || method === 'credit card') {
+        calcCard += totalAmt;
+      } else if (method === 'bank' || method === 'bank transfer' || method === 'online') {
+        calcBank += totalAmt;
+      } else {
+        calcCash += totalAmt;
+      }
+    }
+  });
+
+  // 2. Process credit settlements/payments collected in the reporting period (by actual payment date)
+  periodCreditPayments.forEach(cp => {
+    const payAmt = Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0));
+    const payMethod = (cp.payment_method || cp.paymentMethod || 'Cash').toString().toLowerCase().trim();
+
+    if (payMethod === 'card' || payMethod === 'credit card') {
+      calcCard += payAmt;
+    } else if (payMethod === 'bank' || payMethod === 'bank transfer' || payMethod === 'online') {
+      calcBank += payAmt;
+    } else {
+      calcCash += payAmt;
+    }
+  });
+
+  const todayCash = calcCash;
+  const todayCard = calcCard;
+  const todayCredit = calcCredit;
+  const todayBank = calcBank;
 
   const cashierSummary = todaySales.reduce((acc, s) => {
     const cashierName = s.cashier || s.user_email || 'System / Cashier';
@@ -1042,8 +1092,8 @@ export function Reports() {
             </div>
 
             {/* Card 5: Outstanding Credit */}
-            <div className="bg-gradient-to-br from-rose-500 via-rose-600 to-red-650 rounded-3xl p-6 shadow-[0_12px_30px_rgba(239,68,68,0.2)] hover:-translate-y-1.5 hover:shadow-[0_20px_45px_rgba(239,68,68,0.35)] transition-all duration-300 relative overflow-hidden group">
-              <div className="absolute -top-10 -right-10 w-32 h-32 bg-white/10 rounded-full blur-xl group-hover:scale-125 transition-transform duration-500" />
+            <div className="bg-gradient-to-br from-rose-500 via-rose-600 to-red-700 rounded-3xl p-6 shadow-md shadow-rose-500/10 hover:-translate-y-1.5 hover:shadow-lg hover:shadow-rose-500/20 transition-all duration-300 relative overflow-hidden group isolate">
+              <div className="absolute -top-10 -right-10 w-32 h-32 bg-white/5 rounded-full blur-lg group-hover:scale-125 transition-transform duration-500 pointer-events-none" />
               <div className="flex items-center justify-between mb-4">
                 <p className="text-[10px] text-rose-100 font-extrabold uppercase tracking-widest">{t('Outstanding Credit', 'හිඟ ණය එකතුව')}</p>
                 <div className="p-2.5 bg-white/15 text-white rounded-2xl ring-4 ring-white/10 group-hover:scale-110 transition-all duration-300">
