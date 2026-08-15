@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "rewrites": [
+    {
+      "source": "/((?!api/|assets/|public/|build/).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

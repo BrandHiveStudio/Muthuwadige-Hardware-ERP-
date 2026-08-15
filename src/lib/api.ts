@@ -1,7 +1,17 @@
 const getDefaultApiUrl = () => {
   if (typeof window !== 'undefined') {
     const { protocol, port, origin } = window.location;
-    if ((protocol === 'http:' || protocol === 'https:') && !port.startsWith('517')) {
+    if (protocol === 'file:') {
+      return 'http://localhost:5001/api';
+    }
+    if (port.startsWith('517')) {
+      return 'http://localhost:5001/api';
+    }
+    const envUrl = (import.meta.env as any)?.VITE_API_URL;
+    if (envUrl) {
+      return envUrl;
+    }
+    if (protocol === 'http:' || protocol === 'https:') {
       return `${origin}/api`;
     }
   }
