@@ -64,7 +64,25 @@ try {
 dotenv.config({ path: envPath });
 
 const app = express();
-app.use(cors());
+
+const allowedOrigins = [
+  'https://hardware-store-psi.vercel.app',
+  'https://hardware-store-production-v2.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000'
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+      callback(null, true);
+    } else {
+      callback(null, true); // Fallback for local desktop / dev
+    }
+  },
+  credentials: true
+}));
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
