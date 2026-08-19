@@ -28,6 +28,7 @@ import { api, API_URL, fetchWithTimeout } from '../lib/api';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { SaleOrder, SaleItem, Customer, Product, Quotation, DeliveryNote, SalesReturn, CreditNote, CreditNoteUsage } from '../types';
+import { calculateSaleAccounting } from '../utils/sales/accounting';
 import { formatStock } from '../utils/formatters';
 import { sinhalaFontBase64 } from '../utils/sinhalaFontBase64';
 import {
@@ -280,9 +281,15 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
                 </div>
                 <div className="flex justify-between items-center text-[10px] font-black uppercase pt-1 border-t border-slate-200">
                   <span className="text-slate-500">{isSinhala ? 'ණය ගෙවීමේ තත්ත්වය:' : 'Payment Status:'}</span>
-                  <span className={`px-2 py-0.5 rounded ${isSettled ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
-                    {isSettled ? (isSinhala ? 'සම්පූර්ණයෙන්ම පියවා ඇත' : 'Fully Settled') : (isSinhala ? 'කොටසක් පියවා ඇත' : 'Partially Settled')}
-                  </span>
+                  {(() => {
+                    const isFullyPaid = paidAmt >= totalAmt - 0.01 || remBal <= 0.01;
+                    const isUnpaid = paidAmt <= 0.01 && remBal > 0.01;
+                    return (
+                      <span className={`px-2 py-0.5 rounded ${isFullyPaid ? 'bg-emerald-100 text-emerald-800' : isUnpaid ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'}`}>
+                        {isFullyPaid ? (isSinhala ? 'සම්පූර්ණයෙන්ම පියවා ඇත' : 'Fully Settled') : isUnpaid ? (isSinhala ? 'පියවා නොමැත' : 'Unpaid') : (isSinhala ? 'කොටසක් පියවා ඇත' : 'Partially Settled')}
+                      </span>
+                    );
+                  })()}
                 </div>
               </div>
             );
@@ -304,6 +311,7 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
 function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: SalesReturn; isSinhala: boolean }) {
   const symbol = isSinhala ? 'රු.' : 'Rs.';
   const formatNum = (num: number) => (num || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const isCreditBill = returnRecord.isCredit === true || (returnRecord as any).is_credit === 1 || (returnRecord as any).is_credit === true;
 
   const returnedItemsList = Array.isArray(returnRecord.returnedItems)
     ? returnRecord.returnedItems
@@ -313,9 +321,13 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
     ? returnRecord.exchangeItems
     : safeParseJson(returnRecord.exchangeItems, []);
 
-  const title = returnRecord.returnMethod === 'Exchange'
+  const displayReturnMethod = isCreditBill
+    ? (exchangeItemsList.length > 0 ? 'Exchange' : 'Return')
+    : (returnRecord.returnMethod || 'Return');
+
+  const title = displayReturnMethod === 'Exchange'
     ? (isSinhala ? 'භාණ්ඩ හුවමාරු රසීදුව' : 'EXCHANGE RECEIPT')
-    : returnRecord.returnMethod === 'Credit Note'
+    : displayReturnMethod === 'Credit Note'
       ? (isSinhala ? 'ණය සටහන් රසීදුව' : 'CREDIT NOTE RECEIPT')
       : (isSinhala ? 'ආපසු භාරගැනීමේ රසීදුව' : 'RETURN RECEIPT');
 
@@ -422,7 +434,7 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
       <div className="mx-6 mt-4 mb-4 flex justify-between items-start flex-wrap gap-4 text-xs">
         <div className="w-[45%]">
           <h3 className="text-[#d29d2b] text-[9px] font-black uppercase tracking-wider mb-1">{isSinhala ? 'ආපසු ගෙවීමේ ක්‍රමය' : 'RETURN METHOD'}</h3>
-          <p className="text-slate-800 font-black text-xs">{returnRecord.returnMethod}</p>
+          <p className="text-slate-800 font-black text-xs">{displayReturnMethod}</p>
           {returnRecord.creditNoteNo && (
             <p className="text-amber-600 font-bold text-xs mt-1">Credit Note: {returnRecord.creditNoteNo}</p>
           )}
@@ -455,8 +467,8 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
             </div>
           ) : null}
           <div className="flex justify-between items-center py-2 px-3 bg-slate-100 rounded-lg text-xs font-black text-slate-800 mt-2 border border-slate-200">
-            <span>{isSinhala ? 'මුළු ආපසු/ගෙවූ මුදල:' : 'Net Refund/Paid:'}</span>
-            <span className="text-sm font-black text-emerald-700">{symbol} {formatNum(returnRecord.totalRefunded || returnRecord.returnAmount || 0)}</span>
+            <span>{isCreditBill ? (isSinhala ? 'ණය සැකසුම:' : 'Credit Adjustment:') : (isSinhala ? 'මුළු ආපසු/ගෙවූ මුදල:' : 'Net Refund/Paid:')}</span>
+            <span className="text-sm font-black text-emerald-700">{symbol} {formatNum(isCreditBill ? (returnRecord.returnAmount || returnRecord.totalRefunded || 0) : (returnRecord.totalRefunded || returnRecord.returnAmount || 0))}</span>
           </div>
         </div>
       </div>
@@ -795,7 +807,9 @@ const getUnitOptions = (product: Product | undefined): UnitOption[] => {
           });
         }
       });
-    } catch (e) {}
+    } catch (_e) {
+      /* ignore json parse error */
+    }
   }
 
   return options;
@@ -1088,7 +1102,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         setCreditNotesList(data || []);
         return;
       }
-    } catch (e) {}
+    } catch (_e) {
+      /* ignore primary endpoint failure, fallback follows */
+    }
     try {
       const res = await fetchWithTimeout(`${API_URL}/sales/credit-notes`, {}, 8000);
       if (res.ok) {
@@ -1128,6 +1144,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   const generateReturnPrintHTML = (sr: SalesReturn, shopSettings: any, isSi: boolean) => {
     const symbolStr = isSi ? 'රු.' : 'Rs.';
     const formatNum = (num: number) => num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const isCreditBill = sr.isCredit === true || (sr as any).is_credit === 1 || (sr as any).is_credit === true;
     const title = isSi ? 'විකුණුම් ආපසු ලදුපත' : 'SALES RETURN RECEIPT';
 
     const retItems = Array.isArray(sr.returnedItems) ? sr.returnedItems : safeParseJson(sr.returnedItems, []);
@@ -1219,10 +1236,16 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                   <span>${sr.creditNoteNo || 'CN-ISSUED'}</span>
                 </div>
               ` : ''}
-              ${sr.returnMethod === 'Cash Refund' ? `
+              ${sr.returnMethod === 'Cash Refund' && !isCreditBill ? `
                 <div class="summary-row" style="color: #dc2626;">
                   <span>${isSi ? 'ආපසු ගෙවූ මුදල:' : 'Cash Refunded:'}</span>
                   <span>${symbolStr} ${formatNum(sr.totalRefunded || 0)}</span>
+                </div>
+              ` : ''}
+              ${isCreditBill ? `
+                <div class="summary-row" style="color: #0284c7;">
+                  <span>${isSi ? 'ණය සැකසුම:' : 'Credit Adjustment:'}</span>
+                  <span>${symbolStr} ${formatNum(sr.returnAmount || sr.totalRefunded || 0)}</span>
                 </div>
               ` : ''}
             </div>
@@ -1455,7 +1478,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     }
   };
 
-  const updateCreditQty = (idx: number, newQty: number, forceValidate: boolean = false) => {
+  const updateCreditQty = (idx: number, newQty: number, forceValidate = false) => {
     setCreditCartItems(prev => {
       const updated = [...prev];
       const item = updated[idx];
@@ -1859,7 +1882,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
           const nJson = await nRes.json();
           if (nJson.nextNumber) setQuoteNo(nJson.nextNumber);
         }
-      } catch (e) {}
+      } catch (_e) {
+        /* ignore fallback */
+      }
 
       const { data: dnData } = await supabase.from('delivery_notes').select('*');
       if (dnData) setDeliveryNotes(dnData);
@@ -1900,7 +1925,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     try {
       setIsLoading(true);
 
-      let targetElement = document.getElementById('credit-preview-modal-content') || document.getElementById('receipt-preview');
+      let targetElement = document.getElementById('receipt-preview');
       let tempContainer: HTMLElement | null = null;
       let root: any = null;
 
@@ -2269,7 +2294,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     setProductSearch('');
   };
 
-  const updateQty = (productId: string, newQty: number, forceValidate: boolean = false) => {
+  const updateQty = (productId: string, newQty: number, forceValidate = false) => {
     const product = products.find(p => p.id === productId);
     if (!product) return;
     const item = cartItems.find(i => i.productId === productId);
@@ -2672,7 +2697,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
       try {
         await supabase.from('sales_returns').delete().eq('id', returnId);
-      } catch (e) {}
+      } catch (_e) {
+        /* ignore delete fallback */
+      }
 
       setSalesReturnsList((prev) => prev.filter((sr) => sr.id !== returnId));
       if (selectedReturnPreview && selectedReturnPreview.id === returnId) {
@@ -4560,12 +4587,21 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                             <td className="px-4 py-4 text-gray-500 font-semibold">{productDesc}</td>
                             {(() => {
                               const invTotal = Number(order.total_amount !== undefined ? order.total_amount : order.total);
-                              const paidAmt = Number(order.payment_received || 0);
-                              const remBal = Math.max(0, invTotal - paidAmt);
+                              const origPaidAmt = Number(order.payment_received || 0);
+
+                              const orderReturns = salesReturnsList.filter(sr => sr.status !== 'voided' && sr.status !== 'Voided' && sr.status !== 'cancelled' && (sr.invoiceNo === order.invoiceNo || sr.invoice_no === order.invoiceNo));
+
+                              const activeReturnTotal = orderReturns.reduce((sum, sr) => sum + Number(sr.returnAmount || (sr as any).return_amount || 0), 0);
+                              const activeExchangeTotal = orderReturns.reduce((sum, sr) => sum + Number(sr.exchangeAmount || (sr as any).exchange_amount || 0), 0);
+                              const activeExchangePaid = orderReturns.reduce((sum, sr) => sum + Number(sr.customerPaid || (sr as any).customer_paid || 0), 0);
+
+                              const effectiveTotal = Math.max(0, invTotal + activeExchangeTotal - activeReturnTotal);
+                              const totalPaidAmt = origPaidAmt + activeExchangePaid;
+                              const remBal = Math.max(0, effectiveTotal - totalPaidAmt);
                               return (
                                 <>
-                                  <td className="px-4 py-4 text-right font-black text-slate-800">{symbol} {convert(invTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                                  <td className="px-4 py-4 text-right font-black text-emerald-600">{symbol} {convert(paidAmt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                  <td className="px-4 py-4 text-right font-black text-slate-800">{symbol} {convert(effectiveTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                  <td className="px-4 py-4 text-right font-black text-emerald-600">{symbol} {convert(totalPaidAmt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                                   <td className="px-4 py-4 text-right font-black text-rose-600">{symbol} {convert(remBal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                                 </>
                               );
@@ -4581,14 +4617,24 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                             <td className="px-4 py-4 text-center">
                               {(() => {
                                 const invTotal = Number(order.total_amount !== undefined ? order.total_amount : order.total);
-                                const paidAmt = Number(order.payment_received || 0);
-                                const remBal = Math.max(0, invTotal - paidAmt);
-                                const isSettled = remBal <= 0.01;
+                                const origPaidAmt = Number(order.payment_received || 0);
+
+                                const orderReturns = salesReturnsList.filter(sr => sr.status !== 'voided' && sr.status !== 'Voided' && sr.status !== 'cancelled' && (sr.invoiceNo === order.invoiceNo || sr.invoice_no === order.invoiceNo));
+
+                                const activeReturnTotal = orderReturns.reduce((sum, sr) => sum + Number(sr.returnAmount || (sr as any).return_amount || 0), 0);
+                                const activeExchangeTotal = orderReturns.reduce((sum, sr) => sum + Number(sr.exchangeAmount || (sr as any).exchange_amount || 0), 0);
+                                const activeExchangePaid = orderReturns.reduce((sum, sr) => sum + Number(sr.customerPaid || (sr as any).customer_paid || 0), 0);
+
+                                const effectiveTotal = Math.max(0, invTotal + activeExchangeTotal - activeReturnTotal);
+                                const totalPaidAmt = origPaidAmt + activeExchangePaid;
+                                const remBal = Math.max(0, effectiveTotal - totalPaidAmt);
+                                const isFullyPaid = totalPaidAmt >= effectiveTotal - 0.01 || remBal <= 0.01;
+                                const isUnpaid = totalPaidAmt <= 0.01 && remBal > 0.01;
                                 return (
                                   <span className={`px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest ${
-                                    isSettled ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'
+                                    isFullyPaid ? 'bg-emerald-100 text-emerald-700' : isUnpaid ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
                                   }`}>
-                                    {isSettled ? t('Fully Settled', 'සම්පූර්ණයෙන්ම පියවා ඇත') : t('Partially Settled', 'කොටසක් පියවා ඇත')}
+                                    {isFullyPaid ? t('Fully Settled', 'සම්පූර්ණයෙන්ම පියවා ඇත') : isUnpaid ? t('Unpaid', 'පියවා නොමැත') : t('Partially Settled', 'කොටසක් පියවා ඇත')}
                                   </span>
                                 );
                               })()}
@@ -5737,29 +5783,45 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
               const applicableTransport = includeReturnTransport ? (origTransportFee * (returnedProductsSubtotal > 0 ? 1 : 0)) : 0;
 
               const returnTotalValue = Math.max(0, returnedProductsSubtotal - applicableDiscount + applicableTax + applicableTransport);
-              const exchangeTotalValue = exchangeCartItems.reduce((sum: number, i: any) => sum + (i.qty * i.price), 0);
+
+              // Calculate exchange cart total value from selected replacement items
+              const exchangeCartSubtotal = exchangeCartItems.reduce((sum: number, i: any) => sum + (i.total || 0), 0);
+              const exchangeTotalValue = exchangeCartSubtotal;
+
+              // Balance due from customer when exchange items cost more than returned items
+              const customerBalanceDue = Math.max(0, exchangeTotalValue - returnTotalValue);
+              // Net refund value due when returned items cost more than exchange items
+              const netRefundValue = Math.max(0, returnTotalValue - exchangeTotalValue);
               const netExchangeBalance = exchangeTotalValue - returnTotalValue;
+
+              // Detect if target return invoice is for a Credit Customer / Credit Bill
+              const isCreditCustomer = (() => {
+                if (!targetReturnInvoice) return false;
+                const method = (targetReturnInvoice.payment_method || (targetReturnInvoice as any).paymentMethod || '').toString().toLowerCase().trim();
+                const status = (targetReturnInvoice.status || '').toString().toLowerCase().trim();
+                const isCreditBill = method === 'credit' || method === 'credit sale' || (targetReturnInvoice as any).is_credit === true || status === 'non paid' || status === 'non-paid' || status === 'partially paid' || status === 'partially settled';
+                const customerObj = targetReturnInvoice.customer_id ? customers.find(c => c.id === targetReturnInvoice.customer_id) : null;
+                const isCreditCust = customerObj ? (((customerObj as any).type || '').toLowerCase() === 'credit' || (customerObj as any).is_credit === true || !!(customerObj as any).credit_terms) : false;
+                return isCreditBill || isCreditCust;
+              })();
+
+              const effectiveReturnMethod = isCreditCustomer 
+                ? (returnMethod === 'Exchange' || exchangeCartItems.length > 0 ? 'Exchange' : 'Return') 
+                : returnMethod;
 
               const handleConfirmProcessReturn = async () => {
                 if (itemsToReturn.length === 0) {
                   return alert(t('Please select at least 1 product quantity to return.', 'කරුණාකර ආපසු බාරදීමට අවම වශයෙන් එක් භාණ්ඩයකවත් ප්‍රමාණයක් ඇතුළත් කරන්න.'));
                 }
 
-                if (returnMethod === 'Exchange') {
-                  if (exchangeCartItems.length === 0) {
-                    return alert(t('Please add at least 1 replacement product for exchange.', 'කරුණාකර හුවමාරුව සඳහා අවම වශයෙන් එක් නව භාණ්ඩයක්වත් ඇතුළත් කරන්න.'));
-                  }
-                  if (netExchangeBalance > 0 && exchangeCustomerPaid < netExchangeBalance) {
-                    return alert(t(`Customer Payment (Rs. ${exchangeCustomerPaid}) is less than Balance Due (Rs. ${netExchangeBalance}).`, `පාරිභෝගිකයා ගෙවූ මුදල හිඟ මුදලට වඩා අඩුය.`));
-                  }
-                }
+                const calculatedRefund = isCreditCustomer 
+                  ? 0 
+                  : (effectiveReturnMethod === 'Cash Refund' 
+                    ? returnTotalValue 
+                    : (effectiveReturnMethod === 'Exchange' && netRefundValue > 0 ? (exchangeRefundGiven || netRefundValue) : 0));
 
-                const calculatedRefund = returnMethod === 'Cash Refund' 
-                  ? returnTotalValue 
-                  : (returnMethod === 'Exchange' && netExchangeBalance < 0 ? (exchangeRefundGiven || Math.abs(netExchangeBalance)) : 0);
-
-                const calculatedPaid = returnMethod === 'Exchange' && netExchangeBalance > 0 ? exchangeCustomerPaid : 0;
-                const calculatedChange = returnMethod === 'Exchange' && netExchangeBalance > 0 ? Math.max(0, exchangeCustomerPaid - netExchangeBalance) : 0;
+                const calculatedPaid = (!isCreditCustomer && effectiveReturnMethod === 'Exchange' && customerBalanceDue > 0) ? (exchangeCustomerPaid || customerBalanceDue) : 0;
+                const calculatedChange = (!isCreditCustomer && effectiveReturnMethod === 'Exchange' && customerBalanceDue > 0) ? Math.max(0, (exchangeCustomerPaid || customerBalanceDue) - customerBalanceDue) : 0;
 
                 try {
                   setIsLoading(true);
@@ -5771,7 +5833,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                       invoiceNo: targetReturnInvoice.invoiceNo,
                       returnedItems: itemsToReturn,
                       exchangeItems: exchangeCartItems,
-                      returnMethod,
+                      returnMethod: effectiveReturnMethod,
                       returnAmount: returnTotalValue,
                       exchangeAmount: exchangeTotalValue,
                       balanceAmount: netExchangeBalance,
@@ -5781,7 +5843,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                       customerName: targetReturnInvoice.customerName,
                       customerPhone: targetReturnInvoice.customerPhone,
                       userEmail: user?.email || 'system',
-                      reason: returnReason
+                      reason: returnReason,
+                      isCredit: isCreditCustomer,
+                      is_credit: isCreditCustomer ? 1 : 0
                     })
                   });
 
@@ -5798,7 +5862,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                     customerPhone: targetReturnInvoice.customerPhone,
                     returnedItems: itemsToReturn,
                     exchangeItems: exchangeCartItems,
-                    returnMethod,
+                    returnMethod: effectiveReturnMethod,
                     returnAmount: returnTotalValue,
                     exchangeAmount: exchangeTotalValue,
                     balanceAmount: netExchangeBalance,
@@ -5808,7 +5872,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                     creditNoteNo: result.creditNoteNo,
                     status: 'active',
                     reason: returnReason,
-                    created_at: new Date().toISOString()
+                    created_at: new Date().toISOString(),
+                    isCredit: isCreditCustomer,
+                    is_credit: isCreditCustomer
                   };
 
                   setSelectedReturnPreview(newReturnRecord);
@@ -6101,15 +6167,40 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                   {/* Return Method Selection & Settings */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
                     <div>
-                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 block">{t('Return Method', 'ආපසු ගෙවීමේ ක්‍රමය')}</label>
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 flex items-center justify-between">
+                        <span>{t('Return Method', 'ආපසු ගෙවීමේ ක්‍රමය')}</span>
+                        {isCreditCustomer && (
+                          <span className="text-[9px] font-black text-amber-800 bg-amber-100 px-2 py-0.5 rounded">
+                            {effectiveReturnMethod === 'Exchange' 
+                              ? t('Credit Sale: Exchange', 'ණය විකුණුම්: භාණ්ඩ හුවමාරුව')
+                              : t('Credit Sale: Return', 'ණය විකුණුම්: භාණ්ඩ ආපසු')
+                            }
+                          </span>
+                        )}
+                      </label>
                       <select
-                        value={returnMethod}
-                        onChange={(e) => setReturnMethod(e.target.value as any)}
-                        className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
+                        value={isCreditCustomer ? effectiveReturnMethod : returnMethod}
+                        onChange={(e) => {
+                          const val = e.target.value as any;
+                          setReturnMethod(val);
+                          if (val === 'Return') {
+                            setExchangeCartItems([]);
+                          }
+                        }}
+                        className={`w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 text-xs outline-none focus:border-amber-500 ${isCreditCustomer ? 'bg-amber-50/90 border-amber-300 text-amber-900' : ''}`}
                       >
-                        <option value="Cash Refund">Cash Refund / මුදල් ආපසු</option>
-                        <option value="Exchange">Exchange / භාණ්ඩ හුවමාරුව</option>
-                        <option value="Credit Note">Credit Note / ණය සටහන</option>
+                        {isCreditCustomer ? (
+                          <>
+                            <option value="Return">{isSinhala ? 'Return / භාණ්ඩ ආපසු භාරගැනීම' : 'Return'}</option>
+                            <option value="Exchange">{isSinhala ? 'Exchange / භාණ්ඩ හුවමාරුව' : 'Exchange'}</option>
+                          </>
+                        ) : (
+                          <>
+                            <option value="Cash Refund">Cash Refund / මුදල් ආපසු</option>
+                            <option value="Exchange">Return & Exchange / භාණ්ඩ හුවමාරුව</option>
+                            <option value="Credit Note">Credit Note / ණය සටහන</option>
+                          </>
+                        )}
                       </select>
                     </div>
                     <div>
@@ -6124,8 +6215,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                     </div>
                   </div>
 
-                  {/* EXCHANGE SECTION (When returnMethod === 'Exchange') */}
-                  {returnMethod === 'Exchange' && (() => {
+                  {/* EXCHANGE SECTION (When effectiveReturnMethod === 'Exchange') */}
+                  {effectiveReturnMethod === 'Exchange' && (() => {
                     const categoriesList = ['All', ...Array.from(new Set(allCatalogSelectables.map(i => i.category).filter(Boolean)))];
 
                     const handleAddSelectableToCart = (item: typeof matchingExchangeSelectables[0]) => {
@@ -6377,7 +6468,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                               {netExchangeBalance > 0 
                                 ? `${symbol} ${convert(netExchangeBalance).toLocaleString()} (Customer Owes)` 
                                 : netExchangeBalance < 0 
-                                  ? `${symbol} ${convert(Math.abs(netExchangeBalance)).toLocaleString()} (Refund Due)` 
+                                  ? `${symbol} ${convert(Math.abs(netExchangeBalance)).toLocaleString()} ${isCreditCustomer ? '(Credit Bill Reduction)' : '(Refund Due)'}` 
                                   : 'Rs. 0 (Even Exchange)'}
                             </span>
                           </div>
@@ -6385,36 +6476,16 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
                         {/* Customer Pays Balance Due Scenario */}
                         {netExchangeBalance > 0 && (
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 bg-amber-50/60 p-3 rounded-xl border border-amber-200">
-                            <div>
-                              <label className="text-[10px] font-black text-amber-900 uppercase tracking-wider block mb-1">
-                                {t('Balance Due from Customer:', 'පාරිභෝගිකයාගෙන් අයවිය යුතු ශේෂය:')}
-                              </label>
-                              <div className="text-base font-black text-amber-700">{symbol} {convert(netExchangeBalance).toLocaleString()}</div>
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[10px] font-black text-slate-600 uppercase tracking-wider block">
-                                {t('Customer Payment / Amount Paid:', 'පාරිභෝගිකයා ලබාදුන් මුදල:')}
-                              </label>
-                              <input
-                                type="number"
-                                min={netExchangeBalance}
-                                value={exchangeCustomerPaid || ''}
-                                onChange={(e) => setExchangeCustomerPaid(parseFloat(e.target.value) || 0)}
-                                placeholder={`Min ${netExchangeBalance}`}
-                                className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg font-black text-slate-800 text-sm outline-none focus:border-amber-500"
-                              />
-                              {exchangeCustomerPaid > netExchangeBalance && (
-                                <p className="text-xs font-black text-emerald-700">
-                                  {t('Change to Customer:', 'පාරිභෝගිකයාට ඉතිරි ලබාදිය යුතු මුදල:')} {symbol} {convert(exchangeCustomerPaid - netExchangeBalance).toLocaleString()}
-                                </p>
-                              )}
-                            </div>
+                          <div className="bg-amber-50/60 p-3 rounded-xl border border-amber-200">
+                            <label className="text-[10px] font-black text-amber-900 uppercase tracking-wider block mb-1">
+                              {t('Balance Due from Customer:', 'පාරිභෝගිකයාගෙන් අයවිය යුතු ශේෂය:')}
+                            </label>
+                            <div className="text-base font-black text-amber-700">{symbol} {convert(netExchangeBalance).toLocaleString()}</div>
                           </div>
                         )}
 
-                        {/* Customer Gets Refund Due Scenario */}
-                        {netExchangeBalance < 0 && (
+                        {/* Customer Gets Refund Due Scenario (Non-credit sales only) */}
+                        {netExchangeBalance < 0 && !isCreditCustomer && (
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 bg-blue-50/60 p-3 rounded-xl border border-blue-200">
                             <div>
                               <label className="text-[10px] font-black text-blue-900 uppercase tracking-wider block mb-1">
@@ -6531,7 +6602,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                 {sr.customerName || sr.customer_name || 'Guest Customer'}
                               </td>
                               <td className="px-6 py-4 font-bold text-slate-600 text-xs space-y-1">
-                                <span className={`px-2.5 py-1 rounded-full font-black text-[10px] uppercase block w-max ${sr.returnMethod === 'Exchange' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'}`}>
+                                <span className={`px-2.5 py-1 rounded-full font-black text-[10px] uppercase block w-max ${sr.returnMethod === 'Exchange' ? 'bg-emerald-100 text-emerald-800' : (sr.returnMethod === 'Return' ? 'bg-amber-100 text-amber-900' : 'bg-slate-100 text-slate-700')}`}>
                                   {sr.returnMethod}
                                 </span>
                                 {retItemsList.length > 0 && (
@@ -6545,8 +6616,27 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                   </span>
                                 )}
                               </td>
-                              <td className="px-6 py-4 text-right font-black text-emerald-600 text-sm">
-                                {symbol} {convert(sr.totalRefunded || sr.returnAmount || 0).toLocaleString()}
+                              <td className="px-6 py-4 text-right font-black text-slate-800 text-xs">
+                                {sr.returnMethod === 'Exchange' ? (
+                                  <div className="space-y-0.5">
+                                    <div className="text-rose-600 font-bold text-[11px]">Return: -{symbol} {convert(sr.returnAmount || 0).toLocaleString()}</div>
+                                    {Number(sr.exchangeAmount) > 0 && <div className="text-emerald-700 font-bold text-[11px]">Exchange: +{symbol} {convert(sr.exchangeAmount || 0).toLocaleString()}</div>}
+                                    {Number(sr.customerPaid || (sr as any).customer_paid) > 0 && <div className="text-blue-700 font-bold text-[11px]">Paid: +{symbol} {convert(sr.customerPaid || (sr as any).customer_paid || 0).toLocaleString()}</div>}
+                                    <div className="text-rose-600 font-black text-xs border-t border-slate-100 pt-0.5 mt-0.5">
+                                      Rem Credit: {symbol} {convert(Math.max(0, Number(sr.exchangeAmount || 0) - Number(sr.returnAmount || 0) - Number(sr.customerPaid || (sr as any).customer_paid || 0))).toLocaleString()}
+                                    </div>
+                                  </div>
+                                ) : ((sr.isCredit || (sr as any).is_credit) ? (
+                                  <div className="space-y-0.5 text-right">
+                                    <div className="text-amber-800 font-black text-[11px] bg-amber-50/80 border border-amber-200 px-2 py-1 rounded inline-block">
+                                      Credit Adjustment: -{symbol} {convert(sr.returnAmount || sr.totalRefunded || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="text-emerald-600 text-sm font-black">
+                                    {symbol} {convert(sr.totalRefunded || sr.returnAmount || 0).toLocaleString()}
+                                  </span>
+                                ))}
                               </td>
                               <td className="px-6 py-4 text-center">
                                 <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full ${sr.status === 'voided' ? 'bg-slate-100 text-slate-500' : 'bg-emerald-100 text-emerald-700'}`}>
@@ -6956,7 +7046,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
               <button
                 type="button"
                 onClick={async () => {
-                  const configuredPasskey = shopSettings?.void_passkey || shopSettings?.return_passkey || '1234';
+                  const configuredPasskey = (shopSettings?.void_passkey || shopSettings?.return_passkey || '1234').toString().trim();
                   if (voidPasskeyInput.trim() !== configuredPasskey) {
                     return alert(t('Invalid Passkey! Access Denied.', 'වලංගු නොවන මුරපදයකි! අවලංගු කිරීමට නොහැක.'));
                   }
@@ -7166,7 +7256,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
           size="lg"
         >
           <div id="credit-preview-modal-content" className="space-y-4 p-4 text-center bg-white animate-in zoom-in duration-300">
-            <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+            <div data-html2canvas-ignore="true" className="flex items-center justify-between border-b border-gray-100 pb-3">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 bg-amber-50 text-[#DAA520] rounded-lg flex items-center justify-center border border-amber-200 shadow-inner">
                   <ReceiptIcon className="w-5 h-5" />
@@ -7198,51 +7288,63 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
             {/* Credit Accounts Overview Card */}
             {((lastOrder.payment_method || '').toLowerCase() === 'credit' || lastOrder.status === 'Non Paid' || lastOrder.status === 'Partially Settled' || lastOrder.status === 'Fully Settled' || (lastOrder as any).is_credit) && (() => {
-              const totalAmt = Number(lastOrder.total_amount !== undefined ? lastOrder.total_amount : lastOrder.total);
-              const paidAmt = Number(lastOrder.payment_received || 0);
-              const remBal = Math.max(0, totalAmt - paidAmt);
-              const isSettled = remBal <= 0.01;
-              const statusText = isSettled ? 'Fully Settled' : 'Partially Settled';
+              const acct = calculateSaleAccounting(lastOrder, salesReturnsList);
+              const orderReturns = salesReturnsList.filter(sr => sr.status !== 'voided' && sr.status !== 'Voided' && sr.status !== 'cancelled' && (sr.invoiceNo === lastOrder.invoiceNo || sr.invoice_no === lastOrder.invoiceNo));
+              const origTotalAmt = acct.originalTotal;
+              const totalPaidAmt = acct.totalPaid;
+              const effectiveTotal = acct.effectiveTotal;
+              const remBal = acct.netOutstanding;
 
-              const orderReturns = salesReturnsList.filter(sr => sr.status !== 'voided' && (sr.invoiceNo === lastOrder.invoiceNo || sr.invoice_no === lastOrder.invoiceNo));
+              const isFullyPaid = acct.isFullySettled;
+              const isUnpaid = remBal > 0.01 && totalPaidAmt <= 0.01;
+              const statusText = isFullyPaid ? 'Fully Settled' : isUnpaid ? 'Unpaid' : 'Partially Settled';
 
               return (
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-left space-y-3 my-2">
+                <div data-html2canvas-ignore="true" className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-left space-y-3 my-2">
                   <div className="flex justify-between items-center border-b border-slate-200 pb-2">
                     <span className="text-xs font-black text-slate-700 uppercase tracking-wider">💳 Credit Account Summary</span>
-                    <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${isSettled ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
-                      {isSettled ? t('Fully Settled', 'සම්පූර්ණයෙන්ම පියවා ඇත') : t('Partially Settled', 'කොටසක් පියවා ඇත')}
+                    <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${isFullyPaid ? 'bg-emerald-100 text-emerald-800' : isUnpaid ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'}`}>
+                      {isFullyPaid ? t('Fully Settled', 'සම්පූර්ණයෙන්ම පියවා ඇත') : isUnpaid ? t('Unpaid', 'පියවා නොමැත') : t('Partially Settled', 'කොටසක් පියවා ඇත')}
                     </span>
                   </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                     <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Invoice Amount</span>
-                      <span className="font-black text-slate-800">{symbol} {convert(totalAmt).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Original Invoice</span>
+                      <span className="font-black text-slate-800">{symbol} {convert(origTotalAmt).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                     </div>
                     <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Amount Paid</span>
-                      <span className="font-black text-emerald-600">{symbol} {convert(paidAmt).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Total Amount Paid</span>
+                      <span className="font-black text-emerald-600">{symbol} {convert(totalPaidAmt).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                     </div>
                     <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Outstanding Amount</span>
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Effective Total</span>
+                      <span className="font-black text-slate-900">{symbol} {convert(effectiveTotal).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                      <span className="text-[9px] font-black text-rose-500 uppercase tracking-widest block">Remaining Balance</span>
                       <span className="font-black text-rose-600">{symbol} {convert(remBal).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                    </div>
-                    <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Remaining Balance</span>
-                      <span className="font-black text-slate-900">{symbol} {convert(remBal).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
                     </div>
                   </div>
 
                   {orderReturns.length > 0 && (
-                    <div className="mt-2 pt-2 border-t border-slate-200">
-                      <span className="text-[10px] font-black text-amber-800 uppercase tracking-wider block mb-1">Associated Returns / Credit Notes:</span>
-                      {orderReturns.map((r, rIdx) => (
-                        <div key={rIdx} className="text-[11px] font-bold text-slate-700 bg-white p-2 rounded-lg border border-slate-200 flex justify-between">
-                          <span>Return #{r.returnNo || r.id} ({r.returnMethod})</span>
-                          <span className="text-rose-600">-{symbol} {convert(r.returnAmount || 0).toLocaleString()}</span>
-                        </div>
-                      ))}
+                    <div className="mt-2 pt-2 border-t border-slate-200 space-y-1">
+                      <span className="text-[10px] font-black text-amber-800 uppercase tracking-wider block mb-1">Associated Returns & Exchanges:</span>
+                      {orderReturns.map((r, rIdx) => {
+                        const retValue = Number(r.returnAmount || (r as any).return_amount || 0);
+                        const exValue = Number(r.exchangeAmount || (r as any).exchange_amount || 0);
+                        const cPaid = Number(r.customerPaid || (r as any).customer_paid || 0);
+                        return (
+                          <div key={rIdx} className="text-[11px] font-bold text-slate-700 bg-white p-2 rounded-lg border border-slate-200 flex justify-between flex-wrap gap-1">
+                            <span>Return #{r.returnNo || r.id} ({r.returnMethod})</span>
+                            <div className="flex gap-2 text-[10px]">
+                              {retValue > 0 && <span className="text-rose-600">Return: -{symbol} {convert(retValue).toLocaleString()}</span>}
+                              {exValue > 0 && <span className="text-emerald-700">Exchange: +{symbol} {convert(exValue).toLocaleString()}</span>}
+                              {cPaid > 0 && <span className="text-blue-700">Paid: {symbol} {convert(cPaid).toLocaleString()}</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -7253,7 +7355,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
               <ReceiptPreview order={lastOrder} isSinhala={isSinhala} customers={customers} salesReturns={salesReturnsList} />
             </div>
 
-            <div className="pt-2">
+            <div data-html2canvas-ignore="true" className="pt-2">
               <button 
                 onClick={() => setShowReceipt(false)} 
                 className="w-full bg-gray-100 text-gray-500 py-3 rounded-xl font-black uppercase tracking-widest text-xs hover:bg-gray-200 transition-colors"

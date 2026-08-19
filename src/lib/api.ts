@@ -393,10 +393,8 @@ export const api = {
       if (!res.ok) throw new Error('Failed to log cash flow transaction');
       return res.json();
     },
-    delete: async (id: string) => {
-      const res = await fetchWithTimeout(`${API_URL}/transactions/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to remove transaction record');
-      return res.json();
+    delete: async (_id: string) => {
+      throw new Error('Deleting finance/accounting transaction records is disabled for financial audit compliance.');
     }
   },
 

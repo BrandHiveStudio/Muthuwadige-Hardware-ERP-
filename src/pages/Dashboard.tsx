@@ -62,7 +62,9 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               }
             }
           }
-        } catch (e) {}
+        } catch (_e) {
+          /* ignore json parse error */
+        }
       }
     }
 
@@ -203,7 +205,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     const message = `Hello, we need to reorder ${item.name}. Current stock is ${currentStockFormatted} and the minimum stock level is ${minStockFormatted}. Please let us know the availability and price.`;
     
     // Normalize phone number (0712345678 -> 94712345678, 712345678 -> 94712345678, 94712345678 -> 94712345678)
-    let cleanPhone = String(phone).replace(/[\s_\.\-\(\)\+]/g, '').trim();
+    let cleanPhone = String(phone).replace(/[\s_.\-()+]/g, '').trim();
     if (cleanPhone.startsWith('0')) {
       cleanPhone = '94' + cleanPhone.substring(1);
     } else if (cleanPhone.startsWith('7')) {
@@ -291,22 +293,29 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         return saleDateStr === today && s.status !== 'cancelled' && s.status !== 'Voided' && s.status !== 'voided';
       }) : [];
 
-      // Calculate return adjustments for today's revenue
+      // Calculate return adjustments for today's revenue (factor in both returned product value and exchange value)
       let todayReturnsAdjustment = 0;
       if (allReturns && allReturns.length > 0) {
         allReturns.forEach((ret: any) => {
-          if (ret.status === 'voided' || ret.status === 'Voided') return;
+          if (ret.status === 'voided' || ret.status === 'Voided' || ret.status === 'cancelled') return;
           if (!ret.created_at) return;
           const retDateStr = new Date(ret.created_at).toLocaleDateString('sv-SE');
           if (retDateStr === today) {
-            const method = ret.returnMethod || ret.return_method;
-            const refund = Number(ret.totalRefunded !== undefined ? ret.totalRefunded : (ret.total_refunded || 0));
-            const exTotal = Number(ret.exchangeTotal !== undefined ? ret.exchangeTotal : (ret.exchange_total || 0));
-            if (method === 'Exchange') {
-              todayReturnsAdjustment += (exTotal - refund);
-            } else {
-              todayReturnsAdjustment -= refund;
-            }
+            const retVal = Number(ret.return_amount !== undefined && ret.return_amount !== null
+              ? ret.return_amount
+              : (ret.returnAmount !== undefined && ret.returnAmount !== null
+                ? ret.returnAmount
+                : (ret.total_refunded !== undefined && ret.total_refunded !== null && Number(ret.total_refunded) > 0
+                  ? ret.total_refunded
+                  : (ret.totalRefunded !== undefined && ret.totalRefunded !== null && Number(ret.totalRefunded) > 0
+                    ? ret.totalRefunded
+                    : (ret.amount || 0)))));
+            const exVal = Number(ret.exchange_amount !== undefined && ret.exchange_amount !== null
+              ? ret.exchange_amount
+              : (ret.exchangeAmount !== undefined && ret.exchangeAmount !== null
+                ? ret.exchangeAmount
+                : (ret.exchange_total || ret.exchangeTotal || 0)));
+            todayReturnsAdjustment += (exVal - retVal);
           }
         });
       }
@@ -372,23 +381,28 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       // Reconcile dynamic trend with returns for Net Sales
       if (allReturns && allReturns.length > 0) {
         allReturns.forEach((ret: any) => {
-          if (ret.status === 'voided' || ret.status === 'Voided') return;
+          if (ret.status === 'voided' || ret.status === 'Voided' || ret.status === 'cancelled') return;
           const retDate = new Date(ret.created_at);
           if (isNaN(retDate.getTime())) return;
 
           const retMonth = retDate.getMonth();
           const retYear = retDate.getFullYear();
           
-          const method = ret.returnMethod || ret.return_method;
-          const refund = Number(ret.totalRefunded !== undefined ? ret.totalRefunded : (ret.total_refunded || 0));
-          const exTotal = Number(ret.exchangeTotal !== undefined ? ret.exchangeTotal : (ret.exchange_total || 0));
-          
-          let adjustment = 0;
-          if (method === 'Exchange') {
-            adjustment = exTotal - refund;
-          } else {
-            adjustment = -refund;
-          }
+          const retVal = Number(ret.return_amount !== undefined && ret.return_amount !== null
+            ? ret.return_amount
+            : (ret.returnAmount !== undefined && ret.returnAmount !== null
+              ? ret.returnAmount
+              : (ret.total_refunded !== undefined && ret.total_refunded !== null && Number(ret.total_refunded) > 0
+                ? ret.total_refunded
+                : (ret.totalRefunded !== undefined && ret.totalRefunded !== null && Number(ret.totalRefunded) > 0
+                  ? ret.totalRefunded
+                  : (ret.amount || 0)))));
+          const exVal = Number(ret.exchange_amount !== undefined && ret.exchange_amount !== null
+            ? ret.exchange_amount
+            : (ret.exchangeAmount !== undefined && ret.exchangeAmount !== null
+              ? ret.exchangeAmount
+              : (ret.exchange_total || ret.exchangeTotal || 0)));
+          const adjustment = exVal - retVal;
 
           const matchingMonth = dynamicTrend.find(
             (m) => m.monthNum === retMonth && m.year === retYear
@@ -462,7 +476,9 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         let items: any[] = [];
         try {
           items = typeof o.items === 'string' ? JSON.parse(o.items) : o.items || [];
-        } catch(e) {}
+        } catch (_e) {
+          /* ignore json parse error */
+        }
         
         let saleCost = 0;
         if (Array.isArray(items)) {
@@ -502,6 +518,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       }
 
       let totalRefundsVal = 0;
+      let totalExchangeCashInflows = 0;
       if (allReturns && allReturns.length > 0) {
         allReturns.forEach((ret: any) => {
           if (ret.status === 'voided' || ret.status === 'Voided' || ret.status === 'cancelled') return;
@@ -509,10 +526,15 @@ export function Dashboard({ onNavigate }: DashboardProps) {
           if (method === 'cash refund' || method === 'cash' || method === 'cash_refund') {
             totalRefundsVal += Number(ret.totalRefunded !== undefined ? ret.totalRefunded : (ret.total_refunded !== undefined ? ret.total_refunded : (ret.refund_amount !== undefined ? ret.refund_amount : (ret.return_amount !== undefined ? ret.return_amount : (ret.amount || 0)))));
           }
+          const paidAmt = Number(ret.customer_paid !== undefined ? ret.customer_paid : (ret.customerPaid || 0));
+          const changeGiven = Number(ret.change_given !== undefined ? ret.change_given : (ret.changeGiven || 0));
+          if (paidAmt > 0) {
+            totalExchangeCashInflows += Math.max(0, paidAmt - changeGiven);
+          }
         });
       }
 
-      setCashBalance(Math.max(0, totalCashCollectedVal - totalRefundsVal));
+      setCashBalance(Math.max(0, totalCashCollectedVal + totalExchangeCashInflows - totalRefundsVal));
 
       // Fetch pending Purchase Orders for supplier alerts
       const { data: poData } = await supabase.from('purchase_orders').select('*');

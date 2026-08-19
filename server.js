@@ -18,23 +18,54 @@ const __dirname = path.dirname(__filename);
 let DB_FILE = path.join(__dirname, 'hardware.db');
 let backupsDir = path.join(__dirname, 'backups');
 let envPath = path.join(__dirname, '.env');
+let USER_DATA_PATH = '';
 
 // Dynamically check if running inside Electron to write databases, backups & env configs to Local AppData
 try {
   const electron = await import('electron');
   const electronApp = electron.app || (electron.default && electron.default.app);
   if (electronApp) {
+    if (electronApp.setName) {
+      try { electronApp.setName('Muthuwadige Hardware ERP'); } catch (e) {}
+    }
+    const appDataRoot = electronApp.getPath('appData');
+    USER_DATA_PATH = path.join(appDataRoot, 'Muthuwadige Hardware ERP');
+    if (electronApp.setPath) {
+      try { electronApp.setPath('userData', USER_DATA_PATH); } catch (e) {}
+    }
+
     const isPackaged = electronApp.isPackaged;
     if (isPackaged) {
-      const appDataPath = electronApp.getPath('userData');
-      DB_FILE = path.join(appDataPath, 'hardware.db');
-      backupsDir = path.join(appDataPath, 'backups');
-      envPath = path.join(appDataPath, '.env');
+      DB_FILE = path.join(USER_DATA_PATH, 'hardware.db');
+      backupsDir = path.join(USER_DATA_PATH, 'backups');
+      envPath = path.join(USER_DATA_PATH, '.env');
 
-      // In production packaged mode: DB_FILE is located in Electron userData directory.
-      // On fresh installation (when DB_FILE does not exist), initializeDatabase() programmatically
-      // creates a clean SQLite database with full schema and default configurations (without dev/test data).
-      // Existing user databases are untouched and preserved with 0 data loss.
+      // Auto-migrate legacy erp-template files to Muthuwadige Hardware ERP if present
+      const legacyPath = path.join(appDataRoot, 'erp-template');
+      if (fs.existsSync(legacyPath)) {
+        if (!fs.existsSync(USER_DATA_PATH)) {
+          fs.mkdirSync(USER_DATA_PATH, { recursive: true });
+        }
+        const legacyDb = path.join(legacyPath, 'hardware.db');
+        if (fs.existsSync(legacyDb) && !fs.existsSync(DB_FILE)) {
+          try {
+            fs.copyFileSync(legacyDb, DB_FILE);
+            console.log('✅ Auto-migrated database from erp-template to Muthuwadige Hardware ERP:', DB_FILE);
+          } catch (mErr) {
+            console.error('Failed to copy legacy db:', mErr);
+          }
+        }
+        const legacyEnv = path.join(legacyPath, '.env');
+        if (fs.existsSync(legacyEnv) && !fs.existsSync(envPath)) {
+          try {
+            fs.copyFileSync(legacyEnv, envPath);
+            console.log('✅ Auto-migrated .env from erp-template to Muthuwadige Hardware ERP:', envPath);
+          } catch (mErr) {
+            console.error('Failed to copy legacy env:', mErr);
+          }
+        }
+      }
+
       console.log('📂 Production Electron database path:', DB_FILE);
 
       // Auto-migrate env config: copy .env from bundled code to AppData folder
@@ -44,7 +75,6 @@ try {
           if (fs.existsSync(bundledEnv)) {
             fs.copyFileSync(bundledEnv, envPath);
             console.log('✅ .env file successfully initialized in AppData:', envPath);
-            console.log('✅ .env file auto-restored from workspace to AppData:', envPath);
           }
         } catch (err) {
           console.error('❌ Failed to copy .env to AppData path:', err);
@@ -96,7 +126,58 @@ app.use((req, res, next) => {
   });
   next();
 });
-app.use('/backups', express.static(backupsDir));
+app.get('/backups/:filename', (req, res) => {
+  const filename = path.basename(req.params.filename);
+
+  const candidateDirs = [
+    backupsDir,
+    path.join(__dirname, 'backups'),
+    USER_DATA_PATH ? path.join(USER_DATA_PATH, 'backups') : null,
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'Muthuwadige Hardware ERP', 'backups') : null
+  ].filter(Boolean);
+
+  let foundPath = null;
+  for (const dir of candidateDirs) {
+    const candidate = path.join(dir, filename);
+    if (fs.existsSync(candidate)) {
+      foundPath = candidate;
+      break;
+    }
+  }
+
+  if (foundPath) {
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.sendFile(foundPath);
+  } else {
+    return res.status(404).send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Backup File Not Found</title>
+          <meta charset="utf-8">
+          <style>
+            body { font-family: system-ui, -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #0f172a; color: #f8fafc; }
+            .card { text-align: center; max-width: 480px; padding: 40px 32px; background: #1e293b; border-radius: 16px; border: 1px solid #334155; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }
+            .icon { font-size: 48px; margin-bottom: 16px; }
+            h2 { color: #f43f5e; margin: 0 0 12px 0; font-size: 22px; font-weight: 800; }
+            p { color: #94a3b8; font-size: 14px; line-height: 1.6; margin: 0 0 24px 0; }
+            code { background: #0f172a; padding: 2px 6px; border-radius: 4px; color: #f1f5f9; font-size: 13px; }
+            .btn { display: inline-block; padding: 10px 20px; background: #3b82f6; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="icon">📁</div>
+            <h2>Backup File Missing</h2>
+            <p>The requested backup file <code>${filename}</code> could not be located in the backup directory. It may have been moved or deleted.</p>
+            <a href="javascript:window.close()" class="btn">Close Window</a>
+          </div>
+        </body>
+      </html>
+    `);
+  }
+});
 
 // Express request timeout middleware (prevents hanging HTTP sockets)
 app.use((req, res, next) => {
@@ -230,6 +311,8 @@ const DEFAULT_RUNTIME_SETTINGS = {
   backup_email: 'sanojhardware@gmail.com',
   backup_enabled: 0,
   next_invoice_number: 'INV001',
+  return_passkey: '1234',
+  void_passkey: '1234',
   updated_at: new Date().toISOString()
 };
 
@@ -261,6 +344,15 @@ function safeParseJson(str, fallback = {}) {
 }
 
 function normalizeRuntimeSettings(payload = {}) {
+  const passkeyVal = (
+    payload.return_passkey ||
+    payload.returnPasskey ||
+    payload.void_passkey ||
+    payload.voidPasskey ||
+    DEFAULT_RUNTIME_SETTINGS.return_passkey ||
+    '1234'
+  ).toString().trim();
+
   const normalized = {
     ...DEFAULT_RUNTIME_SETTINGS,
     ...payload,
@@ -277,6 +369,8 @@ function normalizeRuntimeSettings(payload = {}) {
     printer_settings: safeParseJson(payload.printer_settings || payload.printerSettings),
     branch_settings: safeParseJson(payload.branch_settings || payload.branchSettings),
     next_invoice_number: payload.next_invoice_number || payload.nextInvoiceNumber || DEFAULT_RUNTIME_SETTINGS.next_invoice_number,
+    return_passkey: passkeyVal,
+    void_passkey: passkeyVal,
     updated_at: payload.updated_at || new Date().toISOString()
   };
 
@@ -288,8 +382,8 @@ async function getRuntimeSettingsSnapshot() {
   if (!settings) {
     const initial = { ...DEFAULT_RUNTIME_SETTINGS, id: 'global' };
     await db.run(
-      'INSERT INTO system_settings (id, shop_name, address, phone, email, currency, tax_rate, backup_email, backup_enabled, logo_path, printer_settings, branch_settings, next_invoice_number, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [initial.id, initial.shop_name, initial.address, initial.phone, initial.email, initial.currency, initial.tax_rate, initial.backup_email, initial.backup_enabled, '', '', '', initial.next_invoice_number, initial.updated_at]
+      'INSERT INTO system_settings (id, shop_name, address, phone, email, currency, tax_rate, backup_email, backup_enabled, logo_path, printer_settings, branch_settings, next_invoice_number, return_passkey, void_passkey, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [initial.id, initial.shop_name, initial.address, initial.phone, initial.email, initial.currency, initial.tax_rate, initial.backup_email, initial.backup_enabled, '', '', '', initial.next_invoice_number, initial.return_passkey, initial.void_passkey, initial.updated_at]
     );
     settings = initial;
   }
@@ -314,8 +408,10 @@ async function setRuntimeSettings(payload = {}) {
       printer_settings, 
       branch_settings, 
       next_invoice_number,
+      return_passkey,
+      void_passkey,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       'global',
       updated.shop_name,
@@ -330,6 +426,8 @@ async function setRuntimeSettings(payload = {}) {
       typeof updated.printer_settings === 'object' ? JSON.stringify(updated.printer_settings) : updated.printer_settings || '',
       typeof updated.branch_settings === 'object' ? JSON.stringify(updated.branch_settings) : updated.branch_settings || '',
       updated.next_invoice_number,
+      updated.return_passkey,
+      updated.void_passkey,
       updated.updated_at
     ]
   );
@@ -524,6 +622,8 @@ async function initializeDatabase() {
       printer_settings TEXT DEFAULT '',
       branch_settings TEXT DEFAULT '',
       next_invoice_number TEXT DEFAULT 'INV001',
+      return_passkey TEXT DEFAULT '1234',
+      void_passkey TEXT DEFAULT '1234',
       updated_at TEXT
     )
   `);
@@ -564,6 +664,27 @@ async function initializeDatabase() {
   // Auto-migrate historical Sales Return transactions from 'expense' to 'contra_revenue'
   try {
     await db.run("UPDATE transactions SET type = 'contra_revenue' WHERE (category = 'Sales Return' OR category = 'Exchange Refund' OR category LIKE 'Sales Return%') AND type = 'expense'");
+    
+    // Backfill contra_revenue transactions for credit sale returns/exchanges if missing
+    const creditReturns = await db.all("SELECT * FROM sales_returns WHERE status = 'active' AND (is_credit = 1 OR return_method IN ('Return', 'Exchange'))");
+    for (const r of creditReturns) {
+      const isCredit = Boolean(r.is_credit);
+      if (isCredit) {
+        const existingTx = await db.get("SELECT id FROM transactions WHERE reference = ? AND (category LIKE '%Credit Adjustment%' OR category LIKE 'Sales Return%')", [r.invoice_no]);
+        if (!existingTx) {
+          const retAmt = Number(r.return_amount || 0);
+          const exAmt = Number(r.exchange_amount || 0);
+          const netReturnVal = Math.max(0, retAmt - exAmt);
+          if (netReturnVal > 0) {
+            const txId = 't_sr_bf_' + (r.id || Date.now());
+            await db.run(
+              'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+              [txId, 'contra_revenue', 'Sales Return (Credit Adjustment)', `Credit Return Revenue Adjustment for ${r.invoice_no}`, netReturnVal, new Date(r.created_at || Date.now()).toLocaleDateString('sv-SE'), r.invoice_no, r.user_id || 'system']
+            );
+          }
+        }
+      }
+    }
   } catch (e) {}
 
   // 9. Create Suppliers Table
@@ -817,6 +938,12 @@ async function initializeDatabase() {
   } catch(e) {}
   try {
     await db.exec("ALTER TABLE system_settings ADD COLUMN next_invoice_number TEXT DEFAULT 'INV001'");
+  } catch(e) {}
+  try {
+    await db.exec("ALTER TABLE system_settings ADD COLUMN return_passkey TEXT DEFAULT '1234'");
+  } catch(e) {}
+  try {
+    await db.exec("ALTER TABLE system_settings ADD COLUMN void_passkey TEXT DEFAULT '1234'");
   } catch(e) {}
   try {
     await db.exec("ALTER TABLE sales ADD COLUMN transportation_fee REAL DEFAULT 0");
@@ -1125,14 +1252,28 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
   if (fromDate) args.push('--fromDate', fromDate);
   if (toDate) args.push('--toDate', toDate);
 
+  const workerEnv = { 
+    ...process.env, 
+    ELECTRON_RUN_AS_NODE: '1',
+    DB_FILE: DB_FILE,
+    BACKUPS_DIR: backupsDir,
+    ENV_PATH: envPath
+  };
+  if (USER_DATA_PATH) {
+    workerEnv.USER_DATA_PATH = USER_DATA_PATH;
+  }
+
   console.log(`\n📦 Spawning backup worker from main process (Main PID: ${process.pid})...`);
   console.log(`   Worker args: ${args.length > 0 ? args.join(' ') : '(default auto backup)'}\n`);
 
   return new Promise((resolve) => {
+    let stdoutBuffer = '';
+    let stderrBuffer = '';
+
     const worker = spawn(process.execPath, [workerPath, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
-      env: { ...process.env }
+      env: workerEnv
     });
 
     const workerPid = worker.pid;
@@ -1140,25 +1281,35 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
 
     // Capture worker output for logging
     worker.stdout.on('data', (data) => {
-      console.log(`[Worker ${workerPid}] ${data.toString().trim()}`);
+      const str = data.toString();
+      stdoutBuffer += str;
+      console.log(`[Worker ${workerPid}] ${str.trim()}`);
     });
 
     worker.stderr.on('data', (data) => {
-      console.error(`[Worker ${workerPid}] ERROR: ${data.toString().trim()}`);
+      const str = data.toString();
+      stderrBuffer += str;
+      console.error(`[Worker ${workerPid}] ERROR: ${str.trim()}`);
     });
 
     worker.on('error', (err) => {
       console.error(`❌ Backup worker error (PID ${workerPid}):`, err.message);
-      resolve({ success: false, error: err.message, message: err.message, pid: workerPid });
+      resolve({ success: false, error: err.message, message: err.message || 'Worker spawn error', pid: workerPid });
     });
 
     worker.on('exit', (code, signal) => {
       if (code === 0) {
         console.log(`✅ Backup worker completed successfully (PID ${workerPid})`);
-        resolve({ success: true, pid: workerPid, message: 'Backup completed successfully' });
+        resolve({ success: true, pid: workerPid, message: 'Full backup generated and emailed successfully!' });
       } else {
-        console.error(`❌ Backup worker failed with exit code ${code} (PID ${workerPid})`);
-        resolve({ success: false, code, signal, pid: workerPid, message: `Backup worker failed with code ${code}` });
+        const fullOutput = stderrBuffer.trim() || stdoutBuffer.trim() || `Backup worker exited with code ${code}`;
+        let cleanMsg = fullOutput;
+        const errMatch = fullOutput.match(/ERROR:\s*(.+)/i);
+        if (errMatch && errMatch[1]) {
+          cleanMsg = errMatch[1].trim();
+        }
+        console.error(`❌ Backup worker failed with exit code ${code} (PID ${workerPid}): ${cleanMsg}`);
+        resolve({ success: false, code, signal, pid: workerPid, message: cleanMsg, error: cleanMsg });
       }
     });
   });
@@ -1258,10 +1409,15 @@ app.post('/api/settings/trigger-backup', async (req, res) => {
     if (result.success) {
       res.json(result);
     } else {
-      res.status(500).json(result);
+      res.status(500).json({
+        success: false,
+        message: result.message || result.error || 'Backup operation failed.',
+        error: result.error || result.message || 'Backup operation failed.',
+        code: result.code
+      });
     }
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message || 'Backup server error', error: err.message });
   }
 });
 
@@ -1272,9 +1428,18 @@ app.get('/api/trigger-backup', async (req, res) => {
     const settings = await getRuntimeSettingsSnapshot();
     const email = settings.backup_email || 'sanojhardware@gmail.com';
     const result = await performBackup(email, 'Manual', fromDate, toDate);
-    res.json(result);
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(500).json({
+        success: false,
+        message: result.message || result.error || 'Backup operation failed.',
+        error: result.error || result.message || 'Backup operation failed.',
+        code: result.code
+      });
+    }
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message || 'Backup server error', error: err.message });
   }
 });
 
@@ -2132,9 +2297,11 @@ app.get('/api/sales/returns', async (req, res) => {
         user_id TEXT,
         status TEXT DEFAULT 'active',
         reason TEXT,
-        created_at TEXT
+        created_at TEXT,
+        is_credit INTEGER DEFAULT 0
       )
     `);
+    try { await db.exec("ALTER TABLE sales_returns ADD COLUMN is_credit INTEGER DEFAULT 0"); } catch (e) {}
     const returns = await db.all('SELECT * FROM sales_returns ORDER BY created_at DESC');
     const mapped = returns.map(r => ({
       id: r.id,
@@ -2158,7 +2325,9 @@ app.get('/api/sales/returns', async (req, res) => {
       userId: r.user_id,
       status: r.status || 'active',
       reason: r.reason || '',
-      created_at: r.created_at
+      created_at: r.created_at,
+      isCredit: Boolean(r.is_credit),
+      is_credit: Boolean(r.is_credit)
     }));
     res.json(mapped);
   } catch (err) {
@@ -2258,12 +2427,43 @@ app.post('/api/sales/returns', async (req, res) => {
     const resolvedCustName = customerName || sale.customer_name || sale.customerName || 'Guest Customer';
     const resolvedCustPhone = customerPhone || sale.customer_phone || sale.customerPhone || '';
 
-    // Calculate actual returnAmount if 0
+    // Detect if invoice / customer is a Credit Customer
+    const salePayMethod = (sale.payment_method || sale.paymentMethod || '').toString().toLowerCase().trim();
+    const saleStatus = (sale.status || '').toString().toLowerCase().trim();
+    let isCreditCustomer = salePayMethod === 'credit' || salePayMethod === 'credit sale' || sale.is_credit === 1 || sale.is_credit === true || saleStatus === 'non paid' || saleStatus === 'non-paid' || saleStatus === 'partially paid' || saleStatus === 'partially settled';
+
+    if (!isCreditCustomer && sale.customer_id) {
+      const custRecord = await db.get('SELECT * FROM customers WHERE id = ?', [sale.customer_id]);
+      if (custRecord) {
+        const custType = (custRecord.type || '').toString().toLowerCase().trim();
+        if (custType === 'credit' || custRecord.is_credit === 1 || custRecord.is_credit === true) {
+          isCreditCustomer = true;
+        }
+      }
+    }
+
+    // Calculate actual returnAmount & exchangeAmount
     const calcReturnAmount = returnAmount || returnedItems.reduce((acc, i) => acc + (Number(i.qty || 0) * Number(i.price || 0)), 0);
     const calcExchangeAmount = exchangeAmount || exchangeItems.reduce((acc, i) => acc + (Number(i.qty || 0) * Number(i.price || 0)), 0);
 
+    // Safety Rule 8: For Credit Customers, force Return & Exchange method, 0 cash refund, 0 cash change
+    let finalReturnMethod = returnMethod;
+    let finalTotalRefunded = totalRefunded;
+    let finalChangeGiven = changeGiven;
+    let finalCustomerPaid = customerPaid;
+
+    if (isCreditCustomer) {
+      finalReturnMethod = (exchangeItems && exchangeItems.length > 0) ? 'Exchange' : 'Return';
+      finalTotalRefunded = 0;
+      finalChangeGiven = 0;
+      const netDiff = calcExchangeAmount - calcReturnAmount;
+      if (netDiff <= 0) {
+        finalCustomerPaid = 0;
+      }
+    }
+
     let finalCreditNoteNo = creditNoteNo;
-    if (returnMethod === 'Credit Note' && !finalCreditNoteNo) {
+    if (finalReturnMethod === 'Credit Note' && !finalCreditNoteNo) {
       finalCreditNoteNo = 'CN-' + String(timestamp).slice(-6);
     }
 
@@ -2273,13 +2473,13 @@ app.post('/api/sales/returns', async (req, res) => {
         id, return_no, invoice_no, customer_name, customer_phone, 
         returned_items, exchange_items, return_method, return_amount, exchange_amount, 
         balance_amount, total_refunded, customer_paid, change_given, credit_note_no, 
-        user_id, status, reason, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        user_id, status, reason, created_at, is_credit
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id, return_no, invoiceNo, resolvedCustName, resolvedCustPhone,
-        JSON.stringify(returnedItems), JSON.stringify(exchangeItems), returnMethod, calcReturnAmount, calcExchangeAmount,
-        balanceAmount, totalRefunded, customerPaid, changeGiven, finalCreditNoteNo,
-        userEmail || 'system', 'active', reason || '', created_at
+        JSON.stringify(returnedItems), JSON.stringify(exchangeItems), finalReturnMethod, calcReturnAmount, calcExchangeAmount,
+        balanceAmount, finalTotalRefunded, finalCustomerPaid, finalChangeGiven, finalCreditNoteNo,
+        userEmail || 'system', 'active', reason || '', created_at, isCreditCustomer ? 1 : 0
       ]
     );
 
@@ -2302,7 +2502,7 @@ app.post('/api/sales/returns', async (req, res) => {
     }
 
     // 4. Handle Exchange items stock deduction
-    if (returnMethod === 'Exchange' && exchangeItems.length > 0) {
+    if (finalReturnMethod === 'Exchange' && exchangeItems.length > 0) {
       for (const exItem of exchangeItems) {
         const convRate = Number(exItem.conversionRate) || 1;
         const rawBaseDeduction = convRate > 0 ? (Number(exItem.qty || 0) / convRate) : Number(exItem.qty || 0);
@@ -2314,8 +2514,8 @@ app.post('/api/sales/returns', async (req, res) => {
       }
     }
 
-    // 5. Handle Credit Note creation if returnMethod === 'Credit Note'
-    if (returnMethod === 'Credit Note') {
+    // 5. Handle Credit Note creation if finalReturnMethod === 'Credit Note'
+    if (finalReturnMethod === 'Credit Note') {
       const cnId = 'cn_' + timestamp;
       await db.run(
         `INSERT INTO credit_notes (
@@ -2329,28 +2529,51 @@ app.post('/api/sales/returns', async (req, res) => {
       );
     }
 
-    // 6. Log financial transactions
-    if (returnMethod === 'Cash Refund' && totalRefunded > 0) {
-      const txId = 't_' + Date.now();
-      await db.run(
-        'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [txId, 'contra_revenue', 'Sales Return', `Sales Return Refund for ${invoiceNo}`, totalRefunded, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
-      );
-    } else if (returnMethod === 'Exchange') {
-      if (customerPaid > 0) {
+    // 6. Log financial transactions & revenue adjustments
+    if (isCreditCustomer) {
+      const netReturnVal = calcReturnAmount - calcExchangeAmount;
+      if (netReturnVal > 0) {
+        // Credit sale return/exchange where returned value > exchange value:
+        // Log contra_revenue to decrease Total Revenue by netReturnVal
         const txId = 't_' + Date.now();
         await db.run(
           'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [txId, 'income', 'Exchange Payment', `Exchange Balance Payment for ${invoiceNo}`, customerPaid - changeGiven, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
-        );
-      } else if (totalRefunded > 0) {
-        const txId = 't_' + Date.now();
-        await db.run(
-          'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [txId, 'contra_revenue', 'Exchange Refund', `Exchange Balance Refund for ${invoiceNo}`, totalRefunded, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+          [txId, 'contra_revenue', 'Sales Return (Credit Adjustment)', `Credit Return Revenue Adjustment for ${invoiceNo}`, netReturnVal, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
         );
       }
+      if (finalCustomerPaid > 0) {
+        const txId = 't_' + Date.now() + '_ex';
+        await db.run(
+          'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [txId, 'income', 'Exchange Payment', `Exchange Balance Payment for ${invoiceNo}`, finalCustomerPaid - finalChangeGiven, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+        );
+      }
+    } else {
+      // Non-credit (Cash / Normal Sale Return)
+      if (finalReturnMethod === 'Cash Refund' && finalTotalRefunded > 0) {
+        const txId = 't_' + Date.now();
+        await db.run(
+          'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [txId, 'contra_revenue', 'Sales Return', `Sales Return Refund for ${invoiceNo}`, finalTotalRefunded, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+        );
+      } else if (finalReturnMethod === 'Exchange') {
+        if (finalCustomerPaid > 0) {
+          const txId = 't_' + Date.now();
+          await db.run(
+            'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [txId, 'income', 'Exchange Payment', `Exchange Balance Payment for ${invoiceNo}`, finalCustomerPaid - finalChangeGiven, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+          );
+        } else if (finalTotalRefunded > 0) {
+          const txId = 't_' + Date.now();
+          await db.run(
+            'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [txId, 'contra_revenue', 'Exchange Refund', `Exchange Balance Refund for ${invoiceNo}`, finalTotalRefunded, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+          );
+        }
+      }
     }
+
+    // Credit return balance adjustments are derived dynamically from sales_returns without mutating sales.payment_received or sales.total_amount
 
     // 7. Update sales invoice status (Partially Returned / Fully Returned)
     const updatedActiveReturns = await db.all('SELECT returned_items FROM sales_returns WHERE invoice_no = ? AND status = ?', [invoiceNo, 'active']);
@@ -2370,7 +2593,7 @@ app.post('/api/sales/returns', async (req, res) => {
     }
     await db.run('UPDATE sales SET status = ? WHERE id = ?', [newStatus, sale.id]);
 
-    await logAudit(userEmail || 'system', 'SALES_RETURN', `Processed ${returnMethod} (Return No: ${return_no}) for Invoice ${invoiceNo} (Amount: Rs. ${calcReturnAmount})`);
+    await logAudit(userEmail || 'system', 'SALES_RETURN', `Processed ${finalReturnMethod} (Return No: ${return_no}) for Invoice ${invoiceNo} (Amount: Rs. ${calcReturnAmount})`);
 
     await commitTxn(db, txn);
     console.log(`[END] Process Sales Return: Invoice ${invoiceNo} - ${Date.now() - startTime}ms`);
@@ -2380,7 +2603,7 @@ app.post('/api/sales/returns', async (req, res) => {
       returnNo: return_no, 
       return_no,
       invoice_no: invoiceNo, 
-      totalRefunded,
+      totalRefunded: finalTotalRefunded,
       creditNoteNo: finalCreditNoteNo
     });
   } catch (err) {
@@ -2989,13 +3212,7 @@ app.post('/api/transactions', async (req, res) => {
 });
 
 app.delete('/api/transactions/:id', async (req, res) => {
-  const { id } = req.params;
-  try {
-    await db.run('DELETE FROM transactions WHERE id = ?', [id]);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  return res.status(403).json({ error: 'Deleting finance/accounting transaction records is disabled for financial audit compliance.' });
 });
 
 // SYSTEM SETTINGS
@@ -3023,35 +3240,88 @@ app.put('/api/settings', async (req, res) => {
 });
 
 // BACKUP HISTORY LOGS API
-app.get('/api/backup_logs', async (req, res) => {
+const getBackupLogsHandler = async (req, res) => {
   try {
-    const logs = await db.all('SELECT * FROM backup_logs ORDER BY timestamp DESC');
-    res.json(logs);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS backup_logs (
+        id TEXT PRIMARY KEY,
+        file_name TEXT,
+        file_path TEXT,
+        status TEXT,
+        type TEXT,
+        timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-app.get('/api/backup-logs', async (req, res) => {
-  try {
-    const logs = await db.all('SELECT * FROM backup_logs ORDER BY timestamp DESC');
+    let logs = await db.all('SELECT * FROM backup_logs ORDER BY timestamp DESC');
+    
+    // Auto-reconcile physical backup files in candidate directories with DB logs
+    const candidateDirs = [
+      backupsDir,
+      path.join(__dirname, 'backups'),
+      USER_DATA_PATH ? path.join(USER_DATA_PATH, 'backups') : null,
+      process.env.APPDATA ? path.join(process.env.APPDATA, 'Muthuwadige Hardware ERP', 'backups') : null
+    ].filter(Boolean);
+
+    const loggedNames = new Set(logs.map(l => l.file_name));
+    let newLogInserted = false;
+
+    for (const bDir of candidateDirs) {
+      if (fs.existsSync(bDir)) {
+        const files = fs.readdirSync(bDir).filter(f => f.endsWith('.xlsx'));
+        for (const file of files) {
+          if (!loggedNames.has(file)) {
+            const filePath = path.join(bDir, file);
+            let stats = { mtimeMs: Date.now(), mtime: new Date() };
+            try { stats = fs.statSync(filePath); } catch (e) {}
+            const logId = `b_${Math.floor(stats.mtimeMs || Date.now())}`;
+            const timestamp = stats.mtime ? stats.mtime.toISOString() : new Date().toISOString();
+            
+            await db.run(
+              'INSERT INTO backup_logs (id, file_name, file_path, status, type, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
+              [logId, file, filePath, 'Success', 'Manual', timestamp]
+            );
+            loggedNames.add(file);
+            newLogInserted = true;
+          }
+        }
+      }
+    }
+
+    if (newLogInserted) {
+      logs = await db.all('SELECT * FROM backup_logs ORDER BY timestamp DESC');
+    }
+
     res.json(logs);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
+};
+
+app.get('/api/backup_logs', getBackupLogsHandler);
+app.get('/api/backup-logs', getBackupLogsHandler);
 
 app.delete('/api/backup-logs/:id', async (req, res) => {
   const { id } = req.params;
   try {
     const log = await db.get('SELECT * FROM backup_logs WHERE id = ?', [id]);
     if (log && log.file_name) {
-      const filePath = path.join(backupsDir, log.file_name);
-      if (fs.existsSync(filePath)) {
-        try {
-          fs.unlinkSync(filePath);
-        } catch (fileErr) {
-          console.error("Error deleting physical backup file:", fileErr);
+      const filename = path.basename(log.file_name);
+      const candidateDirs = [
+        backupsDir,
+        path.join(__dirname, 'backups'),
+        USER_DATA_PATH ? path.join(USER_DATA_PATH, 'backups') : null,
+        process.env.APPDATA ? path.join(process.env.APPDATA, 'Muthuwadige Hardware ERP', 'backups') : null
+      ].filter(Boolean);
+
+      for (const bDir of candidateDirs) {
+        const filePath = path.join(bDir, filename);
+        if (fs.existsSync(filePath)) {
+          try {
+            fs.unlinkSync(filePath);
+          } catch (fileErr) {
+            console.error("Error deleting physical backup file:", fileErr);
+          }
         }
       }
     }
@@ -3068,15 +3338,25 @@ app.post('/api/backup-logs/bulk-delete', async (req, res) => {
     return res.status(400).json({ error: 'Invalid or missing ids array' });
   }
   try {
+    const candidateDirs = [
+      backupsDir,
+      path.join(__dirname, 'backups'),
+      USER_DATA_PATH ? path.join(USER_DATA_PATH, 'backups') : null,
+      process.env.APPDATA ? path.join(process.env.APPDATA, 'Muthuwadige Hardware ERP', 'backups') : null
+    ].filter(Boolean);
+
     for (const id of ids) {
       const log = await db.get('SELECT * FROM backup_logs WHERE id = ?', [id]);
       if (log && log.file_name) {
-        const filePath = path.join(backupsDir, log.file_name);
-        if (fs.existsSync(filePath)) {
-          try {
-            fs.unlinkSync(filePath);
-          } catch (fileErr) {
-            console.error("Error deleting physical backup file:", fileErr);
+        const filename = path.basename(log.file_name);
+        for (const bDir of candidateDirs) {
+          const filePath = path.join(bDir, filename);
+          if (fs.existsSync(filePath)) {
+            try {
+              fs.unlinkSync(filePath);
+            } catch (fileErr) {
+              console.error("Error deleting physical backup file:", fileErr);
+            }
           }
         }
       }
@@ -3085,6 +3365,106 @@ app.post('/api/backup-logs/bulk-delete', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+const updateEnvCredentials = (newEnvObj) => {
+  try {
+    let content = '';
+    if (fs.existsSync(envPath)) {
+      content = fs.readFileSync(envPath, 'utf8');
+    }
+    let lines = content.split(/\r?\n/);
+
+    for (const [key, value] of Object.entries(newEnvObj)) {
+      if (!key) continue;
+      process.env[key] = value;
+      let found = false;
+      lines = lines.map(line => {
+        if (line.trim().startsWith(`${key}=`)) {
+          found = true;
+          return `${key}=${value}`;
+        }
+        return line;
+      });
+      if (!found) {
+        lines.push(`${key}=${value}`);
+      }
+    }
+
+    const newContent = lines.join('\n');
+    const envDir = path.dirname(envPath);
+    if (!fs.existsSync(envDir)) {
+      fs.mkdirSync(envDir, { recursive: true });
+    }
+    fs.writeFileSync(envPath, newContent, 'utf8');
+    console.log('✅ AppData .env configuration updated successfully at:', envPath);
+    return true;
+  } catch (err) {
+    console.error('❌ Failed to update AppData .env file:', err);
+    throw err;
+  }
+};
+
+// GET SMTP CONFIGURATION STATUS (NEVER RETURNS PASSWORD)
+app.get('/api/settings/smtp-config', (req, res) => {
+  try {
+    const user = process.env.GMAIL_USER || '';
+    const pass = process.env.GMAIL_PASS || '';
+    res.json({
+      configured: Boolean(user && pass && pass.trim().length > 0),
+      gmail_user: user,
+      gmail_pass_configured: Boolean(pass && pass.trim().length > 0)
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST SMTP CONFIGURATION (SAVES TO APPDATA .ENV)
+app.post('/api/settings/smtp-config', (req, res) => {
+  try {
+    const { gmail_user, gmail_pass } = req.body || {};
+    const updates = {};
+    if (gmail_user !== undefined && typeof gmail_user === 'string') {
+      updates.GMAIL_USER = gmail_user.trim();
+    }
+    if (gmail_pass && typeof gmail_pass === 'string' && gmail_pass.trim() !== '' && gmail_pass !== '••••••••') {
+      updates.GMAIL_PASS = gmail_pass.trim();
+    }
+
+    updateEnvCredentials(updates);
+    res.json({ success: true, message: 'SMTP credentials saved successfully to AppData configuration!' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST TEST SMTP CONNECTION
+app.post('/api/settings/test-smtp', async (req, res) => {
+  try {
+    const user = process.env.GMAIL_USER || '';
+    const pass = process.env.GMAIL_PASS || '';
+
+    if (!user || !pass) {
+      return res.status(400).json({
+        success: false,
+        message: 'SMTP credentials missing: GMAIL_USER or GMAIL_PASS environment variables are not configured in AppData .env file.'
+      });
+    }
+
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user, pass }
+    });
+
+    await transporter.verify();
+    res.json({ success: true, message: `SMTP Connection Successful! Account ${user} authenticated.` });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      message: `SMTP Connection Failed: ${err.message || 'Authentication error. Verify App Password.'}`
+    });
   }
 });
 

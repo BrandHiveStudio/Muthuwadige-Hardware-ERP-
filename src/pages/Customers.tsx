@@ -18,6 +18,7 @@ import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabaseClient';
 import { useCurrency } from '../context/CurrencyContext'; // Global currency sync
 import type { Customer, SaleOrder } from '../types';
+import { calculateSaleAccounting, isCreditSaleRecord } from '../utils/sales/accounting';
 
 const emptyCustomer: Omit<Customer, 'id'> = {
   name: '',
@@ -195,18 +196,27 @@ export function Customers() {
     settledInvoices: { invoiceNo: string; amount: number }[];
   } | null>(null);
 
-  // Map cumulative active return amounts per invoice
-  const returnedAmountMap = useMemo(() => {
-    const map: Record<string, number> = {};
+  // Map cumulative active return & exchange amounts per invoice (VERIFIED FORMULA)
+  const exchangeBalanceMap = useMemo(() => {
+    const balanceMap: Record<string, { totalExchange: number; totalReturn: number; totalCustomerPaid: number; netBalance: number }> = {};
     allReturns
-      .filter(r => r.status !== 'voided')
+      .filter(r => r.status !== 'voided' && r.status !== 'Voided' && r.status !== 'cancelled')
       .forEach(r => {
         const invNo = r.invoice_no || r.invoiceNo;
         if (invNo) {
-          map[invNo] = (map[invNo] || 0) + Number(r.return_amount || r.returnAmount || 0);
+          const retAmt = Number(r.return_amount || r.returnAmount || 0);
+          const exAmt = Number(r.exchange_amount || r.exchangeAmount || 0);
+          const custPaid = Number(r.customer_paid || r.customerPaid || 0);
+          if (!balanceMap[invNo]) {
+            balanceMap[invNo] = { totalExchange: 0, totalReturn: 0, totalCustomerPaid: 0, netBalance: 0 };
+          }
+          balanceMap[invNo].totalExchange += exAmt;
+          balanceMap[invNo].totalReturn += retAmt;
+          balanceMap[invNo].totalCustomerPaid += custPaid;
+          balanceMap[invNo].netBalance = balanceMap[invNo].totalExchange - balanceMap[invNo].totalReturn - balanceMap[invNo].totalCustomerPaid;
         }
       });
-    return map;
+    return balanceMap;
   }, [allReturns]);
 
   // Helper to determine if an invoice is an actual CREDIT sale
@@ -236,23 +246,19 @@ export function Customers() {
       if (s.customer_id !== customer.id) return false;
 
       // Must be an actual CREDIT sale (Cash sales with returns are excluded)
-      if (!isCreditSale(s)) return false;
+      if (!isCreditSaleRecord(s)) return false;
 
-      // Calculate net invoice total after returns
-      const invNo = s.invoice_no || s.invoiceNo;
-      const originalTotal = Number(s.total_amount || s.total || 0);
-      const returnedAmount = returnedAmountMap[invNo] || 0;
-      const effectiveTotal = Math.max(0, originalTotal - returnedAmount);
-      const alreadyPaid = Number(s.payment_received || 0);
-      const outstanding = Math.max(0, effectiveTotal - alreadyPaid);
+      // Calculate net invoice total after returns and exchanges using unified engine
+      const acct = calculateSaleAccounting(s, allReturns);
+      const outstanding = acct.netOutstanding;
 
-      // If remaining credit balance is zero (fully paid or fully returned), exclude invoice
-      if (outstanding <= 0.001) return false;
+      // Include if outstanding > 0.001
+      if (outstanding < 0.001) return false;
 
       // Filter by selected date range
       const saleDate = s.created_at || s.date || '';
       const dateOnly = saleDate.substring(0, 10);
-      
+
       if (fromDate && dateOnly < fromDate) return false;
       if (toDate && dateOnly > toDate) return false;
 
@@ -260,12 +266,8 @@ export function Customers() {
     });
 
     const totalOutstanding = unpaidSales.reduce((sum, s) => {
-      const invNo = s.invoice_no || s.invoiceNo;
-      const originalTotal = Number(s.total_amount || s.total || 0);
-      const returnedAmount = returnedAmountMap[invNo] || 0;
-      const effectiveTotal = Math.max(0, originalTotal - returnedAmount);
-      const alreadyPaid = Number(s.payment_received || 0);
-      return sum + Math.max(0, effectiveTotal - alreadyPaid);
+      const acct = calculateSaleAccounting(s, allReturns);
+      return sum + acct.netOutstanding;
     }, 0);
 
     return {
@@ -275,7 +277,7 @@ export function Customers() {
     };
   });
 
-  const creditCustomers = customerBalances.filter(c => c.totalOutstanding > 0);
+  const creditCustomers = customerBalances.filter(c => Math.abs(c.totalOutstanding) > 0.01);  // Include positive AND refund scenarios
   
   const totalOutstandingCredit = creditCustomers.reduce((sum, c) => sum + c.totalOutstanding, 0);
 
@@ -326,23 +328,19 @@ export function Customers() {
         return new Date(a.created_at || a.date).getTime() - new Date(b.created_at || b.date).getTime();
       });
 
-      const totalOwed = sortedUnpaid.reduce((s, x) => s + (x.total_amount || x.total || 0) - (x.payment_received || 0), 0);
-      
-      const amt = enteredAmt;
-      
-      let remainingToPay = amt;
+      let remainingToPay = enteredAmt;
       const invoicesFullySettled: string[] = [];
       const settledInvoicesInfo: { invoiceNo: string; amount: number }[] = [];
 
       // Fully settle as many invoices as possible oldest-first
       for (const sale of sortedUnpaid) {
-        const saleTotal = sale.total_amount || sale.total || 0;
-        const alreadyPaid = sale.payment_received || 0;
-        const remainingOnSale = Math.max(0, saleTotal - alreadyPaid);
+        const invNo = sale.invoice_no || sale.invoiceNo || sale.id;
+        const acct = calculateSaleAccounting(sale, allReturns);
+        const remainingOnSale = acct.netOutstanding;
 
-        if (remainingToPay >= remainingOnSale) {
+        if (remainingOnSale > 0.01 && remainingToPay >= remainingOnSale) {  // Only settle if positive
           invoicesFullySettled.push(sale.id);
-          settledInvoicesInfo.push({ invoiceNo: sale.invoice_no || sale.invoiceNo || sale.id, amount: remainingOnSale });
+          settledInvoicesInfo.push({ invoiceNo: invNo, amount: remainingOnSale });
           remainingToPay -= remainingOnSale;
         } else {
           break;
@@ -352,28 +350,34 @@ export function Customers() {
       // Mark fully-settled invoices as Paid
       for (const id of invoicesFullySettled) {
         const sale = sortedUnpaid.find(s => s.id === id);
-        const saleTotal = sale ? (sale.total_amount || sale.total || 0) : 0;
-        const alreadyPaid = sale ? (sale.payment_received || 0) : 0;
-        const paidThisTime = Math.max(0, saleTotal - alreadyPaid);
+        const invNo = sale?.invoice_no || sale?.invoiceNo || id;
+        const acct = calculateSaleAccounting(sale, allReturns);
+        const outstanding = acct.netOutstanding;
 
-        await supabase.from('sales').update({ status: 'Fully Settled', payment_received: saleTotal }).eq('id', id);
+        if (outstanding <= 0.01) continue;  // Skip non-positive (refunds/settled)
+
+        const paidThisTime = outstanding;  // Don't clamp with Math.max
+        const origPaid = sale ? Number(sale.payment_received || 0) : 0;
+        const newPaymentReceived = origPaid + paidThisTime;
+
+        await supabase.from('sales').update({ status: 'Fully Settled', payment_received: newPaymentReceived }).eq('id', id);
 
         // Record income transaction for Cash Book / Finance / Dashboard
         await supabase.from('transactions').insert([{
           id: 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
           type: 'income',
           category: 'Sales Income (Credit Settlement)',
-          description: `Credit Settlement for Invoice ${sale?.invoice_no || sale?.invoiceNo || id} (${settleCustomer.name})`,
+          description: `Credit Settlement for Invoice ${invNo} (${settleCustomer.name})`,
           amount: paidThisTime,
           date: new Date().toLocaleDateString('sv-SE'),
-          reference: sale?.invoice_no || sale?.invoiceNo || id
+          reference: invNo
         }]);
 
         // Record Credit Payment History log
         await supabase.from('credit_payments').insert([{
           id: 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
           sale_id: id,
-          invoice_no: sale?.invoice_no || sale?.invoiceNo || id,
+          invoice_no: invNo,
           customer_id: settleCustomer.id,
           customer_name: settleCustomer.name,
           amount_paid: paidThisTime,
@@ -388,65 +392,69 @@ export function Customers() {
       const remainingUnpaidAfterFull = sortedUnpaid.filter(s => !invoicesFullySettled.includes(s.id));
       if (remainingToPay > 0 && remainingUnpaidAfterFull.length > 0) {
         const nextInvoice = remainingUnpaidAfterFull[0];
-        const nextTotal = nextInvoice.total_amount || nextInvoice.total || 0;
-        const alreadyPaid = nextInvoice.payment_received || 0;
-        const remainingOnNext = Math.max(0, nextTotal - alreadyPaid);
-        const newPaid = alreadyPaid + remainingToPay;
+        const invNo = nextInvoice.invoice_no || nextInvoice.invoiceNo || nextInvoice.id;
+        const acct = calculateSaleAccounting(nextInvoice, allReturns);
+        const remainingOnNext = acct.netOutstanding;
+        const origPaid = Number(nextInvoice.payment_received || 0);
 
-        if (remainingToPay >= remainingOnNext) {
+        if (remainingToPay >= remainingOnNext && remainingOnNext > 0) {
           // Fully covers it
-          await supabase.from('sales').update({ status: 'Fully Settled', payment_received: nextTotal }).eq('id', nextInvoice.id);
-          settledInvoicesInfo.push({ invoiceNo: nextInvoice.invoice_no || nextInvoice.invoiceNo || nextInvoice.id, amount: remainingOnNext });
+          const paidThisTime = remainingOnNext;
+          const newPaid = origPaid + paidThisTime;
+          await supabase.from('sales').update({ status: 'Fully Settled', payment_received: newPaid }).eq('id', nextInvoice.id);
+          settledInvoicesInfo.push({ invoiceNo: invNo, amount: paidThisTime });
           invoicesFullySettled.push(nextInvoice.id);
 
           await supabase.from('transactions').insert([{
             id: 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
             type: 'income',
             category: 'Sales Income (Credit Settlement)',
-            description: `Credit Settlement for Invoice ${nextInvoice.invoice_no || nextInvoice.invoiceNo} (${settleCustomer.name})`,
-            amount: remainingOnNext,
+            description: `Credit Settlement for Invoice ${invNo} (${settleCustomer.name})`,
+            amount: paidThisTime,
             date: new Date().toLocaleDateString('sv-SE'),
-            reference: nextInvoice.invoice_no || nextInvoice.invoiceNo
+            reference: invNo
           }]);
 
           await supabase.from('credit_payments').insert([{
             id: 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
             sale_id: nextInvoice.id,
-            invoice_no: nextInvoice.invoice_no || nextInvoice.invoiceNo,
+            invoice_no: invNo,
             customer_id: settleCustomer.id,
             customer_name: settleCustomer.name,
-            amount_paid: remainingOnNext,
+            amount_paid: paidThisTime,
             remaining_balance: 0,
             payment_method: 'Cash',
             payment_date: new Date().toISOString(),
             recorded_by: 'system'
           }]);
 
-          remainingToPay = remainingToPay - remainingOnNext;
-        } else {
-          // Partial payment on this invoice — store partial amount, status remains Non Paid
+          remainingToPay = remainingToPay - paidThisTime;
+        } else if (remainingToPay > 0) {
+          // Partial payment on this invoice
+          const paidThisTime = remainingToPay;
+          const newPaid = origPaid + paidThisTime;
           await supabase.from('sales').update({ status: 'Partially Settled', payment_received: newPaid }).eq('id', nextInvoice.id);
-          settledInvoicesInfo.push({ invoiceNo: nextInvoice.invoice_no || nextInvoice.invoiceNo || nextInvoice.id, amount: remainingToPay });
+          settledInvoicesInfo.push({ invoiceNo: invNo, amount: paidThisTime });
 
-          const remainingBal = Math.max(0, nextTotal - newPaid);
+          const remainingBal = remainingOnNext - paidThisTime;  // Remaining after this partial payment
 
           await supabase.from('transactions').insert([{
             id: 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
             type: 'income',
             category: 'Sales Income (Partial Credit Settlement)',
-            description: `Partial Credit Payment for Invoice ${nextInvoice.invoice_no || nextInvoice.invoiceNo} (${settleCustomer.name})`,
-            amount: remainingToPay,
+            description: `Partial Credit Payment for Invoice ${invNo} (${settleCustomer.name})`,
+            amount: paidThisTime,
             date: new Date().toLocaleDateString('sv-SE'),
-            reference: nextInvoice.invoice_no || nextInvoice.invoiceNo
+            reference: invNo
           }]);
 
           await supabase.from('credit_payments').insert([{
             id: 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
             sale_id: nextInvoice.id,
-            invoice_no: nextInvoice.invoice_no || nextInvoice.invoiceNo,
+            invoice_no: invNo,
             customer_id: settleCustomer.id,
             customer_name: settleCustomer.name,
-            amount_paid: remainingToPay,
+            amount_paid: paidThisTime,
             remaining_balance: remainingBal,
             payment_method: 'Cash',
             payment_date: new Date().toISOString(),
@@ -457,7 +465,8 @@ export function Customers() {
         }
       }
 
-      // Remaining balance after payment
+      const totalOwed = settleCustomer.totalOutstanding;
+      const amt = enteredAmt;
       const newOutstandingBalance = Math.max(0, totalOwed - amt);
 
       // Show payment receipt (values stored in base currency, UI converts for display)
@@ -758,42 +767,51 @@ export function Customers() {
       const selectedSales = settleCustomer.unpaidSales.filter((s: any) => selectedInvoiceIds.includes(s.id));
       
       const totalPaid = selectedSales.reduce((sum: number, s: any) => {
-        const remaining = (s.total_amount || s.total || 0) - (s.payment_received || 0);
-        return sum + Math.max(0, remaining);
+        const acct = calculateSaleAccounting(s, allReturns);
+        return sum + acct.netOutstanding;
       }, 0);
       
-      const invoicesInfo = selectedSales.map((s: any) => {
-        const remaining = (s.total_amount || s.total || 0) - (s.payment_received || 0);
-        return {
-          invoiceNo: s.invoice_no || s.invoiceNo || s.id,
-          amount: Math.max(0, remaining)
-        };
-      });
+      const invoicesInfo = selectedSales
+        .map((s: any) => {
+          const invNo = s.invoice_no || s.invoiceNo || s.id;
+          const acct = calculateSaleAccounting(s, allReturns);
+          return {
+            invoiceNo: invNo,
+            amount: acct.netOutstanding
+          };
+        })
+        .filter(inv => inv.amount > 0);
 
       for (const id of selectedInvoiceIds) {
         const sale = selectedSales.find((s: any) => s.id === id);
-        const saleTotal = sale ? (sale.total_amount || sale.total || 0) : 0;
-        const alreadyPaid = sale ? (sale.payment_received || 0) : 0;
-        const paidThisTime = Math.max(0, saleTotal - alreadyPaid);
+        const invNo = sale?.invoice_no || sale?.invoiceNo || id;
+        const acct = calculateSaleAccounting(sale, allReturns);
+        const outstanding = acct.netOutstanding;
 
-        await supabase.from('sales').update({ status: 'Fully Settled', payment_received: saleTotal }).eq('id', id);
+        if (outstanding <= 0.01) continue;  // Skip non-positive
+
+        const paidThisTime = outstanding;  // Don't clamp with Math.max
+        const origPaid = sale ? Number(sale.payment_received || 0) : 0;
+        const newPaymentReceived = origPaid + paidThisTime;
+
+        await supabase.from('sales').update({ status: 'Fully Settled', payment_received: newPaymentReceived }).eq('id', id);
 
         // Record income transaction for Cash Book / Finance / Dashboard
         await supabase.from('transactions').insert([{
           id: 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
           type: 'income',
           category: 'Sales Income (Credit Settlement)',
-          description: `Credit Settlement for Invoice ${sale?.invoice_no || sale?.invoiceNo || id} (${settleCustomer.name})`,
+          description: `Credit Settlement for Invoice ${invNo} (${settleCustomer.name})`,
           amount: paidThisTime,
           date: new Date().toLocaleDateString('sv-SE'),
-          reference: sale?.invoice_no || sale?.invoiceNo || id
+          reference: invNo
         }]);
 
         // Record Credit Payment History log
         await supabase.from('credit_payments').insert([{
           id: 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
           sale_id: id,
-          invoice_no: sale?.invoice_no || sale?.invoiceNo || id,
+          invoice_no: invNo,
           customer_id: settleCustomer.id,
           customer_name: settleCustomer.name,
           amount_paid: paidThisTime,
@@ -805,11 +823,11 @@ export function Customers() {
       }
 
       const allUnpaidTotal = settleCustomer.unpaidSales.reduce((sum: number, s: any) => {
-        const remaining = (s.total_amount || s.total || 0) - (s.payment_received || 0);
-        return sum + Math.max(0, remaining);
+        const acct = calculateSaleAccounting(s, allReturns);
+        return sum + acct.netOutstanding;
       }, 0);
-      
-      const remainingBalance = Math.max(0, allUnpaidTotal - totalPaid);
+
+      const remainingBalance = allUnpaidTotal - totalPaid;  // PRESERVE SIGN
 
       setPaymentReceipt({
         customerName: settleCustomer.name,
@@ -875,7 +893,9 @@ export function Customers() {
     try {
       const { data: settingsData } = await supabase.from('system_settings').select('*').single();
       if (settingsData) setShopSettings(settingsData);
-    } catch (e) {}
+    } catch (_e) {
+      /* ignore settings fetch error */
+    }
   };
 
   useEffect(() => {
@@ -1835,7 +1855,19 @@ export function Customers() {
                       <span>{symbol}{convert(
                         settleCustomer.unpaidSales
                           .filter((s: any) => selectedInvoiceIds.includes(s.id))
-                          .reduce((sum: number, s: any) => sum + (s.total_amount || s.total || 0), 0)
+                          .reduce((sum: number, s: any) => {
+                            const invNo = s.invoice_no || s.invoiceNo;
+                            const originalTotal = Number(s.total_amount || s.total || 0);
+                            const exchangeBalance = exchangeBalanceMap[invNo];
+
+                            let outstanding: number;
+                            if (exchangeBalance) {  // FIXED CONDITION
+                              outstanding = exchangeBalance.netBalance;
+                            } else {
+                              outstanding = originalTotal - Number(s.payment_received || 0);
+                            }
+                            return sum + (outstanding > 0 ? outstanding : 0);  // Only sum positive
+                          }, 0)
                       ).toLocaleString()}</span>
                     </div>
                   </div>
@@ -1894,7 +1926,7 @@ export function Customers() {
                         <input
                           type="checkbox"
                           checked={isChecked}
-                          onChange={() => {}} // Controlled by wrapper div onClick
+                          onChange={() => undefined} // Controlled by wrapper div onClick
                           className="rounded border-gray-300 text-[#DAA520] focus:ring-[#DAA520] cursor-pointer w-4 h-4"
                         />
                         <div>
@@ -1906,28 +1938,32 @@ export function Customers() {
                       </div>
                       <div className="text-right text-xs">
                         {(() => {
-                          const saleTotal = Number(sale.total_amount || sale.total || 0);
-                          const paidAmt = Number(sale.payment_received || 0);
-                          const remBal = Math.max(0, saleTotal - paidAmt);
+                          const acct = calculateSaleAccounting(sale, allReturns);
+                          const originalTotal = acct.originalTotal;
+                          const remBal = acct.netOutstanding;
+
+                          const isFullySettled = acct.isFullySettled;
+                          const isRefundDue = acct.customerCreditEntitlement > 0;
+                          const isUnpaid = remBal > 0.01;
+                          const alreadyPaid = acct.totalPaid;
+
                           return (
                             <div className="space-y-0.5">
-                              <div className="text-slate-500 font-semibold text-[11px]">Total: <span className="font-bold text-slate-800">{symbol}{convert(saleTotal).toLocaleString()}</span></div>
-                              {paidAmt > 0 && (
-                                <div className="text-emerald-600 font-bold text-[11px]">Paid: <span className="font-black">{symbol}{convert(paidAmt).toLocaleString()}</span></div>
+                              <div className="text-slate-500 font-semibold text-[11px]">
+                                Total: <span className="font-bold text-slate-800">{symbol}{convert(originalTotal).toLocaleString()}</span>
+                              </div>
+                              {alreadyPaid > 0 && (
+                                <div className="text-emerald-600 font-bold text-[11px]">Paid: <span className="font-black">{symbol}{convert(alreadyPaid).toLocaleString()}</span></div>
                               )}
-                              <div className="text-rose-600 font-black text-xs">Remaining: {symbol}{convert(remBal).toLocaleString()}</div>
+                              {isRefundDue ? (
+                                <div className="text-blue-600 font-black text-xs">Credit Entitlement: {symbol}{convert(acct.customerCreditEntitlement).toLocaleString()}</div>
+                              ) : (
+                                <div className="text-rose-600 font-black text-xs">Remaining: {symbol}{convert(Math.max(0, remBal)).toLocaleString()}</div>
+                              )}
+                              <span className={`inline-block text-[9px] font-black uppercase px-2 py-0.5 rounded mt-1 ${isFullySettled ? 'text-emerald-700 bg-emerald-50' : isRefundDue ? 'text-blue-700 bg-blue-50' : 'text-rose-700 bg-rose-50'}`}>
+                                {isFullySettled ? t('Fully Settled', 'සම්පූර්ණයෙන්ම පියවා ඇත') : isRefundDue ? t('Credit Due', 'ණය හිමිකම') : t('Unpaid', 'පියවා නොමැත')}
+                              </span>
                             </div>
-                          );
-                        })()}
-                        {(() => {
-                          const saleTotal = sale.total_amount || sale.total || 0;
-                          const paidAmt = sale.payment_received || 0;
-                          const rem = Math.max(0, saleTotal - paidAmt);
-                          const isFullySettled = rem <= 0.01;
-                          return (
-                            <span className={`inline-block text-[9px] font-black uppercase px-2 py-0.5 rounded mt-1 ${isFullySettled ? 'text-emerald-700 bg-emerald-50' : 'text-amber-700 bg-amber-50'}`}>
-                              {isFullySettled ? t('Fully Settled', 'සම්පූර්ණයෙන්ම පියවා ඇත') : t('Partially Settled', 'කොටසක් පියවා ඇත')}
-                            </span>
                           );
                         })()}
                       </div>

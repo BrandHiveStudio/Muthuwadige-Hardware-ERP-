@@ -7,7 +7,6 @@ import {
   ArrowDownRightIcon,
   FileTextIcon,
   PrinterIcon,
-  Trash2Icon,
   Loader2Icon,
   CheckCircleIcon
 } from 'lucide-react';
@@ -48,7 +47,6 @@ export function Finance() {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [showAddModal, setShowAddModal] = useState(false);
   const [viewVoucher, setViewVoucher] = useState<Transaction | null>(null);
-  const [transactionToDelete, setTransactionToDelete] = useState<Transaction | null>(null);
   const [formData, setFormData] = useState<Omit<Transaction, 'id'>>(emptyTransaction);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
@@ -115,11 +113,18 @@ export function Finance() {
     return matchesSearch && matchesType && matchesCategory && matchesPeriod;
   });
 
+  const isCreditAdjustmentTrans = (t: any) => {
+    const cat = (t.category || '').toLowerCase();
+    const desc = (t.description || '').toLowerCase();
+    return cat.includes('credit adjustment') || desc.includes('credit return') || desc.includes('credit adjustment');
+  };
+
   const totalIncome = filtered.filter(t => t.type === 'income').reduce((sum, t) => sum + (t.amount || 0), 0);
   const totalSalesReturns = filtered.filter(t => isSalesReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
   const netSalesIncome = totalIncome - totalSalesReturns;
   const totalExpense = filtered.filter(t => t.type === 'expense' && !isSalesReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
-  const cashBalance = netSalesIncome - totalExpense;
+  const cashSalesReturns = filtered.filter(t => isSalesReturnTrans(t) && !isCreditAdjustmentTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  const cashBalance = totalIncome - cashSalesReturns - totalExpense;
 
   const openAdd = () => {
     setFormData(emptyTransaction);
@@ -157,18 +162,6 @@ export function Finance() {
     } catch (error: any) {
       setToast({ message: "Error saving transaction: " + error.message, type: 'error' });
     }
-  };
-
-  const handleDelete = async (id: string) => {
-    try {
-      const { error } = await supabase.from('transactions').delete().eq('id', id);
-      if (error) throw error;
-      setToast({ message: "Transaction record removed", type: 'success' });
-      fetchData();
-    } catch (error: any) {
-      setToast({ message: "Error deleting transaction: " + error.message, type: 'error' });
-    }
-    setTransactionToDelete(null);
   };
 
   const categories = [
@@ -405,20 +398,20 @@ export function Finance() {
           const cell = ws[cellRef];
           if (cell) {
             cell.s = {
-              font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 11 },
+              font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 12.5 },
               fill: { fgColor: { rgb: themeColor } },
               alignment: { vertical: "center", horizontal: "center", wrapText: true },
               border: {
-                bottom: { style: "medium", color: { rgb: "333333" } },
-                top: { style: "thin", color: { rgb: "E2E8F0" } },
-                left: { style: "thin", color: { rgb: "E2E8F0" } },
-                right: { style: "thin", color: { rgb: "E2E8F0" } }
+                bottom: { style: "medium", color: { rgb: "0F172A" } },
+                top: { style: "medium", color: { rgb: "0F172A" } },
+                left: { style: "thin", color: { rgb: "475569" } },
+                right: { style: "thin", color: { rgb: "475569" } }
               }
             };
           }
         }
 
-        // 2. Style Data Rows (alternate backgrounds for zebra-striping)
+        // 2. Style Data Rows (alternate backgrounds for zebra-striping, bold values, clear borders)
         for (let row = range.s.r + 1; row <= range.e.r; row++) {
           const isEven = (row % 2 === 0);
           for (let col = range.s.c; col <= range.e.c; col++) {
@@ -428,19 +421,24 @@ export function Finance() {
               const bgColor = isEven ? "F8FAFC" : "FFFFFF";
               
               let alignment = "left";
+              let isBold = (col === 0);
+              let fontColor = "0F172A";
+
               if (typeof cell.v === 'number') {
                 alignment = "right";
+                isBold = true;
+                cell.z = '#,##0.00';
               }
               
               cell.s = {
-                font: { name: "Segoe UI", sz: 10, color: { rgb: "334155" } },
+                font: { name: "Segoe UI", sz: 11.5, bold: isBold, color: { rgb: fontColor } },
                 fill: { fgColor: { rgb: bgColor } },
                 alignment: { vertical: "center", horizontal: alignment },
                 border: {
-                  bottom: { style: "thin", color: { rgb: "F1F5F9" } },
-                  top: { style: "thin", color: { rgb: "F1F5F9" } },
-                  left: { style: "thin", color: { rgb: "F1F5F9" } },
-                  right: { style: "thin", color: { rgb: "F1F5F9" } }
+                  bottom: { style: "thin", color: { rgb: "CBD5E1" } },
+                  top: { style: "thin", color: { rgb: "CBD5E1" } },
+                  left: { style: "thin", color: { rgb: "CBD5E1" } },
+                  right: { style: "thin", color: { rgb: "CBD5E1" } }
                 }
               };
             }
@@ -601,7 +599,6 @@ export function Finance() {
                   <th className="px-6 py-4">Reference</th>
                   <th className="px-6 py-4 text-right">Amount</th>
                   <th className="px-6 py-4 text-center">Voucher</th>
-                  <th className="px-6 py-4 text-center">Remove</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
@@ -636,16 +633,11 @@ export function Finance() {
                         <FileTextIcon className="w-4 h-4" />
                       </button>
                     </td>
-                    <td className="px-6 py-4 text-center">
-                      <button onClick={() => setTransactionToDelete(t)} className="p-2.5 rounded-xl bg-red-50 text-red-600 hover:bg-red-500 hover:text-white border border-red-100 transition-all shadow-sm shadow-red-500/10">
-                        <Trash2Icon className="w-4 h-4" />
-                      </button>
-                    </td>
                   </tr>
                 ))}
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="text-center py-12 text-slate-400 font-bold">
+                    <td colSpan={7} className="text-center py-12 text-slate-400 font-bold">
                       No matching records found in Cash Book ledger.
                     </td>
                   </tr>
@@ -742,27 +734,6 @@ export function Finance() {
             <div className="flex gap-3">
               <button onClick={() => downloadVoucherPDF(viewVoucher)} className="flex-1 py-3 bg-[#464646] hover:bg-[#363636] text-white rounded-xl font-black uppercase tracking-widest text-xs flex items-center justify-center gap-2 shadow-lg"><PrinterIcon className="w-4 h-4" /> Print PDF</button>
               <button onClick={() => setViewVoucher(null)} className="flex-1 py-3 bg-gray-100 text-gray-500 rounded-xl font-black uppercase tracking-widest text-xs hover:bg-gray-200 transition-all">Dismiss</button>
-            </div>
-          </div>
-        )}
-      </Modal>
-
-      {/* Delete Confirmation Modal */}
-      <Modal isOpen={!!transactionToDelete} onClose={() => setTransactionToDelete(null)} title="Delete Record" size="sm">
-        {transactionToDelete && (
-          <div className="text-center p-2 space-y-4">
-            <div className="w-15 h-15 bg-red-50 text-red-500 rounded-xl flex items-center justify-center mx-auto border border-red-100 shadow-inner">
-              <Trash2Icon className="w-6 h-6" />
-            </div>
-            <div>
-              <h4 className="font-black text-slate-800 text-sm">Remove Ledger Transaction?</h4>
-              <p className="text-xs text-gray-500 font-bold mt-1.5 leading-relaxed">
-                Are you sure you want to delete this cash book entry? This will change your total cash book balance permanently.
-              </p>
-            </div>
-            <div className="flex gap-3 pt-2">
-              <button onClick={() => setTransactionToDelete(null)} className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-500 rounded-xl font-black uppercase tracking-widest text-xs transition-all border border-gray-200">Cancel</button>
-              <button onClick={() => handleDelete(transactionToDelete.id)} className="flex-1 py-3 bg-red-500 hover:bg-red-600 text-white rounded-xl font-black uppercase tracking-widest text-xs transition-all shadow-lg shadow-red-500/20">Delete</button>
             </div>
           </div>
         )}

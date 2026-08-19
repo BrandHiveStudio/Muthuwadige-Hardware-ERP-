@@ -163,7 +163,7 @@ const deleteTable = async (table: string, val: any) => {
     } else if (table === 'employees') {
       result = await api.employees.delete(val);
     } else if (table === 'transactions') {
-      result = await api.transactions.delete(val);
+      return { data: null, error: new Error('Deleting finance/accounting transaction records is disabled for financial audit compliance.') };
     } else if (table === 'sales') {
       result = await api.sales.delete(val);
     } else if (table === 'profiles') {

@@ -1,5 +1,5 @@
 {
-  "name": "erp-template",
+  "name": "muthuwadige-hardware-erp",
   "version": "0.0.2",
   "main": "electron-main.js",
   "private": true,
@@ -71,6 +71,8 @@
       "preload.js",
       "server.js",
       "backup-service.js",
+      "backup-worker.js",
+      "Backup Excel Format.xlsx",
       "public/**/*",
       "build/**/*",
       ".env"

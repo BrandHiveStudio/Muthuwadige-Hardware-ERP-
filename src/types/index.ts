@@ -199,7 +199,7 @@ export interface SalesReturn {
   customer_phone?: string;
   returnedItems: SaleItem[];
   exchangeItems?: SaleItem[];
-  returnMethod: 'Cash Refund' | 'Exchange' | 'Credit Note';
+  returnMethod: 'Cash Refund' | 'Exchange' | 'Credit Note' | 'Return';
   returnAmount?: number;
   exchangeAmount?: number;
   balanceAmount?: number;
@@ -212,6 +212,8 @@ export interface SalesReturn {
   status?: string;
   reason?: string;
   created_at: string;
+  isCredit?: boolean;
+  is_credit?: boolean | number;
 }
 
 export interface CreditNote {

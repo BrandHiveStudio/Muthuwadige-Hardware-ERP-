@@ -2061,12 +2061,16 @@ const formatInvoiceDateTime = (created_at?: string, fallbackDate?: string) => {
 const generateReturnPrintHTML = (sr: SalesReturn, isSi: boolean, shopSettings?: any) => {
   const symbolStr = isSi ? 'රු.' : 'Rs.';
   const formatNum = (num: number) => (num || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const title = sr.returnMethod === 'Exchange' 
-    ? (isSi ? 'භාණ්ඩ හුවමාරු රසීදුව' : 'EXCHANGE RECEIPT')
-    : (sr.returnMethod === 'Credit Note' ? (isSi ? 'ණය සටහන් රසීදුව' : 'CREDIT NOTE RECEIPT') : (isSi ? 'ආපසු භාරගැනීමේ රසීදුව' : 'RETURN RECEIPT'));
-
   const returnedItems = Array.isArray(sr.returnedItems) ? sr.returnedItems : safeParseJson(sr.returnedItems, []);
   const exchangeItems = Array.isArray(sr.exchangeItems) ? sr.exchangeItems : safeParseJson(sr.exchangeItems, []);
+  const isCreditBill = sr.isCredit === true || (sr as any).is_credit === 1 || (sr as any).is_credit === true;
+  const displayMethod = isCreditBill 
+    ? (exchangeItems.length > 0 ? 'Exchange' : 'Return')
+    : (sr.returnMethod || 'Return');
+
+  const title = displayMethod === 'Exchange' 
+    ? (isSi ? 'භාණ්ඩ හුවමාරු රසීදුව' : 'EXCHANGE RECEIPT')
+    : (displayMethod === 'Credit Note' ? (isSi ? 'ණය සටහන් රසීදුව' : 'CREDIT NOTE RECEIPT') : (isSi ? 'ආපසු භාරගැනීමේ රසීදුව' : 'RETURN RECEIPT'));
 
   const retRows = returnedItems.map((i: any) => `
     <tr style="border-bottom: 1px dashed #e5e7eb;">
@@ -2107,6 +2111,7 @@ const generateReturnPrintHTML = (sr: SalesReturn, isSi: boolean, shopSettings?: 
           <div><strong>Original Inv:</strong> ${sr.invoiceNo || sr.invoice_no}</div>
           <div><strong>Customer:</strong> ${sr.customerName || sr.customer_name || 'Guest'}</div>
           <div><strong>Date:</strong> ${new Date(sr.created_at).toLocaleString()}</div>
+          <div><strong>Method:</strong> ${displayMethod}</div>
         </div>
         
         <div style="font-weight: bold; margin-top: 6px; font-size: 11px; color: #dc2626;">Returned Products:</div>
@@ -2124,11 +2129,19 @@ const generateReturnPrintHTML = (sr: SalesReturn, isSi: boolean, shopSettings?: 
         ` : ''}
 
         <div style="margin-top: 10px; border-top: 1px solid #000; padding-top: 6px; text-align: right; font-weight: bold;">
-          <div>Return Total: ${symbolStr} ${formatNum(sr.returnAmount || sr.totalRefunded || 0)}</div>
-          ${sr.exchangeAmount ? `<div>Exchange Total: ${symbolStr} ${formatNum(sr.exchangeAmount)}</div>` : ''}
-          ${sr.customerPaid ? `<div>Customer Paid: ${symbolStr} ${formatNum(sr.customerPaid)}</div>` : ''}
-          ${sr.changeGiven ? `<div>Change Given: ${symbolStr} ${formatNum(sr.changeGiven)}</div>` : ''}
-          <div style="font-size: 13px; margin-top: 4px;">Net Refund/Paid: ${symbolStr} ${formatNum(sr.totalRefunded || sr.returnAmount || 0)}</div>
+          <div>Return Total: ${symbolStr} ${formatNum(sr.returnAmount || 0)}</div>
+          ${sr.returnMethod === 'Exchange' ? `
+            ${sr.exchangeAmount ? `<div>Exchange Replacement Total: ${symbolStr} ${formatNum(sr.exchangeAmount)}</div>` : ''}
+            <div>Net Exchange Balance: ${symbolStr} ${formatNum(Math.abs((sr.exchangeAmount || 0) - (sr.returnAmount || 0)))} (${(sr.exchangeAmount || 0) >= (sr.returnAmount || 0) ? 'Customer Owed' : 'Refund Due'})</div>
+            ${sr.customerPaid ? `<div>Customer Paid: ${symbolStr} ${formatNum(sr.customerPaid)}</div>` : ''}
+            ${sr.changeGiven ? `<div>Change Given: ${symbolStr} ${formatNum(sr.changeGiven)}</div>` : ''}
+            <div style="font-size: 13px; margin-top: 4px; color: #dc2626;">Remaining Credit Balance Owed: ${symbolStr} ${formatNum(Math.max(0, (sr.exchangeAmount || 0) - (sr.returnAmount || 0) - (sr.customerPaid || 0)))}</div>
+          ` : `${(() => {
+            const isCreditBill = sr.isCredit === true || (sr as any).is_credit === 1 || (sr as any).is_credit === true;
+            const finalLabel = isCreditBill ? (isSi ? 'ණය සැකසුම' : 'Credit Adjustment') : (isSi ? 'මුළු ආපසු/ගෙවූ මුදල' : 'Net Refund/Paid');
+            const finalVal = isCreditBill ? (sr.returnAmount || sr.totalRefunded || 0) : (sr.totalRefunded !== undefined && sr.totalRefunded !== null ? sr.totalRefunded : (sr.returnAmount || 0));
+            return `<div style="font-size: 13px; margin-top: 4px;">${finalLabel}: ${symbolStr} ${formatNum(finalVal)}</div>`;
+          })()}`}
         </div>
       </body>
     </html>

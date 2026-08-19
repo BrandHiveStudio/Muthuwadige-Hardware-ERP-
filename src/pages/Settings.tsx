@@ -10,7 +10,7 @@ import {
   DatabaseIcon, RefreshCcwIcon, XIcon, LockIcon,
   Trash2Icon, Edit2Icon, Loader2Icon, FileTextIcon,
   PackageIcon, ShoppingCartIcon, DollarSignIcon, TruckIcon, UsersIcon,
-  PrinterIcon, MapPinIcon, SearchIcon
+  PrinterIcon, MapPinIcon, SearchIcon, MailIcon, EyeIcon, EyeOffIcon
 } from 'lucide-react';
 
 type Tab = 'system' | 'backup' | 'network' | 'database';
@@ -63,6 +63,14 @@ export function Settings() {
   const [isSendingTest, setIsSendingTest] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
 
+  // SMTP Configuration State
+  const [smtpUser, setSmtpUser] = useState('');
+  const [smtpPass, setSmtpPass] = useState('');
+  const [smtpPassConfigured, setSmtpPassConfigured] = useState(false);
+  const [showSmtpPass, setShowSmtpPass] = useState(false);
+  const [isSavingSmtp, setIsSavingSmtp] = useState(false);
+  const [isTestingSmtp, setIsTestingSmtp] = useState(false);
+
   // Database Tables Viewer State
   const [dbTab, setDbTab] = useState<'products' | 'customers' | 'employees' | 'profiles' | 'purchase_orders' | 'sales' | 'system_settings' | 'transactions'>('products');
   const [dbData, setDbData] = useState<any[]>([]);
@@ -93,16 +101,16 @@ export function Settings() {
         })
       });
       const result = await response.json();
-      if (response.ok) {
-        alert(result.message || "Full backup generated and emailed successfully!");
-        fetchInitialData(); // Reload backup logs from SQLite
+      if (response.ok && result.success) {
+        alert("Full database Excel backup generated successfully!");
       } else {
-        alert("Backup status: " + result.message);
+        alert("Backup status: " + (result.message || result.error || "Backup operation failed."));
       }
     } catch (e) {
       alert("Failed to connect to local SQLite backup service. Please verify that the Express SQLite server is running.");
     } finally {
       setIsEmailingBackup(false);
+      fetchInitialData();
     }
   };
   const handleDeleteBackup = async (id: string, name: string) => {
@@ -241,7 +249,7 @@ export function Settings() {
       setBackupEmail(settingData.backup_email || '');
       setBackupEnabled(settingData.backup_enabled === true || settingData.backup_enabled === 1 || false);
       setLogoPath(settingData.logo_path || '');
-      setReturnPasskey(settingData.return_passkey || '1234');
+      setReturnPasskey(settingData.return_passkey || settingData.void_passkey || '1234');
       
       if (settingData.printer_settings) {
         try {
@@ -302,7 +310,66 @@ export function Settings() {
       console.warn("Failed to load network interfaces", err);
     }
 
+    try {
+      const resSmtp = await fetch(`${API_URL}/settings/smtp-config`);
+      if (resSmtp.ok) {
+        const smtpData = await resSmtp.json();
+        if (smtpData) {
+          setSmtpUser(smtpData.gmail_user || '');
+          setSmtpPassConfigured(smtpData.gmail_pass_configured || false);
+        }
+      }
+    } catch(err) {
+      console.warn("Failed to load SMTP status", err);
+    }
+
     setLoading(false);
+  };
+
+  const handleSaveSmtp = async () => {
+    setIsSavingSmtp(true);
+    try {
+      const res = await fetch(`${API_URL}/settings/smtp-config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          gmail_user: smtpUser,
+          gmail_pass: smtpPass
+        })
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        alert(result.message || "SMTP configuration saved successfully!");
+        setSmtpPass('');
+        setSmtpPassConfigured(true);
+      } else {
+        alert("Failed to save SMTP settings: " + (result.error || result.message || "Unknown error"));
+      }
+    } catch (e: any) {
+      alert("Error saving SMTP settings: " + e.message);
+    } finally {
+      setIsSavingSmtp(false);
+    }
+  };
+
+  const handleTestSmtpConnection = async () => {
+    setIsTestingSmtp(true);
+    try {
+      const res = await fetch(`${API_URL}/settings/test-smtp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        alert(result.message || "SMTP Connection Successful!");
+      } else {
+        alert("SMTP Test Failed: " + (result.message || result.error || "Authentication failure."));
+      }
+    } catch (e: any) {
+      alert("Error testing SMTP connection: " + e.message);
+    } finally {
+      setIsTestingSmtp(false);
+    }
   };
 
   const fetchDbTable = async () => {
@@ -1288,13 +1355,13 @@ export function Settings() {
 
       {/* BACKUP TAB */}
       {tab === 'backup' && (
-        <div className="space-y-8 max-w-5xl animate-in slide-in-from-right-4">
+        <div className="space-y-8 w-full max-w-[1600px] animate-in slide-in-from-right-4">
           
           {/* Main Grid for Backup Operations */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
             
             {/* Card 1: Instant Backup Actions */}
-            <div className="bg-white p-4 sm:p-6 md:p-8 rounded-3xl border border-gray-100 shadow-md flex flex-col justify-between space-y-6 relative overflow-hidden group hover:shadow-lg transition-all duration-300">
+            <div className="bg-white p-5 sm:p-6 rounded-3xl border border-gray-100 shadow-md flex flex-col justify-between space-y-6 relative overflow-hidden group hover:shadow-lg transition-all duration-300 h-full">
               <div className="absolute top-0 left-0 h-1.5 w-full bg-[#DAA520]" />
               <div className="space-y-4 text-left">
                 <div className="w-14 h-14 bg-[#DAA520]/10 rounded-2xl flex items-center justify-center shadow-inner group-hover:scale-105 transition-transform duration-300">
@@ -1354,9 +1421,87 @@ export function Settings() {
                 </button>
               </div>
             </div>
+
+            {/* Card: SMTP Email Credentials Configuration */}
+            <div className="bg-white p-5 sm:p-6 rounded-3xl border border-gray-100 shadow-md flex flex-col justify-between space-y-6 relative overflow-hidden group hover:shadow-lg transition-all duration-300 h-full">
+              <div className="absolute top-0 left-0 h-1.5 w-full bg-[#DAA520]" />
+              <div className="space-y-4 text-left">
+                <div className="w-14 h-14 bg-[#DAA520]/10 rounded-2xl flex items-center justify-center shadow-inner group-hover:scale-105 transition-transform duration-300">
+                  <MailIcon className="w-7 h-7 text-[#DAA520]" />
+                </div>
+                <div>
+                  <h3 className="font-black text-[#464646] text-xl">SMTP Email Configuration</h3>
+                  <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest mt-1">Gmail Sender Account & Credentials</p>
+                </div>
+                <p className="text-xs text-gray-400 font-bold leading-relaxed">
+                  Configure your Gmail sender account and 16-character App Password to enable automated backup email dispatch. (Saved securely to AppData configuration).
+                </p>
+                
+                <div className="space-y-4 pt-2">
+                  <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">SMTP Sender Email (GMAIL_USER)</label>
+                    <input 
+                      type="email" 
+                      value={smtpUser} 
+                      onChange={e => setSmtpUser(e.target.value)} 
+                      placeholder="e.g. sanojhardware@gmail.com" 
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#DAA520] font-bold text-xs text-[#464646]" 
+                    />
+                  </div>
+                  
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Gmail App Password (GMAIL_PASS)</label>
+                      {smtpPassConfigured && (
+                        <span className="px-2 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-700">
+                          Configured
+                        </span>
+                      )}
+                    </div>
+                    <div className="relative">
+                      <input 
+                        type={showSmtpPass ? "text" : "password"} 
+                        value={smtpPass} 
+                        onChange={e => setSmtpPass(e.target.value)} 
+                        placeholder={smtpPassConfigured ? "•••••••• (Password configured. Enter new password to update)" : "Enter 16-character Gmail App Password"} 
+                        className="w-full px-4 py-3 pr-12 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#DAA520] font-bold text-xs text-[#464646]" 
+                      />
+                      <button 
+                        type="button" 
+                        onClick={() => setShowSmtpPass(!showSmtpPass)} 
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1"
+                      >
+                        {showSmtpPass ? <EyeOffIcon className="w-4 h-4" /> : <EyeIcon className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex flex-col sm:flex-row gap-2 mt-4">
+                <button 
+                  type="button"
+                  onClick={handleSaveSmtp} 
+                  disabled={isSavingSmtp} 
+                  className="flex-1 bg-[#464646] hover:bg-[#333333] disabled:bg-gray-300 disabled:shadow-none text-white py-4 rounded-2xl font-black uppercase tracking-widest text-[9px] transition-all flex items-center justify-center gap-2 shadow-lg shadow-black/10"
+                >
+                  {isSavingSmtp ? <Loader2Icon className="w-4 h-4 animate-spin" /> : null}
+                  SAVE SMTP SETTINGS
+                </button>
+                <button 
+                  type="button"
+                  onClick={handleTestSmtpConnection} 
+                  disabled={isTestingSmtp} 
+                  className="flex-1 bg-[#DAA520] hover:bg-[#B8860B] disabled:bg-gray-300 disabled:shadow-none text-white py-4 rounded-2xl font-black uppercase tracking-widest text-[9px] transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#DAA520]/15"
+                >
+                  {isTestingSmtp ? <Loader2Icon className="w-4 h-4 animate-spin" /> : <RefreshCcwIcon className="w-4 h-4" />}
+                  TEST SMTP CONNECTION
+                </button>
+              </div>
+            </div>
  
             {/* Card 2: Weekly Automated Backup Settings */}
-            <div className="bg-white p-4 sm:p-6 md:p-8 rounded-3xl border border-gray-100 shadow-md flex flex-col justify-between space-y-6 relative overflow-hidden group hover:shadow-lg transition-all duration-300">
+            <div className="bg-white p-5 sm:p-6 rounded-3xl border border-gray-100 shadow-md flex flex-col justify-between space-y-6 relative overflow-hidden group hover:shadow-lg transition-all duration-300 h-full">
               <div className="absolute top-0 left-0 h-1.5 w-full bg-[#464646]" />
               <div className="space-y-4 text-left">
                 <div className="w-14 h-14 bg-[#464646]/10 rounded-2xl flex items-center justify-center shadow-inner group-hover:scale-105 transition-transform duration-300">
@@ -1419,7 +1564,7 @@ export function Settings() {
             </div>
 
             {/* Card 3: Restore Database from Excel Backup */}
-            <div className="bg-white p-4 sm:p-6 md:p-8 rounded-3xl border border-gray-100 shadow-md flex flex-col justify-between space-y-6 relative overflow-hidden group hover:shadow-lg transition-all duration-300">
+            <div className="bg-white p-5 sm:p-6 rounded-3xl border border-gray-100 shadow-md flex flex-col justify-between space-y-6 relative overflow-hidden group hover:shadow-lg transition-all duration-300 h-full">
               <div className="absolute top-0 left-0 h-1.5 w-full bg-[#DAA520]" />
               <div className="space-y-4 text-left">
                 <div className="w-14 h-14 bg-[#DAA520]/10 rounded-2xl flex items-center justify-center shadow-inner group-hover:scale-105 transition-transform duration-300">

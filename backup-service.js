@@ -24,25 +24,20 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(cors());
 
-let DB_FILE = path.join(__dirname, 'hardware.db');
-let backupsDir = path.join(__dirname, 'backups');
-let envPath = path.join(__dirname, '.env');
+let candidateDbs = [
+  process.env.DB_FILE,
+  path.join(__dirname, 'hardware.db'),
+  process.env.USER_DATA_PATH ? path.join(process.env.USER_DATA_PATH, 'hardware.db') : null,
+  process.env.APPDATA ? path.join(process.env.APPDATA, 'Muthuwadige Hardware ERP', 'hardware.db') : null
+].filter(Boolean);
 
-// Dynamically check AppData path
-try {
-  const electron = await import('electron');
-  const electronApp = electron.app || (electron.default && electron.default.app);
-  if (electronApp) {
-    const isPackaged = electronApp.isPackaged;
-    if (isPackaged) {
-      const appDataPath = electronApp.getPath('userData');
-      DB_FILE = path.join(appDataPath, 'hardware.db');
-      backupsDir = path.join(appDataPath, 'backups');
-      envPath = path.join(appDataPath, '.env');
-    }
-  }
-} catch (e) {
-  // Standalone Node
+let DB_FILE = candidateDbs.find(p => fs.existsSync(p)) || path.join(__dirname, 'hardware.db');
+
+let backupsDir = process.env.BACKUPS_DIR || (process.env.USER_DATA_PATH ? path.join(process.env.USER_DATA_PATH, 'backups') : path.join(__dirname, 'backups'));
+let envPath = process.env.ENV_PATH || (process.env.USER_DATA_PATH ? path.join(process.env.USER_DATA_PATH, '.env') : path.join(__dirname, '.env'));
+
+if (!fs.existsSync(backupsDir)) {
+  try { fs.mkdirSync(backupsDir, { recursive: true }); } catch (e) {}
 }
 
 dotenv.config({ path: envPath });
@@ -58,6 +53,16 @@ async function getDb() {
     await db.exec("PRAGMA busy_timeout = 15000;");
     await db.exec("PRAGMA journal_mode = WAL;");
     await db.exec("PRAGMA synchronous = NORMAL;");
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS backup_logs (
+        id TEXT PRIMARY KEY,
+        file_name TEXT,
+        file_path TEXT,
+        status TEXT,
+        type TEXT,
+        timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
   }
   return db;
 }
@@ -66,11 +71,11 @@ async function getDb() {
 const setColWidths = (ws, structuredData, headers) => {
   if (!structuredData || structuredData.length === 0) {
     if (headers) {
-      ws['!cols'] = headers.map(h => ({ wch: Math.max(h.toString().length + 4, 12) }));
+      ws['!cols'] = headers.map(h => ({ wch: Math.max(h.toString().length + 8, 22) }));
     }
     return;
   }
-  const keys = Object.keys(structuredData[0]);
+  const keys = headers || Object.keys(structuredData[0]);
   ws['!cols'] = keys.map(key => {
     let maxLen = key.toString().length;
     structuredData.forEach(row => {
@@ -80,15 +85,51 @@ const setColWidths = (ws, structuredData, headers) => {
         if (valLen > maxLen) maxLen = valLen;
       }
     });
-    return { wch: Math.min(Math.max(maxLen + 4, 12), 40) };
+    return { wch: Math.min(Math.max(maxLen + 8, 22), 65) };
   });
+};
+
+const setRowHeights = (ws) => {
+  const ref = ws['!ref'];
+  if (!ref) return;
+  const range = XLSX.utils.decode_range(ref);
+  const rows = [];
+  
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    if (r === range.s.r) {
+      rows.push({ hpt: 40 });
+    } else {
+      const firstCellRef = XLSX.utils.encode_cell({ r, c: range.s.c });
+      const firstCell = ws[firstCellRef];
+      if (firstCell && (String(firstCell.v).toUpperCase() === 'TOTAL' || String(firstCell.v).toUpperCase() === 'SUMMARY')) {
+        rows.push({ hpt: 34 });
+      } else {
+        rows.push({ hpt: 28 });
+      }
+    }
+  }
+  ws['!rows'] = rows;
 };
 
 const getExcelDecimalDate = (dateVal) => {
   if (!dateVal || dateVal === '---') return null;
-  const date = new Date(dateVal);
-  if (isNaN(date.getTime())) return null;
-  // Excel date epoch is 1899-12-30 (due to leap year bug in 1900)
+  let cleanStr = '';
+  if (typeof dateVal === 'string') {
+    cleanStr = dateVal.substring(0, 10);
+  } else if (dateVal instanceof Date) {
+    cleanStr = dateVal.toISOString().substring(0, 10);
+  } else {
+    cleanStr = String(dateVal).substring(0, 10);
+  }
+
+  if (!cleanStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    const parsed = new Date(dateVal);
+    if (isNaN(parsed.getTime())) return null;
+    cleanStr = parsed.toISOString().substring(0, 10);
+  }
+
+  const [year, month, day] = cleanStr.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
   const epoch = new Date(Date.UTC(1899, 11, 30));
   const diff = date.getTime() - epoch.getTime();
   return diff / (24 * 60 * 60 * 1000);
@@ -101,16 +142,19 @@ const createWorksheet = (structuredData, headers) => {
   return XLSX.utils.json_to_sheet(structuredData);
 };
 
-// Apply themed styling to headers and rows
-const applyTableStyles = (ws, themeColor) => {
+// Apply themed styling to headers, data rows, status badges, and accounting totals
+const applyTableStyles = (ws, themeColor = "1E293B") => {
   const ref = ws['!ref'];
   if (!ref) return;
-  
+
   const range = XLSX.utils.decode_range(ref);
   const headerRow = range.s.r;
 
-  // Find which column indices correspond to dates
   const dateColIndices = [];
+  const statusColIndices = [];
+  const amountColIndices = [];
+  const boldHighlightCols = [];
+
   for (let col = range.s.c; col <= range.e.c; col++) {
     const cellRef = XLSX.utils.encode_cell({ r: headerRow, c: col });
     const cell = ws[cellRef];
@@ -119,118 +163,197 @@ const applyTableStyles = (ws, themeColor) => {
       if (label.includes('date') || label.includes('time') || label.includes('timestamp')) {
         dateColIndices.push(col);
       }
+      if (label.includes('status') || label.includes('state') || label.includes('type')) {
+        statusColIndices.push(col);
+      }
+      if (label.includes('(rs.)') || label.includes('amount') || label.includes('total') || label.includes('balance') || label.includes('price') || label.includes('cost') || label.includes('received') || label.includes('salary') || label.includes('paid') || label.includes('outstanding') || label.includes('overdue') || label.includes('value') || label.includes('revenue') || label.includes('profit')) {
+        amountColIndices.push(col);
+      }
+      if (col === 0 || label.includes('sku') || label.includes('invoice') || label.includes('customer') || label.includes('supplier') || label.includes('product') || label.includes('name') || label.includes('code') || label.includes('stock')) {
+        boldHighlightCols.push(col);
+      }
     }
   }
-  
-  // Header Style
+
+  // 1. Header Row Styling — Large 12.5pt White Bold Text on Rich Colored Fills
   for (let col = range.s.c; col <= range.e.c; col++) {
     const cellRef = XLSX.utils.encode_cell({ r: range.s.r, c: col });
     const cell = ws[cellRef];
     if (cell) {
       cell.s = {
-        font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 11 },
-        fill: { fgColor: { rgb: themeColor } }, 
+        font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 12.5 },
+        fill: { fgColor: { rgb: themeColor || "1E293B" } },
         alignment: { vertical: "center", horizontal: "center", wrapText: true },
         border: {
-          bottom: { style: "medium", color: { rgb: "333333" } },
-          top: { style: "thin", color: { rgb: "E2E8F0" } },
-          left: { style: "thin", color: { rgb: "E2E8F0" } },
-          right: { style: "thin", color: { rgb: "E2E8F0" } }
+          bottom: { style: "medium", color: { rgb: "0F172A" } },
+          top: { style: "medium", color: { rgb: "0F172A" } },
+          left: { style: "thin", color: { rgb: "475569" } },
+          right: { style: "thin", color: { rgb: "475569" } }
         }
       };
     }
   }
 
-  // Data Style
+  // 2. Data & Summary Rows Styling — Highly Readable 11.5pt / 13pt Text, Clear Borders & Dynamic Highlighting
   for (let row = range.s.r + 1; row <= range.e.r; row++) {
+    const firstCellRef = XLSX.utils.encode_cell({ r: row, c: range.s.c });
+    const firstCell = ws[firstCellRef];
+    const isTotalRow = firstCell && String(firstCell.v).toUpperCase() === 'TOTAL';
     const isEven = (row % 2 === 0);
+
     for (let col = range.s.c; col <= range.e.c; col++) {
       const cellRef = XLSX.utils.encode_cell({ r: row, c: col });
       const cell = ws[cellRef];
-      if (cell) {
-        const bgColor = isEven ? "F8FAFC" : "FFFFFF";
-        let alignment = "left";
-        if (typeof cell.v === 'number') {
-          alignment = "right";
+      if (!cell) continue;
+
+      if (isTotalRow) {
+        let horizAlign = "left";
+        if (typeof cell.v === 'number' || amountColIndices.includes(col)) {
+          horizAlign = "right";
+          cell.z = '#,##0.00';
+        } else if (col === 0) {
+          horizAlign = "left";
+        } else {
+          horizAlign = "center";
         }
-        
-        // If it's a date column and has a numeric value, format it as date
+        cell.s = {
+          font: { bold: true, color: { rgb: "047857" }, name: "Segoe UI", sz: 13 },
+          fill: { fgColor: { rgb: "D1FAE5" } },
+          alignment: { vertical: "center", horizontal: horizAlign },
+          border: {
+            top: { style: "medium", color: { rgb: "047857" } },
+            bottom: { style: "double", color: { rgb: "047857" } },
+            left: { style: "thin", color: { rgb: "6EE7B7" } },
+            right: { style: "thin", color: { rgb: "6EE7B7" } }
+          }
+        };
+      } else {
+        const bgColor = isEven ? "F8FAFC" : "FFFFFF";
+        let horizAlign = "left";
+        let fontColor = "0F172A";
+        let isBold = boldHighlightCols.includes(col);
+        let fillBg = bgColor;
+        let fontSize = 11.5;
+
+        if (typeof cell.v === 'number') {
+          horizAlign = "right";
+          if (amountColIndices.includes(col)) {
+            cell.z = '#,##0.00';
+            isBold = true;
+            fontColor = "0F172A";
+          }
+        }
+
         if (dateColIndices.includes(col) && typeof cell.v === 'number') {
           cell.z = 'yyyy-mm-dd';
-          alignment = "center";
+          horizAlign = "center";
+          isBold = true;
+          fontColor = "334155";
+          fillBg = "F1F5F9";
+        }
+
+        if (statusColIndices.includes(col) && cell.v) {
+          const valStr = String(cell.v).toUpperCase();
+          horizAlign = "center";
+          isBold = true;
+          fontSize = 11.5;
+          if (valStr.includes('PAID') || valStr.includes('SETTLED') || valStr.includes('ACTIVE') || valStr.includes('ENABLED')) {
+            fillBg = "DCFCE7";
+            fontColor = "15803D";
+          } else if (valStr.includes('NON') || valStr.includes('UNPAID') || valStr.includes('OVERDUE') || valStr.includes('CANCELLED') || valStr.includes('VOIDED') || valStr.includes('DISABLED')) {
+            fillBg = "FFE4E6";
+            fontColor = "B91C1C";
+          } else if (valStr.includes('PARTIAL') || valStr.includes('PENDING') || valStr.includes('EXCHANGE') || valStr.includes('CREDIT NOTE')) {
+            fillBg = "FEF3C7";
+            fontColor = "B45309";
+          }
         }
 
         cell.s = {
-          font: { name: "Segoe UI", sz: 10, color: { rgb: "334155" } },
-          fill: { fgColor: { rgb: bgColor } },
-          alignment: { vertical: "center", horizontal: alignment },
+          font: { name: "Segoe UI", sz: fontSize, bold: isBold, color: { rgb: fontColor } },
+          fill: { fgColor: { rgb: fillBg } },
+          alignment: { vertical: "center", horizontal: horizAlign },
           border: {
-            bottom: { style: "thin", color: { rgb: "F1F5F9" } },
-            top: { style: "thin", color: { rgb: "F1F5F9" } },
-            left: { style: "thin", color: { rgb: "F1F5F9" } },
-            right: { style: "thin", color: { rgb: "F1F5F9" } }
+            bottom: { style: "thin", color: { rgb: "CBD5E1" } },
+            top: { style: "thin", color: { rgb: "CBD5E1" } },
+            left: { style: "thin", color: { rgb: "CBD5E1" } },
+            right: { style: "thin", color: { rgb: "CBD5E1" } }
           }
         };
       }
     }
   }
+
+  setRowHeights(ws);
 };
 
 const styleOverviewSheet = (ws) => {
   const ref = ws['!ref'];
   if (!ref) return;
   const range = XLSX.utils.decode_range(ref);
-  
+
+  ws['!rows'] = [
+    { hpt: 48 }, { hpt: 48 },
+    { hpt: 24 }, { hpt: 28 },
+    { hpt: 18 },
+    { hpt: 38 },
+    { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 },
+    { hpt: 18 },
+    { hpt: 38 },
+    { hpt: 28 }, { hpt: 28 }, { hpt: 28 }, { hpt: 28 }, { hpt: 32 },
+    { hpt: 18 },
+    { hpt: 38 },
+    { hpt: 26 }, { hpt: 26 }, { hpt: 26 }, { hpt: 26 }
+  ];
+
   for (let row = range.s.r; row <= range.e.r; row++) {
     for (let col = range.s.c; col <= range.e.c; col++) {
       const cellRef = XLSX.utils.encode_cell({ r: row, c: col });
       const cell = ws[cellRef];
       if (!cell) continue;
 
-      // Default font
-      cell.s = {
-        font: { name: "Segoe UI", sz: 10, color: { rgb: "334155" } }
-      };
+      cell.s = { font: { name: "Segoe UI", sz: 11.5, color: { rgb: "334155" } } };
 
-      // 1. Banner Title (A1:I2)
       if (row === 0 || row === 1) {
         cell.s = {
-          font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 16 },
-          fill: { fgColor: { rgb: "581C87" } }, // royal purple
+          font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 18 },
+          fill: { fgColor: { rgb: "4C1D95" } },
           alignment: { vertical: "center", horizontal: "center" }
         };
-      }
-      // 2. Month Start & Month End Headers (A3:B3)
-      else if (row === 2 && (col === 0 || col === 1)) {
+      } else if (row === 2 && (col === 0 || col === 1)) {
         cell.s = {
-          font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 10 },
-          fill: { fgColor: { rgb: "581C87" } },
+          font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 12 },
+          fill: { fgColor: { rgb: "1E293B" } },
           alignment: { vertical: "center", horizontal: "center" }
         };
-      }
-      // 3. Month Date Values (A4:B4)
-      else if (row === 3 && (col === 0 || col === 1)) {
+      } else if (row === 3 && (col === 0 || col === 1)) {
         cell.s = {
-          font: { name: "Segoe UI", sz: 10, bold: true },
+          font: { name: "Segoe UI", sz: 12, bold: true, color: { rgb: "0F172A" } },
+          fill: { fgColor: { rgb: "F1F5F9" } },
           alignment: { vertical: "center", horizontal: "center" },
           border: {
-            bottom: { style: "thin", color: { rgb: "E2E8F0" } },
-            top: { style: "thin", color: { rgb: "E2E8F0" } },
-            left: { style: "thin", color: { rgb: "E2E8F0" } },
-            right: { style: "thin", color: { rgb: "E2E8F0" } }
+            bottom: { style: "thin", color: { rgb: "CBD5E1" } },
+            top: { style: "thin", color: { rgb: "CBD5E1" } },
+            left: { style: "thin", color: { rgb: "CBD5E1" } },
+            right: { style: "thin", color: { rgb: "CBD5E1" } }
           }
         };
-      }
-      // 4. KPI Table (Rows 6-11, columns A and B)
-      else if (row >= 5 && row <= 10 && (col === 0 || col === 1)) {
-        const isLeftColumn = (col === 0);
-        
-        if (isLeftColumn) {
-          // Light purple background with dark purple text
+      } else if ((row === 5 || row === 13 || row === 20) && col >= 0 && col <= 8) {
+        cell.s = {
+          font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 13.5 },
+          fill: { fgColor: { rgb: "1E293B" } },
+          alignment: { vertical: "center", horizontal: "left" },
+          border: {
+            bottom: { style: "medium", color: { rgb: "0F172A" } },
+            top: { style: "medium", color: { rgb: "0F172A" } }
+          }
+        };
+      } else if (row >= 6 && row <= 11 && (col === 0 || col === 1)) {
+        if (col === 0) {
           cell.s = {
-            font: { bold: true, color: { rgb: "3B0764" }, name: "Segoe UI", sz: 10 },
+            font: { bold: true, color: { rgb: "3B0764" }, name: "Segoe UI", sz: 12 },
             fill: { fgColor: { rgb: "F3E8FF" } },
-            alignment: { vertical: "center", horizontal: "center", wrapText: true },
+            alignment: { vertical: "center", horizontal: "left" },
             border: {
               bottom: { style: "thin", color: { rgb: "E9D5FF" } },
               top: { style: "thin", color: { rgb: "E9D5FF" } },
@@ -239,32 +362,45 @@ const styleOverviewSheet = (ws) => {
             }
           };
         } else {
-          // Right value column: styled nicely with borders
+          let kpiFill = "F1F5F9";
+          let kpiColor = "0F172A";
+          if (row === 6 || row === 10) { kpiFill = "D1FAE5"; kpiColor = "047857"; }
+          else if (row === 7) { kpiFill = "E0F2FE"; kpiColor = "0369A1"; }
+          else if (row === 8) { kpiFill = "FEF3C7"; kpiColor = "92400E"; }
+          else if (row === 11) { kpiFill = "E0E7FF"; kpiColor = "3730A3"; }
+
           cell.s = {
-            font: { bold: true, name: "Segoe UI", sz: 10, color: { rgb: "0F172A" } },
-            fill: { fgColor: { rgb: "F1F5F9" } },
+            font: { bold: true, name: "Segoe UI", sz: 13, color: { rgb: kpiColor } },
+            fill: { fgColor: { rgb: kpiFill } },
             alignment: { vertical: "center", horizontal: "right" },
             border: {
-              bottom: { style: "thin", color: { rgb: "E2E8F0" } },
-              top: { style: "thin", color: { rgb: "E2E8F0" } },
-              left: { style: "thin", color: { rgb: "E2E8F0" } },
-              right: { style: "thin", color: { rgb: "E2E8F0" } }
+              bottom: { style: "thin", color: { rgb: "CBD5E1" } },
+              top: { style: "thin", color: { rgb: "CBD5E1" } },
+              left: { style: "thin", color: { rgb: "CBD5E1" } },
+              right: { style: "thin", color: { rgb: "CBD5E1" } }
             }
           };
         }
-      }
-      // 5. Useful Notes Header (A13)
-      else if (row === 12 && col >= 0 && col <= 8) {
+      } else if (row >= 14 && row <= 18 && (col === 0 || col === 1)) {
+        const isTotal = (row === 18);
+        const bg = isTotal ? "D1FAE5" : ((row % 2 === 0) ? "F8FAFC" : "FFFFFF");
+        const fontCol = isTotal ? "047857" : "334155";
+        const align = (col === 0) ? "left" : "right";
+
         cell.s = {
-          font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 11 },
-          fill: { fgColor: { rgb: "581C87" } },
-          alignment: { vertical: "center", horizontal: "left" }
+          font: { bold: true, color: { rgb: fontCol }, name: "Segoe UI", sz: isTotal ? 13 : 11.5 },
+          fill: { fgColor: { rgb: bg } },
+          alignment: { vertical: "center", horizontal: align },
+          border: {
+            top: { style: "thin", color: { rgb: "CBD5E1" } },
+            bottom: { style: isTotal ? "double" : "thin", color: { rgb: isTotal ? "047857" : "E2E8F0" } },
+            left: { style: "thin", color: { rgb: "CBD5E1" } },
+            right: { style: "thin", color: { rgb: "CBD5E1" } }
+          }
         };
-      }
-      // 6. Useful Notes details (Rows 14-17)
-      else if (row >= 13 && row <= 16 && col >= 0 && col <= 8) {
+      } else if (row >= 21 && row <= 24 && col === 0) {
         cell.s = {
-          font: { name: "Segoe UI", sz: 9.5, italic: true, color: { rgb: "475569" } },
+          font: { name: "Segoe UI", sz: 11, italic: true, color: { rgb: "475569" } },
           alignment: { vertical: "center", horizontal: "left" }
         };
       }
@@ -417,9 +553,27 @@ const performBackup = async (fromDate = null, toDate = null) => {
     const finalEnd = toDate || maxDate || dateEndStr;
 
     // Pre-calculate exact static values to write to B6:B12 so Excel shows correct figures immediately on open
-    const valB6 = sales.filter(s => s.status?.toUpperCase() !== 'CANCELLED').reduce((sum, s) => sum + (s.total_amount || 0), 0);
-    const valB8 = sales.filter(s => s.status?.toUpperCase() !== 'CANCELLED' && s.status?.toLowerCase() !== 'paid').reduce((sum, s) => sum + Math.max(0, (s.total_amount || 0) - (s.payment_received || 0)), 0);
-    const valB7 = valB6 - valB8; // Cash Received = Total Sales - Customer Credit Outstanding
+    const grossSalesAmount = sales.filter(s => s.status?.toUpperCase() !== 'CANCELLED').reduce((sum, s) => sum + (s.total_amount || 0), 0);
+    const activeReturns = salesReturns ? salesReturns.filter(r => r.status !== 'voided' && r.status !== 'Voided' && r.status !== 'cancelled') : [];
+    const totalReturnAmount = activeReturns.reduce((sum, r) => sum + Number(r.return_amount || 0), 0);
+    const totalExchangeAmount = activeReturns.reduce((sum, r) => sum + Number(r.exchange_amount || 0), 0);
+    const valB6 = Math.max(0, grossSalesAmount + totalExchangeAmount - totalReturnAmount);
+
+    const returnNetMapByInvoice = {};
+    activeReturns.forEach(r => {
+      const inv = r.invoice_no || r.invoiceNo;
+      const retAmt = Number(r.return_amount || 0);
+      const exAmt = Number(r.exchange_amount || 0);
+      returnNetMapByInvoice[inv] = (returnNetMapByInvoice[inv] || 0) + (retAmt - exAmt);
+    });
+
+    const valB8 = sales.filter(s => s.status?.toUpperCase() !== 'CANCELLED' && s.status?.toLowerCase() !== 'paid' && s.status?.toLowerCase() !== 'fully returned').reduce((sum, s) => {
+      const inv = s.invoice_no || s.invoiceNo;
+      const netRet = returnNetMapByInvoice[inv] || 0;
+      const effTotal = Math.max(0, (s.total_amount || 0) - netRet);
+      return sum + Math.max(0, effTotal - (s.payment_received || 0));
+    }, 0);
+    const valB7 = Math.max(0, valB6 - valB8); // Cash Received = Total Sales - Customer Credit Outstanding
     const valB9 = purchaseOrders.filter(po => po.status?.toUpperCase() !== 'CANCELLED').reduce((sum, po) => sum + (po.total || 0), 0);
     const valB10 = transactions.filter(t => t.type?.toUpperCase() === 'EXPENSE' && t.category !== 'Purchases').reduce((sum, t) => sum + (t.amount || 0), 0);
     
@@ -458,50 +612,38 @@ const performBackup = async (fromDate = null, toDate = null) => {
         }
       } catch (err) {}
     });
-    
+
+    // Reconcile return and exchange item cost adjustments
+    activeReturns.forEach(r => {
+      try {
+        const retItems = typeof r.returned_items === 'string' ? JSON.parse(r.returned_items) : r.returned_items;
+        if (Array.isArray(retItems)) {
+          retItems.forEach(it => {
+            const product = products.find(p => p.id === it.productId || p.id === it.product_id);
+            const baseCost = product ? Number(product.cost_price || 0) : 0;
+            const qty = Number(it.qty || 0);
+            totalCostOfSales -= qty * baseCost;
+          });
+        }
+        const exItems = typeof r.exchange_items === 'string' ? JSON.parse(r.exchange_items) : r.exchange_items;
+        if (Array.isArray(exItems)) {
+          exItems.forEach(it => {
+            const product = products.find(p => p.id === it.productId || p.id === it.product_id);
+            const baseCost = product ? Number(product.cost_price || 0) : 0;
+            const qty = Number(it.qty || 0);
+            totalCostOfSales += qty * baseCost;
+          });
+        }
+      } catch (err) {}
+    });
+    totalCostOfSales = Math.max(0, totalCostOfSales);
+
     const valB11 = valB6 - totalCostOfSales;
     const valB12 = products.reduce((sum, p) => sum + ((p.stock || 0) * (p.cost_price || 0)), 0);
 
     // Stats declarations for email HTML
     const totalSalesRevenue = valB6;
-    let totalSalesProfit = 0;
-    sales.filter(s => s.status?.toLowerCase() !== 'cancelled').forEach(s => {
-      try {
-        const items = typeof s.items === 'string' ? JSON.parse(s.items) : s.items;
-        if (Array.isArray(items)) {
-          items.forEach(it => {
-            const product = products.find(p => p.id === it.productId || p.id === it.product_id);
-            let baseCost = product ? Number(product.cost_price || 0) : 0;
-            let convRate = Number(it.conversionRate) || 1;
-            if (product && (!it.conversionRate || convRate === 1) && (it.unit && it.unit.toLowerCase() !== (product.unit || '').toLowerCase())) {
-              const measureDetailsStr = product.measure_details || product.measureDetails;
-              if (measureDetailsStr) {
-                try {
-                  const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
-                  if (parsed && Array.isArray(parsed.conversions)) {
-                    const matchedConv = parsed.conversions.find(c => (c.unit || '').toLowerCase() === it.unit.toLowerCase());
-                    if (matchedConv) {
-                      const rawVal = Number(matchedConv.kgVal) || 1;
-                      if ((product.unit || '').toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
-                        convRate = 1 / rawVal;
-                      } else {
-                        convRate = rawVal;
-                      }
-                    }
-                  }
-                } catch (e) {}
-              }
-            }
-            const unitCost = convRate > 0 ? baseCost / convRate : baseCost;
-            const price = Number(it.price || 0);
-            const qty = Number(it.qty || 0);
-            totalSalesProfit += qty * (price - unitCost);
-          });
-        }
-      } catch (err) {
-        console.warn("Failed to parse items for profit calculation in backup", err);
-      }
-    });
+    const totalSalesProfit = valB11;
     const totalExpenses = valB10;
     const netCashFlow = valB7 - valB10;
     const totalInventoryValue = valB12;
@@ -652,6 +794,21 @@ const performBackup = async (fromDate = null, toDate = null) => {
         }
       } catch (e) {}
 
+      const inv = s.invoice_no || s.invoiceNo;
+      const invReturns = (salesReturns || []).filter(r => (r.invoice_no === inv || r.invoiceNo === inv) && r.status?.toLowerCase() !== 'voided' && r.status?.toLowerCase() !== 'cancelled');
+      const retAmt = invReturns.reduce((acc, r) => acc + Number(r.return_amount || r.returnAmount || 0), 0);
+      const exAmt = invReturns.reduce((acc, r) => acc + Number(r.exchange_amount || r.exchangeAmount || 0), 0);
+      const exPaid = invReturns.reduce((acc, r) => acc + Number(r.customer_paid || r.customerPaid || 0), 0);
+
+      const method = (s.payment_method || '').toLowerCase();
+      const isCredit = method === 'credit' || s.is_credit === 1 || s.is_credit === true || s.status?.toLowerCase() === 'non paid' || s.status?.toLowerCase() === 'partially settled' || s.status?.toLowerCase() === 'fully settled' || s.status?.toLowerCase() === 'fully returned' || s.status?.toLowerCase() === 'partially returned';
+
+      const origTotal = Number(s.total_amount || 0);
+      const origPaid = isCredit ? Number(s.payment_received || 0) : (s.status?.toLowerCase() === 'paid' ? origTotal : Number(s.payment_received || 0));
+      const totalPaid = origPaid + exPaid;
+      const effTotal = Math.max(0, origTotal - retAmt + exAmt);
+      const netOutstanding = Math.max(0, effTotal - totalPaid);
+
       return {
         "Invoice Number": s.invoice_no,
         "Customer Name": s.customer_name || 'Guest Customer',
@@ -660,9 +817,9 @@ const performBackup = async (fromDate = null, toDate = null) => {
         "Discount (Rs.)": s.discount || 0,
         "Tax Amount (Rs.)": s.tax || 0,
         "Total Amount (Rs.)": s.total_amount || 0,
-        "Payment Received (Rs.)": s.status?.toLowerCase() === 'paid' ? (s.total_amount || 0) : (s.payment_received || 0),
-        "Outstanding Balance (Rs.)": s.status?.toLowerCase() === 'paid' ? 0 : Math.max(0, (s.total_amount || 0) - (s.payment_received || 0)),
-        "Payment Status": s.status ? s.status.toUpperCase() : 'PAID',
+        "Payment Received (Rs.)": totalPaid,
+        "Outstanding Balance (Rs.)": netOutstanding,
+        "Payment Status": netOutstanding <= 0.01 ? 'PAID' : (totalPaid > 0 ? 'PARTIALLY SETTLED' : (s.status ? s.status.toUpperCase() : 'NON PAID')),
         "Payment Method": s.payment_method || 'Cash',
         "Checkout Date & Time": getExcelDecimalDate(s.created_at) || '---',
         "Due Date": getExcelDecimalDate(s.due_date) || '---',

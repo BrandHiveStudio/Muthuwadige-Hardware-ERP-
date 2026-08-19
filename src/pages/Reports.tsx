@@ -226,7 +226,15 @@ export function Reports() {
   };
 
   const getReturnSellingSubtotal = (r: any) => {
-    const retAmt = Number(r.return_amount !== undefined ? r.return_amount : (r.returnAmount !== undefined ? r.returnAmount : (r.amount || 0)));
+    const retAmt = Number(r.return_amount !== undefined && r.return_amount !== null
+      ? r.return_amount
+      : (r.returnAmount !== undefined && r.returnAmount !== null
+        ? r.returnAmount
+        : (r.total_refunded !== undefined && r.total_refunded !== null && Number(r.total_refunded) > 0
+          ? r.total_refunded
+          : (r.totalRefunded !== undefined && r.totalRefunded !== null && Number(r.totalRefunded) > 0
+            ? r.totalRefunded
+            : (r.amount || 0)))));
     const retTax = Number(r.tax || 0);
     const retTrans = Number(r.transportation_fee || r.transportationFee || 0);
     if (retAmt > 0) {
@@ -291,7 +299,11 @@ export function Reports() {
   const cashRefundsTotal = filteredSalesReturns.reduce((sum, r) => {
     const statusLower = (r.status || '').toString().toLowerCase().trim();
     if (statusLower === 'voided' || statusLower === 'cancelled') return sum;
+    const isCredit = r.isCredit === true || (r as any).is_credit === 1 || (r as any).is_credit === true;
+    if (isCredit) return sum;
+
     const type = (r.return_type || r.returnType || r.returnMethod || r.return_method || r.type || '').toString().toLowerCase().trim();
+    if (type === 'return' && Number(r.total_refunded || r.totalRefunded || 0) === 0) return sum;
 
     if (type === 'cash refund' || type === 'cash' || type === 'cash_refund') {
       const refundAmt = Number(r.refund_amount !== undefined && r.refund_amount !== null && Number(r.refund_amount) > 0
@@ -333,16 +345,19 @@ export function Reports() {
     return sum + getSaleSellingSubtotal(s);
   }, 0);
 
-  const cashRefundSellingRevenue = filteredSalesReturns.reduce((sum, r) => {
+  // Sales Return Subtotal & Exchange Subtotal adjustments across ALL return methods
+  const returnsSellingRevenue = filteredSalesReturns.reduce((sum, r) => {
     if (r.status === 'voided' || r.status === 'Voided' || r.status === 'cancelled') return sum;
-    const type = (r.return_type || r.returnType || r.returnMethod || r.return_method || r.type || '').toString().toLowerCase().trim();
-    if (type === 'cash refund' || type === 'cash' || type === 'cash_refund') {
-      return sum + getReturnSellingSubtotal(r);
-    }
-    return sum;
+    return sum + getReturnSellingSubtotal(r);
   }, 0);
 
-  const totalSalesRevenue = Math.max(0, grossSalesSellingRevenue - cashRefundSellingRevenue);
+  const exchangeSellingRevenue = filteredSalesReturns.reduce((sum, r) => {
+    if (r.status === 'voided' || r.status === 'Voided' || r.status === 'cancelled') return sum;
+    const exAmt = Number(r.exchange_amount !== undefined ? r.exchange_amount : (r.exchangeAmount || 0));
+    return sum + exAmt;
+  }, 0);
+
+  const totalSalesRevenue = Math.max(0, grossSalesSellingRevenue + exchangeSellingRevenue - returnsSellingRevenue);
   const paidOrders = filteredSales.filter(o => {
     if (o.status === 'cancelled' || o.status === 'Cancelled') return false;
     const rem = Math.max(0, Number(o.total_amount !== undefined ? o.total_amount : (o.total || 0)) - Number(o.payment_received || 0));
@@ -350,31 +365,50 @@ export function Reports() {
     return statusLower === 'paid' || statusLower === 'fully settled' || rem <= 0.01;
   }).length;
 
-  // Daily Sales logic to ensure data maps to chart
-  const dailySalesData = filteredSales.reduce((acc: any[], sale) => {
-    const day = new Date(sale.created_at || sale.date).toLocaleDateString('en-US', { weekday: 'short' });
-    const dayLabel = isSinhala ? (
-      day === 'Sun' ? 'ඉරිදා' :
-      day === 'Mon' ? 'සඳුදා' :
-      day === 'Tue' ? 'අඟහ' :
-      day === 'Wed' ? 'බදාදා' :
-      day === 'Thu' ? 'බ්‍රහස්' :
-      day === 'Fri' ? 'සිකු' : 'සෙන'
-    ) : day;
+  // Daily Sales logic to ensure data maps to chart (reconciled with sales returns)
+  const dailySalesData = (() => {
+    const map: Record<string, number> = {};
+    filteredSales.forEach(sale => {
+      const statusLower = (sale.status || '').toString().toLowerCase().trim();
+      if (statusLower === 'cancelled' || statusLower === 'voided') return;
+      const day = new Date(sale.created_at || sale.date).toLocaleDateString('en-US', { weekday: 'short' });
+      const dayLabel = isSinhala ? (
+        day === 'Sun' ? 'ඉරිදා' :
+        day === 'Mon' ? 'සඳුදා' :
+        day === 'Tue' ? 'අඟහ' :
+        day === 'Wed' ? 'බදාදා' :
+        day === 'Thu' ? 'බ්‍රහස්' :
+        day === 'Fri' ? 'සිකු' : 'සෙන'
+      ) : day;
+      map[dayLabel] = (map[dayLabel] || 0) + Number(sale.total_amount || sale.total || 0);
+    });
 
-    const existing = acc.find(d => d.day === dayLabel);
-    if (existing) {
-      existing.sales += Number(sale.total_amount || sale.total || 0);
-    } else {
-      acc.push({ day: dayLabel, sales: Number(sale.total_amount || sale.total || 0) });
-    }
-    return acc;
-  }, []).sort((a, b) => {
-    const days = isSinhala 
+    filteredSalesReturns.forEach(ret => {
+      const statusLower = (ret.status || '').toString().toLowerCase().trim();
+      if (statusLower === 'voided' || statusLower === 'cancelled') return;
+      const day = new Date(ret.created_at || ret.date).toLocaleDateString('en-US', { weekday: 'short' });
+      const dayLabel = isSinhala ? (
+        day === 'Sun' ? 'ඉරිදා' :
+        day === 'Mon' ? 'සඳුදා' :
+        day === 'Tue' ? 'අඟහ' :
+        day === 'Wed' ? 'බදාදා' :
+        day === 'Thu' ? 'බ්‍රහස්' :
+        day === 'Fri' ? 'සිකු' : 'සෙන'
+      ) : day;
+      const retVal = getReturnSellingSubtotal(ret);
+      const exVal = Number(ret.exchange_amount !== undefined ? ret.exchange_amount : (ret.exchangeAmount || 0));
+      map[dayLabel] = (map[dayLabel] || 0) + (exVal - retVal);
+    });
+
+    const daysOrder = isSinhala 
       ? ['ඉරිදා', 'සඳුදා', 'අඟහ', 'බදාදා', 'බ්‍රහස්', 'සිකුරාදා', 'සෙනසුරාදා']
       : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    return days.indexOf(a.day) - days.indexOf(b.day);
-  });
+
+    return Object.keys(map).map(dayLabel => ({
+      day: dayLabel,
+      sales: Math.max(0, map[dayLabel])
+    })).sort((a, b) => daysOrder.indexOf(a.day) - daysOrder.indexOf(b.day));
+  })();
 
   const topSellingProducts = filteredSales.reduce((acc: any[], sale) => {
     let items: any[] = [];
@@ -511,7 +545,7 @@ export function Reports() {
   const netRevenue = Math.max(0, totalIncome - totalSalesReturns);
   const totalExpenses = filteredTransactions.filter(t => t.type?.toLowerCase() === 'expense' && !isSalesReturnTrans(t)).reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
-  // 3. Net Profit: Net Selling Revenue - Net Item Costs (Profit Reversal = Selling Price - Cost Price)
+  // 3. Net Profit: Net Selling Revenue - Net Item Costs (Includes all return methods and exchange replacement items)
   const totalSalesProfit = (() => {
     let grossSellingRev = 0;
     let grossCostVal = 0;
@@ -539,32 +573,51 @@ export function Reports() {
 
     let returnedSellingRev = 0;
     let returnedCostVal = 0;
+    let exchangeSellingRev = 0;
+    let exchangeCostVal = 0;
 
     filteredSalesReturns.forEach(r => {
       if (r.status === 'voided' || r.status === 'Voided' || r.status === 'cancelled') return;
-      const type = (r.return_type || r.returnType || r.returnMethod || r.return_method || r.type || '').toString().toLowerCase().trim();
-      if (type === 'cash refund' || type === 'cash' || type === 'cash_refund') {
-        returnedSellingRev += getReturnSellingSubtotal(r);
+      
+      // Calculate returned items revenue & cost reversal across ALL return methods
+      returnedSellingRev += getReturnSellingSubtotal(r);
+      let rawItems = r.items || r.returnedItems || r.returned_items || [];
+      let items: any[] = [];
+      try {
+        items = typeof rawItems === 'string' ? JSON.parse(rawItems) : rawItems;
+      } catch(e) {}
 
-        let rawItems = r.items || r.returnedItems || r.returned_items || [];
-        let items: any[] = [];
-        try {
-          items = typeof rawItems === 'string' ? JSON.parse(rawItems) : rawItems;
-        } catch(e) {}
+      if (Array.isArray(items)) {
+        items.forEach(it => {
+          const product = products.find(p => p.id === (it.productId || it.product_id));
+          const cost = getItemUnitCost(product, it.unit, it.conversionRate);
+          const qty = Number(it.qty || 0);
+          returnedCostVal += qty * cost;
+        });
+      }
 
-        if (Array.isArray(items)) {
-          items.forEach(it => {
-            const product = products.find(p => p.id === it.productId);
-            const cost = getItemUnitCost(product, it.unit, it.conversionRate);
-            const qty = Number(it.qty || 0);
-            returnedCostVal += qty * cost;
-          });
-        }
+      // Calculate exchange replacement items revenue & cost addition
+      const exAmt = Number(r.exchange_amount !== undefined ? r.exchange_amount : (r.exchangeAmount || 0));
+      exchangeSellingRev += exAmt;
+
+      let rawExItems = r.exchangeItems || r.exchange_items || [];
+      let exItems: any[] = [];
+      try {
+        exItems = typeof rawExItems === 'string' ? JSON.parse(rawExItems) : rawExItems;
+      } catch(e) {}
+
+      if (Array.isArray(exItems)) {
+        exItems.forEach(it => {
+          const product = products.find(p => p.id === (it.productId || it.product_id));
+          const cost = getItemUnitCost(product, it.unit, it.conversionRate);
+          const qty = Number(it.qty || 0);
+          exchangeCostVal += qty * cost;
+        });
       }
     });
 
-    const netSellingRev = grossSellingRev - returnedSellingRev;
-    const netCostVal = grossCostVal - returnedCostVal;
+    const netSellingRev = grossSellingRev + exchangeSellingRev - returnedSellingRev;
+    const netCostVal = grossCostVal + exchangeCostVal - returnedCostVal;
     return netSellingRev - netCostVal;
   })();
 

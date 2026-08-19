@@ -2,6 +2,13 @@ import { app, BrowserWindow, shell, ipcMain } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+// Ensure consistent production AppData directory path resolution
+try {
+  app.setName('Muthuwadige Hardware ERP');
+  const prodUserData = path.join(app.getPath('appData'), 'Muthuwadige Hardware ERP');
+  app.setPath('userData', prodUserData);
+} catch (e) {}
+
 // 1. Automatically start our local Express SQLite server!
 import './server.js';
 
