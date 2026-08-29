@@ -33,3 +33,7 @@ build/*
 !build/icon.ico
 release-dist/
 backups/
+
+*.exe
+*.zip
+dist/

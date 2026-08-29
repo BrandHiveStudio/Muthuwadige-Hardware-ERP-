@@ -15,7 +15,6 @@ import {
   DownloadIcon,
   TrendingUpIcon,
   PackageIcon,
-  DollarSignIcon,
   FileTextIcon,
   FileSpreadsheetIcon,
   CalendarIcon,
@@ -34,6 +33,7 @@ import XLSX from 'xlsx-js-style';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { supabase } from '../lib/supabaseClient';
+import { calculateSaleAccounting, isCreditSaleRecord, calculateNetSalesRevenue, calculateNetCOGS, calculateGrossProfit } from '../utils/accounting';
 import { useCurrency } from '../context/CurrencyContext';
 import { formatStock } from '../utils/formatters';
 const isDecimalUnit = (unit: string | undefined): boolean => {
@@ -76,7 +76,9 @@ const safeGetDateString = (dateVal: any): string => {
   }
 };
 
-const getItemUnitCost = (product: any, itemUnit?: string, itemConvRate?: number): number => {
+const getItemUnitCost = (product: any, itemUnit?: string, itemConvRate?: number, itemCostOverride?: number): number => {
+  const snapshotCost = Number(itemCostOverride !== undefined && itemCostOverride !== null ? itemCostOverride : 0);
+  if (snapshotCost > 0) return snapshotCost;
   if (!product) return 0;
   const baseCost = Number(product.cost_price !== undefined ? product.cost_price : product.costPrice !== undefined ? product.costPrice : 0);
   let conversionRate = Number(itemConvRate) || 1;
@@ -167,9 +169,11 @@ export function Reports() {
     fetchData();
     fetchSettings();
     window.addEventListener('settings-updated', fetchSettings);
+    window.addEventListener('refresh-reports', fetchData);
     window.addEventListener('focus', fetchData);
     return () => {
       window.removeEventListener('settings-updated', fetchSettings);
+      window.removeEventListener('refresh-reports', fetchData);
       window.removeEventListener('focus', fetchData);
     };
   }, []);
@@ -545,98 +549,108 @@ export function Reports() {
   const netRevenue = Math.max(0, totalIncome - totalSalesReturns);
   const totalExpenses = filteredTransactions.filter(t => t.type?.toLowerCase() === 'expense' && !isSalesReturnTrans(t)).reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
-  // 3. Net Profit: Net Selling Revenue - Net Item Costs (Includes all return methods and exchange replacement items)
-  const totalSalesProfit = (() => {
-    let grossSellingRev = 0;
-    let grossCostVal = 0;
+  // 3. Financial Summary Metrics: Exact Income Waterfall & COGS Reconciliation
+  const financialSummaryMetrics = (() => {
+    let grossStickerSales = 0;
+    let customerDiscounts = 0;
+    let transportFees = 0;
+    let salesCOGS = 0;
 
     filteredSales.forEach(o => {
       const statusLower = (o.status || '').toString().toLowerCase().trim();
       if (statusLower !== 'cancelled' && statusLower !== 'voided') {
-        grossSellingRev += getSaleSellingSubtotal(o);
-
         let items: any[] = [];
         try {
           items = typeof o.items === 'string' ? JSON.parse(o.items) : o.items || [];
         } catch(e) {}
 
+        let lineDiscounts = 0;
         if (Array.isArray(items)) {
           items.forEach(it => {
-            const product = products.find(p => p.id === it.productId);
-            const cost = getItemUnitCost(product, it.unit, it.conversionRate);
-            const qty = Number(it.qty || 0);
-            grossCostVal += qty * cost;
+            const product = products.find(p => p.id === (it.productId || it.product_id));
+            const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.costPrice || it.cost_price);
+            const qty = Number(it.quantity || it.qty || 1);
+            const price = Number(it.unit_price || it.unitPrice || it.price || 0);
+            const itemDisc = Number(it.discount || 0);
+            const itemDiscType = it.discountType || 'amount';
+            const discAmt = (itemDiscType === 'percent' || itemDiscType === 'percentage') ? (qty * price * itemDisc / 100) : (itemDisc * qty);
+            
+            grossStickerSales += (qty * price);
+            salesCOGS += (qty * cost);
+            lineDiscounts += discAmt;
           });
         }
+        const invoiceDiscount = Number(o.discount || 0);
+        customerDiscounts += Math.max(lineDiscounts, invoiceDiscount);
+        transportFees += Number(o.transportation_fee || o.transportationFee || 0);
       }
     });
 
     let returnedSellingRev = 0;
-    let returnedCostVal = 0;
+    let returnsCOGS = 0;
     let exchangeSellingRev = 0;
     let exchangeCostVal = 0;
 
     filteredSalesReturns.forEach(r => {
       if (r.status === 'voided' || r.status === 'Voided' || r.status === 'cancelled') return;
       
-      // Calculate returned items revenue & cost reversal across ALL return methods
       returnedSellingRev += getReturnSellingSubtotal(r);
       let rawItems = r.items || r.returnedItems || r.returned_items || [];
       let items: any[] = [];
-      try {
-        items = typeof rawItems === 'string' ? JSON.parse(rawItems) : rawItems;
-      } catch(e) {}
+      try { items = typeof rawItems === 'string' ? JSON.parse(rawItems) : rawItems; } catch(e) {}
 
       if (Array.isArray(items)) {
         items.forEach(it => {
           const product = products.find(p => p.id === (it.productId || it.product_id));
-          const cost = getItemUnitCost(product, it.unit, it.conversionRate);
-          const qty = Number(it.qty || 0);
-          returnedCostVal += qty * cost;
+          const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.costPrice || it.cost_price);
+          const qty = Number(it.quantity || it.qty || 1);
+          returnsCOGS += (qty * cost);
         });
       }
 
-      // Calculate exchange replacement items revenue & cost addition
       const exAmt = Number(r.exchange_amount !== undefined ? r.exchange_amount : (r.exchangeAmount || 0));
       exchangeSellingRev += exAmt;
 
       let rawExItems = r.exchangeItems || r.exchange_items || [];
       let exItems: any[] = [];
-      try {
-        exItems = typeof rawExItems === 'string' ? JSON.parse(rawExItems) : rawExItems;
-      } catch(e) {}
+      try { exItems = typeof rawExItems === 'string' ? JSON.parse(rawExItems) : rawExItems; } catch(e) {}
 
       if (Array.isArray(exItems)) {
         exItems.forEach(it => {
           const product = products.find(p => p.id === (it.productId || it.product_id));
-          const cost = getItemUnitCost(product, it.unit, it.conversionRate);
-          const qty = Number(it.qty || 0);
-          exchangeCostVal += qty * cost;
+          const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.costPrice || it.cost_price);
+          const qty = Number(it.quantity || it.qty || 1);
+          exchangeCostVal += (qty * cost);
         });
       }
     });
 
-    const netSellingRev = grossSellingRev + exchangeSellingRev - returnedSellingRev;
-    const netCostVal = grossCostVal + exchangeCostVal - returnedCostVal;
-    return netSellingRev - netCostVal;
+    const netReturns = returnedSellingRev - exchangeSellingRev;
+    const netSellingRev = calculateNetSalesRevenue(grossStickerSales, customerDiscounts, netReturns, transportFees);
+    const netCOGS = calculateNetCOGS(salesCOGS, exchangeCostVal, returnsCOGS);
+    const grossProfit = calculateGrossProfit(netSellingRev, netCOGS);
+    const grossMarginPct = netSellingRev > 0 ? (grossProfit / netSellingRev) * 100 : 0;
+
+    return {
+      grossStickerSales,
+      customerDiscounts,
+      salesReturnsRefunds: netReturns,
+      transportFees,
+      grossSalesRevenue: grossStickerSales,
+      netSalesRevenue: netSellingRev,
+      cogs: netCOGS,
+      grossProfit,
+      grossMarginPct
+    };
   })();
 
+  const totalSalesProfit = financialSummaryMetrics.grossProfit;
+
   const totalReceivables = filteredSales.reduce((sum, s) => {
-    if (s.status === 'cancelled' || s.status === 'Cancelled') return sum;
-    const method = (s.payment_method || s.paymentMethod || '').toString().toLowerCase().trim();
-    const status = (s.status || '').toString().toLowerCase().trim();
-
-    if (method === 'cash' || method === 'card' || method === 'bank transfer' || method === 'online' || method === 'pos') {
-      return sum;
-    }
-
-    const isCredit = method === 'credit' || method === 'credit sale' || status === 'non paid' || status === 'non-paid' || status === 'partially paid' || status === 'partially settled' || status === 'pending' || (s as any).is_credit === true;
-    if (!isCredit) return sum;
-
-    const invTotal = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
-    const paidAmt = Number(s.payment_received || 0);
-    const remaining = Math.max(0, invTotal - paidAmt);
-    return sum + remaining;
+    if (s.status === 'cancelled' || s.status === 'Cancelled' || s.status === 'voided' || s.status === 'Voided') return sum;
+    if (!isCreditSaleRecord(s)) return sum;
+    const acct = calculateSaleAccounting(s, salesReturns);
+    return sum + acct.netOutstanding;
   }, 0);
   const totalPayables = suppliers.reduce((sum, s) => sum + Number(s.payable_balance || 0), 0);
 
@@ -645,9 +659,9 @@ export function Reports() {
     if (!fromDate && !toDate && rangeType === 'custom') {
       const todayStr = getLocalDateString();
       const saleDate = safeGetDateString(s.created_at || s.date);
-      return saleDate === todayStr && s.status !== 'cancelled';
+      return saleDate === todayStr && s.status !== 'cancelled' && s.status !== 'voided';
     }
-    return s.status !== 'cancelled';
+    return s.status !== 'cancelled' && s.status !== 'voided';
   });
 
   const periodCreditPayments = creditPayments.filter(cp => {
@@ -670,14 +684,13 @@ export function Reports() {
   todaySales.forEach(s => {
     const method = (s.payment_method || s.paymentMethod || 'Cash').toString().toLowerCase().trim();
     const totalAmt = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
-    const paidAmt = Number(s.payment_received || 0);
 
-    const isCreditSale = method === 'credit' || method === 'credit sale' || (s as any).is_credit === true;
+    const isCreditSale = isCreditSaleRecord(s);
 
     if (isCreditSale) {
-      // Remaining unsettled credit originated in period
-      const remainingUnpaid = Math.max(0, totalAmt - paidAmt);
-      calcCredit += remainingUnpaid;
+      // Remaining unsettled credit originated in period after returns
+      const acct = calculateSaleAccounting(s, salesReturns);
+      calcCredit += acct.netOutstanding;
     } else {
       // Direct non-credit sales
       if (method === 'card' || method === 'credit card') {
@@ -711,15 +724,33 @@ export function Reports() {
 
   const cashierSummary = todaySales.reduce((acc, s) => {
     const cashierName = s.cashier || s.user_email || 'System / Cashier';
-    const amt = Number(s.total_amount || s.total || 0);
+    const isCredit = isCreditSaleRecord(s);
+    // Realized amount: for non-credit sales count payment/total; for credit sales count cash paid at POS (excludes unpaid credit invoices such as INV004)
+    const realizedAmt = isCredit
+      ? Number(s.payment_received || 0)
+      : (s.payment_received !== undefined && s.payment_received !== null && Number(s.payment_received) > 0
+          ? Number(s.payment_received)
+          : Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0)));
+
     if (acc[cashierName]) {
-      acc[cashierName].amount += amt;
+      acc[cashierName].amount += realizedAmt;
       acc[cashierName].count += 1;
     } else {
-      acc[cashierName] = { amount: amt, count: 1 };
+      acc[cashierName] = { amount: realizedAmt, count: 1 };
     }
     return acc;
   }, {} as Record<string, { amount: number; count: number }>);
+
+  // Add credit debt repayments / settlements collected during shift
+  periodCreditPayments.forEach(cp => {
+    const cashierName = cp.recorded_by || cp.cashier || 'System / Cashier';
+    const payAmt = Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0));
+    if (cashierSummary[cashierName]) {
+      cashierSummary[cashierName].amount += payAmt;
+    } else {
+      cashierSummary[cashierName] = { amount: payAmt, count: 1 };
+    }
+  });
 
   const cashierSummaryArray = Object.keys(cashierSummary).map(name => ({
     name,
@@ -758,8 +789,8 @@ export function Reports() {
         let saleProfit = 0;
         if (Array.isArray(items)) {
           saleProfit = items.reduce((sum, it) => {
-            const product = products.find(p => p.id === it.productId);
-            const cost = getItemUnitCost(product, it.unit, it.conversionRate);
+            const product = products.find(p => p.id === it.productId || p.id === it.product_id);
+            const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.costPrice || it.cost_price);
             const price = Number(it.price || 0);
             const qty = Number(it.qty || 0);
             return sum + (qty * (price - cost));
@@ -907,8 +938,8 @@ export function Reports() {
           if (Array.isArray(items)) {
             doc.setTextColor(80, 80, 80);
             saleProfit = items.reduce((sum, it) => {
-              const product = products.find(p => p.id === it.productId);
-              const cost = getItemUnitCost(product, it.unit, it.conversionRate);
+              const product = products.find(p => p.id === it.productId || p.id === it.product_id);
+              const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.costPrice || it.cost_price);
               const price = Number(it.price || 0);
               const qty = Number(it.qty || 0);
               return sum + (qty * (price - cost));
@@ -1083,14 +1114,55 @@ export function Reports() {
 
       {tab === 'sales' && (
         <div className="space-y-6 animate-in fade-in duration-500">
+          {/* Standardized Financial Summary Rows */}
+          <div className="bg-white rounded-3xl border border-slate-100 p-6 shadow-md">
+            <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+              <BarChart3Icon className="w-4 h-4 text-[#DAA520]" />
+              {t("Financial Summary Statement", "මූල්‍ය සාරාංශ වාර්තාව")}
+            </h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
+              <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-150 text-left">
+                <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block mb-1">1. {t("Gross Sales Revenue (Sticker Value)", "එකතුව")}</span>
+                <span className="text-base font-black text-slate-800">{formatCurrency(financialSummaryMetrics.grossStickerSales)}</span>
+              </div>
+              <div className="bg-amber-50/40 p-3.5 rounded-2xl border border-amber-100 text-left">
+                <span className="text-[9px] font-extrabold text-amber-600 uppercase tracking-widest block mb-1">2. {t("Less: Customer Discounts", "වට්ටම්")}</span>
+                <span className="text-base font-black text-amber-700">{formatCurrency(financialSummaryMetrics.customerDiscounts)}</span>
+              </div>
+              <div className="bg-rose-50/50 p-3.5 rounded-2xl border border-rose-100 text-left">
+                <span className="text-[9px] font-extrabold text-rose-500 uppercase tracking-widest block mb-1">3. {t("Less: Sales Returns & Refunds", "ආපසු යැවීම්")}</span>
+                <span className="text-base font-black text-rose-700">{formatCurrency(financialSummaryMetrics.salesReturnsRefunds)}</span>
+              </div>
+              <div className="bg-blue-50/50 p-3.5 rounded-2xl border border-blue-100 text-left">
+                <span className="text-[9px] font-extrabold text-blue-600 uppercase tracking-widest block mb-1">4. {t("Add: Delivery Fees", "ප්‍රවාහන ගාස්තු")}</span>
+                <span className="text-base font-black text-blue-800">{formatCurrency(financialSummaryMetrics.transportFees)}</span>
+              </div>
+              <div className="bg-emerald-50/50 p-3.5 rounded-2xl border border-emerald-100 text-left">
+                <span className="text-[9px] font-extrabold text-emerald-600 uppercase tracking-widest block mb-1">5. {t("Net Sales Revenue", "ශුද්ධ ආදායම")}</span>
+                <span className="text-base font-black text-emerald-800">{formatCurrency(financialSummaryMetrics.netSalesRevenue)}</span>
+              </div>
+              <div className="bg-amber-50/50 p-3.5 rounded-2xl border border-amber-100 text-left">
+                <span className="text-[9px] font-extrabold text-amber-600 uppercase tracking-widest block mb-1">6. {t("Cost of Goods Sold (COGS)", "පිරිවැය")}</span>
+                <span className="text-base font-black text-amber-800">{formatCurrency(financialSummaryMetrics.cogs)}</span>
+              </div>
+              <div className="bg-gradient-to-br from-[#2c2c2c] to-[#464646] p-3.5 rounded-2xl border border-slate-700 text-left shadow-sm">
+                <span className="text-[9px] font-extrabold text-[#DAA520] uppercase tracking-widest block mb-1">7. {t("Gross Profit", "ශුද්ධ ලාභය")}</span>
+                <div className="flex flex-col">
+                  <span className="text-base font-black text-white">{formatCurrency(financialSummaryMetrics.grossProfit)}</span>
+                  <span className="text-[9px] font-bold text-amber-300 mt-0.5">{financialSummaryMetrics.grossMarginPct.toFixed(1)}% Margin</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
             {/* Card 1: Revenue */}
             <div className="bg-gradient-to-br from-emerald-500 via-emerald-600 to-teal-600 rounded-3xl p-6 shadow-[0_12px_30px_rgba(16,185,129,0.2)] hover:-translate-y-1.5 hover:shadow-[0_20px_45px_rgba(16,185,129,0.35)] transition-all duration-300 relative overflow-hidden group">
               <div className="absolute -top-10 -right-10 w-32 h-32 bg-white/10 rounded-full blur-xl group-hover:scale-125 transition-transform duration-500" />
               <div className="flex items-center justify-between mb-4">
-                <p className="text-[10px] text-emerald-100 font-extrabold uppercase tracking-widest">{t('Total Cash Collected', 'මුළු එකතු කරන ලද මුදල')}</p>
-                <div className="p-2.5 bg-white/15 text-white rounded-2xl ring-4 ring-white/10 group-hover:scale-110 transition-all duration-300">
-                  <DollarSignIcon className="w-4 h-4" />
+                <p className="text-[10px] text-emerald-100 font-extrabold uppercase tracking-widest">{t('Total Revenue Collected', 'එකතු කළ මුළු ආදායම')}</p>
+                <div className="px-2.5 py-1 bg-white/15 text-white rounded-2xl ring-4 ring-white/10 group-hover:scale-110 transition-all duration-300 flex items-center justify-center">
+                  <span className="font-black text-sm text-white">Rs.</span>
                 </div>
               </div>
               <p className="text-3xl font-black text-white tracking-tight">{formatCurrency(totalCashCollected)}</p>
@@ -1256,7 +1328,7 @@ export function Reports() {
                   </div>
                   <div className="bg-slate-50/50 p-4 rounded-xl border border-slate-150 flex items-center justify-between">
                     <div>
-                      <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">{t("Credit Card", "ක්‍රෙඩිට් කාඩ්")}</p>
+                      <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">{t("Card", "කාඩ්")}</p>
                       <p className="text-sm font-black text-slate-800 mt-0.5">{formatCurrency(todayCard)}</p>
                     </div>
                     <span className="w-2 h-2 rounded-full bg-[#DAA520]"></span>

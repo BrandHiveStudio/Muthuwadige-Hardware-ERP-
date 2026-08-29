@@ -11,6 +11,7 @@
  */
 
 import type { SaleOrder, SalesReturn, CreditNote } from '../../types';
+import { calculateSaleAccounting, calculateLineGrossTotal, calculateEffectiveUnitPricePaid, calculateTotalRefund } from '../accounting';
 
 /**
  * Utility helper for safe JSON parsing
@@ -28,12 +29,37 @@ const safeParseJson = (data: any, fallback: any = []) => {
   return fallback;
 };
 
+/**
+ * Helper to retrieve active system branding & shop settings dynamically
+ */
+export const getSystemBranding = (shopSettings?: any) => {
+  let settings = shopSettings;
+  if (!settings || (typeof settings === 'object' && Object.keys(settings).length === 0)) {
+    try {
+      const stored = localStorage.getItem('system_settings') || localStorage.getItem('hardware_erp_settings') || localStorage.getItem('erp_settings');
+      settings = stored ? JSON.parse(stored) : {};
+    } catch {
+      settings = {};
+    }
+  }
+  return {
+    shopName: settings?.shop_name || settings?.shopName || 'MUTHUWADIGE HARDWARE',
+    address: settings?.address || 'No. 123, Main Street, Colombo, Sri Lanka',
+    phone: settings?.phone || settings?.telephone || '+94 77 123 4567',
+    email: settings?.email || 'info@muthuwadige.lk',
+    footer: settings?.invoice_footer || settings?.receiptFooter || settings?.footer_text || 'Thank you for your business! Come again.',
+    logoPath: settings?.logo_path || settings?.logoPath || './images/logo.png',
+    printerSettings: settings?.printer_settings 
+      ? (typeof settings.printer_settings === 'object' 
+          ? settings.printer_settings 
+          : (() => { try { return JSON.parse(settings.printer_settings); } catch(e) { return {}; } })())
+      : {}
+  };
+};
+
 const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) => {
-  const printerConfig = shopSettings?.printer_settings 
-    ? (typeof shopSettings.printer_settings === 'object' 
-        ? shopSettings.printer_settings 
-        : (() => { try { return JSON.parse(shopSettings.printer_settings); } catch(e) { return {}; } })())
-    : {};
+  const branding = getSystemBranding(shopSettings);
+  const printerConfig = branding.printerSettings;
   const paperSize = printerConfig?.paperSize || '80mm';
 
   if (paperSize === '80mm') {
@@ -246,9 +272,10 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
         <body>
           <div class="receipt-container">
             <div class="header">
-              <img class="shop-logo-img" src="${shopSettings?.logo_path || './images/logo.png'}" alt="Shop Logo" onerror="this.style.display='none';" />
-              <div class="shop-address">${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</div>
-              <div class="shop-phone">Tel: ${shopSettings?.phone || '077 076 076 7'}</div>
+              <img class="shop-logo-img" src="${branding.logoPath}" alt="Shop Logo" onerror="this.style.display='none';" />
+              <div style="font-size: 16px; font-weight: 800; text-align: center; text-transform: uppercase; color: #111827; margin-bottom: 2px;">${branding.shopName}</div>
+              <div class="shop-address">${branding.address}</div>
+              <div class="shop-phone">Tel: ${branding.phone}</div>
             </div>
             
             <div class="title-badge">${title}</div>
@@ -323,12 +350,6 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
                 <td class="value">+${symbolStr} ${formatNum(quote.transportation_fee)}</td>
               </tr>
               ` : ''}
-              ${quote.tax_amount && quote.tax_amount > 0 ? `
-              <tr>
-                <td>${isSi ? 'බදු:' : 'Tax:'}</td>
-                <td class="value">+${symbolStr} ${formatNum(quote.tax_amount)}</td>
-              </tr>
-              ` : ''}
               <tr class="total-row">
                 <td>${isSi ? 'මුළු එකතුව:' : 'Total Amount:'}</td>
                 <td class="value">${symbolStr} ${formatNum(quote.total)}</td>
@@ -343,11 +364,6 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
               <p style="font-weight: bold; margin-top: 5px;">${isSi ? 'ඔබගේ ව්‍යාපාරයට ස්තූතියි!' : 'Thank you for your business!'}</p>
             </div>
           </div>
-          <script>
-            window.onload = function() {
-              window.print();
-            }
-          </script>
         </body>
       </html>
     `;
@@ -624,9 +640,9 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
         <div class="invoice-container">
           <div class="header-banner">
             <div class="company-info">
-              <h1>${shopSettings?.shop_name || 'MUTUWADIGE HARDWARE'}</h1>
-              <p>${shopSettings?.address || '123 Main Road, Colombo'}</p>
-              <p>Tel: ${shopSettings?.phone || '+94 77 123 4567'} | Email: ${shopSettings?.email || 'info@mutuwadige.lk'}</p>
+              <h1>${branding.shopName}</h1>
+              <p>${branding.address}</p>
+              <p>Tel: ${branding.phone} | Email: ${branding.email}</p>
             </div>
             ${shopSettings?.logo_path ? `<div class="logo-container"><img src="${shopSettings.logo_path}" style="width: 100%; height: 100%; max-width: 228px; max-height: 263px; object-fit: contain;" /></div>` : ''}
           </div>
@@ -696,12 +712,6 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
                 <span>+${symbolStr} ${formatNum(quote.transportation_fee)}</span>
               </div>
               ` : ''}
-              ${quote.tax_amount && quote.tax_amount > 0 ? `
-              <div class="total-row" style="color: #d97706;">
-                <span>${isSi ? 'බදු:' : 'Tax:'}</span>
-                <span>+${symbolStr} ${formatNum(quote.tax_amount)}</span>
-              </div>
-              ` : ''}
               <div class="total-row grand-total">
                 <span>${totalDueLabel}</span>
                 <span>${symbolStr} ${formatNum(quote.total)}</span>
@@ -720,11 +730,6 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
             </div>
           </div>
         </div>
-        <script>
-          window.onload = function() {
-            window.print();
-          };
-        </script>
       </body>
     </html>
   `;
@@ -980,11 +985,6 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
               <p style="font-weight: bold; margin-top: 5px;">${isSi ? 'ඔබගේ ව්‍යාපාරයට ස්තූතියි!' : 'Thank you for your business!'}</p>
             </div>
           </div>
-          <script>
-            window.onload = function() {
-              window.print();
-            }
-          </script>
         </body>
       </html>
     `;
@@ -1261,11 +1261,6 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
             </div>
           </div>
         </div>
-        <script>
-          window.onload = function() {
-            window.print();
-          };
-        </script>
       </body>
     </html>
   `;
@@ -1277,11 +1272,8 @@ const generateDNPrintHTML = (dn: any, isSi: boolean, shopSettings?: any) => {
 // ============================================
 
 const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) => {
-  const printerConfig = shopSettings?.printer_settings 
-    ? (typeof shopSettings.printer_settings === 'object' 
-        ? shopSettings.printer_settings 
-        : (() => { try { return JSON.parse(shopSettings.printer_settings); } catch(e) { return {}; } })())
-    : {};
+  const branding = getSystemBranding(shopSettings);
+  const printerConfig = branding.printerSettings;
   const paperSize = printerConfig?.paperSize || '80mm';
 
   const matchedCust = (shopSettings?.customers || []).find((c: any) => 
@@ -1321,19 +1313,22 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
         if (i.batchCode) parts.push(`Batch: ${i.batchCode}`);
         trackingInfo = `<div style="font-size: 10px; font-weight: normal; color: #6b7280; margin-top: 1px;">${parts.join(' | ')}</div>`;
       }
+      const qty = Number(i.quantity || i.qty || 1);
+      const unitPrice = Number(i.unit_price || i.price || 0);
+      const grossLineTotal = qty * unitPrice;
       return `
         <tr style="border-bottom: 1px dashed #e5e7eb;">
           <td colspan="2" style="padding: 5px 0 2px 0; font-weight: bold; text-align: left; color: #1f2937; font-size: 13px;">
-            ${i.productName}
+            ${i.productName || i.name || i.description}
             ${trackingInfo}
           </td>
         </tr>
         <tr style="border-bottom: 1px dashed #e5e7eb;">
           <td style="padding: 2px 0 6px 0; text-align: left; color: #374151; font-size: 12px;">
-            ${i.qty} ${i.unit || ''} x ${symbolStr} ${formatNum(i.price)}
+            ${qty} ${i.unit || ''} x ${symbolStr} ${formatNum(unitPrice)}
           </td>
           <td style="padding: 2px 0 6px 0; text-align: right; color: #1f2937; font-weight: bold; font-size: 13px;">
-            ${symbolStr} ${formatNum(i.total)}
+            ${symbolStr} ${formatNum(grossLineTotal)}
           </td>
         </tr>
       `;
@@ -1500,28 +1495,35 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
         <body>
           <div class="receipt-container">
             <div class="header">
-              <img class="shop-logo-img" src="${shopSettings?.logo_path || './images/logo.png'}" alt="Shop Logo" onerror="this.style.display='none';" />
-              <div class="shop-address">${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</div>
-              <div class="shop-phone">Tel: ${shopSettings?.phone || '077 076 076 7'}</div>
+              <img class="shop-logo-img" src="${branding.logoPath}" alt="Shop Logo" onerror="this.style.display='none';" />
+              <div style="font-size: 16px; font-weight: 800; text-align: center; text-transform: uppercase; color: #111827; margin-bottom: 2px;">${branding.shopName}</div>
+              <div class="shop-address">${branding.address}</div>
+              <div class="shop-phone">Tel: ${branding.phone}</div>
             </div>
             
             <div class="title-badge">${title}</div>
             
             <table class="meta-table">
               <tr>
-                <td>${isSi ? 'ඉන්වොයිස් අංකය:' : 'Invoice No:'}</td>
-                <td class="value">${order.invoiceNo}</td>
+                <td>${isSi ? 'ඉන්වොයිස් අංකය:' : 'INVOICE NO:'}</td>
+                <td class="value">${order.invoiceNo || order.invoice_no}</td>
               </tr>
               <tr>
-                <td>${isSi ? 'දිනය:' : 'Date:'}</td>
+                <td>${isSi ? 'නිකුත් කළ දිනය:' : 'ISSUE DATE:'}</td>
                 <td class="value">${formatInvoiceDateTime(order.created_at, order.date)}</td>
               </tr>
               <tr>
-                <td>${isSi ? 'ගෙවීම් ක්‍රමය:' : 'Payment Method:'}</td>
-                <td class="value">${order.payment_method || 'Cash'}</td>
+                <td>${isSi ? 'ගෙවීම් ක්‍රමය:' : 'PAYMENT METHOD:'}</td>
+                <td class="value"><span style="display: inline-block; padding: 2px 8px; background-color: #f59e0b; color: #000000; font-weight: 800; text-transform: uppercase; font-size: 11px; border: 1px solid #d97706; border-radius: 4px;">${(order.payment_method || (order as any).paymentMethod || (order.status === 'Non Paid' ? 'CREDIT' : 'CASH')).toUpperCase()}</span></td>
               </tr>
+              ${((order.payment_method || (order as any).paymentMethod || '').toLowerCase() === 'credit' || order.status === 'Non Paid') ? `
               <tr>
-                <td>${isSi ? 'පාරිභෝගිකයා:' : 'Customer:'}</td>
+                <td>${isSi ? 'තත්ත්වය:' : 'STATUS:'}</td>
+                <td class="value"><span style="display: inline-block; padding: 2px 6px; background-color: #ffe4e6; color: #9f1239; font-weight: 800; text-transform: uppercase; font-size: 10px; border: 1px solid #f43f5e; border-radius: 4px;">${isSi ? `නොගෙවූ / හිඟ (ණය කාලය: ${(order as any).credit_period || (order as any).payment_terms || order.credit_period_days || 30} දින)` : `UNPAID / OUTSTANDING (Credit Period: ${(order as any).credit_period || (order as any).payment_terms || order.credit_period_days || 30} Days)`}</span></td>
+              </tr>
+              ` : ''}
+              <tr>
+                <td>${isSi ? 'පාරිභෝගිකයා:' : 'CUSTOMER:'}</td>
                 <td class="value">${customerName}</td>
               </tr>
               ${custPhone ? `
@@ -1556,9 +1558,9 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
                 <td class="value">${symbolStr} ${formatNum(order.subtotal || 0)}</td>
               </tr>
               ${Number(order.discount || 0) > 0 ? `
-              <tr>
-                <td>${isSi ? 'වට්ටම:' : 'Discount:'}</td>
-                <td class="value">-${symbolStr} ${formatNum(order.discount || 0)}</td>
+              <tr style="color: #dc2626;">
+                <td>${isSi ? 'පාරිභෝගික වට්ටම:' : 'Customer Discount:'}</td>
+                <td class="value" style="color: #dc2626;">-${symbolStr} ${formatNum(order.discount || 0)}</td>
               </tr>
               ` : ''}
               ${Number(order.transportation_fee || order.transportationFee || 0) > 0 ? `
@@ -1567,20 +1569,14 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
                 <td class="value">+${symbolStr} ${formatNum(order.transportation_fee || order.transportationFee || 0)}</td>
               </tr>
               ` : ''}
-              ${Number(order.tax || 0) > 0 ? `
-              <tr>
-                <td>${isSi ? `බද්ද (${order.tax_rate || 0}%):` : `Tax (${order.tax_rate || 0}%):`}</td>
-                <td class="value">+${symbolStr} ${formatNum(order.tax || 0)}</td>
-              </tr>
-              ` : ''}
               ${Number(order.credit_note_applied || order.creditNoteApplied || 0) > 0 ? `
-              <tr>
+              <tr style="color: #059669;">
                 <td>${isSi ? 'ණය සටහන:' : 'Credit Note Applied:'}</td>
-                <td class="value">-${symbolStr} ${formatNum(order.credit_note_applied || order.creditNoteApplied || 0)}</td>
+                <td class="value" style="color: #059669;">-${symbolStr} ${formatNum(order.credit_note_applied || order.creditNoteApplied || 0)}</td>
               </tr>
               ` : ''}
               <tr class="total-row">
-                <td>${isSi ? 'මුළු එකතුව:' : 'Total Amount:'}</td>
+                <td>${isSi ? 'ගෙවිය යුතු මුළු මුදල:' : 'Total Amount:'}</td>
                 <td class="value">${symbolStr} ${formatNum(order.total_amount !== undefined ? order.total_amount : order.total)}</td>
               </tr>
             </table>
@@ -1590,16 +1586,9 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
             
             <div class="footer">
               <p>${isSi ? 'කිසියම් ප්‍රශ්නයක් ඇත්නම් කරුණාකර අප හා සම්බන්ධ වන්න.' : 'For queries, please contact us.'}</p>
-              <p style="font-weight: bold; margin-top: 5px;">${isSi ? 'ඔබගේ ව්‍යාපාරයට ස්තූතියි!' : 'Thank you for your business!'}</p>
+              <p style="font-weight: bold; margin-top: 5px;">${branding.footer}</p>
             </div>
           </div>
-          <script>
-            window.onload = function() {
-              setTimeout(function() {
-                window.print();
-              }, 300);
-            }
-          </script>
         </body>
       </html>
     `;
@@ -1613,8 +1602,8 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
     ? (isSi ? 'ණය ඉන්වොයිසිය / CREDIT' : 'CREDIT')
     : (isSi ? 'ඉන්වොයිසිය' : 'INVOICE');
   const billTo = isSi ? 'පාරිභෝගිකයා:' : 'BILL TO:';
-  const invoiceNoLabel = isSi ? 'ඉන්වොයිස් අංකය:' : 'Invoice No:';
-  const issueDateLabel = isSi ? 'නිකුත් කළ දිනය:' : 'Issue Date:';
+  const invoiceNoLabel = isSi ? 'ඉන්වොයිස් අංකය:' : 'INVOICE NO:';
+  const issueDateLabel = isSi ? 'නිකුත් කළ දිනය:' : 'ISSUE DATE:';
   
   const descCol = isSi ? 'විස්තරය' : 'Description';
   const qtyCol = isSi ? 'ප්‍රමාණය' : 'Qty';
@@ -1623,7 +1612,6 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
   
   const subTotalLabel = isSi ? 'උප එකතුව:' : 'Sub Total:';
   const discountLabel = isSi ? 'වට්ටම:' : 'Discount:';
-  const taxLabel = isSi ? `බද්ද (${order.tax_rate || 0}%):` : `Tax (${order.tax_rate || 0}%):`;
   const totalDueLabel = isSi ? 'ගෙවිය යුතු මුළු මුදල:' : 'Total Due:';
   
   const notesLabel = isSi ? 'සටහන්' : 'NOTES';
@@ -1644,15 +1632,18 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
       if (i.batchCode) parts.push(`Batch: ${i.batchCode}`);
       trackingInfo = `<div style="font-size: 9px; font-weight: normal; color: #9ca3af; margin-top: 2px;">${parts.join(' | ')}</div>`;
     }
+    const qty = Number(i.quantity || i.qty || 1);
+    const unitPrice = Number(i.unit_price || i.price || 0);
+    const grossLineTotal = qty * unitPrice;
     return `
       <tr style="border-bottom: 1px solid #e5e7eb;">
         <td style="padding: 12px 15px; font-weight: 700; text-align: left; color: #464646;">
-          ${i.productName}
+          ${i.productName || i.name || i.description}
           ${trackingInfo}
         </td>
-        <td style="padding: 12px 15px; text-align: center; color: #4b5563;">${i.qty} ${i.unit || ''}</td>
-        <td style="padding: 12px 15px; text-align: right; color: #4b5563;">${symbolStr} ${formatNum(i.price)}</td>
-        <td style="padding: 12px 15px; text-align: right; color: #464646; font-weight: 700;">${symbolStr} ${formatNum(i.total)}</td>
+        <td style="padding: 12px 15px; text-align: center; color: #4b5563;">${qty} ${i.unit || ''}</td>
+        <td style="padding: 12px 15px; text-align: right; color: #4b5563;">${symbolStr} ${formatNum(unitPrice)}</td>
+        <td style="padding: 12px 15px; text-align: right; color: #464646; font-weight: 700;">${symbolStr} ${formatNum(grossLineTotal)}</td>
       </tr>
     `;
   }).join('');
@@ -1920,9 +1911,9 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
         <div class="invoice-container">
           <div class="header-banner">
             <div class="company-info">
-              <h1>${shopSettings?.shop_name || 'MUTHUWADIGE HARDWARE'}</h1>
-              <p>${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</p>
-              <p>Contact: ${shopSettings?.phone || '077 076 076 7'}</p>
+              <h1>${branding.shopName}</h1>
+              <p>${branding.address}</p>
+              <p>Contact: ${branding.phone}</p>
             </div>
             <div class="logo-container">
               ${shopSettings?.logo_path ? 
@@ -1953,12 +1944,22 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               <table>
                 <tr>
                   <td class="label">${invoiceNoLabel}</td>
-                  <td class="value">${order.invoiceNo}</td>
+                  <td class="value">${order.invoiceNo || order.invoice_no}</td>
                 </tr>
                 <tr>
                   <td class="label">${issueDateLabel}</td>
                   <td class="value">${formatInvoiceDateTime(order.created_at, order.date)}</td>
                 </tr>
+                <tr>
+                  <td class="label">${isSi ? 'ගෙවීම් ක්‍රමය:' : 'PAYMENT METHOD:'}</td>
+                  <td class="value"><span style="display: inline-block; padding: 2px 8px; background-color: #f59e0b; color: #000000; font-weight: 800; text-transform: uppercase; font-size: 10px; border: 1px solid #d97706; border-radius: 4px;">${(order.payment_method || (order as any).paymentMethod || (order.status === 'Non Paid' ? 'CREDIT' : 'CASH')).toUpperCase()}</span></td>
+                </tr>
+                ${((order.payment_method || (order as any).paymentMethod || '').toLowerCase() === 'credit' || order.status === 'Non Paid') ? `
+                <tr>
+                  <td class="label">${isSi ? 'තත්ත්වය:' : 'STATUS:'}</td>
+                  <td class="value"><span style="display: inline-block; padding: 2px 8px; background-color: #ffe4e6; color: #9f1239; font-weight: 800; text-transform: uppercase; font-size: 9px; border: 1px solid #f43f5e; border-radius: 4px;">${isSi ? `නොගෙවූ / හිඟ (ණය කාලය: ${(order as any).credit_period || (order as any).payment_terms || order.credit_period_days || 30} දින)` : `UNPAID / OUTSTANDING (Credit Period: ${(order as any).credit_period || (order as any).payment_terms || order.credit_period_days || 30} Days)`}</span></td>
+                </tr>
+                ` : ''}
               </table>
             </div>
           </div>
@@ -1994,8 +1995,8 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
                 </tr>
                 ${Number(order.discount || 0) > 0 ? `
                 <tr>
-                  <td class="label">${discountLabel}</td>
-                  <td class="value">-${symbolStr} ${formatNum(order.discount || 0)}</td>
+                  <td class="label" style="color: #dc2626;">${isSi ? 'පාරිභෝගික වට්ටම:' : 'Customer Discount:'}</td>
+                  <td class="value" style="color: #dc2626;">-${symbolStr} ${formatNum(order.discount || 0)}</td>
                 </tr>
                 ` : ''}
                 ${Number(order.transportation_fee || order.transportationFee || 0) > 0 ? `
@@ -2004,20 +2005,14 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
                   <td class="value">+${symbolStr} ${formatNum(order.transportation_fee || order.transportationFee || 0)}</td>
                 </tr>
                 ` : ''}
-                ${Number(order.tax || 0) > 0 ? `
-                <tr>
-                  <td class="label">${taxLabel}</td>
-                  <td class="value">+${symbolStr} ${formatNum(order.tax || 0)}</td>
-                </tr>
-                ` : ''}
                 ${Number(order.credit_note_applied || order.creditNoteApplied || 0) > 0 ? `
                 <tr>
-                  <td class="label">${isSi ? 'ණය සටහන:' : 'Credit Note Applied:'}</td>
-                  <td class="value">-${symbolStr} ${formatNum(order.credit_note_applied || order.creditNoteApplied || 0)}</td>
+                  <td class="label" style="color: #059669;">${isSi ? 'ණය සටහන:' : 'Credit Note Applied:'}</td>
+                  <td class="value" style="color: #059669;">-${symbolStr} ${formatNum(order.credit_note_applied || order.creditNoteApplied || 0)}</td>
                 </tr>
                 ` : ''}
                 <tr class="total-due-row">
-                  <td class="label">${totalDueLabel}</td>
+                  <td class="label">${isSi ? 'ගෙවිය යුතු මුළු මුදල:' : 'Total Amount:'}</td>
                   <td class="value">${symbolStr} ${formatNum(order.total_amount !== undefined ? order.total_amount : order.total)}</td>
                 </tr>
               </table>
@@ -2028,13 +2023,6 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
             <span class="signature-line">${signeeLabel}</span>
           </div>
         </div>
-        <script>
-          window.onload = function() {
-            setTimeout(function() {
-              window.print();
-            }, 300);
-          }
-        </script>
       </body>
     </html>
   `;
@@ -2072,13 +2060,29 @@ const generateReturnPrintHTML = (sr: SalesReturn, isSi: boolean, shopSettings?: 
     ? (isSi ? 'භාණ්ඩ හුවමාරු රසීදුව' : 'EXCHANGE RECEIPT')
     : (displayMethod === 'Credit Note' ? (isSi ? 'ණය සටහන් රසීදුව' : 'CREDIT NOTE RECEIPT') : (isSi ? 'ආපසු භාරගැනීමේ රසීදුව' : 'RETURN RECEIPT'));
 
-  const retRows = returnedItems.map((i: any) => `
-    <tr style="border-bottom: 1px dashed #e5e7eb;">
-      <td style="padding: 4px 0; text-align: left; color: #1f2937; font-weight: bold;">${i.productName}</td>
-      <td style="padding: 4px 0; text-align: center;">${i.qty} ${i.unit || ''}</td>
-      <td style="padding: 4px 0; text-align: right; font-weight: bold; color: #dc2626;">${symbolStr} ${formatNum(i.qty * i.price)}</td>
-    </tr>
-  `).join('');
+  const grossReturnVal = returnedItems.reduce((sum: number, i: any) => sum + ((i.qty || 1) * Number(i.originalStickerPrice || i.originalUnitPrice || i.price || 0)), 0);
+  const discountReturnVal = returnedItems.reduce((sum: number, i: any) => sum + ((i.qty || 1) * Number(i.unitDiscount || 0)), 0);
+  const netReturnVal = Number(sr.returnAmount || (grossReturnVal - discountReturnVal) || 0);
+
+  const retRows = returnedItems.map((i: any) => {
+    const origPrice = Number(i.originalStickerPrice || i.originalUnitPrice || i.price || 0);
+    const rawDisc = Number(i.unitDiscount !== undefined ? i.unitDiscount : (i.discount || 0));
+    const itemQty = Number(i.originalQty || i.quantity || i.qty || 1);
+    const { unitDiscount: unitDisc, netUnitPrice: netPrice } = calculateEffectiveUnitPricePaid(origPrice, rawDisc, itemQty);
+    const lineTotal = Number(i.qty || 1) * netPrice;
+    return `
+      <tr style="border-bottom: 1px dashed #e5e7eb;">
+        <td style="padding: 4px 0; text-align: left; color: #1f2937; font-weight: bold;">
+          ${i.productName}
+          ${unitDisc > 0 ? `<div style="font-size: 9px; color: #dc2626; font-weight: normal;">-${symbolStr} ${formatNum(unitDisc)}/pc disc</div>` : ''}
+        </td>
+        <td style="padding: 4px 0; text-align: center;">${i.qty} ${i.unit || ''}</td>
+        <td style="padding: 4px 0; text-align: right; color: #6b7280;">${symbolStr} ${formatNum(origPrice)}</td>
+        <td style="padding: 4px 0; text-align: right; font-weight: bold;">${symbolStr} ${formatNum(netPrice)}</td>
+        <td style="padding: 4px 0; text-align: right; font-weight: bold; color: #dc2626;">${symbolStr} ${formatNum(lineTotal)}</td>
+      </tr>
+    `;
+  }).join('');
 
   const exRows = exchangeItems.map((i: any) => `
     <tr style="border-bottom: 1px dashed #e5e7eb;">
@@ -2116,7 +2120,7 @@ const generateReturnPrintHTML = (sr: SalesReturn, isSi: boolean, shopSettings?: 
         
         <div style="font-weight: bold; margin-top: 6px; font-size: 11px; color: #dc2626;">Returned Products:</div>
         <table>
-          <thead><tr><th>Item</th><th style="text-align:center;">Qty</th><th style="text-align:right;">Total</th></tr></thead>
+          <thead><tr><th>Item Description</th><th style="text-align:center;">Qty</th><th style="text-align:right;">Orig</th><th style="text-align:right;">Net Price</th><th style="text-align:right;">Total</th></tr></thead>
           <tbody>${retRows}</tbody>
         </table>
 
@@ -2129,19 +2133,15 @@ const generateReturnPrintHTML = (sr: SalesReturn, isSi: boolean, shopSettings?: 
         ` : ''}
 
         <div style="margin-top: 10px; border-top: 1px solid #000; padding-top: 6px; text-align: right; font-weight: bold;">
-          <div>Return Total: ${symbolStr} ${formatNum(sr.returnAmount || 0)}</div>
+          <div>Gross Item Value: ${symbolStr} ${formatNum(grossReturnVal)}</div>
+          ${discountReturnVal > 0 ? `<div style="color: #dc2626;">Less: Proportional Discounts: -${symbolStr} ${formatNum(discountReturnVal)}</div>` : ''}
+          <div style="font-size: 13px; margin-top: 4px; color: #059669;">Total Refund / Credit Adjustment: ${symbolStr} ${formatNum(netReturnVal)}</div>
           ${sr.returnMethod === 'Exchange' ? `
             ${sr.exchangeAmount ? `<div>Exchange Replacement Total: ${symbolStr} ${formatNum(sr.exchangeAmount)}</div>` : ''}
             <div>Net Exchange Balance: ${symbolStr} ${formatNum(Math.abs((sr.exchangeAmount || 0) - (sr.returnAmount || 0)))} (${(sr.exchangeAmount || 0) >= (sr.returnAmount || 0) ? 'Customer Owed' : 'Refund Due'})</div>
             ${sr.customerPaid ? `<div>Customer Paid: ${symbolStr} ${formatNum(sr.customerPaid)}</div>` : ''}
             ${sr.changeGiven ? `<div>Change Given: ${symbolStr} ${formatNum(sr.changeGiven)}</div>` : ''}
-            <div style="font-size: 13px; margin-top: 4px; color: #dc2626;">Remaining Credit Balance Owed: ${symbolStr} ${formatNum(Math.max(0, (sr.exchangeAmount || 0) - (sr.returnAmount || 0) - (sr.customerPaid || 0)))}</div>
-          ` : `${(() => {
-            const isCreditBill = sr.isCredit === true || (sr as any).is_credit === 1 || (sr as any).is_credit === true;
-            const finalLabel = isCreditBill ? (isSi ? 'ණය සැකසුම' : 'Credit Adjustment') : (isSi ? 'මුළු ආපසු/ගෙවූ මුදල' : 'Net Refund/Paid');
-            const finalVal = isCreditBill ? (sr.returnAmount || sr.totalRefunded || 0) : (sr.totalRefunded !== undefined && sr.totalRefunded !== null ? sr.totalRefunded : (sr.returnAmount || 0));
-            return `<div style="font-size: 13px; margin-top: 4px;">${finalLabel}: ${symbolStr} ${formatNum(finalVal)}</div>`;
-          })()}`}
+          ` : ''}
         </div>
       </body>
     </html>
@@ -2206,6 +2206,49 @@ const generateCreditNotePrintHTML = (cn: CreditNote, isSi: boolean, shopSettings
 };
 
 // Premium On-Screen Interactive Preview Component
+
+// Standardized single-execution print dispatcher:
+export const safePrintIframe = (htmlContent: string, focusElementAfter?: HTMLElement | null) => {
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  iframe.style.visibility = 'hidden';
+  document.body.appendChild(iframe);
+
+  const doc = iframe.contentWindow?.document;
+  if (!doc) return;
+
+  let hasPrinted = false;
+  const triggerPrint = () => {
+    if (hasPrinted) return;
+    hasPrinted = true;
+    try {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+    } catch (err) {
+      console.error('Print trigger failed:', err);
+    } finally {
+      setTimeout(() => {
+        if (document.body.contains(iframe)) {
+          document.body.removeChild(iframe);
+        }
+        focusElementAfter?.focus();
+      }, 1000);
+    }
+  };
+
+  doc.open();
+  doc.write(htmlContent);
+  doc.close();
+
+  // Single reliable execution hook
+  iframe.onload = () => setTimeout(triggerPrint, 150);
+  setTimeout(triggerPrint, 600); // Fallback only if onload fails to fire
+};
 
 // Export all print template generators and helpers
 export {

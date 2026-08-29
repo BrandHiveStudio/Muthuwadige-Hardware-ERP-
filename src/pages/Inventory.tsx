@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import XLSX from 'xlsx-js-style';
 import {
   SearchIcon,
@@ -20,6 +20,7 @@ import { supabase } from '../lib/supabaseClient';
 import { api, API_URL } from '../lib/api';
 import type { Product } from '../types';
 import { formatStock } from '../utils/formatters';
+import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 
 const categories = [
   'All',
@@ -131,119 +132,106 @@ export function Inventory() {
         const ws = wb.Sheets[wsname];
         const rawRows = XLSX.utils.sheet_to_json(ws) as any[];
 
-        if (rawRows.length === 0) {
+        if (!rawRows || rawRows.length === 0) {
           setToast({ type: 'error', message: "The uploaded Excel file has no records." });
           setTimeout(() => setToast(null), 5000);
           return;
         }
 
-        // Strict spreadsheet type validation to prevent wrong sheet imports
-        const firstRow = rawRows[0];
-        const keys = Object.keys(firstRow || {});
-        const isWrongSheet = keys.some(key => {
-          const lower = key.toLowerCase();
-          return lower.includes('customer id') || 
-                 lower.includes('customer name') || 
-                 lower.includes('loyalty') || 
-                 lower.includes('staff id') || 
-                 lower.includes('employee') || 
-                 lower.includes('invoice') || 
-                 lower.includes('transaction id') || 
-                 lower.includes('salary') ||
-                 lower.includes('privilege');
-        });
-
-        if (isWrongSheet) {
-          setToast({ 
-            type: 'error', 
-            message: "Wrong Excel Sheet detected: This spreadsheet belongs to another system table (such as Customers, Staff, or Invoices). Please upload a valid Product Inventory spreadsheet." 
-          });
-          setTimeout(() => setToast(null), 6000);
-          return;
-        }
-
         setIsLoading(true);
         const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-          setToast({ type: 'error', message: "Session expired. Please log in again." });
-          setTimeout(() => setToast(null), 5000);
-          setIsLoading(false);
-          return;
-        }
 
-        const normalizeString = (value: any) => {
-          if (value === undefined || value === null) return '';
-          return String(value).trim();
-        };
-
-        const normalizedKey = (value: string) => normalizeString(value).toLowerCase();
+        const cleanKey = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
         const getValueByKeys = (rowObj: any, possibleKeys: string[]) => {
+          if (!rowObj || typeof rowObj !== 'object') return '';
           const keys = Object.keys(rowObj);
-          for (const key of possibleKeys) {
-            const matchedKey = keys.find(
-              (k) => k.toLowerCase().replace(/[^a-z0-9]/g, '') === key.toLowerCase().replace(/[^a-z0-9]/g, '')
-            );
+          for (const pKey of possibleKeys) {
+            const targetClean = cleanKey(pKey);
+            const matchedKey = keys.find((k) => cleanKey(k) === targetClean);
             if (matchedKey && rowObj[matchedKey] !== undefined && rowObj[matchedKey] !== null) {
-              return normalizeString(rowObj[matchedKey]);
+              const val = String(rowObj[matchedKey]).trim();
+              if (val !== '' && val !== 'null' && val !== 'undefined' && val !== '—' && val !== '-') {
+                return val;
+              }
             }
           }
           return '';
         };
 
-        // Fetch up-to-date suppliers list with full details
         const { data: currentSuppliers } = await supabase.from('suppliers').select('*');
         const suppliersMap = new Map<string, any>();
         (currentSuppliers || []).forEach((sup: any) => {
           if (sup && sup.name) {
-            suppliersMap.set(normalizeString(sup.name).toLowerCase(), sup);
+            suppliersMap.set(String(sup.name).trim().toLowerCase(), sup);
           }
         });
 
         let imported = 0;
         let errors = 0;
 
-        for (const row of rawRows) {
-          const name = getValueByKeys(row, ['PRODUCT', 'Product', 'Name', 'Product Name', 'name']);
-          const sku = getValueByKeys(row, ['SKU', 'sku', 'Product SKU']) || `SKU-${Date.now().toString().slice(-4)}-${imported}`;
-          const category = getValueByKeys(row, ['CATEGORY', 'Category', 'category']) || 'Power Tools';
+        for (let idx = 0; idx < rawRows.length; idx++) {
+          const row = rawRows[idx];
 
-          const rawPrice = getValueByKeys(row, ['PRICE (RS.)', 'Price', 'Selling Price', 'price']);
+          let name = getValueByKeys(row, [
+            'product name', 'product_name', 'product', 'item', 'item_name', 'item name',
+            'description', 'name', 'title'
+          ]);
+          if (!name) {
+            name = `Product #${idx + 1}`;
+          }
+
+          let sku = getValueByKeys(row, [
+            'sku', 'item code', 'item_code', 'code', 'barcode', 'product_sku', 'product sku', 'item_number'
+          ]);
+          if (!sku) {
+            sku = `SKU-${Date.now().toString().slice(-4)}-${idx + 1}`;
+          }
+
+          const category = getValueByKeys(row, ['category', 'product_category', 'product category', 'type']) || 'Power Tools';
+          const unit = getValueByKeys(row, ['unit', 'uom', 'unit_of_measure', 'measurement']) || 'pcs';
+
+          const rawPrice = getValueByKeys(row, [
+            'price', 'selling price', 'selling_price', 'retail price', 'retail_price',
+            'unit price', 'unit_price', 'price (rs.)'
+          ]);
           const price = parseFloat(rawPrice) || 0;
 
-          const rawCost = getValueByKeys(row, ['COST (RS.)', 'Cost Price', 'Cost', 'cost', 'costPrice']);
+          const rawCost = getValueByKeys(row, [
+            'cost', 'cost price', 'cost_price', 'buying price', 'buying_price',
+            'purchase price', 'purchase_price', 'cost (rs.)'
+          ]);
           const costPrice = parseFloat(rawCost) || 0;
 
-          const unit = getValueByKeys(row, ['UNIT', 'Unit', 'unit']) || 'pcs';
-          const rawStock = getValueByKeys(row, ['STOCK', 'Stock', 'stock', 'Qty', 'Quantity']);
+          const rawStock = getValueByKeys(row, [
+            'stock', 'qty', 'quantity', 'current stock', 'current_stock', 'units_in_stock', 'stock_qty'
+          ]);
           const stock = isDecimalUnit(unit) ? parseFloat(rawStock) || 0 : parseInt(rawStock) || 0;
 
-          const rawMin = getValueByKeys(row, ['MIN', 'Min', 'min', 'Min Stock', 'Stock Alert', 'minStock']);
+          const rawMin = getValueByKeys(row, [
+            'min stock', 'min_stock', 'reorder level', 'reorder_level', 'min', 'stock alert', 'stock_alert', 'minstock'
+          ]);
           const minStock = parseInt(rawMin) || 5;
 
-          const supplierInput = getValueByKeys(row, ['SUPPLIER', 'Supplier', 'supplier', 'Vendor', 'Vendor Name', 'Supplier Name']);
-          const normalizedSupplierInput = supplierInput === '—' || supplierInput === '-' ? '' : supplierInput;
+          const supplierInput = getValueByKeys(row, [
+            'supplier', 'supplier_name', 'supplier name', 'vendor', 'vendor_name', 'vendor name'
+          ]);
+          const excelSupplierPhone = getValueByKeys(row, [
+            'supplier number', 'supplier number', 'supplier phone', 'supplier_phone',
+            'supplierphone', 'mobile', 'phone', 'contact'
+          ]);
+          const excelSupplierEmail = getValueByKeys(row, ['supplier email', 'supplier_email', 'email']);
+          const excelSupplierAddress = getValueByKeys(row, ['supplier address', 'supplier_address', 'address', 'location']);
 
-          let excelSupplierPhone = getValueByKeys(row, ['SUPPLIER NUMBER', 'Supplier Number', 'SUPPLIER PHONE', 'Supplier Phone', 'supplier_phone', 'supplierPhone', 'Mobile', 'Phone', 'Contact']);
-          if (excelSupplierPhone === '—' || excelSupplierPhone === '-') excelSupplierPhone = '';
-
-          const excelSupplierEmail = getValueByKeys(row, ['SUPPLIER EMAIL', 'Supplier Email', 'Email', 'email']);
-          const excelSupplierAddress = getValueByKeys(row, ['SUPPLIER ADDRESS', 'Supplier Address', 'Address', 'supplier_address', 'location']);
-
-          const barcode = getValueByKeys(row, ['BARCODE', 'Barcode', 'barcode']);
-          const expiryDateVal = getValueByKeys(row, ['EXPIRY DATE', 'Expiry Date', 'expiryDate', 'expiry_date']);
-
-          if (!name) {
-            errors++;
-            continue;
-          }
+          const barcode = getValueByKeys(row, ['barcode', 'barcode_number', 'upc', 'ean']) || sku;
+          const expiryDateVal = getValueByKeys(row, ['expiry date', 'expiry_date', 'expirydate', 'expiry']);
 
           let finalSupplierName = '';
           let finalSupplierPhone = '';
           let finalSupplierId = '';
 
-          if (normalizedSupplierInput) {
-            const existingSup = suppliersMap.get(normalizedSupplierInput.trim().toLowerCase());
+          if (supplierInput) {
+            const existingSup = suppliersMap.get(supplierInput.trim().toLowerCase());
 
             if (existingSup) {
               finalSupplierName = existingSup.name;
@@ -262,7 +250,7 @@ export function Inventory() {
               }
             } else {
               const newSupPayload = {
-                name: normalizedSupplierInput.trim(),
+                name: supplierInput.trim(),
                 email: excelSupplierEmail || '',
                 phone: excelSupplierPhone || '',
                 address: excelSupplierAddress || '',
@@ -274,15 +262,15 @@ export function Inventory() {
               if (!supErr) {
                 const createdSup = {
                   id: newSupData?.[0]?.id || 'sup_' + Date.now(),
-                  name: normalizedSupplierInput.trim(),
+                  name: supplierInput.trim(),
                   phone: excelSupplierPhone || ''
                 };
-                suppliersMap.set(normalizedSupplierInput.trim().toLowerCase(), createdSup);
+                suppliersMap.set(supplierInput.trim().toLowerCase(), createdSup);
                 finalSupplierName = createdSup.name;
                 finalSupplierPhone = createdSup.phone;
                 finalSupplierId = createdSup.id;
               } else {
-                finalSupplierName = normalizedSupplierInput.trim();
+                finalSupplierName = supplierInput.trim();
                 finalSupplierPhone = excelSupplierPhone || '';
               }
             }
@@ -301,9 +289,11 @@ export function Inventory() {
             supplierPhone: finalSupplierPhone,
             unit,
             barcode,
-            expiry_date: expiryDateVal,
-            user_id: user.id
+            expiry_date: expiryDateVal
           };
+          if (user?.id) {
+            dbPayload.user_id = user.id;
+          }
 
           if (finalSupplierId) {
             dbPayload.supplier_id = finalSupplierId;
@@ -313,7 +303,9 @@ export function Inventory() {
           if (error) {
             const { error: updateError } = await supabase.from('products').update(dbPayload).eq('sku', sku);
             if (updateError) {
-              errors++;
+              const { error: nameError } = await supabase.from('products').update(dbPayload).eq('name', name);
+              if (nameError) errors++;
+              else imported++;
             } else {
               imported++;
             }
@@ -323,14 +315,15 @@ export function Inventory() {
         }
 
         setToast({
-          type: errors > 0 && imported === 0 ? 'error' : 'success',
+          type: imported > 0 ? 'success' : 'error',
           message: `Successfully imported/updated ${imported} products! (Skipped/failed: ${errors})`
         });
         setTimeout(() => setToast(null), 5000);
+
         fetchProducts();
-        fetchSuppliers();
+        window.dispatchEvent(new CustomEvent('refresh-inventory'));
       } catch (err: any) {
-        setToast({ type: 'error', message: "Failed to parse Excel file: " + err.message });
+        setToast({ type: 'error', message: "Excel import error: " + err.message });
         setTimeout(() => setToast(null), 5000);
       } finally {
         setIsLoading(false);
@@ -499,11 +492,23 @@ export function Inventory() {
 
     window.addEventListener('suppliers-updated', handleRefresh);
     window.addEventListener('refresh-inventory', handleRefresh);
+    window.addEventListener('refresh-all-data', handleRefresh);
     return () => {
       window.removeEventListener('suppliers-updated', handleRefresh);
       window.removeEventListener('refresh-inventory', handleRefresh);
+      window.removeEventListener('refresh-all-data', handleRefresh);
     };
   }, []);
+
+  // Global Barcode Scanner Listener for Inventory Page
+  useBarcodeScanner({
+    onScan: (scannedBarcode) => {
+      const q = scannedBarcode.trim();
+      if (!q) return;
+      setSearch(q);
+    },
+    enabled: !showAddModal && !showStockModal
+  });
 
   useEffect(() => {
     if (showAddModal) {
@@ -527,19 +532,22 @@ export function Inventory() {
     }
   }, [showAddModal, editingProduct]);
 
-  const filtered = products.filter((p) => {
-    const matchSearch =
-      p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.sku.toLowerCase().includes(search.toLowerCase());
-    const matchCat = categoryFilter === 'All' || p.category === categoryFilter;
-    return matchSearch && matchCat;
-  });
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return products.filter((p) => {
+      const matchSearch =
+        !q ||
+        p.name.toLowerCase().includes(q) ||
+        p.sku.toLowerCase().includes(q) ||
+        (p.barcode && p.barcode.toLowerCase().includes(q));
+      const matchCat = categoryFilter === 'All' || p.category === categoryFilter;
+      return matchSearch && matchCat;
+    });
+  }, [products, search, categoryFilter]);
 
-  const lowStockCount = products.filter((p) => p.stock < p.minStock).length;
-  const totalValue = products.reduce((sum, p) => {
-    return sum + p.stock * convert(p.costPrice);
-  }, 0);
-  const uniqueCategories = [...new Set(products.map((p) => p.category))].length;
+  const lowStockCount = useMemo(() => products.filter((p) => p.stock < p.minStock).length, [products]);
+  const totalValue = useMemo(() => products.reduce((sum, p) => sum + p.stock * convert(p.costPrice), 0), [products]);
+  const uniqueCategories = useMemo(() => [...new Set(products.map((p) => p.category))].length, [products]);
 
   const openAdd = () => {
     setEditingProduct(null);

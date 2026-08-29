@@ -132,8 +132,8 @@ export interface Transaction {
   date: string;
   reference: string;
 }
-// 1. Define all possible roles in one place
-export type UserRole = 'super_admin' | 'admin' | 'manager' | 'cashier' | 'retail_user';
+// 1. Define all possible roles in one place (strictly restricted to Admin, Manager, Cashier)
+export type UserRole = 'Admin' | 'Manager' | 'Cashier';
 
 // 2. Update the User interface (Delete the old duplicate version)
 export interface User {
@@ -144,7 +144,7 @@ export interface User {
   avatar: string;
 }
 
-// 3. Ensure PageName includes all your pages
+// 3. Ensure PageName includes all your pages and granular permission keys
 export type PageName = 
   | 'dashboard' 
   | 'inventory' 
@@ -157,7 +157,27 @@ export type PageName =
   | 'database'
   | 'settings'
   | 'finance'
-  | 'audit_logs';
+  | 'audit_logs'
+  | 'barcode-print'
+  | 'barcode_print'
+  | 'barcodes'
+  | 'sales_create'
+  | 'sales_today'
+  | 'sales_own_history'
+  | 'sales_all_history'
+  | 'sales_customer_history'
+  | 'sales_credit_history'
+  | 'sales_customer_credit'
+  | 'sales_invoice_details'
+  | 'sales_payment_status'
+  | 'sales_returns'
+  | 'credit_view_history'
+  | 'credit_customer_details'
+  | 'credit_create_sale'
+  | 'credit_record_payment'
+  | 'credit_returns'
+  | 'credit_edit'
+  | 'credit_delete_void';
 
 export interface Quotation {
   id: string;
@@ -201,6 +221,12 @@ export interface SalesReturn {
   exchangeItems?: SaleItem[];
   returnMethod: 'Cash Refund' | 'Exchange' | 'Credit Note' | 'Return';
   returnAmount?: number;
+  refund_amount?: number;
+  grossAmount?: number;
+  gross_amount?: number;
+  discountAmount?: number;
+  discount_amount?: number;
+  total_amount?: number;
   exchangeAmount?: number;
   balanceAmount?: number;
   totalRefunded: number;

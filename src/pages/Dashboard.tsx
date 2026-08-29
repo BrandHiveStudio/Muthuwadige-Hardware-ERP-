@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { API_URL } from '../lib/api';
 import { formatStock } from '../utils/formatters';
+import { openExternalUrl, formatWhatsAppUrl } from '../utils/openExternalUrl';
+import { calculateNetSalesRevenue, calculateNetCOGS, calculateGrossProfit, calculateSaleAccounting } from '../utils/accounting';
 import {
-  DollarSignIcon,
   ShoppingCartIcon,
   AlertTriangleIcon,
   UsersIcon,
@@ -41,7 +42,9 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   // Hardcode symbol to Rs.
   const symbol = 'Rs.';
 
-  const getItemUnitCost = (product: any, itemUnit?: string, itemConvRate?: number): number => {
+  const getItemUnitCost = (product: any, itemUnit?: string, itemConvRate?: number, itemCostOverride?: number): number => {
+    const snapshotCost = Number(itemCostOverride !== undefined && itemCostOverride !== null ? itemCostOverride : 0);
+    if (snapshotCost > 0) return snapshotCost;
     if (!product) return 0;
     const baseCost = Number(product.cost_price !== undefined ? product.cost_price : product.costPrice !== undefined ? product.costPrice : 0);
     let conversionRate = Number(itemConvRate) || 1;
@@ -89,6 +92,10 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   // --- STATE MANAGEMENT ---
   const [stats, setStats] = useState({
     revenue: 0,
+    grossSales: 0,
+    netSales: 0,
+    cogs: 0,
+    profit: 0,
     orders: 0,
     customers: 0,
     lowStock: 0
@@ -175,8 +182,6 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   const handleWhatsAppAlert = async (item: any) => {
     if (!item) return;
 
-    console.log('[WhatsApp] 1. Button clicked for product:', item.name);
-
     const supplierName = item.supplier || item.supplier_name || item.supplierName;
     let phone = item.supplierPhone || item.supplier_phone || item.supplierPhoneNo || item.supplier_phone_no;
     
@@ -191,51 +196,18 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     }
     
     if (!phone || !String(phone).trim()) {
-      const errorMsg = "Supplier WhatsApp number is not available.";
-      console.warn('[WhatsApp] Error:', errorMsg);
-      alert(errorMsg);
+      alert("Supplier WhatsApp number is not available.");
       return;
     }
     
-    // Construct professional reorder WhatsApp message
     const currentStockFormatted = `${formatStock(item.stock, item.unit)} ${item.unit || 'PCS'}`;
     const minStockVal = item.minStock !== undefined ? item.minStock : item.min_stock !== undefined ? item.min_stock : 10;
     const minStockFormatted = `${minStockVal} ${item.unit || 'PCS'}`;
 
     const message = `Hello, we need to reorder ${item.name}. Current stock is ${currentStockFormatted} and the minimum stock level is ${minStockFormatted}. Please let us know the availability and price.`;
     
-    // Normalize phone number (0712345678 -> 94712345678, 712345678 -> 94712345678, 94712345678 -> 94712345678)
-    let cleanPhone = String(phone).replace(/[\s_.\-()+]/g, '').trim();
-    if (cleanPhone.startsWith('0')) {
-      cleanPhone = '94' + cleanPhone.substring(1);
-    } else if (cleanPhone.startsWith('7')) {
-      cleanPhone = '94' + cleanPhone;
-    }
-    cleanPhone = cleanPhone.replace(/[^0-9]/g, '');
-
-    if (!cleanPhone) {
-      const errorMsg = "Supplier WhatsApp number is not available.";
-      console.warn('[WhatsApp] Error:', errorMsg);
-      alert(errorMsg);
-      return;
-    }
-
-    const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
-    console.log('[WhatsApp] 2. URL generated:', url);
-
-    try {
-      const electronAPI = (window as any).electronAPI;
-      if (electronAPI && typeof electronAPI.openExternalUrl === 'function') {
-        await electronAPI.openExternalUrl(url);
-      } else if (electronAPI && typeof electronAPI.openExternal === 'function') {
-        await electronAPI.openExternal(url);
-      } else {
-        throw new Error("Electron API interface (window.electronAPI.openExternalUrl) is not available at runtime.");
-      }
-    } catch (err: any) {
-      console.error('[WhatsApp] 6. Error opening WhatsApp URL:', err);
-      alert(`Failed to open WhatsApp: ${err.message || err}`);
-    }
+    const url = formatWhatsAppUrl(String(phone), message);
+    await openExternalUrl(url);
   };
 
   // Custom Theme Colors for the Dashboard (Gold, Dark Charcoal, Ash, Slate)
@@ -470,28 +442,103 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         setSalesByCategory(dynamicCategories);
       }
 
-      // Calculate today's profit: Today's Revenue - Today's Item Cost
-      const todayRevenueVal = salesToday.reduce((acc, curr) => acc + (curr.total_amount || curr.total || 0), 0) + todayReturnsAdjustment;
-      const todayItemCostVal = salesToday.reduce((totalCost, o) => {
+      // 1. Calculate Gross Sales Today (Sticker price before returns or discounts)
+      let grossSalesToday = 0;
+      let totalDiscountsToday = 0;
+      let totalTransportToday = 0;
+      let todayItemCostVal = 0;
+
+      salesToday.forEach((s: any) => {
         let items: any[] = [];
         try {
-          items = typeof o.items === 'string' ? JSON.parse(o.items) : o.items || [];
-        } catch (_e) {
-          /* ignore json parse error */
+          items = typeof s.items === 'string' ? JSON.parse(s.items) : s.items || [];
+        } catch (_e) {}
+
+        if (Array.isArray(items) && items.length > 0) {
+          items.forEach((it: any) => {
+            const qty = Number(it.qty || it.quantity || 0);
+            const price = Number(it.price || it.unitPrice || it.unit_price || 0);
+            const product = products?.find(p => p.id === (it.productId || it.product_id));
+            const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.costPrice || it.cost_price);
+            
+            grossSalesToday += (qty * price);
+            todayItemCostVal += (qty * cost);
+          });
+        } else {
+          const saleSubtotal = Number(s.subtotal !== undefined ? s.subtotal : (s.total_amount || s.total || 0));
+          grossSalesToday += saleSubtotal;
         }
-        
-        let saleCost = 0;
-        if (Array.isArray(items)) {
-          saleCost = items.reduce((sum, it) => {
-            const product = products?.find(p => p.id === it.productId);
-            const cost = getItemUnitCost(product, it.unit, it.conversionRate);
-            const qty = Number(it.qty || 0);
-            return sum + (qty * cost);
-          }, 0);
-        }
-        return totalCost + saleCost;
-      }, 0);
-      setTodayProfit(todayRevenueVal - todayItemCostVal);
+        totalDiscountsToday += Number(s.discount_amount || s.discount || 0);
+        totalTransportToday += Number(s.transportation_fee || s.transportationFee || s.delivery_fee || 0);
+      });
+
+      // 2. Calculate Total Returns / Refunds & Net Returns Today
+      let returnedSellingRev = 0;
+      let returnedCostVal = 0;
+      let exchangeSellingRev = 0;
+      let exchangeCostVal = 0;
+
+      if (allReturns && allReturns.length > 0) {
+        allReturns.forEach((ret: any) => {
+          if (ret.status === 'voided' || ret.status === 'Voided' || ret.status === 'cancelled') return;
+          if (!ret.created_at) return;
+          const retDateStr = new Date(ret.created_at).toLocaleDateString('sv-SE');
+          if (retDateStr === today) {
+            const refAmt = Number(
+              ret.refund_amount !== undefined && ret.refund_amount !== null
+                ? ret.refund_amount
+                : (ret.total_amount !== undefined && ret.total_amount !== null
+                  ? ret.total_amount
+                  : (ret.return_amount !== undefined && ret.return_amount !== null
+                    ? ret.return_amount
+                    : (ret.returnAmount !== undefined && ret.returnAmount !== null
+                      ? ret.returnAmount
+                      : (ret.total_refunded !== undefined && ret.total_refunded !== null
+                        ? ret.total_refunded
+                        : (ret.amount || 0)))))
+            );
+            const exVal = Number(
+              ret.exchange_amount !== undefined && ret.exchange_amount !== null
+                ? ret.exchange_amount
+                : (ret.exchangeAmount !== undefined && ret.exchangeAmount !== null
+                  ? ret.exchangeAmount
+                  : (ret.exchange_total || ret.exchangeTotal || 0))
+            );
+
+            returnedSellingRev += refAmt;
+            exchangeSellingRev += exVal;
+
+            let rawRetItems = ret.items || ret.returnedItems || ret.returned_items || [];
+            let retItems: any[] = [];
+            try { retItems = typeof rawRetItems === 'string' ? JSON.parse(rawRetItems) : rawRetItems; } catch (e) {}
+            if (Array.isArray(retItems)) {
+              retItems.forEach((it: any) => {
+                const product = products?.find(p => p.id === (it.productId || it.product_id));
+                const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.costPrice || it.cost_price);
+                returnedCostVal += Number(it.qty || it.quantity || 0) * cost;
+              });
+            }
+
+            let rawExItems = ret.exchangeItems || ret.exchange_items || [];
+            let exItems: any[] = [];
+            try { exItems = typeof rawExItems === 'string' ? JSON.parse(rawExItems) : rawExItems; } catch (e) {}
+            if (Array.isArray(exItems)) {
+              exItems.forEach((it: any) => {
+                const product = products?.find(p => p.id === (it.productId || it.product_id));
+                const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.costPrice || it.cost_price);
+                exchangeCostVal += Number(it.qty || it.quantity || 0) * cost;
+              });
+            }
+          }
+        });
+      }
+
+      // 3. Standardized Net Sales = Gross Sales - Refunds - Discounts + Fees
+      const todayNetReturns = returnedSellingRev - exchangeSellingRev;
+      const netSalesToday = calculateNetSalesRevenue(grossSalesToday, totalDiscountsToday, todayNetReturns, totalTransportToday);
+      const todayNetCogs = calculateNetCOGS(todayItemCostVal, exchangeCostVal, returnedCostVal);
+      const grossProfitToday = calculateGrossProfit(netSalesToday, todayNetCogs);
+      setTodayProfit(grossProfitToday);
 
       // Calculate Actual Cash Collected Balance: (Sales Cash + Credit Payments) - Cash Refunds
       let totalCashCollectedVal = 0;
@@ -542,7 +589,11 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       setPendingPOs(pendingCount);
 
       setStats({
-        revenue: todayRevenue,
+        revenue: grossSalesToday,
+        grossSales: grossSalesToday,
+        netSales: netSalesToday,
+        cogs: todayNetCogs,
+        profit: grossProfitToday,
         orders: todayOrders,
         customers: customerCount,
         lowStock: lowStock.length
@@ -625,7 +676,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             <div className="bg-white rounded-2xl border border-gray-100 shadow-md p-5 flex items-center justify-between relative overflow-hidden group">
               <div className="absolute top-0 left-0 h-1.5 w-full bg-[#DAA520] opacity-80" />
               <div className="text-left">
-                <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">{t("Today's Sales", "අද දින විකුණුම්")}</p>
+                <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">{t("Gross Sales (Today)", "මුළු දෛනික විකුණුම්")}</p>
                 <p className="text-2xl font-black text-slate-800 tracking-tight">{symbol} {stats.revenue.toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
                 <span className="text-[9px] font-black text-slate-400">{stats.orders} {t("orders processed", "ඇණවුම් සංඛ්‍යාව")}</span>
               </div>
@@ -638,12 +689,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             <div className="bg-white rounded-2xl border border-gray-100 shadow-md p-5 flex items-center justify-between relative overflow-hidden group">
               <div className="absolute top-0 left-0 h-1.5 w-full bg-emerald-500 opacity-80" />
               <div className="text-left">
-                <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">{t("Today's Profit", "අද දින ලාභය")}</p>
+                <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">{t("Gross Profit (Net Sales - COGS)", "දෛනික ශුද්ධ ලාභය")}</p>
                 <p className="text-2xl font-black text-emerald-600 tracking-tight">{symbol} {todayProfit.toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
                 <span className="text-[9px] font-black text-[#DAA520] bg-[#DAA520]/10 px-1.5 py-0.5 rounded-lg">{t("Est. net profit today", "ඇස්තමේන්තුගත ශුද්ධ ලාභය")}</span>
               </div>
               <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-500 flex items-center justify-center shrink-0">
-                <DollarSignIcon className="w-6 h-6" />
+                <span className="font-black text-sm text-emerald-600">Rs.</span>
               </div>
             </div>
 
@@ -675,7 +726,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                 <span className="text-[9px] font-black text-slate-400">{t("Total revenue minus non-paid credit orders", "මුළු ආදායමෙන් නොගෙවූ ණය ඇණවුම් අඩු කළ පසු")}</span>
               </div>
               <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-500 flex items-center justify-center shrink-0">
-                <DollarSignIcon className="w-6 h-6" />
+                <span className="font-black text-sm text-blue-600">Rs.</span>
               </div>
             </div>
 
@@ -755,29 +806,74 @@ export function Dashboard({ onNavigate }: DashboardProps) {
           {/* Premium Custom Stat Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
             
-            {/* Stat Card 1: Revenue */}
+            {/* Stat Card 1: Gross Sales (Today) */}
             <div className="bg-white rounded-3xl border border-gray-100/80 shadow-md p-6 flex items-center justify-between hover:shadow-xl hover:-translate-y-1.5 transition-all duration-300 relative overflow-hidden group">
               <div className="absolute top-0 left-0 h-1.5 w-full bg-[#DAA520] opacity-80" />
               <div className="flex-1 min-w-0 text-left">
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Total Revenue (Today)</p>
-                <p className="text-2xl font-black text-slate-800 tracking-tight">{symbol} {stats.revenue.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">{t('Gross Sales (Today)', 'මුළු දෛනික විකුණුම්')}</p>
+                <p className="text-2xl font-black text-slate-800 tracking-tight">{symbol} {stats.grossSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
                 <span className="inline-flex items-center gap-1 mt-3.5 text-[10px] font-black text-[#DAA520] bg-[#DAA520]/10 px-2 py-1 rounded-xl">
-                  <TrendingUpIcon className="w-3.5 h-3.5" /> +12.5% vs yesterday
+                  <TrendingUpIcon className="w-3.5 h-3.5" /> Sticker / Listed Value
                 </span>
               </div>
               <div className="w-14 h-14 rounded-2xl bg-[#DAA520]/10 text-[#DAA520] flex items-center justify-center shrink-0 shadow-inner group-hover:scale-110 transition-transform duration-300">
-                <DollarSignIcon className="w-7 h-7" />
+                <span className="font-black text-sm text-amber-600">Rs.</span>
               </div>
             </div>
 
-            {/* Stat Card 2: Orders */}
+            {/* Stat Card 2: Net Sales Revenue (Today) */}
+            <div className="bg-white rounded-3xl border border-gray-100/80 shadow-md p-6 flex items-center justify-between hover:shadow-xl hover:-translate-y-1.5 transition-all duration-300 relative overflow-hidden group">
+              <div className="absolute top-0 left-0 h-1.5 w-full bg-emerald-500 opacity-80" />
+              <div className="flex-1 min-w-0 text-left">
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">{t('Net Sales Revenue (Today)', 'ශුද්ධ දෛනික විකුණුම් ආදායම')}</p>
+                <p className="text-2xl font-black text-emerald-700 tracking-tight">{symbol} {stats.netSales.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
+                <span className="inline-flex items-center gap-1 mt-3.5 text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-xl">
+                  <TrendingUpIcon className="w-3.5 h-3.5" /> Gross - Deductions + Fees
+                </span>
+              </div>
+              <div className="w-14 h-14 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 shadow-inner group-hover:scale-110 transition-transform duration-300">
+                <span className="font-black text-sm text-emerald-600">Rs.</span>
+              </div>
+            </div>
+
+            {/* Stat Card 3: Cost of Goods Sold (COGS) */}
+            <div className="bg-white rounded-3xl border border-gray-100/80 shadow-md p-6 flex items-center justify-between hover:shadow-xl hover:-translate-y-1.5 transition-all duration-300 relative overflow-hidden group">
+              <div className="absolute top-0 left-0 h-1.5 w-full bg-rose-500 opacity-80" />
+              <div className="flex-1 min-w-0 text-left">
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">{t('Cost of Goods Sold (COGS)', 'විකිණූ භාණ්ඩවල පිරිවැය')}</p>
+                <p className="text-2xl font-black text-slate-800 tracking-tight">{symbol} {stats.cogs.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
+                <span className="inline-flex items-center gap-1 mt-3.5 text-[10px] font-black text-rose-600 bg-rose-50 px-2 py-1 rounded-xl">
+                  <PackageIcon className="w-3.5 h-3.5" /> Historical Cost Snapshot
+                </span>
+              </div>
+              <div className="w-14 h-14 rounded-2xl bg-rose-50 text-rose-500 flex items-center justify-center shrink-0 shadow-inner group-hover:scale-110 transition-transform duration-300">
+                <PackageIcon className="w-7 h-7" />
+              </div>
+            </div>
+
+            {/* Stat Card 4: Gross Profit (Net Sales - COGS) */}
+            <div className="bg-white rounded-3xl border border-gray-100/80 shadow-md p-6 flex items-center justify-between hover:shadow-xl hover:-translate-y-1.5 transition-all duration-300 relative overflow-hidden group">
+              <div className={`absolute top-0 left-0 h-1.5 w-full opacity-80 ${stats.profit >= 0 ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+              <div className="flex-1 min-w-0 text-left">
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">{t('Gross Profit (Net Sales - COGS)', 'දෛනික ශුද්ධ ලාභය')}</p>
+                <p className={`text-2xl font-black tracking-tight ${stats.profit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{symbol} {stats.profit.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</p>
+                <span className={`inline-flex items-center gap-1 mt-3.5 text-[10px] font-black px-2 py-1 rounded-xl ${stats.profit >= 0 ? 'text-emerald-600 bg-emerald-50' : 'text-rose-600 bg-rose-50'}`}>
+                  <TrendingUpIcon className="w-3.5 h-3.5" /> Net Sales - COGS
+                </span>
+              </div>
+              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 shadow-inner group-hover:scale-110 transition-transform duration-300 ${stats.profit >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-500'}`}>
+                <TrendingUpIcon className="w-7 h-7" />
+              </div>
+            </div>
+
+            {/* Stat Card 5: Orders Today */}
             <div className="bg-white rounded-3xl border border-gray-100/80 shadow-md p-6 flex items-center justify-between hover:shadow-xl hover:-translate-y-1.5 transition-all duration-300 relative overflow-hidden group">
               <div className="absolute top-0 left-0 h-1.5 w-full bg-[#464646] opacity-80" />
               <div className="flex-1 min-w-0 text-left">
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Orders Today</p>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">{t('Orders Today', 'අද දින ඇණවුම්')}</p>
                 <p className="text-2xl font-black text-slate-800 tracking-tight">{stats.orders}</p>
                 <span className="inline-flex items-center gap-1 mt-3.5 text-[10px] font-black text-[#464646] bg-[#464646]/10 px-2 py-1 rounded-xl">
-                  <TrendingUpIcon className="w-3.5 h-3.5" /> +8.3% vs yesterday
+                  <ShoppingCartIcon className="w-3.5 h-3.5" /> {t('Processed Invoices', 'සකසන ලද ඉන්වොයිසි')}
                 </span>
               </div>
               <div className="w-14 h-14 rounded-2xl bg-[#464646]/10 text-[#464646] flex items-center justify-center shrink-0 shadow-inner group-hover:scale-110 transition-transform duration-300">
@@ -785,11 +881,11 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               </div>
             </div>
 
-            {/* Stat Card 3: Low Stock Alerts */}
+            {/* Stat Card 6: Low Stock Alerts */}
             <div className="bg-white rounded-3xl border border-gray-100/80 shadow-md p-6 flex items-center justify-between hover:shadow-xl hover:-translate-y-1.5 transition-all duration-300 relative overflow-hidden group">
               <div className="absolute top-0 left-0 h-1.5 w-full bg-red-500 opacity-80" />
               <div className="flex-1 min-w-0 text-left">
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Low Stock Items</p>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">{t('Low Stock Items', 'අඩු තොග භාණ්ඩ')}</p>
                 <p className="text-2xl font-black text-slate-800 tracking-tight">{stats.lowStock}</p>
                 <span className={`inline-flex items-center gap-1 mt-3.5 text-[10px] font-black px-2 py-1 rounded-xl ${stats.lowStock > 0 ? 'text-red-600 bg-red-50 border border-red-100' : 'text-emerald-600 bg-emerald-50 border border-emerald-100'}`}>
                   <AlertTriangleIcon className="w-3.5 h-3.5" /> {stats.lowStock > 0 ? 'Needs Attention' : 'All Stocked'}
@@ -800,14 +896,14 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               </div>
             </div>
 
-            {/* Stat Card 4: Customers */}
+            {/* Stat Card 7: Customers */}
             <div className="bg-white rounded-3xl border border-gray-100/80 shadow-md p-6 flex items-center justify-between hover:shadow-xl hover:-translate-y-1.5 transition-all duration-300 relative overflow-hidden group">
               <div className="absolute top-0 left-0 h-1.5 w-full bg-[#DAA520] opacity-80" />
               <div className="flex-1 min-w-0 text-left">
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Customers</p>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">{t('Customers', 'පාරිභෝගිකයින්')}</p>
                 <p className="text-2xl font-black text-slate-800 tracking-tight">{stats.customers}</p>
                 <span className="inline-flex items-center gap-1 mt-3.5 text-[10px] font-black text-[#DAA520] bg-[#DAA520]/10 px-2 py-1 rounded-xl">
-                  <TrendingUpIcon className="w-3.5 h-3.5" /> +2 new this week
+                  <UsersIcon className="w-3.5 h-3.5" /> {t('Registered Entities', 'ලියාපදිංචි පාරිභෝගිකයින්')}
                 </span>
               </div>
               <div className="w-14 h-14 rounded-2xl bg-[#DAA520]/10 text-[#DAA520] flex items-center justify-center shrink-0 shadow-inner group-hover:scale-110 transition-transform duration-300">

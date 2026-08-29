@@ -224,7 +224,7 @@ export function Auth({ onLogin }: AuthProps) {
         // Fetch the real, Super Admin approved role from the protected profiles table
         const { data: profile } = await supabase.from('profiles').select('*').eq('email', data.user.email).single();
         
-        const finalRole = profile?.role || data.user.user_metadata?.role || 'retail_user';
+        const finalRole = profile?.role || data.user.user_metadata?.role || 'Cashier';
         const finalName = profile?.name || data.user.user_metadata?.full_name || 'Hardware Staff';
         
         const loggedInUser: User = {

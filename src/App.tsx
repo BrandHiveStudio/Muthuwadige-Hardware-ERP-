@@ -14,17 +14,38 @@ import { Database } from './pages/Database';
 import { Settings } from './pages/Settings';
 import { Finance } from './pages/Finance';
 import { AuditLogs } from './pages/AuditLogs';
+import { BarcodePrint } from './pages/BarcodePrint';
 import { CurrencyProvider } from './context/CurrencyContext';
-import { ROLE_PERMISSIONS } from './utils/permissions'; 
+import { ROLE_PERMISSIONS } from './utils/permissions';
+import { hasUserPermission } from './utils/auth';
 import { API_URL, fetchWithTimeout } from './lib/api';
 import type { User, PageName } from './types';
 import { Notifications, notify } from './components/Notifications';
 import { Trash2, AlertTriangle, CheckCircle, HelpCircle, MessageSquare } from 'lucide-react';
 import { supabase } from './lib/supabaseClient';
 import { Modal } from './components/Modal';
+import { openExternalUrl, formatWhatsAppUrl } from './utils/openExternalUrl';
 
 export function App() {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    try {
+      const savedUser = sessionStorage.getItem('hardware_erp_user') || sessionStorage.getItem('erp_user');
+      return savedUser ? JSON.parse(savedUser) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    try {
+      const savedUser = sessionStorage.getItem('hardware_erp_user') || sessionStorage.getItem('erp_user');
+      const isAuth = sessionStorage.getItem('hardware_erp_auth') === 'true';
+      return isAuth && !!savedUser;
+    } catch {
+      return false;
+    }
+  });
+
   const [currentPage, setCurrentPage] = useState<PageName>('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [salesTab, setSalesTab] = useState<'new' | 'history' | 'credit' | 'credit_history' | 'quotes'>('new');
@@ -164,17 +185,8 @@ export function App() {
       }
       
       const message = `Stock Alert: Product "${product.name}" (SKU: ${product.sku}) is low on stock. Current stock is ${product.stock} left. Please restock soon!`;
-      let cleanPhone = phone.replace(/[\s_.-]/g, '');
-      if (cleanPhone.startsWith('0')) {
-        cleanPhone = '94' + cleanPhone.substring(1);
-      } else if (cleanPhone.startsWith('7')) {
-        cleanPhone = '94' + cleanPhone;
-      } else if (cleanPhone.startsWith('+')) {
-        cleanPhone = cleanPhone.substring(1);
-      }
-      cleanPhone = cleanPhone.replace(/[^0-9]/g, '');
-      const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
-      window.open(url, '_blank');
+      const url = formatWhatsAppUrl(phone, message);
+      await openExternalUrl(url);
     } catch (err) {
       console.error(err);
       alert("Error generating WhatsApp alert.");
@@ -208,12 +220,11 @@ export function App() {
   // --- SECURITY GUARD: Role-Based Access Control ---
   useEffect(() => {
     if (currentUser) {
-      const allowedPages = ROLE_PERMISSIONS[currentUser.role] || [];
-      
-      if (!allowedPages.includes(currentPage)) {
+      if (!hasUserPermission(currentUser, currentPage)) {
         console.warn(`Access Denied: ${currentUser.role} cannot access ${currentPage}`);
         
-        if (currentUser.role === 'super_admin' || currentUser.role === 'admin' || currentUser.role === 'manager') {
+        const roleStr = (currentUser.role || '').toLowerCase();
+        if (roleStr === 'admin' || roleStr === 'manager' || roleStr === 'super_admin') {
           setCurrentPage('dashboard');
         } else {
           setCurrentPage('sales');
@@ -259,9 +270,17 @@ export function App() {
 
   const handleLogin = (user: User) => {
     console.log("✅ User logged in with role:", user.role); 
+    sessionStorage.setItem('hardware_erp_user', JSON.stringify(user));
+    sessionStorage.setItem('hardware_erp_auth', 'true');
+    sessionStorage.setItem('erp_user', JSON.stringify(user));
+    localStorage.removeItem('hardware_erp_user');
+    localStorage.removeItem('hardware_erp_auth');
+    localStorage.removeItem('erp_user');
     setCurrentUser(user);
+    setIsAuthenticated(true);
     
-    if (user.role === 'super_admin' || user.role === 'admin' || user.role === 'manager') {
+    const roleStr = (user.role || '').toLowerCase();
+    if (roleStr === 'admin' || roleStr === 'manager' || roleStr === 'super_admin') {
       setCurrentPage('dashboard');
     } else {
       setCurrentPage('sales'); 
@@ -269,7 +288,14 @@ export function App() {
   };
 
   const handleLogout = () => {
+    sessionStorage.removeItem('hardware_erp_user');
+    sessionStorage.removeItem('hardware_erp_auth');
+    sessionStorage.removeItem('erp_user');
+    localStorage.removeItem('hardware_erp_user');
+    localStorage.removeItem('hardware_erp_auth');
+    localStorage.removeItem('erp_user');
     setCurrentUser(null);
+    setIsAuthenticated(false);
     setCurrentPage('dashboard');
   };
 
@@ -349,7 +375,7 @@ export function App() {
   // ==========================================
   // 2. RENDER LOGIN PAGE (If not logged in)
   // ==========================================
-  if (!currentUser) {
+  if (!isAuthenticated || !currentUser) {
     return <Auth onLogin={handleLogin} />;
   }
 
@@ -357,10 +383,9 @@ export function App() {
   // 3. RENDER MAIN APPLICATION
   // ==========================================
   const renderPage = () => {
-    const allowedPages = ROLE_PERMISSIONS[currentUser.role] || [];
-    
-    if (!allowedPages.includes(currentPage)) {
-      return (currentUser.role === 'super_admin' || currentUser.role === 'admin' || currentUser.role === 'manager') 
+    const roleStr = (currentUser.role || '').toLowerCase();
+    if (!hasUserPermission(currentUser, currentPage)) {
+      return (roleStr === 'admin' || roleStr === 'manager' || roleStr === 'super_admin') 
         ? <Dashboard onNavigate={(page, tab) => {
             if (page === 'sales' && tab) {
               setSalesTab(tab as any);
@@ -392,6 +417,10 @@ export function App() {
       case 'settings': return <Settings />;
       case 'finance': return <Finance />;
       case 'audit_logs': return <AuditLogs />;
+      case 'barcode-print':
+      case 'barcode_print':
+      case 'barcodes':
+        return <BarcodePrint />;
       default: return (
         <Dashboard 
           onNavigate={(page, tab) => {
@@ -480,7 +509,7 @@ export function App() {
                           </span>
                         </div>
                         <p className="text-xs font-bold mt-1.5 leading-relaxed">{n.message}</p>
-                        {n.id.startsWith('low-stock-') && (currentUser?.role === 'admin' || currentUser?.role === 'super_admin') && (
+                        {n.id.startsWith('low-stock-') && ((currentUser?.role || '').toLowerCase() === 'admin' || (currentUser?.role || '').toLowerCase() === 'super_admin') && (
                           <button
                             onClick={() => handleNotificationWhatsApp(n.id.replace('low-stock-', ''))}
                             className="mt-2 bg-emerald-600 hover:bg-emerald-700 text-white text-[9px] font-black uppercase tracking-widest px-2.5 py-1.5 rounded-xl transition-all shadow-sm flex items-center gap-1 w-fit"

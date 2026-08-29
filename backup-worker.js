@@ -15,14 +15,15 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
+import { createMailTransporter, sendBackupEmail } from './src/utils/mailer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 let candidateDbs = [
   process.env.DB_FILE,
-  path.join(__dirname, 'hardware.db'),
   process.env.USER_DATA_PATH ? path.join(process.env.USER_DATA_PATH, 'hardware.db') : null,
+  path.join(__dirname, 'hardware.db'),
   process.env.APPDATA ? path.join(process.env.APPDATA, 'Muthuwadige Hardware ERP', 'hardware.db') : null
 ].filter(Boolean);
 
@@ -32,14 +33,13 @@ let backupsDir = process.env.BACKUPS_DIR || (process.env.USER_DATA_PATH ? path.j
 let envPath = process.env.ENV_PATH || (process.env.USER_DATA_PATH ? path.join(process.env.USER_DATA_PATH, '.env') : path.join(__dirname, '.env'));
 
 if (!fs.existsSync(backupsDir)) {
-  try { fs.mkdirSync(backupsDir, { recursive: true }); } catch (e) {}
+  try { fs.mkdirSync(backupsDir, { recursive: true }); } catch (e) { }
 }
 
 dotenv.config({ path: envPath });
 
 const LOCK_FILE = path.join(backupsDir, '.backup.lock');
 
-// Logging helpers
 const log = (msg) => {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] [BACKUP-WORKER] ${msg}`);
@@ -50,7 +50,6 @@ const logError = (msg) => {
   console.error(`[${timestamp}] [BACKUP-WORKER] ERROR: ${msg}`);
 };
 
-// Cross-platform process detection
 const isProcessStillRunning = (pid) => {
   if (!pid || typeof pid !== 'number' || pid < 1) return false;
   try {
@@ -62,7 +61,6 @@ const isProcessStillRunning = (pid) => {
   }
 };
 
-// Lock management with stale detection
 const acquireLock = () => {
   try {
     if (fs.existsSync(LOCK_FILE)) {
@@ -101,7 +99,6 @@ const releaseLock = () => {
   }
 };
 
-// Database connection
 async function openDatabase() {
   try {
     log(`Opening database: ${DB_FILE}`);
@@ -130,7 +127,6 @@ async function openDatabase() {
   }
 }
 
-// Utility functions for formatting and Excel helper calculations
 const isDecimalUnit = (unit) => {
   if (!unit) return false;
   const PREDEFINED_UNITS = ['pcs', 'kg', 'g', 'liters', 'ml', 'meters', 'boxes', 'packets', 'rolls', 'bundles'];
@@ -165,7 +161,7 @@ const setRowHeights = (ws) => {
   if (!ref) return;
   const range = XLSX.utils.decode_range(ref);
   const rows = [];
-  
+
   for (let r = range.s.r; r <= range.e.r; r++) {
     if (r === range.s.r) {
       rows.push({ hpt: 40 });
@@ -213,7 +209,6 @@ const createWorksheet = (structuredData, headers) => {
   return XLSX.utils.json_to_sheet(structuredData);
 };
 
-// Apply themed styling to headers, data rows, status badges, and accounting totals
 const applyTableStyles = (ws, themeColor = "1E293B") => {
   const ref = ws['!ref'];
   if (!ref) return;
@@ -246,7 +241,6 @@ const applyTableStyles = (ws, themeColor = "1E293B") => {
     }
   }
 
-  // 1. Header Row Styling — Large 12.5pt White Bold Text on Rich Colored Fills
   for (let col = range.s.c; col <= range.e.c; col++) {
     const cellRef = XLSX.utils.encode_cell({ r: range.s.r, c: col });
     const cell = ws[cellRef];
@@ -265,7 +259,6 @@ const applyTableStyles = (ws, themeColor = "1E293B") => {
     }
   }
 
-  // 2. Data & Summary Rows Styling — Highly Readable 11.5pt / 13pt Text, Clear Borders & Dynamic Highlighting
   for (let row = range.s.r + 1; row <= range.e.r; row++) {
     const firstCellRef = XLSX.utils.encode_cell({ r: row, c: range.s.c });
     const firstCell = ws[firstCellRef];
@@ -368,7 +361,7 @@ const styleOverviewSheet = (ws) => {
     { hpt: 24 }, { hpt: 28 },
     { hpt: 18 },
     { hpt: 38 },
-    { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 },
+    { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 },
     { hpt: 18 },
     { hpt: 38 },
     { hpt: 28 }, { hpt: 28 }, { hpt: 28 }, { hpt: 28 }, { hpt: 32 },
@@ -409,7 +402,7 @@ const styleOverviewSheet = (ws) => {
             right: { style: "thin", color: { rgb: "CBD5E1" } }
           }
         };
-      } else if ((row === 5 || row === 13 || row === 20) && col >= 0 && col <= 8) {
+      } else if ((row === 5 || row === 15 || row === 22) && col >= 0 && col <= 8) {
         cell.s = {
           font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 13.5 },
           fill: { fgColor: { rgb: "1E293B" } },
@@ -419,7 +412,7 @@ const styleOverviewSheet = (ws) => {
             top: { style: "medium", color: { rgb: "0F172A" } }
           }
         };
-      } else if (row >= 6 && row <= 11 && (col === 0 || col === 1)) {
+      } else if (row >= 6 && row <= 13 && (col === 0 || col === 1)) {
         if (col === 0) {
           cell.s = {
             font: { bold: true, color: { rgb: "3B0764" }, name: "Segoe UI", sz: 12 },
@@ -435,10 +428,14 @@ const styleOverviewSheet = (ws) => {
         } else {
           let kpiFill = "F1F5F9";
           let kpiColor = "0F172A";
-          if (row === 6 || row === 10) { kpiFill = "D1FAE5"; kpiColor = "047857"; }
-          else if (row === 7) { kpiFill = "E0F2FE"; kpiColor = "0369A1"; }
-          else if (row === 8) { kpiFill = "FEF3C7"; kpiColor = "92400E"; }
-          else if (row === 11) { kpiFill = "E0E7FF"; kpiColor = "3730A3"; }
+          if (row === 6) { kpiFill = "F8FAFC"; kpiColor = "0F172A"; }
+          else if (row === 7) { kpiFill = "D1FAE5"; kpiColor = "047857"; }
+          else if (row === 8) { kpiFill = "FEF2F2"; kpiColor = "991B1B"; }
+          else if (row === 9) { kpiFill = "FEF3C7"; kpiColor = "92400E"; }
+          else if (row === 10) { kpiFill = "E0F2FE"; kpiColor = "0369A1"; }
+          else if (row === 11) { kpiFill = "FEE2E2"; kpiColor = "B91C1C"; }
+          else if (row === 12) { kpiFill = "F3E8FF"; kpiColor = "6B21A8"; }
+          else if (row === 13) { kpiFill = "E0E7FF"; kpiColor = "3730A3"; }
 
           cell.s = {
             font: { bold: true, name: "Segoe UI", sz: 13, color: { rgb: kpiColor } },
@@ -452,8 +449,8 @@ const styleOverviewSheet = (ws) => {
             }
           };
         }
-      } else if (row >= 14 && row <= 18 && (col === 0 || col === 1)) {
-        const isTotal = (row === 18);
+      } else if (row >= 16 && row <= 20 && (col === 0 || col === 1)) {
+        const isTotal = (row === 20);
         const bg = isTotal ? "D1FAE5" : ((row % 2 === 0) ? "F8FAFC" : "FFFFFF");
         const fontCol = isTotal ? "047857" : "334155";
         const align = (col === 0) ? "left" : "right";
@@ -469,7 +466,7 @@ const styleOverviewSheet = (ws) => {
             right: { style: "thin", color: { rgb: "CBD5E1" } }
           }
         };
-      } else if (row >= 21 && row <= 24 && col === 0) {
+      } else if (row >= 23 && row <= 26 && col === 0) {
         cell.s = {
           font: { name: "Segoe UI", sz: 11, italic: true, color: { rgb: "475569" } },
           alignment: { vertical: "center", horizontal: "left" }
@@ -479,7 +476,6 @@ const styleOverviewSheet = (ws) => {
   }
 };
 
-// Parse CLI arguments
 const args = process.argv.slice(2);
 let targetEmail = null;
 let backupType = 'Manual';
@@ -493,12 +489,8 @@ for (let i = 0; i < args.length; i++) {
   if (args[i] === '--toDate') toDate = args[++i];
 }
 
-if (!targetEmail) {
-  logError('No target email provided');
-  process.exit(1);
-}
+// If --email arg was omitted, targetEmail will be dynamically resolved from system settings or env in runBackup()
 
-// Main backup execution
 async function runBackup() {
   if (!acquireLock()) {
     logError('Backup lock acquisition failed or another backup process is active');
@@ -523,8 +515,12 @@ async function runBackup() {
     const rawEmployees = await db.all('SELECT * FROM employees ORDER BY name ASC').catch(() => []);
     const branches = await db.all('SELECT * FROM branches').catch(() => []);
     const salesReturns = await db.all('SELECT * FROM sales_returns').catch(() => []);
+    let creditPayments = await db.all('SELECT * FROM credit_payments').catch(() => []);
 
     let rawSettings = rawSettingsList.find(s => s.id === 'global') || rawSettingsList[0];
+    if (!targetEmail && rawSettings) {
+      targetEmail = rawSettings.backup_email || rawSettings.email || process.env.SMTP_USER || process.env.GMAIL_USER;
+    }
     if (!rawSettings) {
       rawSettings = {
         shop_name: 'Muthuwadige Hardware',
@@ -548,17 +544,21 @@ async function runBackup() {
       attendance: e.attendance !== undefined ? e.attendance : 100
     }));
 
+    const getSriLankaDateStr = (dateInput) => {
+      if (!dateInput || dateInput === '---') return '';
+      try {
+        const d = new Date(dateInput);
+        if (isNaN(d.getTime())) return String(dateInput).substring(0, 10);
+        return d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Colombo' });
+      } catch (e) {
+        return String(dateInput).substring(0, 10);
+      }
+    };
+
     const isWithinDateRange = (dateVal) => {
       if (!fromDate && !toDate) return true;
       if (!dateVal || dateVal === '---') return false;
-      let checkStr = '';
-      if (typeof dateVal === 'string') {
-        checkStr = dateVal.substring(0, 10);
-      } else if (dateVal instanceof Date) {
-        checkStr = dateVal.toISOString().substring(0, 10);
-      } else {
-        checkStr = String(dateVal).substring(0, 10);
-      }
+      const checkStr = getSriLankaDateStr(dateVal);
       if (fromDate && checkStr < fromDate) return false;
       if (toDate && checkStr > toDate) return false;
       return true;
@@ -570,6 +570,7 @@ async function runBackup() {
       purchaseOrders = purchaseOrders.filter(po => isWithinDateRange(po.created_at));
       stockAdjustments = stockAdjustments.filter(sa => isWithinDateRange(sa.created_at));
       quotations = quotations.filter(q => isWithinDateRange(q.created_at));
+      creditPayments = creditPayments.filter(cp => isWithinDateRange(cp.payment_date || cp.created_at));
     }
 
     let minDate = null;
@@ -607,136 +608,261 @@ async function runBackup() {
     const finalStart = fromDate || minDate || dateStartStr;
     const finalEnd = toDate || maxDate || dateEndStr;
 
-    // Calculate Business Metrics
-    const grossSalesAmount = sales.filter(s => s.status?.toUpperCase() !== 'CANCELLED').reduce((sum, s) => sum + (s.total_amount || 0), 0);
+    // --- RECONCILED FINANCIAL ENGINE ---
     const activeReturns = salesReturns ? salesReturns.filter(r => r.status !== 'voided' && r.status !== 'Voided' && r.status !== 'cancelled') : [];
-    const totalReturnAmount = activeReturns.reduce((sum, r) => sum + Number(r.return_amount || 0), 0);
-    const totalExchangeAmount = activeReturns.reduce((sum, r) => sum + Number(r.exchange_amount || 0), 0);
-    const valB6 = Math.max(0, grossSalesAmount + totalExchangeAmount - totalReturnAmount);
+    const validSales = sales.filter(s => s.status?.toUpperCase() !== 'CANCELLED' && s.status?.toUpperCase() !== 'VOIDED');
 
-    const returnNetMapByInvoice = {};
-    activeReturns.forEach(r => {
-      const inv = r.invoice_no || r.invoiceNo;
-      const retAmt = Number(r.return_amount || 0);
-      const exAmt = Number(r.exchange_amount || 0);
-      returnNetMapByInvoice[inv] = (returnNetMapByInvoice[inv] || 0) + (retAmt - exAmt);
+    const getItemUnitCost = (product, itemUnit, itemConvRate, itemCostSnapshot) => {
+      const snapshotCost = (itemCostSnapshot !== undefined && itemCostSnapshot !== null && !isNaN(Number(itemCostSnapshot)))
+        ? Number(itemCostSnapshot)
+        : null;
+      const baseCost = snapshotCost !== null
+        ? snapshotCost
+        : (product ? Number(product.cost_price !== undefined ? product.cost_price : (product.costPrice !== undefined ? product.costPrice : 0)) : 0);
+      let conversionRate = Number(itemConvRate) || 1;
+
+      if ((!itemConvRate || conversionRate === 1) && itemUnit && (product.unit && itemUnit.toLowerCase() !== product.unit.toLowerCase())) {
+        const measureDetailsStr = product.measure_details || product.measureDetails;
+        if (measureDetailsStr) {
+          try {
+            const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
+            if (parsed && Array.isArray(parsed.conversions)) {
+              const matchedConv = parsed.conversions.find(c => (c.unit || '').toLowerCase() === itemUnit.toLowerCase());
+              if (matchedConv) {
+                const rawVal = Number(matchedConv.kgVal) || 1;
+                if ((product.unit || '').toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
+                  conversionRate = 1 / rawVal;
+                } else {
+                  conversionRate = rawVal;
+                }
+              }
+            }
+          } catch (e) { }
+        }
+      }
+
+      return conversionRate > 0 ? baseCost / conversionRate : baseCost;
+    };
+
+    const getSaleSellingSubtotal = (s) => {
+      const tot = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
+      return Math.max(0, tot);
+    };
+
+    const getReturnSellingSubtotal = (r) => {
+      const retAmt = Number(r.return_amount !== undefined && r.return_amount !== null
+        ? r.return_amount
+        : (r.returnAmount !== undefined && r.returnAmount !== null
+          ? r.returnAmount
+          : (r.total_refunded !== undefined && r.total_refunded !== null && Number(r.total_refunded) > 0
+            ? r.total_refunded
+            : (r.totalRefunded !== undefined && r.totalRefunded !== null && Number(r.totalRefunded) > 0
+              ? r.totalRefunded
+              : (r.amount || 0)))));
+      const retTax = 0;
+      const retTrans = Number(r.transportation_fee || r.transportationFee || 0);
+      if (retAmt > 0) {
+        return Math.max(0, retAmt - retTrans);
+      }
+      let rawItems = r.items || r.returnedItems || r.returned_items || [];
+      let items = [];
+      try {
+        items = typeof rawItems === 'string' ? JSON.parse(rawItems) : rawItems;
+      } catch (e) { }
+      if (Array.isArray(items) && items.length > 0) {
+        return items.reduce((sum, it) => {
+          const itemQty = Number(it.qty || 0);
+          const itemPrice = Number(it.price || it.unitPrice || 0);
+          const itemDisc = Number(it.discount || 0);
+          const itemDiscType = it.discountType || 'amount';
+          const discAmt = (itemDiscType === 'percent' || itemDiscType === 'percentage') ? (itemQty * itemPrice * itemDisc / 100) : (itemDisc * itemQty);
+          return sum + Math.max(0, itemQty * itemPrice - discAmt);
+        }, 0);
+      }
+      return 0;
+    };
+
+    // 1. Calculate Gross and Net Revenue
+    let grossStickerSales = 0;
+    let customerDiscounts = 0;
+    let transportFees = 0;
+    let grossCostVal = 0;
+
+    validSales.forEach(o => {
+      let items = [];
+      try {
+        items = typeof o.items === 'string' ? JSON.parse(o.items) : o.items || [];
+      } catch (e) { }
+
+      if (Array.isArray(items)) {
+        items.forEach(it => {
+          const product = products.find(p => p.id === it.productId || p.id === it.product_id);
+          const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.cost_price || it.costPrice);
+          const qty = Number(it.qty || 0);
+          const price = Number(it.price || it.unitPrice || 0);
+          
+          grossStickerSales += (qty * price);
+          grossCostVal += (qty * cost);
+        });
+      }
+      customerDiscounts += Number(o.discount || 0);
+      transportFees += Number(o.transportation_fee || o.transportationFee || 0);
     });
 
-    const valB8 = sales.filter(s => s.status?.toUpperCase() !== 'CANCELLED').reduce((sum, s) => {
+    let returnedSellingRev = 0;
+    let returnedCostVal = 0;
+    let exchangeSellingRev = 0;
+    let exchangeCostVal = 0;
+
+    activeReturns.forEach(r => {
+      returnedSellingRev += getReturnSellingSubtotal(r);
+      let rawItems = r.items || r.returnedItems || r.returned_items || [];
+      let items = [];
+      try {
+        items = typeof rawItems === 'string' ? JSON.parse(rawItems) : rawItems;
+      } catch (e) { }
+
+      if (Array.isArray(items)) {
+        items.forEach(it => {
+          const product = products.find(p => p.id === (it.productId || it.product_id));
+          const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.cost_price || it.costPrice);
+          const qty = Number(it.qty || 0);
+          returnedCostVal += qty * cost;
+        });
+      }
+
+      const exAmt = Number(r.exchange_amount !== undefined ? r.exchange_amount : (r.exchangeAmount || 0));
+      exchangeSellingRev += exAmt;
+
+      let rawExItems = r.exchangeItems || r.exchange_items || [];
+      let exItems = [];
+      try {
+        exItems = typeof rawExItems === 'string' ? JSON.parse(rawExItems) : rawExItems;
+      } catch (e) { }
+
+      if (Array.isArray(exItems)) {
+        exItems.forEach(it => {
+          const product = products.find(p => p.id === (it.productId || it.product_id));
+          const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.cost_price || it.costPrice);
+          const qty = Number(it.qty || 0);
+          exchangeCostVal += qty * cost;
+        });
+      }
+    });
+
+    const netReturns = returnedSellingRev - exchangeSellingRev;
+    const grossSellingRev = grossStickerSales;
+    const netSellingRev = Math.max(0, grossStickerSales - customerDiscounts - netReturns + transportFees);
+    const netCostVal = Math.max(0, grossCostVal + exchangeCostVal - returnedCostVal);
+
+    const valB6 = Math.max(0, netSellingRev);
+    const valB11 = netSellingRev - netCostVal;
+    const totalCostOfSales = netCostVal;
+
+    // 2. Accurate Payment Attribution Calculation
+    let directCash = 0;
+    let directCard = 0;
+    let directBank = 0;
+
+    validSales.forEach(s => {
+      const rawMethod = (s.payment_method || s.paymentMethod || '').toString().trim();
+      const methodLower = rawMethod.toLowerCase();
+      const isCredit = methodLower === 'credit' || s.is_credit === 1 || s.is_credit === true || s.status?.toLowerCase() === 'non paid' || s.status?.toLowerCase() === 'partially settled' || s.status?.toLowerCase() === 'pending';
+
+      const totalAmt = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
+
+      if (isCredit) {
+        // Calculate initial POS down payment (not from subsequent settlements)
+        const invNo = s.invoice_no || s.invoiceNo;
+        const totalSettledOnInvoice = (Array.isArray(creditPayments) ? creditPayments : [])
+          .filter(cp => cp.sale_id === s.id || (invNo && cp.invoice_no === invNo))
+          .reduce((sum, cp) => sum + Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0)), 0);
+
+        const initialDownPayment = Math.max(0, Number(s.payment_received || 0) - totalSettledOnInvoice);
+        if (initialDownPayment > 0) {
+          if (methodLower.includes('card')) directCard += initialDownPayment;
+          else if (methodLower.includes('bank')) directBank += initialDownPayment;
+          else directCash += initialDownPayment;
+        }
+      } else {
+        if (methodLower.includes('card')) directCard += totalAmt;
+        else if (methodLower.includes('bank')) directBank += totalAmt;
+        else directCash += totalAmt;
+      }
+    });
+
+    // Process all credit settlements into their respective buckets
+    let settledCash = 0;
+    let settledCard = 0;
+    let settledBank = 0;
+
+    if (Array.isArray(creditPayments)) {
+      creditPayments.forEach(cp => {
+        const cpAmt = Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0));
+        const cpMethod = (cp.payment_method || cp.paymentMethod || 'Cash').toString().toLowerCase().trim();
+
+        if (cpMethod.includes('card')) settledCard += cpAmt;
+        else if (cpMethod.includes('bank')) settledBank += cpAmt;
+        else settledCash += cpAmt;
+      });
+    }
+
+    // Exchange Return Adjustments to cash
+    const cashRefundsTotal = activeReturns.reduce((sum, r) => {
+      const type = (r.return_type || r.returnType || r.returnMethod || r.return_method || r.type || '').toString().toLowerCase().trim();
+      if (type === 'cash refund' || type === 'cash') {
+        return sum + Number(r.refund_amount || r.total_refunded || r.return_amount || 0);
+      }
+      return sum;
+    }, 0);
+
+    const exchangeCashInflowsTotal = activeReturns.reduce((sum, r) => {
+      const type = (r.return_type || r.returnType || r.returnMethod || r.return_method || r.type || '').toString().toLowerCase().trim();
+      if (type === 'exchange') {
+        const paidAmt = Number(r.customer_paid || 0);
+        const changeGiven = Number(r.change_given || 0);
+        return sum + Math.max(0, paidAmt - changeGiven);
+      }
+      return sum;
+    }, 0);
+
+    // Outstanding customer credit calculation
+    const totalCreditOutstanding = validSales.reduce((sum, s) => {
       const inv = s.invoice_no || s.invoiceNo;
-      const invReturns = salesReturns.filter(r => (r.invoice_no === inv || r.invoiceNo === inv) && r.status?.toLowerCase() !== 'voided' && r.status?.toLowerCase() !== 'cancelled');
+      const invReturns = activeReturns.filter(r => (r.invoice_no === inv || r.invoiceNo === inv));
       const retAmt = invReturns.reduce((acc, r) => acc + Number(r.return_amount || r.returnAmount || 0), 0);
       const exAmt = invReturns.reduce((acc, r) => acc + Number(r.exchange_amount || r.exchangeAmount || 0), 0);
       const exPaid = invReturns.reduce((acc, r) => acc + Number(r.customer_paid || r.customerPaid || 0), 0);
 
       const method = (s.payment_method || '').toLowerCase();
-      const isCredit = method === 'credit' || s.is_credit === 1 || s.is_credit === true || s.status?.toLowerCase() === 'non paid' || s.status?.toLowerCase() === 'partially settled' || s.status?.toLowerCase() === 'fully settled' || s.status?.toLowerCase() === 'fully returned' || s.status?.toLowerCase() === 'partially returned';
+      const isCredit = method === 'credit' || s.is_credit === 1 || s.is_credit === true || s.status?.toLowerCase() === 'non paid' || s.status?.toLowerCase() === 'partially settled' || s.status?.toLowerCase() === 'pending';
 
       if (!isCredit && s.status?.toLowerCase() === 'paid') return sum;
 
       const origTotal = Number(s.total_amount || 0);
-      const origPaid = isCredit ? Number(s.payment_received || 0) : (s.status?.toLowerCase() === 'paid' ? origTotal : Number(s.payment_received || 0));
-      const totalPaid = origPaid + exPaid;
+      const origPaid = Number(s.payment_received || 0);
       const effTotal = Math.max(0, origTotal - retAmt + exAmt);
-      const netOutstanding = Math.max(0, effTotal - totalPaid);
+      const netOutstanding = Math.max(0, effTotal - origPaid - exPaid);
 
       return sum + netOutstanding;
     }, 0);
-    const valB7 = Math.max(0, valB6 - valB8);
+
+    const cashAmount = Math.max(0, directCash + settledCash + exchangeCashInflowsTotal - cashRefundsTotal);
+    const cardAmount = directCard + settledCard;
+    const bankTransferAmount = directBank + settledBank;
+    const creditAmount = totalCreditOutstanding;
+
+    const valB8 = totalCreditOutstanding;
+    const valB7 = cashAmount + cardAmount + bankTransferAmount;
     const valB9 = purchaseOrders.filter(po => po.status?.toUpperCase() !== 'CANCELLED').reduce((sum, po) => sum + (po.total || 0), 0);
     const valB10 = transactions.filter(t => t.type?.toUpperCase() === 'EXPENSE' && t.category !== 'Purchases').reduce((sum, t) => sum + (t.amount || 0), 0);
-
-    let totalCostOfSales = 0;
-    sales.filter(s => s.status?.toUpperCase() !== 'CANCELLED').forEach(s => {
-      try {
-        const items = typeof s.items === 'string' ? JSON.parse(s.items) : s.items;
-        if (Array.isArray(items)) {
-          items.forEach(it => {
-            const product = products.find(p => p.id === it.productId || p.id === it.product_id);
-            let baseCost = product ? Number(product.cost_price || 0) : 0;
-            let convRate = Number(it.conversionRate) || 1;
-            if (product && (!it.conversionRate || convRate === 1) && (it.unit && it.unit.toLowerCase() !== (product.unit || '').toLowerCase())) {
-              const measureDetailsStr = product.measure_details || product.measureDetails;
-              if (measureDetailsStr) {
-                try {
-                  const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
-                  if (parsed && Array.isArray(parsed.conversions)) {
-                    const matchedConv = parsed.conversions.find(c => (c.unit || '').toLowerCase() === it.unit.toLowerCase());
-                    if (matchedConv) {
-                      const rawVal = Number(matchedConv.kgVal) || 1;
-                      if ((product.unit || '').toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
-                        convRate = 1 / rawVal;
-                      } else {
-                        convRate = rawVal;
-                      }
-                    }
-                  }
-                } catch (e) {}
-              }
-            }
-            const unitCost = convRate > 0 ? baseCost / convRate : baseCost;
-            const qty = Number(it.qty || 1);
-            totalCostOfSales += qty * unitCost;
-          });
-        }
-      } catch (err) {}
-    });
-
-    // Reconcile return and exchange item cost adjustments
-    activeReturns.forEach(r => {
-      try {
-        const retItems = typeof r.returned_items === 'string' ? JSON.parse(r.returned_items) : r.returned_items;
-        if (Array.isArray(retItems)) {
-          retItems.forEach(it => {
-            const product = products.find(p => p.id === it.productId || p.id === it.product_id);
-            const baseCost = product ? Number(product.cost_price || 0) : 0;
-            const qty = Number(it.qty || 0);
-            totalCostOfSales -= qty * baseCost;
-          });
-        }
-        const exItems = typeof r.exchange_items === 'string' ? JSON.parse(r.exchange_items) : r.exchange_items;
-        if (Array.isArray(exItems)) {
-          exItems.forEach(it => {
-            const product = products.find(p => p.id === it.productId || p.id === it.product_id);
-            const baseCost = product ? Number(product.cost_price || 0) : 0;
-            const qty = Number(it.qty || 0);
-            totalCostOfSales += qty * baseCost;
-          });
-        }
-      } catch (err) {}
-    });
-    totalCostOfSales = Math.max(0, totalCostOfSales);
-
-    const valB11 = valB6 - totalCostOfSales;
     const valB12 = products.reduce((sum, p) => sum + ((p.stock || 0) * (p.cost_price || 0)), 0);
 
     const totalSalesRevenue = valB6;
     const totalSalesProfit = valB11;
-
-    let cashAmount = 0;
-    let cardAmount = 0;
-    let creditAmount = 0;
-    let bankTransferAmount = 0;
-
-    sales.filter(s => s.status?.toUpperCase() !== 'CANCELLED').forEach(s => {
-      const amt = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
-      const rawMethod = (s.payment_method || s.paymentMethod || '').toString().trim();
-      const methodLower = rawMethod.toLowerCase();
-      const statusStr = (s.status || '').toString();
-
-      if (methodLower === 'card') {
-        cardAmount += amt;
-      } else if (methodLower === 'bank transfer' || methodLower === 'bank' || methodLower === 'banktransfer' || methodLower === 'online') {
-        bankTransferAmount += amt;
-      } else if (methodLower === 'credit' || statusStr === 'Non Paid' || statusStr === 'Non-Paid' || statusStr === 'pending') {
-        creditAmount += amt;
-      } else {
-        cashAmount += amt;
-      }
-    });
     const paymentTotal = cashAmount + cardAmount + creditAmount + bankTransferAmount;
 
-    // Build Overview Dashboard Sheet
+    // Overview Dashboard Sheet
     const overviewRows = [
       ["MUTHUWADIGE HARDWARE - BUSINESS & ACCOUNTING BACKUP REPORT", "", "", "", "", "", "", "", ""],
       ["", "", "", "", "", "", "", "", ""],
@@ -744,11 +870,13 @@ async function runBackup() {
       [finalStart, finalEnd, "", "", "", "", "", "", ""],
       ["", "", "", "", "", "", "", "", ""],
       ["KEY BUSINESS METRICS (ERP SUMMARY)", "", "", "", "", "", "", "", ""],
-      ["Total Sales Revenue", "", "", "", "", "", "", "", ""],
+      ["Gross Sales", "", "", "", "", "", "", "", ""],
+      ["Net Sales Revenue", "", "", "", "", "", "", "", ""],
+      ["Cost of Goods Sold (COGS)", "", "", "", "", "", "", "", ""],
+      ["Gross Profit", "", "", "", "", "", "", "", ""],
       ["Cash Received", "", "", "", "", "", "", "", ""],
       ["Customer Credit Outstanding", "", "", "", "", "", "", "", ""],
       ["Total Purchases", "", "", "", "", "", "", "", ""],
-      ["Net Profit", "", "", "", "", "", "", "", ""],
       ["Total Stock Value", "", "", "", "", "", "", "", ""],
       ["", "", "", "", "", "", "", "", ""],
       ["PAYMENT METHOD BREAKDOWN", "", "", "", "", "", "", "", ""],
@@ -767,37 +895,39 @@ async function runBackup() {
 
     const wsOverview = XLSX.utils.aoa_to_sheet(overviewRows);
     wsOverview['!cols'] = [
-      { wch: 34 }, { wch: 24 }, { wch: 5 }, 
-      { wch: 15 }, { wch: 15 }, { wch: 15 }, 
+      { wch: 34 }, { wch: 24 }, { wch: 5 },
+      { wch: 15 }, { wch: 15 }, { wch: 15 },
       { wch: 15 }, { wch: 15 }, { wch: 15 }
     ];
 
     wsOverview['!merges'] = [
       { s: { r: 0, c: 0 }, e: { r: 1, c: 8 } },
       { s: { r: 5, c: 0 }, e: { r: 5, c: 8 } },
-      { s: { r: 13, c: 0 }, e: { r: 13, c: 8 } },
-      { s: { r: 20, c: 0 }, e: { r: 20, c: 8 } },
-      { s: { r: 21, c: 0 }, e: { r: 21, c: 8 } },
+      { s: { r: 15, c: 0 }, e: { r: 15, c: 8 } },
       { s: { r: 22, c: 0 }, e: { r: 22, c: 8 } },
       { s: { r: 23, c: 0 }, e: { r: 23, c: 8 } },
-      { s: { r: 24, c: 0 }, e: { r: 24, c: 8 } }
+      { s: { r: 24, c: 0 }, e: { r: 24, c: 8 } },
+      { s: { r: 25, c: 0 }, e: { r: 25, c: 8 } },
+      { s: { r: 26, c: 0 }, e: { r: 26, c: 8 } }
     ];
 
     wsOverview['A4'] = { t: 'n', v: getExcelDecimalDate(finalStart), z: 'yyyy-mm-dd' };
     wsOverview['B4'] = { t: 'n', v: getExcelDecimalDate(finalEnd), z: 'yyyy-mm-dd' };
 
-    wsOverview['B7'] = { t: 'n', v: valB6, f: "SUMIFS('Sales & Invoices'!G:G, 'Sales & Invoices'!L:L, \">=\"&A4, 'Sales & Invoices'!L:L, \"<=\"&B4, 'Sales & Invoices'!J:J, \"<>CANCELLED\")", z: '#,##0.00' };
-    wsOverview['B8'] = { t: 'n', v: valB7, f: "B7-B9", z: '#,##0.00' };
-    wsOverview['B9'] = { t: 'n', v: valB8, f: "SUMIFS('Sales & Invoices'!I:I, 'Sales & Invoices'!L:L, \">=\"&A4, 'Sales & Invoices'!L:L, \"<=\"&B4, 'Sales & Invoices'!J:J, \"<>CANCELLED\")", z: '#,##0.00' };
-    wsOverview['B10'] = { t: 'n', v: valB9, f: "SUMIFS('Purchase Orders'!D:D, 'Purchase Orders'!G:G, \">=\"&A4, 'Purchase Orders'!G:G, \"<=\"&B4, 'Purchase Orders'!E:E, \"<>CANCELLED\")", z: '#,##0.00' };
-    wsOverview['B11'] = { t: 'n', v: valB11, f: "B7-SUMIFS('Sales & Invoices'!O:O, 'Sales & Invoices'!L:L, \">=\"&A4, 'Sales & Invoices'!L:L, \"<=\"&B4, 'Sales & Invoices'!J:J, \"<>CANCELLED\")", z: '#,##0.00' };
-    wsOverview['B12'] = { t: 'n', v: valB12, f: "SUM('Inventory Stock'!I:I)", z: '#,##0.00' };
+    wsOverview['B7'] = { t: 'n', v: grossSellingRev, z: '#,##0.00' };
+    wsOverview['B8'] = { t: 'n', v: netSellingRev, z: '#,##0.00' };
+    wsOverview['B9'] = { t: 'n', v: netCostVal, z: '#,##0.00' };
+    wsOverview['B10'] = { t: 'n', v: netSellingRev - netCostVal, z: '#,##0.00' };
+    wsOverview['B11'] = { t: 'n', v: valB7, z: '#,##0.00' };
+    wsOverview['B12'] = { t: 'n', v: valB8, z: '#,##0.00' };
+    wsOverview['B13'] = { t: 'n', v: valB9, z: '#,##0.00' };
+    wsOverview['B14'] = { t: 'n', v: valB12, z: '#,##0.00' };
 
-    wsOverview['B15'] = { t: 'n', v: cashAmount, z: '#,##0.00' };
-    wsOverview['B16'] = { t: 'n', v: cardAmount, z: '#,##0.00' };
-    wsOverview['B17'] = { t: 'n', v: creditAmount, z: '#,##0.00' };
-    wsOverview['B18'] = { t: 'n', v: bankTransferAmount, z: '#,##0.00' };
-    wsOverview['B19'] = { t: 'n', v: paymentTotal, f: "SUM(B15:B18)", z: '#,##0.00' };
+    wsOverview['B17'] = { t: 'n', v: cashAmount, z: '#,##0.00' };
+    wsOverview['B18'] = { t: 'n', v: cardAmount, z: '#,##0.00' };
+    wsOverview['B19'] = { t: 'n', v: creditAmount, z: '#,##0.00' };
+    wsOverview['B20'] = { t: 'n', v: bankTransferAmount, z: '#,##0.00' };
+    wsOverview['B21'] = { t: 'n', v: paymentTotal, z: '#,##0.00' };
 
     // 1. Inventory Stock Sheet
     const structuredInventory = products.map(p => ({
@@ -829,8 +959,8 @@ async function runBackup() {
       });
     }
     const wsInventoryHeaders = [
-      "Item Name", "Category", "Base Retail Price (Rs.)", "Base Cost Price (Rs.)", 
-      "Current Stock Level", "Measurement Unit", "Brand", "Supplier Entity", 
+      "Item Name", "Category", "Base Retail Price (Rs.)", "Base Cost Price (Rs.)",
+      "Current Stock Level", "Measurement Unit", "Brand", "Supplier Entity",
       "Total Cost Value (Rs.)", "Total Market Value (Rs.)"
     ];
     const wsInventory = createWorksheet(structuredInventory, wsInventoryHeaders);
@@ -845,10 +975,10 @@ async function runBackup() {
         if (Array.isArray(items)) {
           itemsList = items.map(it => `${it.productName || it.name || 'Item'} (x${it.qty || 1})`).join(', ');
         }
-      } catch (e) {}
+      } catch (e) { }
 
       const inv = s.invoice_no || s.invoiceNo;
-      const invReturns = salesReturns.filter(r => (r.invoice_no === inv || r.invoiceNo === inv) && r.status?.toLowerCase() !== 'voided' && r.status?.toLowerCase() !== 'cancelled');
+      const invReturns = activeReturns.filter(r => (r.invoice_no === inv || r.invoiceNo === inv));
       const retAmt = invReturns.reduce((acc, r) => acc + Number(r.return_amount || r.returnAmount || 0), 0);
       const exAmt = invReturns.reduce((acc, r) => acc + Number(r.exchange_amount || r.exchangeAmount || 0), 0);
       const exPaid = invReturns.reduce((acc, r) => acc + Number(r.customer_paid || r.customerPaid || 0), 0);
@@ -868,8 +998,8 @@ async function runBackup() {
         "Products Sold": itemsList,
         "Subtotal (Rs.)": s.subtotal || 0,
         "Discount (Rs.)": s.discount || 0,
-        "Tax Amount (Rs.)": s.tax || 0,
-        "Total Amount (Rs.)": s.total_amount || 0,
+        "Tax Amount (Rs.)": 0,
+        "Total Amount (Rs.)": effTotal,
         "Payment Received (Rs.)": totalPaid,
         "Outstanding Balance (Rs.)": netOutstanding,
         "Payment Status": netOutstanding <= 0.01 ? 'PAID' : (totalPaid > 0 ? 'PARTIALLY SETTLED' : (s.status ? s.status.toUpperCase() : 'NON PAID')),
@@ -877,75 +1007,15 @@ async function runBackup() {
         "Checkout Date & Time": getExcelDecimalDate(s.created_at) || '---',
         "Due Date": getExcelDecimalDate(s.due_date) || '---',
         "Credit Period (Days)": s.credit_period_days || 0,
-        "Cost of Goods Sold (Rs.)": (() => {
-          let totalCostOfSale = 0;
-          try {
-            const items = typeof s.items === 'string' ? JSON.parse(s.items) : s.items;
-            if (Array.isArray(items)) {
-              items.forEach(it => {
-                const product = products.find(p => p.id === it.productId || p.id === it.product_id);
-                let cost = product ? Number(product.cost_price || 0) : 0;
-                if (product) {
-                  const measureDetailsStr = product.measure_details || product.measureDetails;
-                  if (measureDetailsStr) {
-                    try {
-                      const parsed = JSON.parse(measureDetailsStr);
-                      if (parsed && Array.isArray(parsed.conversions)) {
-                        const matchedConv = parsed.conversions.find(c => c.unit.toLowerCase() === (it.unit || '').toLowerCase());
-                        if (matchedConv) {
-                          const rate = Number(matchedConv.kgVal) || 1;
-                          if (isDecimalUnit(product.unit)) {
-                            cost = cost / rate;
-                          } else {
-                            cost = cost * rate;
-                          }
-                        }
-                      }
-                    } catch (e) {}
-                  }
-                }
-                const qty = Number(it.qty || 1);
-                totalCostOfSale += qty * cost;
-              });
-            }
-          } catch (e) {}
-          return totalCostOfSale;
-        })()
+        "Cost of Goods Sold (Rs.)": 0
       };
     });
 
-    if (structuredSales.length > 0) {
-      const subtotalSum = sales.reduce((sum, s) => sum + (s.subtotal || 0), 0);
-      const discountSum = sales.reduce((sum, s) => sum + (s.discount || 0), 0);
-      const taxSum = sales.reduce((sum, s) => sum + (s.tax || 0), 0);
-      const totalSum = sales.reduce((sum, s) => sum + (s.total_amount || 0), 0);
-      const receivedSum = sales.reduce((sum, s) => sum + (s.status?.toLowerCase() === 'paid' ? (s.total_amount || 0) : (s.payment_received || 0)), 0);
-      const balanceSum = sales.reduce((sum, s) => sum + (s.status?.toLowerCase() === 'paid' ? 0 : Math.max(0, (s.total_amount || 0) - (s.payment_received || 0))), 0);
-
-      structuredSales.push({
-        "Invoice Number": "TOTAL",
-        "Customer Name": "",
-        "Products Sold": "",
-        "Subtotal (Rs.)": subtotalSum,
-        "Discount (Rs.)": discountSum,
-        "Tax Amount (Rs.)": taxSum,
-        "Total Amount (Rs.)": totalSum,
-        "Payment Received (Rs.)": receivedSum,
-        "Outstanding Balance (Rs.)": balanceSum,
-        "Payment Status": "",
-        "Payment Method": "",
-        "Checkout Date & Time": "",
-        "Due Date": "",
-        "Credit Period (Days)": "",
-        "Cost of Goods Sold (Rs.)": totalCostOfSales
-      });
-    }
-
     const wsSalesHeaders = [
-      "Invoice Number", "Customer Name", "Products Sold", "Subtotal (Rs.)", 
-      "Discount (Rs.)", "Tax Amount (Rs.)", "Total Amount (Rs.)", 
-      "Payment Received (Rs.)", "Outstanding Balance (Rs.)", "Payment Status", 
-      "Payment Method", "Checkout Date & Time", "Due Date", 
+      "Invoice Number", "Customer Name", "Products Sold", "Subtotal (Rs.)",
+      "Discount (Rs.)", "Tax Amount (Rs.)", "Total Amount (Rs.)",
+      "Payment Received (Rs.)", "Outstanding Balance (Rs.)", "Payment Status",
+      "Payment Method", "Checkout Date & Time", "Due Date",
       "Credit Period (Days)", "Cost of Goods Sold (Rs.)"
     ];
     const wsSales = createWorksheet(structuredSales, wsSalesHeaders);
@@ -962,20 +1032,8 @@ async function runBackup() {
       "Transaction Value (Rs.)": t.amount || 0,
       "System Log Date": getExcelDecimalDate(t.created_at) || '---'
     }));
-    if (structuredTransactions.length > 0) {
-      const transSum = transactions.reduce((sum, t) => sum + (t.amount || 0), 0);
-      structuredTransactions.push({
-        "Record Date": "TOTAL",
-        "Flow Type": "",
-        "Finance Category": "",
-        "Description Details": "",
-        "Reference Invoice / PO": "",
-        "Transaction Value (Rs.)": transSum,
-        "System Log Date": ""
-      });
-    }
     const wsTransactionsHeaders = [
-      "Record Date", "Flow Type", "Finance Category", "Description Details", 
+      "Record Date", "Flow Type", "Finance Category", "Description Details",
       "Reference Invoice / PO", "Transaction Value (Rs.)", "System Log Date"
     ];
     const wsTransactions = createWorksheet(structuredTransactions, wsTransactionsHeaders);
@@ -994,7 +1052,7 @@ async function runBackup() {
       "Registered Date": getExcelDecimalDate(c.created_at) || '---'
     }));
     const wsCustomersHeaders = [
-      "Customer Name", "Email", "Phone Number", "Address", 
+      "Customer Name", "Email", "Phone Number", "Address",
       "NIC Number", "Loyalty Points", "Total Purchases (Rs.)", "Registered Date"
     ];
     const wsCustomers = createWorksheet(structuredCustomers, wsCustomersHeaders);
@@ -1014,8 +1072,8 @@ async function runBackup() {
       "Date of Joining": getExcelDecimalDate(e.join_date) || '---'
     }));
     const wsEmployeesHeaders = [
-      "Full Name", "Designated Role", "Department", "Email Address", 
-      "Phone Number", "Salary (Rs.)", "Active Status", 
+      "Full Name", "Designated Role", "Department", "Email Address",
+      "Phone Number", "Salary (Rs.)", "Active Status",
       "Attendance Percentage (%)", "Date of Joining"
     ];
     const wsEmployees = createWorksheet(structuredEmployees, wsEmployeesHeaders);
@@ -1049,7 +1107,7 @@ async function runBackup() {
       "Last Synced Time": getExcelDecimalDate(set.updated_at) || '---'
     }));
     const wsSettingsHeaders = [
-      "Shop Name", "Address", "Phone", "Email", "Currency", "Tax Rate (%)", 
+      "Shop Name", "Address", "Phone", "Email", "Currency", "Tax Rate (%)",
       "Backup Email", "Weekly Auto-Backup", "Last Synced Time"
     ];
     const wsSettings = createWorksheet(structuredSettings, wsSettingsHeaders);
@@ -1067,7 +1125,7 @@ async function runBackup() {
       "Registered Date": getExcelDecimalDate(s.created_at) || '---'
     }));
     const wsSuppliersHeaders = [
-      "Supplier Name", "Email Address", "Phone Number", "Address", 
+      "Supplier Name", "Email Address", "Phone Number", "Address",
       "Credit Terms", "Payable Balance (Rs.)", "Registered Date"
     ];
     const wsSuppliers = createWorksheet(structuredSuppliers, wsSuppliersHeaders);
@@ -1082,7 +1140,7 @@ async function runBackup() {
         if (Array.isArray(parsed)) {
           poItems = parsed.map(it => `${it.name || it.productName || 'Item'} (x${it.qty || 1})`).join(', ');
         }
-      } catch(e) {}
+      } catch (e) { }
       return {
         "PO Number": po.po_no,
         "Supplier Name": po.supplier_name,
@@ -1093,20 +1151,8 @@ async function runBackup() {
         "Created Date": getExcelDecimalDate(po.created_at) || '---'
       };
     });
-    if (structuredPO.length > 0) {
-      const poSum = purchaseOrders.reduce((sum, po) => sum + (po.total || 0), 0);
-      structuredPO.push({
-        "PO Number": "TOTAL",
-        "Supplier Name": "",
-        "PO Items": "",
-        "Total Amount (Rs.)": poSum,
-        "PO Status": "",
-        "Due Date": "",
-        "Created Date": ""
-      });
-    }
     const wsPOHeaders = [
-      "PO Number", "Supplier Name", "PO Items", "Total Amount (Rs.)", 
+      "PO Number", "Supplier Name", "PO Items", "Total Amount (Rs.)",
       "PO Status", "Due Date", "Created Date"
     ];
     const wsPO = createWorksheet(structuredPO, wsPOHeaders);
@@ -1124,7 +1170,7 @@ async function runBackup() {
       "Timestamp": getExcelDecimalDate(sa.created_at) || '---'
     }));
     const wsAdjustmentsHeaders = [
-      "Product Name", "Old Quantity", "New Quantity", "Adjustment Type", 
+      "Product Name", "Old Quantity", "New Quantity", "Adjustment Type",
       "Reason Details", "Staff Email", "Timestamp"
     ];
     const wsAdjustments = createWorksheet(structuredAdjustments, wsAdjustmentsHeaders);
@@ -1161,13 +1207,13 @@ async function runBackup() {
     applyTableStyles(wsBranches, "1E3A8A");
 
     // 13. Credit Customers Sheet
-    let creditSalesList = sales.filter(s => {
+    let creditSalesList = validSales.filter(s => {
       const isCredit = s.status === 'Non Paid' || s.status === 'Partially Paid' || s.status === 'Pending' || (s.payment_method && s.payment_method.toLowerCase() === 'credit');
       const rem = Math.max(0, (s.total_amount || 0) - (s.payment_received || 0));
       return isCredit && rem > 0;
     });
 
-    const totOutstandingAll = creditSalesList.reduce((sum, s) => sum + Math.max(0, (s.total_amount || 0) - (s.payment_received || 0)), 0);
+    const totOutstandingAll = totalCreditOutstanding;
     const totOverdueAll = creditSalesList.filter(s => s.due_date && new Date(s.due_date) < new Date()).reduce((sum, s) => sum + Math.max(0, (s.total_amount || 0) - (s.payment_received || 0)), 0);
 
     const structuredCreditCustomers = creditSalesList.map(s => {
@@ -1195,7 +1241,7 @@ async function runBackup() {
     applyTableStyles(wsCreditCustomers, "B8860B");
 
     // 14. Sales Returns Sheet
-    const structuredSalesReturns = salesReturns.map(sr => {
+    const structuredSalesReturns = activeReturns.map(sr => {
       let returnedProd = '---';
       let returnedQty = 0;
       try {
@@ -1204,7 +1250,7 @@ async function runBackup() {
           returnedProd = items.map(i => i.productName || i.name).join(', ');
           returnedQty = items.reduce((sum, i) => sum + (Number(i.qty) || 0), 0);
         }
-      } catch (e) {}
+      } catch (e) { }
 
       let exchangeProd = 'N/A';
       let exchangeAmt = Number(sr.exchange_amount || 0);
@@ -1213,7 +1259,7 @@ async function runBackup() {
         if (Array.isArray(xItems) && xItems.length > 0) {
           exchangeProd = xItems.map(i => i.productName || i.name).join(', ');
         }
-      } catch (e) {}
+      } catch (e) { }
 
       return {
         "Return ID": sr.return_no || sr.id,
@@ -1240,7 +1286,6 @@ async function runBackup() {
 
     styleOverviewSheet(wsOverview);
 
-    // Load Master Template and populate with live data to preserve formatting
     if (!fs.existsSync(backupsDir)) {
       fs.mkdirSync(backupsDir, { recursive: true });
     }
@@ -1253,49 +1298,6 @@ async function runBackup() {
     }
     const fileName = `Backup_${dateStr}.xlsx`;
     const filePath = path.join(backupsDir, fileName);
-
-    // Locate Master Template
-    let templatePath = path.join(__dirname, 'Backup Excel Format.xlsx');
-    if (!fs.existsSync(templatePath) && process.env.USER_DATA_PATH) {
-      templatePath = path.join(process.env.USER_DATA_PATH, 'Backup Excel Format.xlsx');
-    }
-
-    // Convert worksheet data to row arrays for template population
-    const convertWSToRows = (ws) => {
-      const rows = [];
-      const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
-      for (let row = range.s.r + 1; row <= range.e.r; row++) {
-        const rowData = [];
-        for (let col = range.s.c; col <= range.e.c; col++) {
-          const cellRef = XLSX.utils.encode_cell({ r: row, c: col });
-          const cell = ws[cellRef];
-          rowData.push(cell ? cell.v : null);
-        }
-        if (rowData.some(v => v !== null && v !== undefined)) {
-          rows.push(rowData);
-        }
-      }
-      return rows;
-    };
-
-    // Prepare data structure for template population
-    const templateData = {
-      "Dashboard": { headers: [], rows: [] },
-      "Inventory Stock": { headers: ["Product Name", "SKU", "Category", "Quantity on Hand", "Reorder Level", "Unit Price", "Total Value", "Last Restocked", "Supplier", "Status"], rows: convertWSToRows(wsInventory) },
-      "Sales & Invoices": { headers: ["Invoice Number", "Date", "Customer", "Phone", "Items Count", "Subtotal", "Discount", "Tax", "Transport", "Total Amount", "Payment Method", "Paid Amount", "Status", "Staff Email", "Notes"], rows: convertWSToRows(wsSales) },
-      "Credit Customers": { headers: ["Customer", "Invoice Number", "Invoice Date", "Invoice Amount", "Amount Paid", "Outstanding Amount", "Due Date", "Payment Status", "Payment History", "Total Outstanding", "Total Overdue"], rows: convertWSToRows(wsCreditCustomers) },
-      "Sales Returns": { headers: ["Return ID", "Original Invoice Number", "Return Date", "Customer", "Return Type", "Product", "Quantity", "Return Amount", "Payment/Refund Amount", "Payment Method", "Replacement Product (for Exchange)", "Replacement Amount", "Difference", "Credit Note Number (for Credit Note)", "Notes"], rows: convertWSToRows(wsSalesReturns) },
-      "Accounting Ledger": { headers: ["Date", "Transaction ID", "Description", "Debit", "Credit", "Balance", "Category"], rows: convertWSToRows(wsTransactions) },
-      "Customers": { headers: ["Customer Name", "Phone Number", "Email", "Address", "Total Purchase", "Outstanding Balance", "Registration Date"], rows: convertWSToRows(wsCustomers) },
-      "Suppliers Directory": { headers: ["Supplier Name", "Contact Person", "Phone Number", "Email", "Address", "Payment Terms", "Status"], rows: convertWSToRows(wsSuppliers) },
-      "Purchase Orders": { headers: ["PO Number", "Supplier", "Date", "Items", "Total Amount", "Status"], rows: convertWSToRows(wsPO) },
-      "Stock Adjustments": { headers: ["Product Name", "Old Quantity", "New Quantity", "Adjustment Type", "Reason Details", "Staff Email", "Timestamp"], rows: convertWSToRows(wsAdjustments) },
-      "Quotations": { headers: ["Quotation Number", "Customer Name", "Total Amount (Rs.)", "Created Date"], rows: convertWSToRows(wsQuotes) },
-      "Employees": { headers: ["Employee ID", "Full Name", "Email", "Phone", "Position", "Department", "Joining Date", "Status", "Salary"], rows: convertWSToRows(wsEmployees) },
-      "User Profiles": { headers: ["User Email", "Full Name", "Role", "Status"], rows: convertWSToRows(wsProfiles) },
-      "System Settings": { headers: ["Setting Name", "Value", "Type", "Last Modified", "Modified By", "Category", "Notes", "Active"], rows: convertWSToRows(wsSettings) },
-      "Branches": { headers: ["Branch Name", "Branch Code", "Address", "Phone Number", "Created Date"], rows: convertWSToRows(wsBranches) }
-    };
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, wsOverview, "Dashboard");
@@ -1318,16 +1320,8 @@ async function runBackup() {
     log(`Master Excel backup report generated with enhanced executive styling: ${filePath}`);
 
     let emailSent = false;
-    if (process.env.GMAIL_USER && process.env.GMAIL_PASS) {
+    if (targetEmail) {
       try {
-        const transporter = nodemailer.createTransport({
-          service: 'gmail',
-          auth: {
-            user: process.env.GMAIL_USER,
-            pass: process.env.GMAIL_PASS
-          }
-        });
-
         const htmlBody = `
         <!DOCTYPE html>
         <html lang="en">
@@ -1348,13 +1342,21 @@ async function runBackup() {
             <div style="padding:28px 24px;">
               <div style="margin-bottom:28px;">
                 <h2 style="margin:0 0 16px 0; color:#1e293b; font-size:12px; font-weight:800; letter-spacing:1px; text-transform:uppercase;">📊 FINANCIAL PERFORMANCE SUMMARY</h2>
-                <div style="background-color:#f8fafc; border:1px solid #f1f5f9; border-radius:14px; padding:18px; margin-bottom:12px;">
-                  <p style="margin:0 0 6px 0; color:#64748b; font-size:11px; font-weight:700;">Total Gross Sales</p>
-                  <p style="margin:0; color:#0f172a; font-size:20px; font-weight:900; letter-spacing:-0.3px;">LKR ${totalSalesRevenue.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
+                <div style="background-color:#f8fafc; border:1px solid #f1f5f9; border-radius:14px; padding:14px 18px; margin-bottom:10px;">
+                  <p style="margin:0 0 4px 0; color:#64748b; font-size:11px; font-weight:700;">Gross Sales</p>
+                  <p style="margin:0; color:#0f172a; font-size:18px; font-weight:900;">LKR ${grossSellingRev.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                 </div>
-                <div style="background-color:#f0fdf4; border:1px solid #bbf7d0; border-radius:14px; padding:18px;">
-                  <p style="margin:0 0 6px 0; color:#166534; font-size:11px; font-weight:700;">Net Sales Profit</p>
-                  <p style="margin:0; color:#15803d; font-size:20px; font-weight:900; letter-spacing:-0.3px;">LKR ${totalSalesProfit.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</p>
+                <div style="background-color:#f0fdf4; border:1px solid #bbf7d0; border-radius:14px; padding:14px 18px; margin-bottom:10px;">
+                  <p style="margin:0 0 4px 0; color:#166534; font-size:11px; font-weight:700;">Net Sales Revenue</p>
+                  <p style="margin:0; color:#15803d; font-size:18px; font-weight:900;">LKR ${netSellingRev.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                </div>
+                <div style="background-color:#fef2f2; border:1px solid #fecaca; border-radius:14px; padding:14px 18px; margin-bottom:10px;">
+                  <p style="margin:0 0 4px 0; color:#991b1b; font-size:11px; font-weight:700;">COGS (Historical Snapshot)</p>
+                  <p style="margin:0; color:#b91c1c; font-size:18px; font-weight:900;">LKR ${netCostVal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                </div>
+                <div style="background-color:#fffbeb; border:1px solid #fef3c7; border-radius:14px; padding:14px 18px;">
+                  <p style="margin:0 0 4px 0; color:#92400e; font-size:11px; font-weight:700;">Gross Profit</p>
+                  <p style="margin:0; color:#b45309; font-size:18px; font-weight:900;">LKR ${(netSellingRev - netCostVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                 </div>
               </div>
               <div style="height:1px; background-color:#f1f5f9; margin-bottom:28px;"></div>
@@ -1365,26 +1367,26 @@ async function runBackup() {
                     <tbody>
                       <tr>
                         <td style="padding:7px 0; color:#475569; font-weight:600;">💵 Cash:</td>
-                        <td style="padding:7px 0; color:#0f172a; font-weight:800; text-align:right;">LKR ${cashAmount.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+                        <td style="padding:7px 0; color:#0f172a; font-weight:800; text-align:right;">LKR ${cashAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       </tr>
                       <tr>
                         <td style="padding:7px 0; color:#475569; font-weight:600;">💳 Card:</td>
-                        <td style="padding:7px 0; color:#0f172a; font-weight:800; text-align:right;">LKR ${cardAmount.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+                        <td style="padding:7px 0; color:#0f172a; font-weight:800; text-align:right;">LKR ${cardAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       </tr>
                       <tr>
                         <td style="padding:7px 0; color:#475569; font-weight:600;">📜 Credit:</td>
-                        <td style="padding:7px 0; color:#0f172a; font-weight:800; text-align:right;">LKR ${creditAmount.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+                        <td style="padding:7px 0; color:#0f172a; font-weight:800; text-align:right;">LKR ${creditAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       </tr>
                       <tr>
                         <td style="padding:7px 0; color:#475569; font-weight:600;">🏦 Bank Transfer:</td>
-                        <td style="padding:7px 0; color:#0f172a; font-weight:800; text-align:right;">LKR ${bankTransferAmount.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+                        <td style="padding:7px 0; color:#0f172a; font-weight:800; text-align:right;">LKR ${bankTransferAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       </tr>
                       <tr>
                         <td colspan="2" style="padding:10px 0 6px 0;"><div style="border-top:1px dashed #cbd5e1; width:100%;"></div></td>
                       </tr>
                       <tr>
                         <td style="padding:4px 0 0 0; color:#0f172a; font-weight:900; font-size:14px;">Total:</td>
-                        <td style="padding:4px 0 0 0; color:#0f172a; font-weight:900; font-size:15px; text-align:right;">LKR ${paymentTotal.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+                        <td style="padding:4px 0 0 0; color:#0f172a; font-weight:900; font-size:15px; text-align:right;">LKR ${paymentTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1401,21 +1403,25 @@ async function runBackup() {
         `;
 
         log(`Sending backup email to ${targetEmail}...`);
-        await transporter.sendMail({
-          from: process.env.GMAIL_USER,
-          to: targetEmail,
+        const result = await sendBackupEmail({
+          toEmail: targetEmail,
           subject: `Hardware System Backup - ${dateStr}`,
-          text: `Automated backup created on ${new Date().toLocaleString()}.\n\nTotal Sales: LKR ${totalSalesRevenue}\nNet Profit: LKR ${totalSalesProfit}\nTotal Payment Methods: LKR ${paymentTotal}\n\nPlease find attached the Excel database backup.`,
+          text: `Automated backup created on ${new Date().toLocaleString()}.\n\nGross Sales: LKR ${grossSellingRev}\nNet Sales Revenue: LKR ${netSellingRev}\nCOGS: LKR ${netCostVal}\nGross Profit: LKR ${netSellingRev - netCostVal}\nTotal Payment Methods: LKR ${paymentTotal}\n\nPlease find attached the Excel database backup.`,
           html: htmlBody,
-          attachments: [{ filename: fileName, path: filePath }]
+          fileName,
+          filePath,
+          settings: rawSettings
         });
-        log(`Email sent successfully to ${targetEmail}`);
-        emailSent = true;
+
+        if (result.success) {
+          log(`Email sent successfully to ${targetEmail}`);
+          emailSent = true;
+        } else {
+          logError(`Failed to send email notification: ${result.error || result.reason}`);
+        }
       } catch (emailErr) {
         logError(`Failed to send email notification: ${emailErr.message}`);
       }
-    } else {
-      log('SMTP credentials not configured. Local Excel backup generated successfully.');
     }
 
     await db.run(
@@ -1436,9 +1442,7 @@ async function runBackup() {
           [`b_${Date.now()}`, 'Error_Backup', 'N/A', 'Failed', backupType, new Date().toISOString()]
         );
       }
-    } catch (dbErr) {
-      logError(`Failed to log error: ${dbErr.message}`);
-    }
+    } catch (dbErr) { }
     releaseLock();
     process.exit(1);
   } finally {

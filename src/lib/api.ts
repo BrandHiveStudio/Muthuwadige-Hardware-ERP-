@@ -163,15 +163,14 @@ export const api = {
       return { data, error: null };
     },
     getUser: async () => {
-      const localUserStr = localStorage.getItem('erp_user');
+      const localUserStr = localStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user');
       if (localUserStr) {
         try {
           const user = JSON.parse(localUserStr);
           return { data: { user }, error: null };
         } catch (_) {}
       }
-      const defaultUser = { id: 'u2', email: 'admin@hardware.com', role: 'admin', name: 'Steven Clark' };
-      return { data: { user: defaultUser }, error: null };
+      return { data: { user: null }, error: null };
     }
   },
 

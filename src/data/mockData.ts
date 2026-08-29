@@ -1033,21 +1033,21 @@ export const mockUsers: User[] = [
   id: 'u1',
   name: 'Admin User',
   email: 'admin@shop.com',
-  role: 'admin',
+  role: 'Admin',
   avatar: 'AU'
 },
 {
   id: 'u2',
   name: 'Carlos Mendez',
   email: 'manager@shop.com',
-  role: 'manager',
+  role: 'Manager',
   avatar: 'CM'
 },
 {
   id: 'u3',
   name: 'Jennifer Lee',
   email: 'cashier@shop.com',
-  role: 'cashier',
+  role: 'Cashier',
   avatar: 'JL'
 }];
 

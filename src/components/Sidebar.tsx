@@ -11,10 +11,11 @@ import {
   DatabaseIcon,
   ShieldIcon,
   ChevronRightIcon,
-  LogOutIcon
+  LogOutIcon,
+  PrinterIcon
 } from 'lucide-react';
 import type { PageName, User } from '../types';
-import { ROLE_PERMISSIONS } from '../utils/permissions';
+import { ROLE_PERMISSIONS, hasUserPermission } from '../utils/permissions';
 import { supabase } from '../lib/supabaseClient';
 
 interface SidebarProps {
@@ -48,7 +49,8 @@ const navGroups: NavGroup[] = [
     items: [
       { id: 'inventory', label: 'Inventory', icon: <PackageIcon className="w-5 h-5" /> },
       { id: 'sales', label: 'Sales & Billing', icon: <ShoppingCartIcon className="w-5 h-5" /> },
-      { id: 'purchasing', label: 'Purchasing', icon: <TruckIcon className="w-5 h-5" /> }
+      { id: 'purchasing', label: 'Purchasing', icon: <TruckIcon className="w-5 h-5" /> },
+      { id: 'barcode-print', label: 'Barcode Printing', icon: <PrinterIcon className="w-5 h-5" /> }
     ]
   },
   {
@@ -81,11 +83,13 @@ const navGroups: NavGroup[] = [
   }
 ];
 
-// Updated Role Colors to match the new Gold theme
 const roleColors: Record<string, string> = {
-  super_admin: 'bg-[#DAA520]/20 text-[#DAA520]', // Gold
-  admin: 'bg-blue-500/20 text-blue-300',
-  retail_user: 'bg-emerald-500/20 text-emerald-300'
+  Admin: 'bg-purple-500/20 text-purple-300',
+  Manager: 'bg-blue-500/20 text-blue-300',
+  Cashier: 'bg-emerald-500/20 text-emerald-300',
+  admin: 'bg-purple-500/20 text-purple-300',
+  manager: 'bg-blue-500/20 text-blue-300',
+  cashier: 'bg-emerald-500/20 text-emerald-300'
 };
 
 export function Sidebar({
@@ -119,13 +123,11 @@ export function Sidebar({
     };
   }, []);
 
-  // ROLE FILTERING LOGIC
-  const allowedPages = ROLE_PERMISSIONS[currentUser.role] || [];
-  
+  // PERMISSION FILTERING LOGIC
   const filteredNavGroups = navGroups
     .map(group => ({
       ...group,
-      items: group.items.filter(item => allowedPages.includes(item.id))
+      items: group.items.filter(item => hasUserPermission(currentUser, item.id))
     }))
     .filter(group => group.items.length > 0);
 

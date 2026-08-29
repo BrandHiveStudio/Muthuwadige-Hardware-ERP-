@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { SearchIcon, BellIcon, MenuIcon } from 'lucide-react';
+import { SearchIcon, BellIcon, MenuIcon, RotateCw } from 'lucide-react';
 import type { User, PageName } from '../types';
 
 interface HeaderProps {
@@ -9,15 +9,18 @@ interface HeaderProps {
   // NEW PROPS ADDED HERE:
   onSearch?: (query: string) => void;
   onNotificationClick?: () => void;
+  onRefresh?: () => void;
   unreadNotifications?: number; 
 }
 
-const pageTitles: Record<
-  PageName,
-  {
-    title: string;
-    breadcrumb: string;
-  }
+const pageTitles: Partial<
+  Record<
+    PageName,
+    {
+      title: string;
+      breadcrumb: string;
+    }
+  >
 > = {
   dashboard: { title: 'Dashboard', breadcrumb: 'Home / Dashboard' },
   inventory: { title: 'Inventory Management', breadcrumb: 'Operations / Inventory' },
@@ -30,7 +33,10 @@ const pageTitles: Record<
   database: { title: 'Database', breadcrumb: 'System / Database' },
   settings: { title: 'Settings', breadcrumb: 'System / Settings' },
   finance: { title: 'Finance Ledger', breadcrumb: 'Finance / Ledger' },
-  audit_logs: { title: 'Audit Logs', breadcrumb: 'System / Audit Logs' }
+  audit_logs: { title: 'Audit Logs', breadcrumb: 'System / Audit Logs' },
+  'barcode-print': { title: 'Barcode Printing', breadcrumb: 'Operations / Barcode Printing' },
+  barcode_print: { title: 'Barcode Printing', breadcrumb: 'Operations / Barcode Printing' },
+  barcodes: { title: 'Barcode Printing', breadcrumb: 'Operations / Barcode Printing' }
 };
 
 const roleColors: Record<string, string> = {
@@ -45,10 +51,43 @@ export function Header({
   onMenuToggle,
   onSearch,
   onNotificationClick,
+  onRefresh,
   unreadNotifications = 0 // Default to 0
 }: HeaderProps) {
   const [searchValue, setSearchValue] = useState('');
-  const pageInfo = pageTitles[currentPage];
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const pageInfo = pageTitles[currentPage] || { title: 'Hardware Store ERP', breadcrumb: 'System' };
+
+  const handleGlobalRefresh = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (isRefreshing) return;
+
+    setIsRefreshing(true);
+
+    // If a page-specific onRefresh callback is provided, invoke it
+    if (onRefresh) {
+      try {
+        await Promise.resolve(onRefresh());
+      } catch (err) {
+        console.error('Page refresh error:', err);
+      }
+    }
+
+    // Broadcast global synchronization events across all listening modules
+    window.dispatchEvent(new CustomEvent('refresh-all-data'));
+    window.dispatchEvent(new CustomEvent('refresh-dashboard'));
+    window.dispatchEvent(new CustomEvent('refresh-sales'));
+    window.dispatchEvent(new CustomEvent('refresh-inventory'));
+    window.dispatchEvent(new CustomEvent('refresh-reports'));
+    window.dispatchEvent(new CustomEvent('refresh-customers'));
+    window.dispatchEvent(new CustomEvent('refresh-suppliers'));
+    window.dispatchEvent(new CustomEvent('settings-updated'));
+
+    setTimeout(() => {
+      setIsRefreshing(false);
+    }, 750);
+  };
 
   // Handle search input changes
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -78,6 +117,19 @@ export function Header({
         </h1>
         <p className="text-xs text-slate-400 mt-0.5 hidden sm:block">{pageInfo.breadcrumb}</p>
       </div>
+
+      {/* Refresh Page Button */}
+      <button
+        type="button"
+        onClick={handleGlobalRefresh}
+        disabled={isRefreshing}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 hover:text-amber-600 hover:border-amber-300 transition-colors text-xs font-semibold disabled:opacity-50 shadow-sm"
+        title="Refresh Data"
+        aria-label="Refresh Data"
+      >
+        <RotateCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-amber-600' : ''}`} />
+        <span>{isRefreshing ? 'Syncing...' : 'Refresh'}</span>
+      </button>
 
 
 

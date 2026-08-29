@@ -74,6 +74,7 @@ async function seedDatabase(dbPath) {
       items TEXT NOT NULL,
       subtotal REAL NOT NULL,
       tax REAL DEFAULT 0,
+      tax_rate REAL DEFAULT 0,
       discount REAL DEFAULT 0,
       total_amount REAL NOT NULL,
       payment_received REAL DEFAULT 0,
@@ -154,6 +155,20 @@ async function seedDatabase(dbPath) {
       customer_name TEXT,
       items TEXT,
       reference_invoice TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS bill_holds (
+      id TEXT PRIMARY KEY,
+      hold_name TEXT,
+      customer_id TEXT,
+      customer_name TEXT,
+      items TEXT,
+      subtotal REAL,
+      discount REAL,
+      tax REAL DEFAULT 0,
+      total_amount REAL,
+      transportation_fee REAL DEFAULT 0,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 

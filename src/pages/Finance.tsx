@@ -15,6 +15,7 @@ import { supabase } from '../lib/supabaseClient';
 import { useCurrency } from '../context/CurrencyContext';
 import { jsPDF } from 'jspdf';
 import XLSX from 'xlsx-js-style';
+import { calculateNetSalesRevenue } from '../utils/accounting';
 
 interface Transaction {
   id: string;
@@ -80,6 +81,13 @@ export function Finance() {
 
   useEffect(() => {
     fetchData();
+    const handleRefresh = () => fetchData();
+    window.addEventListener('refresh-all-data', handleRefresh);
+    window.addEventListener('refresh-finance', handleRefresh);
+    return () => {
+      window.removeEventListener('refresh-all-data', handleRefresh);
+      window.removeEventListener('refresh-finance', handleRefresh);
+    };
   }, []);
 
   const convert = (val: number) => val;
@@ -121,7 +129,7 @@ export function Finance() {
 
   const totalIncome = filtered.filter(t => t.type === 'income').reduce((sum, t) => sum + (t.amount || 0), 0);
   const totalSalesReturns = filtered.filter(t => isSalesReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
-  const netSalesIncome = totalIncome - totalSalesReturns;
+  const netSalesIncome = calculateNetSalesRevenue(totalIncome, 0, totalSalesReturns, 0);
   const totalExpense = filtered.filter(t => t.type === 'expense' && !isSalesReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
   const cashSalesReturns = filtered.filter(t => isSalesReturnTrans(t) && !isCreditAdjustmentTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
   const cashBalance = totalIncome - cashSalesReturns - totalExpense;

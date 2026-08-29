@@ -83,6 +83,13 @@ export function Purchasing() {
   useEffect(() => {
     setSelectedPoIds([]);
     fetchData();
+    const handleRefresh = () => fetchData();
+    window.addEventListener('refresh-all-data', handleRefresh);
+    window.addEventListener('refresh-purchasing', handleRefresh);
+    return () => {
+      window.removeEventListener('refresh-all-data', handleRefresh);
+      window.removeEventListener('refresh-purchasing', handleRefresh);
+    };
   }, [tab]);
 
   // --- PDF PURCHASE ORDER GENERATOR ---

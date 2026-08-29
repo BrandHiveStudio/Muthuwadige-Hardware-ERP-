@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import {
   SearchIcon,
@@ -92,19 +92,27 @@ export function Suppliers() {
 
   useEffect(() => {
     fetchData();
+    const handleRefresh = () => fetchData();
+    window.addEventListener('refresh-all-data', handleRefresh);
+    window.addEventListener('refresh-suppliers', handleRefresh);
+    return () => {
+      window.removeEventListener('refresh-all-data', handleRefresh);
+      window.removeEventListener('refresh-suppliers', handleRefresh);
+    };
   }, []);
 
   const convert = (val: number) => val;
 
-  const filtered = suppliers.filter(
-    (s) => {
-      const matchesSearch =
-        s.name.toLowerCase().includes(search.toLowerCase()) ||
-        (s.nic && s.nic.toLowerCase().includes(search.toLowerCase())) ||
-        s.phone.includes(search);
-      return matchesSearch;
-    }
-  );
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return suppliers;
+    return suppliers.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        (s.nic && s.nic.toLowerCase().includes(q)) ||
+        s.phone.includes(q)
+    );
+  }, [suppliers, search]);
 
   const activeSuppliersCount = suppliers.length;
 
@@ -212,101 +220,80 @@ export function Suppliers() {
 
         setIsLoading(true);
 
-        // Fetch existing suppliers to prevent duplicates
-        const { data: existingData } = await supabase.from('suppliers').select('*');
-        const existingSuppliers: Supplier[] = existingData ? existingData.map((s: any) => ({
-          id: s.id,
-          name: (s.name || '').toString().trim(),
-          email: (s.email || '').toString().trim(),
-          phone: (s.phone || '').toString().trim(),
-          address: (s.address || '').toString().trim(),
-          creditTerms: s.creditTerms || s.credit_terms || 'Net 30',
-          payableBalance: s.payableBalance !== undefined ? s.payableBalance : s.payable_balance || 0,
-          nic: (s.nic || '').toString().trim(),
-          createdAt: s.createdAt || s.created_at || ''
-        })) : [];
-
-        const existingNames = new Set(existingSuppliers.map(s => s.name.toLowerCase()));
-        const existingPhones = new Set(existingSuppliers.map(s => s.phone).filter(p => p.length > 0));
-        const existingNics = new Set(existingSuppliers.map(s => (s.nic || '').toLowerCase()).filter(n => n.length > 0));
-
         let imported = 0;
-        let skipped = 0;
         let failed = 0;
 
+        const cleanKey = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
         const getValueByKeys = (rowObj: any, possibleKeys: string[]) => {
+          if (!rowObj || typeof rowObj !== 'object') return '';
           const keys = Object.keys(rowObj);
           for (const pKey of possibleKeys) {
-            const targetClean = pKey.toLowerCase().replace(/[\s_.-]/g, '');
-            const matchedKey = keys.find(k => k.toLowerCase().replace(/[\s_.-]/g, '') === targetClean);
+            const targetClean = cleanKey(pKey);
+            const matchedKey = keys.find(k => cleanKey(k) === targetClean);
             if (matchedKey && rowObj[matchedKey] !== undefined && rowObj[matchedKey] !== null) {
-              return rowObj[matchedKey];
+              const val = String(rowObj[matchedKey]).trim();
+              if (val !== '' && val !== 'null' && val !== 'undefined' && val !== '—' && val !== '-') {
+                return val;
+              }
             }
           }
           return '';
         };
 
-        for (const row of rawRows) {
-          const rawName = getValueByKeys(row, ['supplier', 'suppliername', 'supplier name', 'name', 'company', 'vendor']);
-          const name = rawName !== undefined && rawName !== null ? String(rawName).trim() : '';
+        for (let idx = 0; idx < rawRows.length; idx++) {
+          const row = rawRows[idx];
 
-          const rawPhone = getValueByKeys(row, ['phonenumber', 'phone number', 'phone', 'supplierphone', 'contact', 'mobile', 'tel', 'telephone']);
-          let phone = rawPhone !== undefined && rawPhone !== null ? String(rawPhone).trim() : '';
+          let name = getValueByKeys(row, [
+            'supplier name', 'supplier_name', 'supplier', 'company', 'name', 'vendor',
+            'vendor_name', 'vendor name', 'suppliername'
+          ]);
+          if (!name) {
+            name = `Supplier #${idx + 1}`;
+          }
+
+          let phone = getValueByKeys(row, [
+            'phone', 'phone number', 'phone_number', 'contact', 'contact_no', 'mobile',
+            'tel', 'telephone', 'supplierphone', 'phonenumber'
+          ]);
           if (/^\d{9}$/.test(phone)) {
             phone = '0' + phone;
           }
 
-          const rawNic = getValueByKeys(row, ['nic', 'nicnumber', 'nic number', 'nationalid', 'idnumber', 'nicno']);
-          const nic = rawNic !== undefined && rawNic !== null ? String(rawNic).trim() : '';
-
-          const rawAddress = getValueByKeys(row, ['address', 'supplieraddress', 'location']);
-          const address = rawAddress !== undefined && rawAddress !== null ? String(rawAddress).trim() : '';
-
-          // Validate row: Supplier name must be at least 2 characters
-          if (!name || name.length < 2) {
-            skipped++;
-            continue;
-          }
-
-          const nameLower = name.toLowerCase();
-          const phoneLower = phone;
-          const nicLower = nic.toLowerCase();
-
-          // Deduplication check
-          const isDuplicate = 
-            existingNames.has(nameLower) ||
-            (phoneLower !== '' && existingPhones.has(phoneLower)) ||
-            (nicLower !== '' && existingNics.has(nicLower));
-
-          if (isDuplicate) {
-            skipped++;
-            continue;
-          }
+          const email = getValueByKeys(row, ['email', 'email_address', 'mail', 'supplieremail', 'supplier_email']);
+          const address = getValueByKeys(row, ['address', 'supplier_address', 'supplieraddress', 'location', 'city', 'street']);
+          const nic = getValueByKeys(row, ['nic', 'brn', 'reg no', 'reg_no', 'registration', 'registration_no', 'nic_number', 'nicnumber', 'nationalid']);
+          const creditTerms = getValueByKeys(row, ['credit terms', 'credit_terms', 'terms', 'payment terms', 'payment_terms']) || 'Net 30';
+          
+          const rawPayable = getValueByKeys(row, ['payable balance', 'payable_balance', 'balance', 'owed', 'amount_owed']);
+          const payableBalance = parseFloat(rawPayable) || 0;
 
           const dbPayload = {
             name,
-            email: '',
+            email,
             phone,
             address,
-            credit_terms: 'Net 30',
-            payable_balance: 0,
+            credit_terms: creditTerms,
+            payable_balance: payableBalance,
             nic
           };
 
           const { error } = await supabase.from('suppliers').insert([dbPayload]);
           if (error) {
-            failed++;
+            const { error: updateError } = await supabase.from('suppliers').update(dbPayload).eq('name', name);
+            if (updateError) {
+              failed++;
+            } else {
+              imported++;
+            }
           } else {
             imported++;
-            existingNames.add(nameLower);
-            if (phoneLower) existingPhones.add(phoneLower);
-            if (nicLower) existingNics.add(nicLower);
           }
         }
 
         setToast({ 
-          message: `Import complete: ${imported} imported, ${skipped} skipped (duplicates/invalid), ${failed} failed.`, 
-          type: imported > 0 ? 'success' : (skipped > 0 || failed > 0 ? 'error' : 'success') 
+          message: `Successfully imported/updated ${imported} suppliers! (Failed: ${failed})`, 
+          type: imported > 0 ? 'success' : 'error' 
         });
 
         await fetchData();
@@ -314,13 +301,12 @@ export function Suppliers() {
         window.dispatchEvent(new CustomEvent('refresh-inventory'));
         window.dispatchEvent(new CustomEvent('refresh-dashboard'));
       } catch (err: any) {
-        setToast({ message: "Import failed: " + err.message, type: 'error' });
+        setToast({ message: "Excel import error: " + err.message, type: 'error' });
       } finally {
         setIsLoading(false);
         if (e.target) e.target.value = '';
       }
     };
-
     reader.readAsArrayBuffer(file);
   };
 

@@ -2,21 +2,16 @@ import type { UserRole, PageName } from '../types';
 import { API_URL, fetchWithTimeout } from '../lib/api';
 
 export const defaultPermissions: Record<UserRole, PageName[]> = {
-  super_admin: [
-    'dashboard', 'inventory', 'sales', 'purchasing',
+  Admin: [
+    'dashboard', 'inventory', 'sales', 'purchasing', 'barcode-print', 'barcode_print', 'barcodes',
     'customers', 'suppliers', 'reports', 'users', 'database', 'settings', 'finance', 'audit_logs'
   ],
-  admin: [
-    'dashboard', 'inventory', 'sales', 'purchasing', 'customers', 'suppliers', 'reports', 'settings', 'finance'
+  Manager: [
+    'dashboard', 'inventory', 'sales', 'purchasing', 'barcode-print', 'barcode_print', 'barcodes',
+    'customers', 'suppliers', 'reports', 'finance'
   ],
-  manager: [
-    'dashboard', 'inventory', 'sales', 'purchasing', 'customers', 'suppliers', 'reports', 'finance'
-  ],
-  cashier: [
-    'dashboard', 'sales', 'customers'
-  ],
-  retail_user: [
-    'dashboard', 'sales', 'customers'
+  Cashier: [
+    'dashboard', 'sales', 'inventory', 'barcode-print', 'barcode_print', 'barcodes', 'customers'
   ]
 };
 
@@ -45,13 +40,13 @@ export const savePermissions = (perms: Record<UserRole, PageName[]>) => {
 };
 
 // Use Proxy so ROLE_PERMISSIONS can be imported and accessed as an object dynamically
-export const ROLE_PERMISSIONS = new Proxy({} as Record<UserRole, PageName[]>, {
+export const ROLE_PERMISSIONS = new Proxy({} as Record<string, PageName[]>, {
   get(target, prop: string) {
-    const perms = getPermissions();
-    const role = prop as UserRole;
-    if (role === 'retail_user') {
-      return perms['cashier'] || perms['retail_user'] || defaultPermissions.retail_user;
-    }
-    return perms[role] || defaultPermissions[role] || [];
+    const perms = getPermissions() as Record<string, PageName[]>;
+    const normalizedProp = prop ? (prop.charAt(0).toUpperCase() + prop.slice(1).toLowerCase()) : 'Cashier';
+    
+    return perms[normalizedProp] || perms[prop] || (defaultPermissions as Record<string, PageName[]>)[normalizedProp] || (defaultPermissions as Record<string, PageName[]>)[prop] || defaultPermissions.Cashier || [];
   }
 });
+
+export { hasUserPermission } from './auth';

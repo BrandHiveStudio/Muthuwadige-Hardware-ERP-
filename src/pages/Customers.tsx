@@ -18,7 +18,8 @@ import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabaseClient';
 import { useCurrency } from '../context/CurrencyContext'; // Global currency sync
 import type { Customer, SaleOrder } from '../types';
-import { calculateSaleAccounting, isCreditSaleRecord } from '../utils/sales/accounting';
+import { calculateSaleAccounting, isCreditSaleRecord } from '../utils/accounting';
+import { openExternalUrl, formatWhatsAppUrl } from '../utils/openExternalUrl';
 
 const emptyCustomer: Omit<Customer, 'id'> = {
   name: '',
@@ -49,103 +50,118 @@ export function Customers() {
         const ws = wb.Sheets[wsname];
         const rawRows = XLSX.utils.sheet_to_json(ws) as any[];
 
-        if (rawRows.length === 0) {
+        if (!rawRows || rawRows.length === 0) {
           setToast({ message: "The Excel file contains no records.", type: 'error' });
-          return;
-        }
-
-        // Strict sheet validation to prevent wrong imports
-        const firstRow = rawRows[0];
-        const keys = Object.keys(firstRow || {});
-        const isWrongSheet = keys.some(key => {
-          const lower = key.toLowerCase();
-          return lower.includes('sku') || 
-                 lower.includes('product') || 
-                 lower.includes('cost_price') || 
-                 lower.includes('costprice') || 
-                 lower.includes('barcode') || 
-                 lower.includes('invoice') || 
-                 lower.includes('po_number') || 
-                 lower.includes('salary') ||
-                 lower.includes('staff id');
-        });
-
-        if (isWrongSheet) {
-          setToast({ 
-            message: "Wrong Excel Sheet detected: This spreadsheet contains Product, Staff, or Invoice data. Please upload a valid Customer Loyalty spreadsheet.", 
-            type: 'error' 
-          });
           return;
         }
 
         setIsLoading(true);
         const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-          setToast({ message: "Session expired.", type: 'error' });
-          setIsLoading(false);
-          return;
-        }
 
         let imported = 0;
         let errors = 0;
 
-        // Helper to grab values by case-insensitive and punctuation-agnostic key names
+        const cleanKey = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
         const getValueByKeys = (rowObj: any, possibleKeys: string[]) => {
+          if (!rowObj || typeof rowObj !== 'object') return '';
           const keys = Object.keys(rowObj);
-          for (const key of possibleKeys) {
-            const matchedKey = keys.find(
-              k => k.toLowerCase().replace(/[\s_.-]/g, '') === key.toLowerCase().replace(/[\s_.-]/g, '')
-            );
+          for (const pKey of possibleKeys) {
+            const targetClean = cleanKey(pKey);
+            const matchedKey = keys.find(k => cleanKey(k) === targetClean);
             if (matchedKey && rowObj[matchedKey] !== undefined && rowObj[matchedKey] !== null) {
-              return rowObj[matchedKey];
+              const val = String(rowObj[matchedKey]).trim();
+              if (val !== '' && val !== 'null' && val !== 'undefined' && val !== '—' && val !== '-') {
+                return val;
+              }
             }
           }
           return '';
         };
 
-        for (const row of rawRows) {
-          const name = getValueByKeys(row, ['name', 'customername', 'fullname', 'username', 'customer', 'contactname']).toString().trim();
-          const phone = getValueByKeys(row, ['phone', 'phonenumber', 'contactnumber', 'contact', 'mobile', 'mobilenumber']).toString().trim();
-          const address = getValueByKeys(row, ['address', 'customeraddress', 'homeaddress', 'location', 'residence', 'addressline1']).toString().trim();
-          const nic = getValueByKeys(row, ['nic', 'nicnumber', 'nicno', 'idnumber', 'identitycard', 'nationalid']).toString().trim();
+        for (let idx = 0; idx < rawRows.length; idx++) {
+          const row = rawRows[idx];
           
+          let name = getValueByKeys(row, [
+            'name', 'customer name', 'customer_name', 'customer', 'client', 'company',
+            'contactname', 'contact_name', 'fullname', 'username'
+          ]);
+          if (!name) {
+            name = `Customer #${idx + 1}`;
+          }
+
+          let phone = getValueByKeys(row, [
+            'phone', 'phone number', 'phone_number', 'mobile', 'mobile_no', 'contact',
+            'contact no', 'contact_no', 'telephone', 'tel', 'phonenumber', 'contactnumber', 'mobilenumber'
+          ]);
+          if (/^\d{9}$/.test(phone)) {
+            phone = '0' + phone;
+          }
+
+          const nic = getValueByKeys(row, [
+            'nic', 'nic number', 'nic_number', 'national id', 'national_id', 'id', 'nic_no',
+            'nicno', 'idnumber', 'identitycard'
+          ]);
+
+          const address = getValueByKeys(row, [
+            'address', 'customer_address', 'customeraddress', 'street', 'location', 'city',
+            'homeaddress', 'residence', 'addressline1'
+          ]);
+
+          const rawCreditLimit = getValueByKeys(row, ['credit limit', 'credit_limit', 'limit', 'max_credit', 'creditlimit']);
+          const creditLimit = parseFloat(rawCreditLimit) || 0;
+
+          const rawCreditPeriod = getValueByKeys(row, ['credit period', 'credit_period', 'payment terms', 'payment_terms', 'terms', 'days', 'period', 'creditperiod']);
+          const creditPeriod = parseInt(rawCreditPeriod) || 30;
+
+          const rawType = getValueByKeys(row, ['type', 'customer type', 'customer_type', 'customertype']);
+          const type = rawType || 'registered';
+
           const rawLoyalty = getValueByKeys(row, ['loyaltypoints', 'points', 'loyalty']);
           const loyaltyPoints = parseInt(rawLoyalty) || 0;
-          
+
           const rawPurchases = getValueByKeys(row, ['totalpurchases', 'spend', 'totalspend', 'purchases']);
           const totalPurchases = parseFloat(rawPurchases) || 0;
-          
+
           const rawDate = getValueByKeys(row, ['joindate', 'registereddate', 'date', 'createdat']);
           const joinDate = rawDate ? rawDate.toString().trim() : new Date().toISOString().split('T')[0];
 
-          if (!name) {
-            errors++;
-            continue;
-          }
-
-          const dbPayload = {
+          const dbPayload: any = {
             name,
             phone,
             address,
             nic,
+            credit_limit: creditLimit,
+            credit_period: creditPeriod,
+            type,
             loyalty_points: loyaltyPoints,
             total_purchases: totalPurchases,
-            join_date: joinDate,
-            user_id: user.id
+            join_date: joinDate
           };
+          if (user?.id) {
+            dbPayload.user_id = user.id;
+          }
 
           const { error } = await supabase.from('customers').insert([dbPayload]);
           if (error) {
-            // If email or phone already exists, try updating it by name
             const { error: updateError } = await supabase.from('customers').update(dbPayload).eq('name', name);
-            if (updateError) errors++;
-            else imported++;
+            if (updateError) {
+              if (phone) {
+                const { error: phoneErr } = await supabase.from('customers').update(dbPayload).eq('phone', phone);
+                if (phoneErr) errors++;
+                else imported++;
+              } else {
+                errors++;
+              }
+            } else {
+              imported++;
+            }
           } else {
             imported++;
           }
         }
 
-        setToast({ message: `Successfully imported ${imported} customer profiles!`, type: 'success' });
+        setToast({ message: `Successfully imported ${imported} customer profiles! (Skipped: ${errors})`, type: imported > 0 ? 'success' : 'error' });
         fetchData();
       } catch (err: any) {
         setToast({ message: "Excel parse failed: " + err.message, type: 'error' });
@@ -184,6 +200,7 @@ export function Customers() {
   const [settleCustomer, setSettleCustomer] = useState<any | null>(null);
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<string[]>([]);
   const [settleAmount, setSettleAmount] = useState('');
+  const [settlementPaymentMethod, setSettlementPaymentMethod] = useState<'Cash' | 'Card' | 'Bank'>('Cash');
   const [isSettling, setIsSettling] = useState(false);
   const [paymentReceipt, setPaymentReceipt] = useState<{
     customerName: string;
@@ -300,19 +317,11 @@ export function Customers() {
   });
 
   const getWhatsAppLink = (customer: any) => {
-    let cleanPhone = customer.phone ? customer.phone.replace(/[\s_.-]/g, '') : '';
-    if (cleanPhone.startsWith('0')) {
-      cleanPhone = '94' + cleanPhone.substring(1);
-    } else if (cleanPhone.startsWith('7')) {
-      cleanPhone = '94' + cleanPhone;
-    } else if (cleanPhone.startsWith('+')) {
-      cleanPhone = cleanPhone.substring(1);
-    }
     const message = t(
       `Dear ${customer.name}, this is a friendly reminder that you have an outstanding balance of Rs. ${convert(customer.totalOutstanding).toLocaleString()} at Muthuwadige Hardware. Please settle it at your earliest convenience. Thank you!`,
       `හිතවත් ${customer.name}, මුතුවාඩිගේ හාඩ්වෙයාර් හි ඔබගේ නොගෙවූ හිඟ මුදල රු. ${convert(customer.totalOutstanding).toLocaleString()} ක් පියවන මෙන් කාරුණිකව මතක් කර සිටිමු. ස්තූතියි!`
     );
-    return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
+    return formatWhatsAppUrl(customer.phone, message);
   };
 
   const handleLumpSumSettle = async () => {
@@ -382,7 +391,7 @@ export function Customers() {
           customer_name: settleCustomer.name,
           amount_paid: paidThisTime,
           remaining_balance: 0,
-          payment_method: 'Cash',
+          payment_method: settlementPaymentMethod,
           payment_date: new Date().toISOString(),
           recorded_by: 'system'
         }]);
@@ -423,7 +432,7 @@ export function Customers() {
             customer_name: settleCustomer.name,
             amount_paid: paidThisTime,
             remaining_balance: 0,
-            payment_method: 'Cash',
+            payment_method: settlementPaymentMethod,
             payment_date: new Date().toISOString(),
             recorded_by: 'system'
           }]);
@@ -456,7 +465,7 @@ export function Customers() {
             customer_name: settleCustomer.name,
             amount_paid: paidThisTime,
             remaining_balance: remainingBal,
-            payment_method: 'Cash',
+            payment_method: settlementPaymentMethod,
             payment_date: new Date().toISOString(),
             recorded_by: 'system'
           }]);
@@ -816,7 +825,7 @@ export function Customers() {
           customer_name: settleCustomer.name,
           amount_paid: paidThisTime,
           remaining_balance: 0,
-          payment_method: 'Cash',
+          payment_method: settlementPaymentMethod,
           payment_date: new Date().toISOString(),
           recorded_by: 'system'
         }]);
@@ -900,30 +909,46 @@ export function Customers() {
 
   useEffect(() => {
     fetchData();
+    const handleRefresh = () => {
+      fetchData();
+      fetchSettingsOnly();
+    };
     window.addEventListener('settings-updated', fetchSettingsOnly);
-    return () => window.removeEventListener('settings-updated', fetchSettingsOnly);
+    window.addEventListener('refresh-all-data', handleRefresh);
+    window.addEventListener('refresh-customers', handleRefresh);
+    return () => {
+      window.removeEventListener('settings-updated', fetchSettingsOnly);
+      window.removeEventListener('refresh-all-data', handleRefresh);
+      window.removeEventListener('refresh-customers', handleRefresh);
+    };
   }, []);
 
-  const normalCustomers = customers.filter((c) => {
-    const balanceInfo = customerBalances.find(cb => cb.id === c.id);
-    return balanceInfo ? balanceInfo.totalOutstanding === 0 : true;
-  });
+  const normalCustomers = useMemo(() => {
+    return customers.filter((c) => {
+      const balanceInfo = customerBalances.find(cb => cb.id === c.id);
+      return balanceInfo ? balanceInfo.totalOutstanding === 0 : true;
+    });
+  }, [customers, customerBalances]);
 
-  const filtered = normalCustomers.filter(
-    (c) =>
-      c.name.toLowerCase().includes(search.toLowerCase()) ||
-      c.nic?.toLowerCase().includes(search.toLowerCase()) ||
-      c.phone?.includes(search)
-  );
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return normalCustomers;
+    return normalCustomers.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.nic?.toLowerCase().includes(q) ||
+        c.phone?.includes(q)
+    );
+  }, [normalCustomers, search]);
 
-  const totalRevenue = customers.reduce((sum, c) => sum + (c.totalPurchases || 0), 0);
-  const avgPurchase = customers.length > 0 ? totalRevenue / customers.length : 0;
-  const loyaltyMemberCount = customers.filter((customer) => customer.loyaltyPoints > 0).length;
-  const topLoyaltyCustomer = customers.reduce((max, c) =>
+  const totalRevenue = useMemo(() => customers.reduce((sum, c) => sum + (c.totalPurchases || 0), 0), [customers]);
+  const avgPurchase = useMemo(() => (customers.length > 0 ? totalRevenue / customers.length : 0), [customers, totalRevenue]);
+  const loyaltyMemberCount = useMemo(() => customers.filter((customer) => customer.loyaltyPoints > 0).length, [customers]);
+  const topLoyaltyCustomer = useMemo(() => customers.reduce((max, c) =>
     (c.loyaltyPoints || 0) > (max?.loyaltyPoints || 0) ? c : max
-  , null as Customer | null);
+  , null as Customer | null), [customers]);
 
-  const relatedCustomerCount = (() => {
+  const relatedCustomerCount = useMemo(() => {
     const relatedIds = new Set<string>();
     customers.forEach((customer, index) => {
       const hasMatch = customers.some((other, otherIndex) =>
@@ -938,7 +963,7 @@ export function Customers() {
       }
     });
     return relatedIds.size;
-  })();
+  }, [customers]);
 
   const openAdd = () => {
     setEditingCustomer(null);
@@ -1572,7 +1597,7 @@ export function Customers() {
                                   <span className="text-xs font-black uppercase tracking-wider">{t("Settle Credit", "ණය පියවන්න")}</span>
                                 </button>
                                 <button
-                                  onClick={() => window.open(getWhatsAppLink(customer), '_blank')}
+                                  onClick={() => openExternalUrl(getWhatsAppLink(customer))}
                                   className="p-2.5 rounded-xl bg-emerald-50 text-emerald-600 hover:bg-emerald-500 hover:text-white transition-all border border-emerald-100 shadow-sm"
                                   title={t("Send WhatsApp Reminder", "WhatsApp මතක් කිරීමක් යවන්න")}
                                 >
@@ -1793,6 +1818,29 @@ export function Customers() {
               <div>
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t("Unpaid Invoices", "නොගෙවූ ඉන්වොයිසි ප්‍රමාණය")}</p>
                 <p className="text-lg font-black text-slate-800 mt-1">{settleCustomer.unpaidSales.length} {t("Invoices", "ඉන්වොයිසි")}</p>
+              </div>
+            </div>
+
+            {/* Payment Method Selector */}
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5">
+                {t("Settlement Payment Method", "පියවීමේ ගෙවීම් ක්‍රමය")}
+              </label>
+              <div className="flex gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl mb-4">
+                {(['Cash', 'Card', 'Bank'] as const).map((method) => (
+                  <button
+                    key={method}
+                    type="button"
+                    onClick={() => setSettlementPaymentMethod(method)}
+                    className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                      settlementPaymentMethod === method
+                        ? 'bg-amber-500 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900 dark:text-slate-300'
+                    }`}
+                  >
+                    {method}
+                  </button>
+                ))}
               </div>
             </div>
 

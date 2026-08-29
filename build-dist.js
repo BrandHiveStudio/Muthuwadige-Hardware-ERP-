@@ -22,6 +22,19 @@ try {
     fs.mkdirSync(localOutputDir, { recursive: true });
   }
 
+  // Clean any bundled database/env files from unpacked output resources
+  const winUnpackedResources = path.join(tempOutputDir, 'win-unpacked', 'resources', 'app');
+  if (fs.existsSync(winUnpackedResources)) {
+    const dbFilesToClean = ['hardware.db', 'hardware.db-wal', 'hardware.db-shm', '.env'];
+    for (const f of dbFilesToClean) {
+      const targetPath = path.join(winUnpackedResources, f);
+      if (fs.existsSync(targetPath)) {
+        console.log(`🧹 Removing bundled file from package resources: ${f}`);
+        fs.rmSync(targetPath, { force: true });
+      }
+    }
+  }
+
   // Copy installer files and win-unpacked folder
   const files = fs.readdirSync(tempOutputDir);
   for (const file of files) {

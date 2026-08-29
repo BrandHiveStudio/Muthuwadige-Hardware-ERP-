@@ -53,3 +53,17 @@ input[type='number']::-webkit-inner-spin-button {
 input[type='number'] {
   -moz-appearance: textfield;
 }
+
+/* Keep only safe hardware acceleration hooks */
+html, body, #root {
+  height: 100%;
+  overflow-x: hidden;
+  text-rendering: optimizeSpeed;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Ensure smooth scrolling without overriding component colors */
+main, .overflow-y-auto, .overflow-auto {
+  -webkit-overflow-scrolling: touch;
+  transform: translateZ(0);
+}

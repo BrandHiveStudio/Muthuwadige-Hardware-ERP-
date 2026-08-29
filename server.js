@@ -7,9 +7,10 @@ import { fileURLToPath } from 'url';
 import cron from 'node-cron';
 import nodemailer from 'nodemailer';
 import XLSX from 'xlsx-js-style';
+import { createMailTransporter, sendResetEmail as mailerSendResetEmail, sendNotificationEmail as mailerSendNotificationEmail, sendBackupEmail as mailerSendBackupEmail } from './src/utils/mailer.js';
 import fs from 'fs';
 import dotenv from 'dotenv';
-import { execSync, spawn } from 'child_process';
+import { exec, execSync, spawn } from 'child_process';
 import os from 'os';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -18,77 +19,58 @@ const __dirname = path.dirname(__filename);
 let DB_FILE = path.join(__dirname, 'hardware.db');
 let backupsDir = path.join(__dirname, 'backups');
 let envPath = path.join(__dirname, '.env');
-let USER_DATA_PATH = '';
+let USER_DATA_PATH = process.env.USER_DATA_PATH || '';
 
-// Dynamically check if running inside Electron to write databases, backups & env configs to Local AppData
+// Dynamically check if running inside Electron / Node-in-Electron to write databases, backups & env configs to Local AppData
+const isNodeInElectron = process.env.ELECTRON_RUN_AS_NODE === '1';
+const isProduction = process.env.NODE_ENV === 'production';
+
+if (!USER_DATA_PATH && (isNodeInElectron || isProduction)) {
+  const appDataRoot = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  USER_DATA_PATH = path.join(appDataRoot, 'Muthuwadige Hardware ERP');
+}
+
+let electronApp = null;
 try {
   const electron = await import('electron');
-  const electronApp = electron.app || (electron.default && electron.default.app);
-  if (electronApp) {
-    if (electronApp.setName) {
-      try { electronApp.setName('Muthuwadige Hardware ERP'); } catch (e) {}
-    }
-    const appDataRoot = electronApp.getPath('appData');
-    USER_DATA_PATH = path.join(appDataRoot, 'Muthuwadige Hardware ERP');
-    if (electronApp.setPath) {
-      try { electronApp.setPath('userData', USER_DATA_PATH); } catch (e) {}
-    }
+  electronApp = electron.app || (electron.default && electron.default.app) || null;
+} catch (e) {
+  // Silent fallback for standalone Node environments
+}
 
-    const isPackaged = electronApp.isPackaged;
-    if (isPackaged) {
-      DB_FILE = path.join(USER_DATA_PATH, 'hardware.db');
-      backupsDir = path.join(USER_DATA_PATH, 'backups');
-      envPath = path.join(USER_DATA_PATH, '.env');
+const isPackagedApp = (electronApp && electronApp.isPackaged) || isNodeInElectron || (isProduction && Boolean(USER_DATA_PATH));
 
-      // Auto-migrate legacy erp-template files to Muthuwadige Hardware ERP if present
-      const legacyPath = path.join(appDataRoot, 'erp-template');
-      if (fs.existsSync(legacyPath)) {
-        if (!fs.existsSync(USER_DATA_PATH)) {
-          fs.mkdirSync(USER_DATA_PATH, { recursive: true });
-        }
-        const legacyDb = path.join(legacyPath, 'hardware.db');
-        if (fs.existsSync(legacyDb) && !fs.existsSync(DB_FILE)) {
-          try {
-            fs.copyFileSync(legacyDb, DB_FILE);
-            console.log('✅ Auto-migrated database from erp-template to Muthuwadige Hardware ERP:', DB_FILE);
-          } catch (mErr) {
-            console.error('Failed to copy legacy db:', mErr);
-          }
-        }
-        const legacyEnv = path.join(legacyPath, '.env');
-        if (fs.existsSync(legacyEnv) && !fs.existsSync(envPath)) {
-          try {
-            fs.copyFileSync(legacyEnv, envPath);
-            console.log('✅ Auto-migrated .env from erp-template to Muthuwadige Hardware ERP:', envPath);
-          } catch (mErr) {
-            console.error('Failed to copy legacy env:', mErr);
-          }
-        }
-      }
+if (isPackagedApp && USER_DATA_PATH) {
+  // Ensure target AppData directory exists before database initialization
+  if (!fs.existsSync(USER_DATA_PATH)) {
+    fs.mkdirSync(USER_DATA_PATH, { recursive: true });
+  }
 
-      console.log('📂 Production Electron database path:', DB_FILE);
+  DB_FILE = path.join(USER_DATA_PATH, 'hardware.db');
+  backupsDir = path.join(USER_DATA_PATH, 'backups');
+  envPath = path.join(USER_DATA_PATH, '.env');
 
-      // Auto-migrate env config: copy .env from bundled code to AppData folder
-      const bundledEnv = path.join(__dirname, '.env');
-      if (!fs.existsSync(envPath)) {
-        try {
-          if (fs.existsSync(bundledEnv)) {
-            fs.copyFileSync(bundledEnv, envPath);
-            console.log('✅ .env file successfully initialized in AppData:', envPath);
-          }
-        } catch (err) {
-          console.error('❌ Failed to copy .env to AppData path:', err);
-        }
-      }
-    } else {
-      // In development mode, write directly to the workspace folder so that changes are saved permanently in the repository
-      DB_FILE = path.join(__dirname, 'hardware.db');
-      backupsDir = path.join(__dirname, 'backups');
-      envPath = path.join(__dirname, '.env');
+  if (!fs.existsSync(backupsDir)) {
+    fs.mkdirSync(backupsDir, { recursive: true });
+  }
+
+  console.log('📂 Production Electron database path:', DB_FILE);
+
+  // Auto-migrate env config: copy .env from bundled code to AppData folder
+  const bundledEnv = path.join(__dirname, '.env');
+  if (!fs.existsSync(envPath) && fs.existsSync(bundledEnv)) {
+    try {
+      fs.copyFileSync(bundledEnv, envPath);
+      console.log('✅ .env file successfully initialized in AppData:', envPath);
+    } catch (err) {
+      console.error('❌ Failed to copy .env to AppData path:', err);
     }
   }
-} catch (e) {
-  // Fallback for standalone Node.js environments
+} else {
+  // In development mode, write directly to the workspace folder so that changes are saved permanently in the repository
+  DB_FILE = path.join(__dirname, 'hardware.db');
+  backupsDir = path.join(__dirname, 'backups');
+  envPath = path.join(__dirname, '.env');
 }
 
 dotenv.config({ path: envPath });
@@ -310,6 +292,7 @@ const DEFAULT_RUNTIME_SETTINGS = {
   tax_rate: 0,
   backup_email: 'sanojhardware@gmail.com',
   backup_enabled: 0,
+  backup_interval_hours: 6,
   next_invoice_number: 'INV001',
   return_passkey: '1234',
   void_passkey: '1234',
@@ -353,6 +336,12 @@ function normalizeRuntimeSettings(payload = {}) {
     '1234'
   ).toString().trim();
 
+  let rawInterval = payload.backup_interval_hours ?? payload.backupIntervalHours ?? payload.backup_interval ?? DEFAULT_RUNTIME_SETTINGS.backup_interval_hours;
+  let intervalHours = Number(rawInterval);
+  if (isNaN(intervalHours) || !Number.isInteger(intervalHours) || intervalHours < 1 || intervalHours > 168) {
+    intervalHours = 6;
+  }
+
   const normalized = {
     ...DEFAULT_RUNTIME_SETTINGS,
     ...payload,
@@ -365,6 +354,7 @@ function normalizeRuntimeSettings(payload = {}) {
     tax_rate: payload.tax_rate !== undefined ? Number(payload.tax_rate) : Number(payload.taxRate ?? DEFAULT_RUNTIME_SETTINGS.tax_rate),
     backup_email: payload.backup_email || payload.backupEmail || '',
     backup_enabled: payload.backup_enabled === true || payload.backup_enabled === 1 || payload.backupEnabled === true ? 1 : 0,
+    backup_interval_hours: intervalHours,
     logo_path: payload.logo_path || payload.logoPath || '',
     printer_settings: safeParseJson(payload.printer_settings || payload.printerSettings),
     branch_settings: safeParseJson(payload.branch_settings || payload.branchSettings),
@@ -382,8 +372,8 @@ async function getRuntimeSettingsSnapshot() {
   if (!settings) {
     const initial = { ...DEFAULT_RUNTIME_SETTINGS, id: 'global' };
     await db.run(
-      'INSERT INTO system_settings (id, shop_name, address, phone, email, currency, tax_rate, backup_email, backup_enabled, logo_path, printer_settings, branch_settings, next_invoice_number, return_passkey, void_passkey, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [initial.id, initial.shop_name, initial.address, initial.phone, initial.email, initial.currency, initial.tax_rate, initial.backup_email, initial.backup_enabled, '', '', '', initial.next_invoice_number, initial.return_passkey, initial.void_passkey, initial.updated_at]
+      'INSERT INTO system_settings (id, shop_name, address, phone, email, currency, tax_rate, backup_email, backup_enabled, backup_interval_hours, logo_path, printer_settings, branch_settings, next_invoice_number, return_passkey, void_passkey, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [initial.id, initial.shop_name, initial.address, initial.phone, initial.email, initial.currency, initial.tax_rate, initial.backup_email, initial.backup_enabled, initial.backup_interval_hours, '', '', '', initial.next_invoice_number, initial.return_passkey, initial.void_passkey, initial.updated_at]
     );
     settings = initial;
   }
@@ -404,6 +394,7 @@ async function setRuntimeSettings(payload = {}) {
       tax_rate, 
       backup_email, 
       backup_enabled, 
+      backup_interval_hours,
       logo_path, 
       printer_settings, 
       branch_settings, 
@@ -411,7 +402,7 @@ async function setRuntimeSettings(payload = {}) {
       return_passkey,
       void_passkey,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       'global',
       updated.shop_name,
@@ -422,6 +413,7 @@ async function setRuntimeSettings(payload = {}) {
       updated.tax_rate,
       updated.backup_email,
       updated.backup_enabled,
+      updated.backup_interval_hours,
       updated.logo_path || '',
       typeof updated.printer_settings === 'object' ? JSON.stringify(updated.printer_settings) : updated.printer_settings || '',
       typeof updated.branch_settings === 'object' ? JSON.stringify(updated.branch_settings) : updated.branch_settings || '',
@@ -587,7 +579,8 @@ async function initializeDatabase() {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       due_date TEXT,
       credit_period_days INTEGER DEFAULT 0,
-      payment_received REAL DEFAULT 0
+      payment_received REAL DEFAULT 0,
+      client_tx_id TEXT UNIQUE
     )
   `);
 
@@ -618,6 +611,7 @@ async function initializeDatabase() {
       tax_rate REAL,
       backup_email TEXT,
       backup_enabled INTEGER DEFAULT 0,
+      backup_interval_hours INTEGER DEFAULT 6,
       logo_path TEXT DEFAULT '',
       printer_settings TEXT DEFAULT '',
       branch_settings TEXT DEFAULT '',
@@ -937,6 +931,9 @@ async function initializeDatabase() {
     await db.exec("ALTER TABLE products ADD COLUMN measure_details TEXT");
   } catch(e) {}
   try {
+    await db.exec("ALTER TABLE products ADD COLUMN barcode TEXT");
+  } catch(e) {}
+  try {
     await db.exec("ALTER TABLE system_settings ADD COLUMN next_invoice_number TEXT DEFAULT 'INV001'");
   } catch(e) {}
   try {
@@ -944,6 +941,12 @@ async function initializeDatabase() {
   } catch(e) {}
   try {
     await db.exec("ALTER TABLE system_settings ADD COLUMN void_passkey TEXT DEFAULT '1234'");
+  } catch(e) {}
+  try {
+    await db.exec("ALTER TABLE system_settings ADD COLUMN backup_interval_hours INTEGER DEFAULT 6");
+  } catch(e) {}
+  try {
+    await db.exec("ALTER TABLE system_settings ADD COLUMN label_printer_settings TEXT");
   } catch(e) {}
   try {
     await db.exec("ALTER TABLE sales ADD COLUMN transportation_fee REAL DEFAULT 0");
@@ -966,6 +969,8 @@ async function initializeDatabase() {
   try { await db.exec("ALTER TABLE sales ADD COLUMN credit_note_code TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE sales ADD COLUMN customer_phone TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE sales ADD COLUMN customer_address TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales ADD COLUMN client_tx_id TEXT"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_client_tx_id ON sales(client_tx_id)"); } catch(e) {}
 
   await db.exec(`
     CREATE TABLE IF NOT EXISTS credit_notes (
@@ -1081,8 +1086,8 @@ async function seedInitialData() {
   if (!hasSettings) {
     const initial = { ...DEFAULT_RUNTIME_SETTINGS, id: 'global' };
     await db.run(
-      'INSERT INTO system_settings (id, shop_name, address, phone, email, currency, tax_rate, backup_email, backup_enabled, logo_path, printer_settings, branch_settings, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [initial.id, initial.shop_name, initial.address, initial.phone, initial.email, initial.currency, initial.tax_rate, initial.backup_email, initial.backup_enabled, '', '', '', initial.updated_at]
+      'INSERT INTO system_settings (id, shop_name, address, phone, email, currency, tax_rate, backup_email, backup_enabled, backup_interval_hours, logo_path, printer_settings, branch_settings, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [initial.id, initial.shop_name, initial.address, initial.phone, initial.email, initial.currency, initial.tax_rate, initial.backup_email, initial.backup_enabled, initial.backup_interval_hours, '', '', '', initial.updated_at]
     );
   }
 
@@ -1092,20 +1097,38 @@ async function seedInitialData() {
     if (permCheck?.count === 0) {
       const defaultPermissions = {
         super_admin: [
-          'dashboard', 'inventory', 'sales', 'purchasing',
-          'customers', 'suppliers', 'reports', 'users', 'database', 'settings', 'finance', 'audit_logs'
+          'dashboard', 'inventory', 'sales', 'purchasing', 'barcode-print', 'barcode_print', 'barcodes',
+          'customers', 'suppliers', 'reports', 'users', 'database', 'settings', 'finance', 'audit_logs',
+          'sales_create', 'sales_today', 'sales_own_history', 'sales_all_history', 'sales_customer_history',
+          'sales_credit_history', 'sales_customer_credit', 'sales_invoice_details', 'sales_payment_status', 'sales_returns',
+          'credit_view_history', 'credit_customer_details', 'credit_create_sale', 'credit_record_payment', 'credit_returns',
+          'credit_edit', 'credit_delete_void'
         ],
         admin: [
-          'dashboard', 'inventory', 'sales', 'purchasing', 'customers', 'suppliers', 'reports', 'settings', 'finance'
+          'dashboard', 'inventory', 'sales', 'purchasing', 'barcode-print', 'barcode_print', 'barcodes', 'customers', 'suppliers', 'reports', 'settings', 'finance',
+          'sales_create', 'sales_today', 'sales_own_history', 'sales_all_history', 'sales_customer_history',
+          'sales_credit_history', 'sales_customer_credit', 'sales_invoice_details', 'sales_payment_status', 'sales_returns',
+          'credit_view_history', 'credit_customer_details', 'credit_create_sale', 'credit_record_payment', 'credit_returns',
+          'credit_edit'
         ],
         manager: [
-          'dashboard', 'inventory', 'sales', 'purchasing', 'customers', 'suppliers', 'reports', 'finance'
+          'dashboard', 'inventory', 'sales', 'purchasing', 'barcode-print', 'barcode_print', 'barcodes', 'customers', 'suppliers', 'reports', 'finance',
+          'sales_create', 'sales_today', 'sales_own_history', 'sales_all_history', 'sales_customer_history',
+          'sales_credit_history', 'sales_customer_credit', 'sales_invoice_details', 'sales_payment_status', 'sales_returns',
+          'credit_view_history', 'credit_customer_details', 'credit_create_sale', 'credit_record_payment', 'credit_returns',
+          'credit_edit'
         ],
         cashier: [
-          'dashboard', 'sales', 'customers'
+          'dashboard', 'sales', 'inventory', 'barcode-print', 'barcode_print', 'barcodes', 'customers',
+          'sales_create', 'sales_today', 'sales_own_history', 'sales_customer_history',
+          'sales_credit_history', 'sales_customer_credit', 'sales_invoice_details', 'sales_payment_status', 'sales_returns',
+          'credit_view_history', 'credit_customer_details', 'credit_create_sale', 'credit_record_payment', 'credit_returns'
         ],
         retail_user: [
-          'dashboard', 'sales', 'customers'
+          'dashboard', 'sales', 'inventory', 'barcode-print', 'barcode_print', 'barcodes', 'customers',
+          'sales_create', 'sales_today', 'sales_own_history', 'sales_customer_history',
+          'sales_credit_history', 'sales_customer_credit', 'sales_invoice_details', 'sales_payment_status', 'sales_returns',
+          'credit_view_history', 'credit_customer_details', 'credit_create_sale', 'credit_record_payment', 'credit_returns'
         ]
       };
       for (const [role, pages] of Object.entries(defaultPermissions)) {
@@ -1115,6 +1138,26 @@ async function seedInitialData() {
         );
       }
       console.log('[Startup] Seeded default permissions table.');
+    } else {
+      // Ensure existing custom_permissions table rows contain barcode-print
+      const existingRows = await db.all('SELECT * FROM custom_permissions');
+      for (const row of existingRows) {
+        try {
+          let pages = JSON.parse(row.pages);
+          if (Array.isArray(pages)) {
+            let updated = false;
+            ['barcode-print', 'barcode_print', 'barcodes'].forEach(k => {
+              if (!pages.includes(k)) {
+                pages.push(k);
+                updated = true;
+              }
+            });
+            if (updated) {
+              await db.run('UPDATE custom_permissions SET pages = ? WHERE role = ?', [JSON.stringify(pages), row.role]);
+            }
+          }
+        } catch (e) {}
+      }
     }
   } catch (err) {
     console.error('[Startup] Failed to seed custom permissions:', err.message);
@@ -1127,79 +1170,14 @@ async function seedInitialData() {
 // 📧 INTEGRATED EXCEL BACKUP SERVICE
 // ----------------------------------------------------
 
-const sendNotificationEmail = async (subject, text) => {
-  try {
-    const settings = await getRuntimeSettingsSnapshot();
-    const targetEmail = settings.backup_email || settings.email || 'sanojhardware@gmail.com';
-    const gmailUser = process.env.GMAIL_USER || 'sanojhardware@gmail.com';
-    const gmailPass = process.env.GMAIL_PASS;
-
-    if (!gmailPass) {
-      console.warn(`[Notification Email Fallback] GMAIL_PASS missing in .env. Would send email to ${targetEmail} with Subject: "${subject}". Text: "${text}"`);
-      return { success: false, reason: 'GMAIL_PASS missing' };
-    }
-
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user: gmailUser, pass: gmailPass }
-    });
-
-    await transporter.sendMail({
-      from: gmailUser,
-      to: targetEmail,
-      subject,
-      text
-    });
-
-    console.log(`[Notification Email] Email sent successfully to ${targetEmail}`);
-    return { success: true };
-  } catch (err) {
-    console.error('[Notification Email] Failed to send email:', err);
-    return { success: false, error: err.message };
-  }
+const sendNotificationEmail = async (subject, text, targetEmail = null) => {
+  const settings = await getRuntimeSettingsSnapshot();
+  return mailerSendNotificationEmail(subject, text, settings, targetEmail);
 };
 
 const sendResetEmail = async (toEmail, code) => {
-  try {
-    const gmailUser = process.env.GMAIL_USER || 'sanojhardware@gmail.com';
-    const gmailPass = process.env.GMAIL_PASS;
-
-    if (!gmailPass) {
-      console.warn(`[Reset Password Fallback] GMAIL_PASS missing in .env. Code for ${toEmail}: ${code}`);
-      return { success: false, reason: 'GMAIL_PASS missing' };
-    }
-
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user: gmailUser, pass: gmailPass }
-    });
-
-    await transporter.sendMail({
-      from: gmailUser,
-      to: toEmail,
-      subject: 'Muthuwadige Hardware - Password Reset Code',
-      html: `
-        <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; max-width: 500px; margin: 0 auto; border: 1px solid #f3f4f6; border-radius: 16px; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
-          <div style="text-align: center; margin-bottom: 20px;">
-            <h2 style="color: #DAA520; margin: 0; font-size: 22px; font-weight: 800;">Password Reset Request</h2>
-            <p style="color: #6b7280; font-size: 13px; margin-top: 5px;">Muthuwadige Hardware ERP</p>
-          </div>
-          <p style="font-size: 14px; line-height: 1.5; color: #4b5563;">We received a request to reset the password for your staff account. Use the verification code below to complete the reset process:</p>
-          <div style="background-color: #f9fafb; padding: 18px; text-align: center; font-size: 28px; font-weight: 800; letter-spacing: 6px; border-radius: 12px; margin: 25px 0; color: #464646; border: 1px solid #f3f4f6;">
-            ${code}
-          </div>
-          <p style="font-size: 13px; line-height: 1.5; color: #6b7280; text-align: center;">This code will expire in <strong>15 minutes</strong> for security.</p>
-          <p style="font-size: 13px; line-height: 1.5; color: #9ca3af; margin-top: 25px; border-top: 1px solid #f3f4f6; padding-top: 15px;">If you did not make this request, you can safely ignore this email.</p>
-        </div>
-      `
-    });
-
-    console.log(`[Reset Password] Email sent successfully to ${toEmail}`);
-    return { success: true };
-  } catch (err) {
-    console.error('[Reset Password] Failed to send email:', err);
-    return { success: false, error: err.message };
-  }
+  const settings = await getRuntimeSettingsSnapshot();
+  return mailerSendResetEmail(toEmail, code, settings);
 };
 
 async function checkAndEmailLowStockAlerts(productIds = []) {
@@ -1266,53 +1244,50 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
   console.log(`\n📦 Spawning backup worker from main process (Main PID: ${process.pid})...`);
   console.log(`   Worker args: ${args.length > 0 ? args.join(' ') : '(default auto backup)'}\n`);
 
-  return new Promise((resolve) => {
-    let stdoutBuffer = '';
-    let stderrBuffer = '';
-
+  try {
     const worker = spawn(process.execPath, [workerPath, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      detached: false,
+      detached: true,
       env: workerEnv
     });
 
     const workerPid = worker.pid;
-    console.log(`✓ Backup worker spawned with PID: ${workerPid}`);
+    console.log(`✓ Backup worker spawned in background with PID: ${workerPid}`);
 
-    // Capture worker output for logging
+    // Capture worker output asynchronously for background logging
     worker.stdout.on('data', (data) => {
-      const str = data.toString();
-      stdoutBuffer += str;
-      console.log(`[Worker ${workerPid}] ${str.trim()}`);
+      console.log(`[Worker ${workerPid}] ${data.toString().trim()}`);
     });
 
     worker.stderr.on('data', (data) => {
-      const str = data.toString();
-      stderrBuffer += str;
-      console.error(`[Worker ${workerPid}] ERROR: ${str.trim()}`);
+      console.error(`[Worker ${workerPid}] ERROR: ${data.toString().trim()}`);
     });
 
     worker.on('error', (err) => {
-      console.error(`❌ Backup worker error (PID ${workerPid}):`, err.message);
-      resolve({ success: false, error: err.message, message: err.message || 'Worker spawn error', pid: workerPid });
+      console.error(`❌ Backup worker spawn error (PID ${workerPid}):`, err.message);
     });
 
     worker.on('exit', (code, signal) => {
       if (code === 0) {
         console.log(`✅ Backup worker completed successfully (PID ${workerPid})`);
-        resolve({ success: true, pid: workerPid, message: 'Full backup generated and emailed successfully!' });
       } else {
-        const fullOutput = stderrBuffer.trim() || stdoutBuffer.trim() || `Backup worker exited with code ${code}`;
-        let cleanMsg = fullOutput;
-        const errMatch = fullOutput.match(/ERROR:\s*(.+)/i);
-        if (errMatch && errMatch[1]) {
-          cleanMsg = errMatch[1].trim();
-        }
-        console.error(`❌ Backup worker failed with exit code ${code} (PID ${workerPid}): ${cleanMsg}`);
-        resolve({ success: false, code, signal, pid: workerPid, message: cleanMsg, error: cleanMsg });
+        console.error(`❌ Backup worker finished with code ${code} (PID ${workerPid})`);
       }
     });
-  });
+
+    // Unref worker process so parent Express server returns response immediately without blocking
+    worker.unref();
+
+    return {
+      success: true,
+      pid: workerPid,
+      status: 'processing',
+      message: 'Full database Excel backup has been triggered in the background.'
+    };
+  } catch (err) {
+    console.error('❌ Failed to spawn backup worker process:', err);
+    return { success: false, error: err.message, message: 'Failed to spawn backup worker' };
+  }
 };
 
 // OLD performBackup REPLACED WITH WORKER PATTERN ABOVE
@@ -1324,23 +1299,69 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
 // - Database logging
 // All functionality now executed in backup-worker.js child process
 
-// 🕰️ Cron Scheduler: Every 6 hours ('0 */6 * * *')
-cron.schedule('0 */6 * * *', async () => {
-  console.log('[Cron] Running automated tasks (6-Hourly Backup & WhatsApp Credit Reminders)...');
-  try {
-    const settings = await getRuntimeSettingsSnapshot();
-    if (settings.backup_enabled === 1 && settings.backup_email) {
-      console.log(`[Cron] 6-hourly automated backup triggered for target email: ${settings.backup_email}`);
-      await performBackup(settings.backup_email);
-    } else {
-      console.log('[Cron] Automated 6-hourly backup is disabled or email is missing. Skipping.');
-    }
-  } catch (err) {
-    console.error('[Cron] 6-hourly backup scheduler failed:', err);
+// ----------------------------------------------------
+// 🕰️ DYNAMIC AUTOMATED BACKUP SCHEDULER
+// ----------------------------------------------------
+let activeBackupScheduleTimer = null;
+
+async function scheduleAutomaticBackups() {
+  // 1. Stop any existing active backup schedule timer
+  if (activeBackupScheduleTimer) {
+    clearInterval(activeBackupScheduleTimer);
+    activeBackupScheduleTimer = null;
+    console.log('[Backup Scheduler] Previous active backup scheduler stopped. Active scheduler count: 0');
   }
 
+  try {
+    // 2. Read runtime settings
+    const settings = await getRuntimeSettingsSnapshot();
 
-  // Check for overdue credit sales and simulate automated WhatsApp dispatch
+    // 3. Verify automated backup is enabled and target email is valid
+    if (settings.backup_enabled !== 1 || !settings.backup_email || !settings.backup_email.trim()) {
+      console.log('[Backup Scheduler] Automated backups disabled or destination email missing. Active scheduler count: 0');
+      return;
+    }
+
+    // 4. Validate backup interval hours (whole integer 1..168, default 6)
+    let intervalHours = Number(settings.backup_interval_hours);
+    if (isNaN(intervalHours) || !Number.isInteger(intervalHours) || intervalHours < 1 || intervalHours > 168) {
+      intervalHours = 6;
+    }
+
+    const intervalMs = intervalHours * 3600 * 1000;
+    const targetEmail = settings.backup_email.trim();
+
+    console.log(`[Backup Scheduler] Initialized automated backup scheduler for "${targetEmail}" every ${intervalHours} hour(s) (${intervalMs} ms). Active scheduler count: 1`);
+
+    // 5. Create EXACTLY ONE dynamic interval timer
+    activeBackupScheduleTimer = setInterval(async () => {
+      try {
+        const currentSettings = await getRuntimeSettingsSnapshot();
+        if (currentSettings.backup_enabled === 1 && currentSettings.backup_email) {
+          console.log(`[Backup Scheduler] ${intervalHours}-hourly automated backup triggered for target email: ${currentSettings.backup_email}`);
+          await performBackup(currentSettings.backup_email, 'Auto');
+        } else {
+          console.log('[Backup Scheduler] Automated backup tick skipped (feature disabled or email missing).');
+        }
+      } catch (err) {
+        console.error('[Backup Scheduler] Automated backup execution failed:', err);
+      }
+    }, intervalMs);
+
+  } catch (err) {
+    console.error('[Backup Scheduler] Failed to initialize backup scheduler:', err);
+  }
+}
+
+function getBackupSchedulerStatus() {
+  return {
+    active: activeBackupScheduleTimer !== null,
+    activeSchedulerCount: activeBackupScheduleTimer !== null ? 1 : 0
+  };
+}
+
+// 🕰️ Cron Scheduler: Checking for overdue credit sales every 6 hours ('0 */6 * * *')
+cron.schedule('0 */6 * * *', async () => {
   try {
     console.log('[Cron] Checking for overdue credit sales...');
     const overdueSales = await db.all(`
@@ -1474,13 +1495,18 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.post('/api/auth/register', async (req, res) => {
   const { email, password, name, role } = req.body;
-  const id = 'u_' + Date.now();
   try {
+    const countRow = await db.get('SELECT COUNT(*) as count FROM profiles');
+    if (countRow && countRow.count >= 3) {
+      return res.status(400).json({ error: 'Staff quota limit reached. Maximum 3 staff accounts allowed.' });
+    }
+    const id = 'u_' + Date.now();
+    const normalizedRole = role ? (role.charAt(0).toUpperCase() + role.slice(1).toLowerCase()) : 'Cashier';
     await db.run(
       'INSERT INTO profiles (id, name, email, role, avatar, password) VALUES (?, ?, ?, ?, ?, ?)',
-      [id, name || 'Staff User', email, role || 'cashier', email.charAt(0).toUpperCase(), password || '123456']
+      [id, name || 'Staff User', email, normalizedRole, email.charAt(0).toUpperCase(), password || '123456']
     );
-    res.json({ success: true, user: { id, email, role: role || 'cashier', name: name || 'Staff User' } });
+    res.json({ success: true, user: { id, email, role: normalizedRole, name: name || 'Staff User' } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1923,6 +1949,36 @@ function generateNextInvoiceNumber(currentInvoiceNumber) {
 
 app.post('/api/sales', async (req, res) => {
   const s = req.body;
+  const clientTxId = s.client_tx_id || req.headers['idempotency-key'] || null;
+
+  // 0. Pre-transaction Idempotency Check
+  if (clientTxId && typeof clientTxId === 'string' && clientTxId.trim()) {
+    try {
+      const existingSale = await db.get(
+        'SELECT * FROM sales WHERE client_tx_id = ? AND client_tx_id IS NOT NULL AND client_tx_id != ""',
+        [clientTxId.trim()]
+      );
+      if (existingSale) {
+        console.log(`[Idempotency] Pre-txn duplicate transaction detected for client_tx_id "${clientTxId}". Returning existing invoice ${existingSale.invoice_no}.`);
+        let itemsArr = [];
+        try {
+          itemsArr = typeof existingSale.items === 'string' ? JSON.parse(existingSale.items) : (existingSale.items || []);
+        } catch (e) {
+          itemsArr = existingSale.items || [];
+        }
+        return res.status(200).json({
+          ...existingSale,
+          items: itemsArr,
+          invoiceNo: existingSale.invoice_no,
+          total: existingSale.total_amount,
+          idempotent_replay: true
+        });
+      }
+    } catch (e) {
+      console.warn('[Idempotency] Notice checking existing client_tx_id:', e);
+    }
+  }
+
   const id = 'so_' + Date.now();
   const created_at = new Date().toISOString();
   const creditNoteApplied = Number(s.credit_note_applied || s.creditNoteApplied || 0);
@@ -1940,6 +1996,31 @@ app.post('/api/sales', async (req, res) => {
     // 1. Start SQLite Transaction
     txn = await beginTxn(db, `Save Sale Invoice ${s.invoice_no || 'New'}`);
 
+    // In-transaction Idempotency Check (handles concurrent requests)
+    if (clientTxId && typeof clientTxId === 'string' && clientTxId.trim()) {
+      const existingTxnSale = await db.get(
+        'SELECT * FROM sales WHERE client_tx_id = ? AND client_tx_id IS NOT NULL AND client_tx_id != ""',
+        [clientTxId.trim()]
+      );
+      if (existingTxnSale) {
+        await rollbackTxn(db, txn);
+        console.log(`[Idempotency] Transactional check detected duplicate client_tx_id "${clientTxId}". Returning existing invoice ${existingTxnSale.invoice_no}.`);
+        let itemsArr = [];
+        try {
+          itemsArr = typeof existingTxnSale.items === 'string' ? JSON.parse(existingTxnSale.items) : (existingTxnSale.items || []);
+        } catch (e) {
+          itemsArr = existingTxnSale.items || [];
+        }
+        return res.status(200).json({
+          ...existingTxnSale,
+          items: itemsArr,
+          invoiceNo: existingTxnSale.invoice_no,
+          total: existingTxnSale.total_amount,
+          idempotent_replay: true
+        });
+      }
+    }
+
     // Determine final invoice number
     let finalInvoiceNo = s.invoice_no;
     const isTempInvoice = !s.invoice_no || s.invoice_no.startsWith('INV-');
@@ -1953,28 +2034,43 @@ app.post('/api/sales', async (req, res) => {
       await db.run('UPDATE system_settings SET next_invoice_number = ? WHERE id = ?', [nextInv, 'global']);
     }
 
-    // 2. Insert Sale Order
-    await db.run(
-      'INSERT INTO sales (id, invoice_no, customer_id, customer_name, customer_phone, customer_address, items, subtotal, discount, tax, tax_rate, total_amount, status, user_id, payment_method, created_at, due_date, credit_period_days, payment_received, transportation_fee, credit_note_applied, credit_note_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, finalInvoiceNo, s.customer_id, customerNameVal, customerPhoneVal, customerAddressVal, JSON.stringify(s.items), s.subtotal, s.discount, s.tax, s.tax_rate, s.total_amount, s.status, s.user_id, s.payment_method || 'Cash', created_at, s.due_date || null, s.credit_period_days || 0, s.payment_received || 0, transportationFeeVal, creditNoteApplied, creditNoteCode]
-    );
-
-    // 3. Decrement Product Stock levels & validate available stock
-    // Phase 2B optimization: batch fetch all products at once
-    const productIds = s.items.map(item => item.productId);
+    // Phase 2A Historical Cost Snapshot Protection: batch fetch products with cost_price before sale insertion
+    const rawItemsArr = Array.isArray(s.items) ? s.items : [];
+    const productIds = rawItemsArr.map(item => item.productId || item.product_id).filter(Boolean);
     const placeholders = productIds.map(() => '?').join(',');
     const productsMap = new Map();
     if (productIds.length > 0) {
-      const products = await db.all(`SELECT id, stock, name FROM products WHERE id IN (${placeholders})`, productIds);
+      const products = await db.all(`SELECT id, stock, name, cost_price FROM products WHERE id IN (${placeholders})`, productIds);
       products.forEach(p => productsMap.set(p.id, p));
     }
 
-    for (const item of s.items) {
+    const enrichedItems = rawItemsArr.map(item => {
+      const prod = productsMap.get(item.productId || item.product_id);
+      const snapshotCostPrice = Number(
+        item.cost_price !== undefined && item.cost_price !== null ? item.cost_price :
+        (item.costPrice !== undefined && item.costPrice !== null ? item.costPrice :
+        (prod ? (prod.cost_price !== undefined ? prod.cost_price : 0) : 0))
+      );
+      return {
+        ...item,
+        cost_price: snapshotCostPrice,
+        costPrice: snapshotCostPrice
+      };
+    });
+
+    // 2. Insert Sale Order
+    await db.run(
+      'INSERT INTO sales (id, invoice_no, customer_id, customer_name, customer_phone, customer_address, items, subtotal, discount, tax, tax_rate, total_amount, status, user_id, payment_method, created_at, due_date, credit_period_days, payment_received, transportation_fee, credit_note_applied, credit_note_code, client_tx_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, finalInvoiceNo, s.customer_id, customerNameVal, customerPhoneVal, customerAddressVal, JSON.stringify(enrichedItems), s.subtotal, s.discount, 0, 0, s.total_amount, s.status, s.user_id, s.payment_method || 'Cash', created_at, s.due_date || null, s.credit_period_days || 0, s.payment_received || 0, transportationFeeVal, creditNoteApplied, creditNoteCode, clientTxId]
+    );
+
+    // 3. Decrement Product Stock levels & validate available stock
+    for (const item of enrichedItems) {
       const convRate = Number(item.conversionRate) || 1;
       const baseQtyDeduction = convRate > 0 ? (Number(item.qty || 0) / convRate) : Number(item.qty || 0);
 
       // Backend stock validation check using batched product data
-      const prod = productsMap.get(item.productId);
+      const prod = productsMap.get(item.productId || item.product_id);
       if (prod) {
         const availableStock = Number(prod.stock || 0);
         if (baseQtyDeduction > availableStock + 0.0001) {
@@ -2081,7 +2177,7 @@ app.post('/api/sales', async (req, res) => {
     }
 
     if (s.payment_method !== 'Credit' && s.status !== 'Non Paid') {
-      replaceRuntimeTransactionByDescription(`POS Sale ${finalInvoiceNo}`, {
+      await replaceRuntimeTransactionByDescription(`POS Sale ${finalInvoiceNo}`, {
         type: 'income',
         category: 'Sales',
         amount: s.total_amount,
@@ -2123,6 +2219,38 @@ app.post('/api/sales', async (req, res) => {
     });
   } catch (err) {
     if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
+
+    if (clientTxId && typeof clientTxId === 'string' && clientTxId.trim()) {
+      const cleanTxId = clientTxId.trim();
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          const existingSale = await db.get(
+            'SELECT * FROM sales WHERE client_tx_id = ? AND client_tx_id IS NOT NULL AND client_tx_id != ""',
+            [cleanTxId]
+          );
+          if (existingSale) {
+            console.log(`[Idempotency] Catch-block recovered completed sale for client_tx_id "${cleanTxId}" on attempt ${attempt + 1}. Returning existing invoice ${existingSale.invoice_no}.`);
+            let itemsArr = [];
+            try {
+              itemsArr = typeof existingSale.items === 'string' ? JSON.parse(existingSale.items) : (existingSale.items || []);
+            } catch (e) {
+              itemsArr = existingSale.items || [];
+            }
+            return res.status(200).json({
+              ...existingSale,
+              items: itemsArr,
+              invoiceNo: existingSale.invoice_no,
+              total: existingSale.total_amount,
+              idempotent_replay: true
+            });
+          }
+        } catch (e) {
+          console.warn('[Idempotency] Notice in catch-block sale recovery:', e);
+        }
+        await new Promise(r => setTimeout(r, 50));
+      }
+    }
+
     res.status(500).json({ error: err.message });
   }
 });
@@ -2136,7 +2264,7 @@ app.put('/api/sales/:id', async (req, res) => {
     const finalStatus = status ? (status === 'paid' ? 'Paid' : status) : undefined;
     
     if (existing && (finalStatus === 'Paid' || finalStatus === 'paid') && existing.status !== 'Paid' && existing.status !== 'paid') {
-      replaceRuntimeTransactionByDescription(`POS Credit Payment ${existing.invoice_no}`, {
+      await replaceRuntimeTransactionByDescription(`POS Credit Payment ${existing.invoice_no}`, {
         type: 'income',
         category: 'Sales',
         amount: existing.total_amount,
@@ -2208,6 +2336,18 @@ app.post('/api/credit_payments', async (req, res) => {
       ]
     );
 
+    // Phase 2B Unified Accounting: Log transaction for credit repayments to reflect cash inflow in Finance page
+    const txAmt = Number(p.amount_paid) || 0;
+    if (txAmt > 0) {
+      const txId = 'tx_cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      const txDate = (paymentDate || new Date().toISOString()).substring(0, 10);
+      const invNo = p.invoice_no || 'INV';
+      await db.run(
+        'INSERT INTO transactions (id, date, description, amount, type, category, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [txId, txDate, `Credit Repayment for Invoice #${invNo}`, txAmt, 'income', 'Credit Repayment', invNo, p.recorded_by || 'system']
+      ).catch(e => console.error('Error logging credit repayment transaction:', e));
+    }
+
     res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2216,14 +2356,20 @@ app.post('/api/credit_payments', async (req, res) => {
 
 app.delete('/api/sales/:id', async (req, res) => {
   const { id } = req.params;
+  let txn = null;
   try {
     const sale = await db.get('SELECT * FROM sales WHERE id = ?', [id]);
     if (sale) {
-      removeRuntimeTransactionsForSale(sale.invoice_no);
+      txn = await beginTxn(db, `Delete Sale ${sale.invoice_no}`);
+      await removeRuntimeTransactionsForSale(sale.invoice_no);
+      await db.run('DELETE FROM sales WHERE id = ?', [id]);
+      await commitTxn(db, txn);
+    } else {
+      await db.run('DELETE FROM sales WHERE id = ?', [id]);
     }
-    await db.run('DELETE FROM sales WHERE id = ?', [id]);
     res.json({ success: true });
   } catch (err) {
+    if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
     res.status(500).json({ error: err.message });
   }
 });
@@ -2264,7 +2410,7 @@ app.post('/api/sales/:id/void', async (req, res) => {
     );
 
     await db.run("DELETE FROM transactions WHERE reference = ? OR reference = ? OR description LIKE ?", [sale.invoice_no, id, `%${sale.invoice_no}%`]);
-    removeRuntimeTransactionsForSale(sale.invoice_no);
+    await removeRuntimeTransactionsForSale(sale.invoice_no);
 
     await db.run('COMMIT');
     res.json({ success: true });
@@ -2658,13 +2804,13 @@ app.post('/api/sales/returns/:id/void', async (req, res) => {
 
     // 4. Void associated Credit Note if applicable
     if (sr.credit_note_no) {
-      await db.run("UPDATE credit_notes SET status = 'voided' WHERE credit_note_no = ?", [sr.credit_note_no]);
+      await db.run("UPDATE credit_notes SET status = 'voided', balance_remaining = 0 WHERE credit_note_no = ?", [sr.credit_note_no]);
     }
 
-    // 5. Reverse financial refund transaction
-    await db.run("DELETE FROM transactions WHERE reference = ? AND (category = 'Sales Return' OR category = 'Exchange Payment' OR category = 'Exchange Refund')", [sr.invoice_no]);
+    // 5. Reverse financial refund & credit adjustment transactions
+    await db.run("DELETE FROM transactions WHERE reference = ? AND (category LIKE 'Sales Return%' OR category LIKE 'Exchange%' OR category = 'Sales Return')", [sr.invoice_no]);
 
-    // 6. Update sales invoice status
+    // 6. Update sales invoice status accurately
     const sale = await db.get('SELECT * FROM sales WHERE invoice_no = ?', [sr.invoice_no]);
     if (sale) {
       const originalItems = safeParseJson(sale.items, []);
@@ -2678,8 +2824,28 @@ app.post('/api/sales/returns/:id/void', async (req, res) => {
       });
 
       let newStatus = sale.status;
+      const salePayMethod = (sale.payment_method || sale.paymentMethod || '').toString().toLowerCase().trim();
+      const isCreditSale = salePayMethod === 'credit' || salePayMethod === 'credit sale' || sale.is_credit === 1 || sale.is_credit === true;
+
       if (totalReturnedQty === 0) {
-        newStatus = 'Paid';
+        if (isCreditSale) {
+          const rec = Number(sale.payment_received || 0);
+          const tot = Number(sale.total_amount !== undefined ? sale.total_amount : (sale.total || 0));
+          if (rec >= tot - 0.01) {
+            newStatus = 'Paid';
+          } else if (rec > 0) {
+            newStatus = 'Partially Paid';
+          } else {
+            const dueDate = sale.due_date ? new Date(sale.due_date) : null;
+            if (dueDate && dueDate < new Date()) {
+              newStatus = 'Overdue';
+            } else {
+              newStatus = 'Non Paid';
+            }
+          }
+        } else {
+          newStatus = 'Paid';
+        }
       } else if (totalReturnedQty >= totalOriginalQty && totalOriginalQty > 0) {
         newStatus = 'Fully Returned';
       } else {
@@ -2733,10 +2899,10 @@ app.delete('/api/sales/returns/:id', async (req, res) => {
       }
 
       if (sr.credit_note_no) {
-        await db.run("UPDATE credit_notes SET status = 'voided' WHERE credit_note_no = ?", [sr.credit_note_no]);
+        await db.run("UPDATE credit_notes SET status = 'voided', balance_remaining = 0 WHERE credit_note_no = ?", [sr.credit_note_no]);
       }
 
-      await db.run("DELETE FROM transactions WHERE reference = ? AND (category = 'Sales Return' OR category = 'Exchange Payment' OR category = 'Exchange Refund')", [sr.invoice_no]);
+      await db.run("DELETE FROM transactions WHERE reference = ? AND (category LIKE 'Sales Return%' OR category LIKE 'Exchange%' OR category = 'Sales Return')", [sr.invoice_no]);
 
       const sale = await db.get('SELECT * FROM sales WHERE invoice_no = ?', [sr.invoice_no]);
       if (sale) {
@@ -2751,8 +2917,28 @@ app.delete('/api/sales/returns/:id', async (req, res) => {
         });
 
         let newStatus = sale.status;
+        const salePayMethod = (sale.payment_method || sale.paymentMethod || '').toString().toLowerCase().trim();
+        const isCreditSale = salePayMethod === 'credit' || salePayMethod === 'credit sale' || sale.is_credit === 1 || sale.is_credit === true;
+
         if (totalReturnedQty === 0) {
-          newStatus = 'Paid';
+          if (isCreditSale) {
+            const rec = Number(sale.payment_received || 0);
+            const tot = Number(sale.total_amount !== undefined ? sale.total_amount : (sale.total || 0));
+            if (rec >= tot - 0.01) {
+              newStatus = 'Paid';
+            } else if (rec > 0) {
+              newStatus = 'Partially Paid';
+            } else {
+              const dueDate = sale.due_date ? new Date(sale.due_date) : null;
+              if (dueDate && dueDate < new Date()) {
+                newStatus = 'Overdue';
+              } else {
+                newStatus = 'Non Paid';
+              }
+            }
+          } else {
+            newStatus = 'Paid';
+          }
         } else if (totalReturnedQty >= totalOriginalQty && totalOriginalQty > 0) {
           newStatus = 'Fully Returned';
         } else {
@@ -3122,14 +3308,20 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
 
 app.delete('/api/purchase-orders/:id', async (req, res) => {
   const { id } = req.params;
+  let txn = null;
   try {
     const po = await db.get('SELECT * FROM purchase_orders WHERE id = ?', [id]);
     if (po) {
-      removeRuntimeTransactionsForPurchaseOrder(po.po_number);
+      txn = await beginTxn(db, `Delete Purchase Order ${po.po_number}`);
+      await removeRuntimeTransactionsForPurchaseOrder(po.po_number);
+      await db.run('DELETE FROM purchase_orders WHERE id = ?', [id]);
+      await commitTxn(db, txn);
+    } else {
+      await db.run('DELETE FROM purchase_orders WHERE id = ?', [id]);
     }
-    await db.run('DELETE FROM purchase_orders WHERE id = ?', [id]);
     res.json({ success: true });
   } catch (err) {
+    if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
     res.status(500).json({ error: err.message });
   }
 });
@@ -3221,7 +3413,8 @@ app.get('/api/settings', async (req, res) => {
     const settings = await getRuntimeSettingsSnapshot();
     res.json({
       ...settings,
-      backup_enabled: settings.backup_enabled === 1
+      backup_enabled: settings.backup_enabled === 1,
+      backup_interval_hours: settings.backup_interval_hours || 6
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3231,9 +3424,25 @@ app.get('/api/settings', async (req, res) => {
 app.put('/api/settings', async (req, res) => {
   const s = req.body;
   try {
-    await setRuntimeSettings(s);
+    const updated = await setRuntimeSettings(s);
+    await scheduleAutomaticBackups();
     await logAudit(s.user_email || 'system', 'SETTINGS_UPDATED', 'System settings were updated.');
-    res.json({ success: true });
+    res.json({ success: true, settings: updated });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/settings/scheduler-status', async (req, res) => {
+  try {
+    const settings = await getRuntimeSettingsSnapshot();
+    const status = getBackupSchedulerStatus();
+    res.json({
+      ...status,
+      backup_enabled: settings.backup_enabled === 1,
+      backup_email: settings.backup_email,
+      backup_interval_hours: settings.backup_interval_hours || 6
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -3267,13 +3476,14 @@ const getBackupLogsHandler = async (req, res) => {
     let newLogInserted = false;
 
     for (const bDir of candidateDirs) {
-      if (fs.existsSync(bDir)) {
-        const files = fs.readdirSync(bDir).filter(f => f.endsWith('.xlsx'));
+      try {
+        await fs.promises.access(bDir);
+        const files = (await fs.promises.readdir(bDir)).filter(f => f.endsWith('.xlsx'));
         for (const file of files) {
           if (!loggedNames.has(file)) {
             const filePath = path.join(bDir, file);
             let stats = { mtimeMs: Date.now(), mtime: new Date() };
-            try { stats = fs.statSync(filePath); } catch (e) {}
+            try { stats = await fs.promises.stat(filePath); } catch (e) {}
             const logId = `b_${Math.floor(stats.mtimeMs || Date.now())}`;
             const timestamp = stats.mtime ? stats.mtime.toISOString() : new Date().toISOString();
             
@@ -3285,6 +3495,8 @@ const getBackupLogsHandler = async (req, res) => {
             newLogInserted = true;
           }
         }
+      } catch (e) {
+        // Directory inaccessible or missing
       }
     }
 
@@ -3368,12 +3580,14 @@ app.post('/api/backup-logs/bulk-delete', async (req, res) => {
   }
 });
 
-const updateEnvCredentials = (newEnvObj) => {
+const updateEnvCredentials = async (newEnvObj) => {
   try {
     let content = '';
-    if (fs.existsSync(envPath)) {
-      content = fs.readFileSync(envPath, 'utf8');
-    }
+    try {
+      await fs.promises.access(envPath);
+      content = await fs.promises.readFile(envPath, 'utf8');
+    } catch (e) {}
+
     let lines = content.split(/\r?\n/);
 
     for (const [key, value] of Object.entries(newEnvObj)) {
@@ -3394,10 +3608,11 @@ const updateEnvCredentials = (newEnvObj) => {
 
     const newContent = lines.join('\n');
     const envDir = path.dirname(envPath);
-    if (!fs.existsSync(envDir)) {
-      fs.mkdirSync(envDir, { recursive: true });
-    }
-    fs.writeFileSync(envPath, newContent, 'utf8');
+    try {
+      await fs.promises.mkdir(envDir, { recursive: true });
+    } catch (e) {}
+
+    await fs.promises.writeFile(envPath, newContent, 'utf8');
     console.log('✅ AppData .env configuration updated successfully at:', envPath);
     return true;
   } catch (err) {
@@ -3407,14 +3622,17 @@ const updateEnvCredentials = (newEnvObj) => {
 };
 
 // GET SMTP CONFIGURATION STATUS (NEVER RETURNS PASSWORD)
-app.get('/api/settings/smtp-config', (req, res) => {
+app.get('/api/settings/smtp-config', async (req, res) => {
   try {
-    const user = process.env.GMAIL_USER || '';
-    const pass = process.env.GMAIL_PASS || '';
+    const settings = await getRuntimeSettingsSnapshot();
+    const user = settings.smtp_user || process.env.SMTP_USER || process.env.GMAIL_USER || '';
+    const pass = settings.smtp_pass || process.env.SMTP_PASS || process.env.GMAIL_PASS || '';
     res.json({
       configured: Boolean(user && pass && pass.trim().length > 0),
       gmail_user: user,
-      gmail_pass_configured: Boolean(pass && pass.trim().length > 0)
+      smtp_user: user,
+      gmail_pass_configured: Boolean(pass && pass.trim().length > 0),
+      smtp_pass_configured: Boolean(pass && pass.trim().length > 0)
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3422,18 +3640,25 @@ app.get('/api/settings/smtp-config', (req, res) => {
 });
 
 // POST SMTP CONFIGURATION (SAVES TO APPDATA .ENV)
-app.post('/api/settings/smtp-config', (req, res) => {
+app.post('/api/settings/smtp-config', async (req, res) => {
   try {
-    const { gmail_user, gmail_pass } = req.body || {};
+    const { gmail_user, gmail_pass, smtp_host, smtp_port, smtp_user, smtp_pass } = req.body || {};
     const updates = {};
-    if (gmail_user !== undefined && typeof gmail_user === 'string') {
-      updates.GMAIL_USER = gmail_user.trim();
-    }
-    if (gmail_pass && typeof gmail_pass === 'string' && gmail_pass.trim() !== '' && gmail_pass !== '••••••••') {
-      updates.GMAIL_PASS = gmail_pass.trim();
-    }
+    const effectiveUser = smtp_user || gmail_user;
+    const effectivePass = smtp_pass || gmail_pass;
 
-    updateEnvCredentials(updates);
+    if (effectiveUser !== undefined && typeof effectiveUser === 'string') {
+      updates.GMAIL_USER = effectiveUser.trim();
+      updates.SMTP_USER = effectiveUser.trim();
+    }
+    if (effectivePass && typeof effectivePass === 'string' && effectivePass.trim() !== '' && effectivePass !== '••••••••') {
+      updates.GMAIL_PASS = effectivePass.trim();
+      updates.SMTP_PASS = effectivePass.trim();
+    }
+    if (smtp_host) updates.SMTP_HOST = smtp_host.trim();
+    if (smtp_port) updates.SMTP_PORT = String(smtp_port).trim();
+
+    await updateEnvCredentials(updates);
     res.json({ success: true, message: 'SMTP credentials saved successfully to AppData configuration!' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -3443,21 +3668,17 @@ app.post('/api/settings/smtp-config', (req, res) => {
 // POST TEST SMTP CONNECTION
 app.post('/api/settings/test-smtp', async (req, res) => {
   try {
-    const user = process.env.GMAIL_USER || '';
-    const pass = process.env.GMAIL_PASS || '';
+    const settings = await getRuntimeSettingsSnapshot();
+    const transporter = createMailTransporter(settings);
 
-    if (!user || !pass) {
+    if (!transporter) {
       return res.status(400).json({
         success: false,
-        message: 'SMTP credentials missing: GMAIL_USER or GMAIL_PASS environment variables are not configured in AppData .env file.'
+        message: 'SMTP credentials missing: GMAIL_USER or GMAIL_PASS / SMTP_USER or SMTP_PASS environment variables are not configured in AppData .env file.'
       });
     }
 
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user, pass }
-    });
-
+    const user = settings.smtp_user || process.env.SMTP_USER || process.env.GMAIL_USER;
     await transporter.verify();
     res.json({ success: true, message: `SMTP Connection Successful! Account ${user} authenticated.` });
   } catch (err) {
@@ -4059,7 +4280,7 @@ app.post('/api/quotations', async (req, res) => {
         Number(discount_value || 0),
         Number(discount_amount || 0),
         Number(transportation_fee || 0),
-        Number(tax_amount || 0),
+        0,
         Number(total || 0),
         status || 'Active',
         created_at
@@ -4166,7 +4387,7 @@ app.post('/api/bill_holds', async (req, res) => {
         typeof items === 'string' ? items : JSON.stringify(items),
         subtotal,
         discount,
-        tax,
+        0,
         total_amount,
         transportation_fee || 0,
         created_at
@@ -4270,11 +4491,16 @@ if (fs.existsSync(distPath)) {
 }
 
 // Express server launch hook listening on all network interfaces
-app.listen(PORT, '0.0.0.0', async () => {
+(async () => {
   try {
+    console.log('[Startup] Initializing SQLite Database & Schema...');
     await initializeDatabase();
-    console.log(`🚀 REST API Server running on port ${PORT} (accepts local network connections)`);
+    await scheduleAutomaticBackups();
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 REST API Server running on port ${PORT} (accepts local network connections)`);
+    });
   } catch (err) {
     console.error('🔴 Failed to initialize local SQLite database:', err);
+    process.exit(1);
   }
-});
+})();

@@ -130,8 +130,12 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
           )}
         </div>
         <div className="text-right text-gray-500 font-semibold space-y-1">
-          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'ඉන්වොයිස් අංකය:' : 'Invoice No:'}</span> {order.invoiceNo}</p>
-          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'නිකුත් කළ දිනය:' : 'Issue Date:'}</span> {formatInvoiceDateTime(order.created_at, order.date)}</p>
+          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'ඉන්වොයිස් අංකය:' : 'INVOICE NO:'}</span> <strong className="text-slate-800 font-black">{order.invoiceNo || order.invoice_no}</strong></p>
+          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'නිකුත් කළ දිනය:' : 'ISSUE DATE:'}</span> {formatInvoiceDateTime(order.created_at, order.date)}</p>
+          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'ගෙවීම් ක්‍රමය:' : 'PAYMENT METHOD:'}</span> <strong className="uppercase text-slate-900 font-black bg-amber-100 text-amber-900 px-2 py-0.5 rounded text-[10px] border border-amber-300">{(order.payment_method || (order as any).paymentMethod || (order.status === 'Non Paid' ? 'CREDIT' : 'CASH')).toUpperCase()}</strong></p>
+          {((order.payment_method || (order as any).paymentMethod || '').toLowerCase() === 'credit' || order.status === 'Non Paid') && (
+            <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'තත්ත්වය:' : 'STATUS:'}</span> <span className="inline-block bg-rose-50 border border-rose-200 text-rose-700 text-[10px] font-black px-2.5 py-0.5 rounded uppercase">{isSinhala ? `නොගෙවූ / හිඟ (ණය කාලය: ${(order as any).credit_period || (order as any).payment_terms || order.credit_period_days || 30} දින)` : `UNPAID / OUTSTANDING (Credit Period: ${(order as any).credit_period || (order as any).payment_terms || order.credit_period_days || 30} Days)`}</span></p>
+          )}
         </div>
       </div>
       
@@ -147,14 +151,19 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {(Array.isArray(order.items) ? order.items : (typeof order.items === 'string' ? (() => { try { return JSON.parse(order.items); } catch(e) { return []; } })() : [])).map((item: any, idx: number) => (
-              <tr key={idx} className="hover:bg-gray-50/50">
-                <td className="py-2.5 px-3 font-bold text-[#464646]">{item.productName}</td>
-                <td className="py-2.5 px-3 text-center text-gray-500 font-semibold">{item.qty} {item.unit || ''}</td>
-                <td className="py-2.5 px-3 text-right text-gray-500 font-semibold">{symbol} {formatNum(item.price)}</td>
-                <td className="py-2.5 px-3 text-right font-bold text-[#464646]">{symbol} {formatNum(item.total)}</td>
-              </tr>
-            ))}
+            {(Array.isArray(order.items) ? order.items : (typeof order.items === 'string' ? (() => { try { return JSON.parse(order.items); } catch(e) { return []; } })() : [])).map((item: any, idx: number) => {
+              const qty = Number(item.quantity || item.qty || 1);
+              const price = Number(item.unit_price || item.price || 0);
+              const grossRowTotal = qty * price;
+              return (
+                <tr key={idx} className="hover:bg-gray-50/50">
+                  <td className="py-2.5 px-3 font-bold text-[#464646]">{item.productName || item.name || item.description}</td>
+                  <td className="py-2.5 px-3 text-center text-gray-500 font-semibold">{qty} {item.unit || ''}</td>
+                  <td className="py-2.5 px-3 text-right text-gray-500 font-semibold">{symbol} {formatNum(price)}</td>
+                  <td className="py-2.5 px-3 text-right font-bold text-[#464646]">{symbol} {formatNum(grossRowTotal)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -231,8 +240,8 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
             <span className="font-bold text-[#4b5563]">{symbol} {formatNum(order.subtotal || 0)}</span>
           </div>
           {Number(order.discount || 0) > 0 && (
-            <div className="flex justify-between font-semibold text-gray-500">
-              <span>{isSinhala ? 'වට්ටම:' : 'Discount:'}</span>
+            <div className="flex justify-between font-semibold text-red-600">
+              <span>{isSinhala ? 'පාරිභෝගික වට්ටම:' : 'Customer Discount:'}</span>
               <span className="font-bold text-red-600">-{symbol} {formatNum(order.discount || 0)}</span>
             </div>
           )}
@@ -240,12 +249,6 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
             <div className="flex justify-between font-semibold text-gray-500">
               <span>{isSinhala ? 'ප්‍රවාහන ගාස්තුව:' : 'Transportation Fee:'}</span>
               <span className="font-bold text-[#4b5563]">+{symbol} {formatNum(order.transportation_fee || order.transportationFee || 0)}</span>
-            </div>
-          )}
-          {Number(order.tax || 0) > 0 && (
-            <div className="flex justify-between font-semibold text-gray-500">
-              <span>{isSinhala ? `බද්ද (${order.tax_rate || 0}%):` : `Tax (${order.tax_rate || 0}%):`}</span>
-              <span className="font-bold text-[#4b5563]">+{symbol} {formatNum(order.tax || 0)}</span>
             </div>
           )}
           {Number(order.credit_note_applied || order.creditNoteApplied || 0) > 0 && (
@@ -886,7 +889,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     const price = updated[index].price || 0;
     const qty = updated[index].qty || 1;
     const baseSubtotal = price * qty;
-    const discountAmt = normType === 'percent' ? (baseSubtotal * numVal) / 100 : numVal;
+    const discountAmt = normType === 'percent' ? (baseSubtotal * numVal) / 100 : (numVal * qty);
     updated[index].total = Math.max(0, baseSubtotal - discountAmt);
     setCartItems(updated);
   };
@@ -1036,7 +1039,6 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   const [returnProductSearch, setReturnProductSearch] = useState('');
   const [targetReturnInvoice, setTargetReturnInvoice] = useState<SaleOrder | null>(null);
   const [includeReturnDiscount, setIncludeReturnDiscount] = useState<boolean>(true);
-  const [includeReturnTax, setIncludeReturnTax] = useState<boolean>(true);
   const [includeReturnTransport, setIncludeReturnTransport] = useState<boolean>(true);
   const [returnQtys, setReturnQtys] = useState<Record<string, number>>({});
   const [returnMethod, setReturnMethod] = useState<'Cash Refund' | 'Exchange' | 'Credit Note'>('Cash Refund');
@@ -1514,7 +1516,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       const gross = safeQtyForTotal * item.price;
       const disc = item.discount || 0;
       const discType = item.discountType || 'amount';
-      const discAmt = discType === 'percent' ? gross * (disc / 100) : disc;
+      const discAmt = discType === 'percent' ? gross * (disc / 100) : (disc * safeQtyForTotal);
       updated[idx] = { ...item, qty: targetQty, total: Math.max(0, gross - discAmt) };
       return updated;
     });
@@ -1525,7 +1527,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       const updated = [...prev];
       const item = updated[idx];
       const gross = item.qty * item.price;
-      const discAmt = discountType === 'percent' ? gross * (discount / 100) : discount;
+      const discAmt = discountType === 'percent' ? gross * (discount / 100) : (discount * item.qty);
       updated[idx] = { ...item, discount, discountType, total: Math.max(0, gross - discAmt) };
       return updated;
     });
@@ -1666,17 +1668,18 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         }
       }
 
-      const grossCreditSubtotal = creditCartItems.reduce((sum, item) => sum + (item.qty * item.price), 0);
+      const grossCreditSubtotal = creditCartItems.reduce((sum, item) => sum + ((Number(item.price) || 0) * (Number(item.qty) || 0)), 0);
       const creditTotalDiscount = creditCartItems.reduce((sum, item) => {
-        const gross = item.qty * item.price;
-        const disc = item.discount || 0;
+        const gross = (Number(item.price) || 0) * (Number(item.qty) || 0);
+        const discVal = Number(item.discount) || 0;
         const discType = item.discountType || 'amount';
-        const discAmt = discType === 'percent' ? gross * (disc / 100) : disc;
+        const qty = Number(item.qty) || 0;
+        const discAmt = discType === 'percent' ? gross * (discVal / 100) : (discVal * qty);
         return sum + discAmt;
       }, 0);
       const creditNetSubtotal = Math.max(0, grossCreditSubtotal - creditTotalDiscount);
-      const creditTaxAmt = applyTax ? creditNetSubtotal * (creditTaxRate / 100) : 0;
-      const creditTotal = creditNetSubtotal + creditTaxAmt + (Number(creditTransportationFee) || 0);
+      const creditTaxAmt = 0;
+      const creditTotal = creditNetSubtotal + (Number(creditTransportationFee) || 0);
 
       const newOrderData = {
         invoice_no: `INV-${Date.now()}`,
@@ -1687,8 +1690,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         items: creditCartItems,
         subtotal: grossCreditSubtotal,
         discount: creditTotalDiscount,
-        tax: creditTaxAmt,
-        tax_rate: applyTax ? creditTaxRate : 0,
+        tax: 0,
+        tax_rate: 0,
         total_amount: creditTotal,
         status: 'Non Paid',
         user_id: user?.id,
@@ -2331,7 +2334,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         const discType = i.discountType || 'amount';
         const safeQtyForTotal = Math.max(0, targetQty);
         const gross = safeQtyForTotal * price;
-        const discAmt = discType === 'percent' ? gross * (disc / 100) : disc;
+        const discAmt = discType === 'percent' ? gross * (disc / 100) : (disc * safeQtyForTotal);
         return { ...i, qty: targetQty, total: Math.max(0, gross - discAmt) };
       }
       return i;
@@ -2388,16 +2391,17 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
   const grossSubtotal = cartItems.reduce((sum, i) => sum + ((Number(i.price) || 0) * (Number(i.qty) || 0)), 0);
   const totalProductDiscounts = cartItems.reduce((sum, i) => {
-    const discType = i.discountType || 'percent';
+    const discType = i.discountType || 'amount';
     const gross = (Number(i.price) || 0) * (Number(i.qty) || 0);
     const discVal = Number(i.discount) || 0;
-    const discAmt = discType === 'percent' ? gross * (discVal / 100) : discVal;
+    const qty = Number(i.qty) || 0;
+    const discAmt = discType === 'percent' ? gross * (discVal / 100) : (discVal * qty);
     return sum + discAmt;
   }, 0);
   const subtotal = grossSubtotal;
   const discountAmt = totalProductDiscounts;
-  const taxAmt = applyTax ? Math.max(0, subtotal - discountAmt) * (taxRate / 100) : 0;
-  const netTotalBeforeCreditNote = Math.max(0, subtotal - discountAmt + taxAmt + (Number(transportationFee) || 0));
+  const taxAmt = 0;
+  const netTotalBeforeCreditNote = Math.max(0, subtotal - discountAmt + (Number(transportationFee) || 0));
   const numCreditNoteApplied = Math.min(
     Math.max(0, activeCreditBalance),
     Math.min(Number(creditNoteApplied || 0), netTotalBeforeCreditNote)
@@ -2787,17 +2791,18 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   const totalCreditVolume = totalOutstanding + totalCollected;
   const collectionRate = totalCreditVolume > 0 ? (totalCollected / totalCreditVolume) * 100 : 0;
 
-  const grossCreditSubtotal = creditCartItems.reduce((sum, item) => sum + (item.qty * item.price), 0);
+  const grossCreditSubtotal = creditCartItems.reduce((sum, item) => sum + ((Number(item.price) || 0) * (Number(item.qty) || 0)), 0);
   const creditTotalDiscount = creditCartItems.reduce((sum, item) => {
-    const gross = item.qty * item.price;
-    const disc = item.discount || 0;
+    const gross = (Number(item.price) || 0) * (Number(item.qty) || 0);
+    const discVal = Number(item.discount) || 0;
     const discType = item.discountType || 'amount';
-    const discAmt = discType === 'percent' ? gross * (disc / 100) : disc;
+    const qty = Number(item.qty) || 0;
+    const discAmt = discType === 'percent' ? gross * (discVal / 100) : (discVal * qty);
     return sum + discAmt;
   }, 0);
   const creditSubtotal = Math.max(0, grossCreditSubtotal - creditTotalDiscount);
-  const creditTaxAmt = applyTax ? creditSubtotal * (creditTaxRate / 100) : 0;
-  const creditTotal = creditSubtotal + creditTaxAmt + (Number(creditTransportationFee) || 0);
+  const creditTaxAmt = 0;
+  const creditTotal = creditSubtotal + (Number(creditTransportationFee) || 0);
 
   const allFilteredSelected = filteredOrders.length > 0 && filteredOrders.every((order) => selectedHistoryIds.includes(order.id));
 
@@ -3383,19 +3388,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
             
             <div className="space-y-4 mb-6">
               
-              {/* Optional Tax Toggle */}
-              <div className="flex items-center gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200/40 shadow-inner">
-                <input 
-                  type="checkbox" 
-                  id="applyTaxToggle"
-                  checked={applyTax} 
-                  onChange={(e) => setApplyTax(e.target.checked)} 
-                  className="w-4 h-4 text-amber-500 border-slate-300 rounded focus:ring-amber-500 cursor-pointer transition-colors"
-                />
-                <label htmlFor="applyTaxToggle" className="text-xs font-black text-slate-500 cursor-pointer select-none">
-                  {t(`Apply Tax (${taxRate}%)`, `බදු එකතු කරන්න (${taxRate}%)`)}
-                </label>
-              </div>
+
 
               <div className="grid grid-cols-1 gap-4 bg-slate-50/50 p-4 rounded-2xl border border-slate-100 shadow-sm">
                 <div>
@@ -3410,18 +3403,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                   />
                 </div>
 
-                {applyTax && (
-                  <div className="animate-in slide-in-from-top-3 duration-350">
-                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1 block">{t('Tax Rate (%)', 'බදු අනුපාතය (%)')}</label>
-                    <input 
-                      type="number" 
-                      min={0} 
-                      value={taxRate} 
-                      onChange={(e) => setTaxRate(parseFloat(e.target.value) || 0)} 
-                      className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm" 
-                    />
-                  </div>
-                )}
+
 
                 <div>
                   <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1 block">{t('Payment Method', 'ගෙවීම් ක්‍රමය')}</label>
@@ -3636,10 +3618,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                     <span className="text-slate-700 font-mono">+{symbol} {convert(transportationFee).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                 )}
-                <div className="flex justify-between text-xs font-black text-slate-400 uppercase tracking-widest">
-                  <span>{t('Total Tax', 'මුළු බද්ද')} ({applyTax ? taxRate : 0}%)</span>
-                  <span className="text-slate-700 font-mono">+{symbol} {convert(taxAmt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                </div>
+
                 {numCreditNoteApplied > 0 && (
                   <>
                     <div className="flex justify-between text-xs font-black text-emerald-600 uppercase tracking-widest bg-emerald-50 p-2 rounded-lg border border-emerald-200">
@@ -4357,19 +4336,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
             
             <div className="space-y-4 mb-6">
               
-              {/* Optional Tax Toggle */}
-              <div className="flex items-center gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200/40 shadow-inner">
-                <input 
-                  type="checkbox" 
-                  id="applyCreditTaxToggle"
-                  checked={applyTax} 
-                  onChange={(e) => setApplyTax(e.target.checked)} 
-                  className="w-4 h-4 text-amber-500 border-slate-300 rounded focus:ring-amber-500 cursor-pointer transition-colors"
-                />
-                <label htmlFor="applyCreditTaxToggle" className="text-xs font-black text-slate-500 cursor-pointer select-none">
-                  {t(`Apply Tax (${creditTaxRate}%)`, `බදු එකතු කරන්න (${creditTaxRate}%)`)}
-                </label>
-              </div>
+
 
               <div className="grid grid-cols-1 gap-4 bg-slate-50/50 p-4 rounded-2xl border border-slate-100 shadow-sm">
                 <div>
@@ -4395,18 +4362,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                   />
                 </div>
 
-                {applyTax && (
-                  <div className="animate-in slide-in-from-top-3 duration-350">
-                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1 block">{t('Tax Rate (%)', 'බදු අනුපාතය (%)')}</label>
-                    <input 
-                      type="number" 
-                      min={0} 
-                      value={creditTaxRate} 
-                      onChange={(e) => setCreditTaxRate(parseFloat(e.target.value) || 0)} 
-                      className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm" 
-                    />
-                  </div>
-                )}
+
               </div>
 
               {/* Price Calculation Details Block */}
@@ -4425,12 +4381,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                   <span>{t('Net Subtotal', 'ශුද්ධ උප එකතුව')}</span>
                   <span className="text-slate-700 font-mono">{symbol} {convert(creditSubtotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
-                {applyTax && (
-                  <div className="flex justify-between text-xs font-black text-slate-400 uppercase tracking-widest">
-                    <span>{t('Total Tax', 'මුළු බද්ද')} ({creditTaxRate}%)</span>
-                    <span className="text-slate-700 font-mono">+{symbol} {convert(creditTaxAmt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                  </div>
-                )}
+
                 {creditTransportationFee > 0 && (
                   <div className="flex justify-between text-xs font-black text-slate-400 uppercase tracking-widest">
                     <span>{t('Transport Fee', 'ප්‍රවාහන ගාස්තුව')}</span>
@@ -5779,10 +5730,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
               const returnRatio = Math.min(1, Math.max(0, returnedProductsSubtotal / origSubtotal));
 
               const applicableDiscount = includeReturnDiscount ? (origDiscount * returnRatio) : 0;
-              const applicableTax = includeReturnTax ? (origTax * returnRatio) : 0;
               const applicableTransport = includeReturnTransport ? (origTransportFee * (returnedProductsSubtotal > 0 ? 1 : 0)) : 0;
 
-              const returnTotalValue = Math.max(0, returnedProductsSubtotal - applicableDiscount + applicableTax + applicableTransport);
+              const returnTotalValue = Math.max(0, returnedProductsSubtotal - applicableDiscount + applicableTransport);
 
               // Calculate exchange cart total value from selected replacement items
               const exchangeCartSubtotal = exchangeCartItems.reduce((sum: number, i: any) => sum + (i.total || 0), 0);
@@ -5952,7 +5902,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                         <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5 border-b border-slate-100 pb-2">
                           <span>📊</span> {t('Original Bill Pricing & Payment Details', 'මුල් ඉන්වොයිසියේ මිල ගණන් සහ ගෙවීම් විස්තර')}
                         </h5>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 text-xs">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 text-xs">
                           {/* 1. Subtotal */}
                           <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 flex flex-col justify-between">
                             <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">{t('Subtotal', 'උප එකතුව')}</span>
@@ -5980,28 +5930,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                             </span>
                           </label>
 
-                          {/* 3. Selectable Tax */}
-                          <label className={`p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between select-none ${includeReturnTax ? 'bg-emerald-50/90 border-emerald-300 ring-2 ring-emerald-500/20' : 'bg-slate-50/60 border-slate-200 opacity-50'}`}>
-                            <div className="flex justify-between items-center">
-                              <span className="text-[9px] font-black text-emerald-800 uppercase tracking-widest block">{t('Tax', 'බදු')}</span>
-                              <input
-                                type="checkbox"
-                                checked={includeReturnTax}
-                                onChange={(e) => setIncludeReturnTax(e.target.checked)}
-                                className="w-3.5 h-3.5 text-emerald-600 rounded border-gray-300 focus:ring-emerald-500 cursor-pointer"
-                              />
-                            </div>
-                            <div className="mt-1 flex items-baseline justify-between">
-                              <span className={`font-black text-sm ${includeReturnTax ? 'text-emerald-700' : 'text-slate-400 line-through'}`}>
-                                +{symbol} {convert(origTax).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                              </span>
-                            </div>
-                            <span className="text-[8px] font-bold text-emerald-800/70 mt-0.5">
-                              {includeReturnTax ? t('✓ Included', '✓ ඇතුළත්') : t('✗ Excluded', '✗ ඉවත් කර ඇත')}
-                            </span>
-                          </label>
-
-                          {/* 4. Selectable Transport Fee */}
+                          {/* 3. Selectable Transport Fee */}
                           <label className={`p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between select-none ${includeReturnTransport ? 'bg-blue-50/90 border-blue-300 ring-2 ring-blue-500/20' : 'bg-slate-50/60 border-slate-200 opacity-50'}`}>
                             <div className="flex justify-between items-center">
                               <span className="text-[9px] font-black text-blue-800 uppercase tracking-widest block">{t('Transport Fee', 'ප්‍රවාහන ගාස්තු')}</span>
