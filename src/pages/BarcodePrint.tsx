@@ -407,6 +407,7 @@ export function BarcodePrint() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [previewIndex, setPreviewIndex] = useState<number>(0);
   const [isSinhala, setIsSinhala] = useState<boolean>(false);
+  const [isRefreshingData, setIsRefreshingData] = useState(false);
 
   const t = (en: string, si: string) => (isSinhala ? si : en);
 
@@ -438,6 +439,18 @@ export function BarcodePrint() {
 
   useEffect(() => {
     fetchProducts();
+    const handleRefresh = () => {
+      setIsRefreshingData(true);
+      fetchProducts().finally(() => {
+        setTimeout(() => setIsRefreshingData(false), 600);
+      });
+    };
+    window.addEventListener('refresh-all-data', handleRefresh);
+    window.addEventListener('refresh-inventory', handleRefresh);
+    return () => {
+      window.removeEventListener('refresh-all-data', handleRefresh);
+      window.removeEventListener('refresh-inventory', handleRefresh);
+    };
   }, []);
 
   const categories = useMemo(() => {
@@ -525,7 +538,7 @@ export function BarcodePrint() {
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-[1600px] mx-auto space-y-6 text-[#464646]">
+    <div className={`p-4 md:p-6 max-w-[1600px] mx-auto space-y-6 text-[#464646] transition-all duration-300 ${isRefreshingData ? 'opacity-60 scale-[0.99] blur-[0.5px]' : 'opacity-100 scale-100'}`}>
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
         <div>

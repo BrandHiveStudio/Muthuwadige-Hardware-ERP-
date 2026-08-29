@@ -108,6 +108,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   const [growthPercent, setGrowthPercent] = useState<number>(0);
   const [salesByCategory, setSalesByCategory] = useState<any[]>(categorySalesData);
   const [loading, setLoading] = useState(true);
+  const [isRefreshingData, setIsRefreshingData] = useState(false);
 
   // Responsive Owner/Mobile Dashboard Toggle State
   const [isMobileMode, setIsMobileMode] = useState(false);
@@ -229,11 +230,16 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     fetchDashboardStats();
 
     const handleRefresh = () => {
-      fetchDashboardStats();
+      setIsRefreshingData(true);
+      fetchDashboardStats().finally(() => {
+        setTimeout(() => setIsRefreshingData(false), 600);
+      });
     };
     window.addEventListener('refresh-dashboard', handleRefresh);
+    window.addEventListener('refresh-all-data', handleRefresh);
     return () => {
       window.removeEventListener('refresh-dashboard', handleRefresh);
+      window.removeEventListener('refresh-all-data', handleRefresh);
     };
   }, []);
 
@@ -608,7 +614,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   };
 
   return (
-    <div className="p-4 sm:p-6 space-y-6 animate-in fade-in duration-500">
+    <div className={`p-4 sm:p-6 space-y-6 animate-in fade-in duration-500 transition-all duration-300 ${isRefreshingData ? 'opacity-60 scale-[0.99] blur-[0.5px]' : 'opacity-100 scale-100'}`}>
       
       {/* Dashboard Toggle Switcher & Language Switcher */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white border border-gray-200 p-2.5 rounded-2xl shadow-sm gap-3">

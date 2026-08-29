@@ -66,17 +66,45 @@ export function Header({
     setIsRefreshing(true);
 
     try {
+      // 1. Clear any active input focus to unbind keyboard capture
+      if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+
+      // 2. Execute custom onRefresh callback if provided
       if (onRefresh) {
         await Promise.resolve(onRefresh());
       }
-      // Broadcast single synchronized refresh event to all modules
-      window.dispatchEvent(new CustomEvent('refresh-all-data'));
+
+      // 3. Trigger Electron IPC renderer cache flush if running in Electron
+      const win = typeof window !== 'undefined' ? (window as any) : null;
+      if (win?.electronAPI?.clearRendererCache) {
+        try {
+          await win.electronAPI.clearRendererCache();
+        } catch (_) {}
+      }
+
+      // 4. Clean up any stuck DOM modals/overlays (leave permanent root)
+      if (typeof document !== 'undefined') {
+        document.querySelectorAll('.modal-backdrop, [role="dialog"]').forEach(el => {
+          if (!el.classList.contains('permanent') && !el.closest('#root')) {
+            el.remove();
+          }
+        });
+      }
+
+      // 5. Broadcast single synchronized refresh events to all modules without reloading window
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('app:force-sync-data'));
+        window.dispatchEvent(new CustomEvent('refresh-all-data'));
+        window.dispatchEvent(new CustomEvent('settings-updated'));
+      }
     } catch (err) {
       console.error('Page refresh error:', err);
     } finally {
       setTimeout(() => {
         setIsRefreshing(false);
-      }, 500);
+      }, 700);
     }
   };
 

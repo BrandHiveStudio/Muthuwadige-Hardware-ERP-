@@ -38,6 +38,8 @@ const fetchTable = async (table: string, type?: string, filter?: { col: string; 
       data = await api.sales.returns.getAll();
     } else if (table === 'credit_notes') {
       data = await api.creditNotes.getAll();
+    } else if (table === 'credit_payments' || table === 'credit_settlements') {
+      data = await api.creditPayments.getAll();
     } else {
       const res = await fetchWithTimeout(`${API_URL}/${table}`);
       if (res.ok) data = await res.json();
@@ -80,6 +82,8 @@ const insertTable = async (table: string, payload: any) => {
       result = await api.transactions.save(payload);
     } else if (table === 'sales_returns') {
       result = await api.sales.returns.process(payload);
+    } else if (table === 'credit_payments' || table === 'credit_settlements') {
+      result = await api.creditPayments.save(Array.isArray(payload) ? payload[0] : payload);
     } else {
       const res = await fetchWithTimeout(`${API_URL}/${table}`, {
         method: 'POST',
@@ -212,7 +216,8 @@ export const supabase: any = {
       try {
         const name = options?.data?.full_name || 'Staff Member';
         const role = options?.data?.role || 'cashier';
-        const { data, error } = await api.auth.register(email, password, name, role);
+        const permissions = options?.data?.permissions;
+        const { data, error } = await api.auth.register(email, password, name, role, permissions);
         if (error) throw error;
         return { data: { user: data.user }, error: null };
       } catch (err: any) {

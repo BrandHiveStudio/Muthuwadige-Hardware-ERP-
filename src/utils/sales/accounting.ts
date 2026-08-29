@@ -3,6 +3,8 @@
  * Muthuwadige Hardware ERP - Unified Remediation Engine
  */
 
+export { calculateEffectiveUnitPricePaid } from '../accounting';
+
 export interface SaleAccountingSummary {
   originalTotal: number;
   originalPaid: number;

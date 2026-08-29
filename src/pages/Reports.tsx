@@ -107,7 +107,12 @@ const getItemUnitCost = (product: any, itemUnit?: string, itemConvRate?: number,
 };
 
 type Tab = 'sales' | 'inventory' | 'financial';
-export function Reports() {
+
+interface ReportsProps {
+  currentUser?: any;
+}
+
+export function Reports({ currentUser }: ReportsProps = {}) {
   const { currency } = useCurrency();
   const [isSinhala, setIsSinhala] = useState(false);
   const t = (en: string, si: string) => isSinhala ? si : en;
@@ -133,25 +138,34 @@ export function Reports() {
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [salesReturns, setSalesReturns] = useState<any[]>([]);
   const [creditPayments, setCreditPayments] = useState<any[]>([]);
-  const [shopName, setShopName] = useState('MUTHUWADIGE HARDWARE');
+  const [profiles, setProfiles] = useState<any[]>([]);
+  const [shopName, setShopName] = useState('Sanoj Hardware');
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
+  const [isRefreshingData, setIsRefreshingData] = useState(false);
 
   const fetchData = async () => {
-    const { data: sData } = await supabase.from('sales').select('*');
-    const { data: pData } = await supabase.from('products').select('*');
-    const { data: tData } = await supabase.from('transactions').select('*');
-    const { data: cData } = await supabase.from('customers').select('*');
-    const { data: supData } = await supabase.from('suppliers').select('*');
-    const { data: srData } = await supabase.from('sales_returns').select('*');
-    const { data: cpData } = await supabase.from('credit_payments').select('*');
-    if (sData) setSales(sData);
-    if (pData) setProducts(pData);
-    if (tData) setTransactions(tData);
-    if (cData) setCustomers(cData);
-    if (supData) setSuppliers(supData);
-    if (srData) setSalesReturns(srData);
-    if (cpData) setCreditPayments(cpData);
+    setIsRefreshingData(true);
+    try {
+      const { data: sData } = await supabase.from('sales').select('*');
+      const { data: pData } = await supabase.from('products').select('*');
+      const { data: tData } = await supabase.from('transactions').select('*');
+      const { data: cData } = await supabase.from('customers').select('*');
+      const { data: supData } = await supabase.from('suppliers').select('*');
+      const { data: srData } = await supabase.from('sales_returns').select('*');
+      const { data: cpData } = await supabase.from('credit_payments').select('*');
+      const { data: prData } = await supabase.from('profiles').select('*');
+      if (sData) setSales(sData);
+      if (pData) setProducts(pData);
+      if (tData) setTransactions(tData);
+      if (cData) setCustomers(cData);
+      if (supData) setSuppliers(supData);
+      if (srData) setSalesReturns(srData);
+      if (cpData) setCreditPayments(cpData);
+      if (prData) setProfiles(prData);
+    } finally {
+      setTimeout(() => setIsRefreshingData(false), 600);
+    }
   };
 
   const fetchSettings = async () => {
@@ -170,9 +184,11 @@ export function Reports() {
     fetchSettings();
     window.addEventListener('settings-updated', fetchSettings);
     window.addEventListener('refresh-reports', fetchData);
+    window.addEventListener('refresh-all-data', fetchData);
     return () => {
       window.removeEventListener('settings-updated', fetchSettings);
       window.removeEventListener('refresh-reports', fetchData);
+      window.removeEventListener('refresh-all-data', fetchData);
     };
   }, []);
 
@@ -720,8 +736,73 @@ export function Reports() {
   const todayCredit = calcCredit;
   const todayBank = calcBank;
 
+  const resolveCashierDisplayName = (rawName?: string, email?: string, userId?: string): string => {
+    const rawVal = (rawName || '').trim();
+    const emVal = (email || '').trim().toLowerCase();
+    const idVal = (userId || '').trim();
+
+    // Baseline shop identity
+    const baselineName = shopName || 'Sanoj Hardware';
+
+    // 1. Check against registered dedicated staff accounts (profiles)
+    if (profiles && profiles.length > 0) {
+      const matchedStaff = profiles.find(p => {
+        const pRole = (p.role || '').toLowerCase().trim();
+        const pEmail = (p.email || '').toLowerCase().trim();
+        const pName = (p.name || p.fullName || '').toLowerCase().trim();
+        const pUsername = (p.username || '').toLowerCase().trim();
+
+        // Exclude Super Admin / Root Admin from dedicated staff accounts
+        if (
+          pRole === 'super_admin' || 
+          pRole === 'super admin' || 
+          pRole === 'superadmin' || 
+          pRole === 'admin' || 
+          pEmail === 'admin@hardware.com' || 
+          pEmail === 'sanojhardware@gmail.com' ||
+          p.id === 'u1' ||
+          p.id === 'u2' ||
+          p.id === 'admin_super'
+        ) {
+          return false;
+        }
+
+        // Match dedicated staff by ID, email, name, or username
+        if (idVal && (p.id === idVal || p.id === idVal.replace(/^u_/, '') || `u_${p.id}` === idVal)) return true;
+        if (emVal && pEmail === emVal) return true;
+        if (rawVal) {
+          const lowerRaw = rawVal.toLowerCase();
+          if (pName && lowerRaw === pName) return true;
+          if (pUsername && lowerRaw === pUsername) return true;
+          if (pEmail && lowerRaw === pEmail) return true;
+        }
+        return false;
+      });
+
+      if (matchedStaff) {
+        return matchedStaff.name || matchedStaff.fullName || matchedStaff.username || matchedStaff.email;
+      }
+    }
+
+    // 2. Check if active logged-in user is a dedicated secondary staff account
+    if (currentUser) {
+      const curRole = (currentUser.role || '').toLowerCase().trim();
+      const curEmail = (currentUser.email || '').toLowerCase().trim();
+      const isSuper = curRole === 'super_admin' || curRole === 'super admin' || curRole === 'superadmin' || curRole === 'admin' || curEmail === 'admin@hardware.com' || curEmail === 'sanojhardware@gmail.com';
+      if (!isSuper) {
+        const curName = (currentUser.name || currentUser.username || '').trim();
+        if ((emVal && curEmail === emVal) || (idVal && (currentUser.id === idVal || `u_${currentUser.id}` === idVal)) || (rawVal && curName && rawVal.toLowerCase() === curName.toLowerCase())) {
+          return curName || currentUser.email;
+        }
+      }
+    }
+
+    // 3. Any transaction without an explicitly registered separate staff account automatically maps to Sanoj Hardware
+    return baselineName;
+  };
+
   const cashierSummary = todaySales.reduce((acc, s) => {
-    const cashierName = s.cashier || s.user_email || 'System / Cashier';
+    const cashierName = resolveCashierDisplayName(s.cashier || s.user_name || s.user_id, s.user_email, s.user_id);
     const isCredit = isCreditSaleRecord(s);
     // Realized amount: for non-credit sales count payment/total; for credit sales count cash paid at POS (excludes unpaid credit invoices such as INV004)
     const realizedAmt = isCredit
@@ -741,10 +822,11 @@ export function Reports() {
 
   // Add credit debt repayments / settlements collected during shift
   periodCreditPayments.forEach(cp => {
-    const cashierName = cp.recorded_by || cp.cashier || 'System / Cashier';
+    const cashierName = resolveCashierDisplayName(cp.recorded_by || cp.created_by || cp.cashier, cp.user_email, cp.user_id);
     const payAmt = Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0));
     if (cashierSummary[cashierName]) {
       cashierSummary[cashierName].amount += payAmt;
+      cashierSummary[cashierName].count += 1;
     } else {
       cashierSummary[cashierName] = { amount: payAmt, count: 1 };
     }
@@ -985,7 +1067,7 @@ export function Reports() {
   };
 
   return (
-    <div className="p-4 sm:p-6 space-y-6 text-left">
+    <div className={`p-4 sm:p-6 space-y-6 text-left transition-all duration-300 ${isRefreshingData ? 'opacity-60 scale-[0.99] blur-[0.5px]' : 'opacity-100 scale-100'}`}>
       
       {/* Tab Navigation & Language Switcher Header wrapper */}
       <div className="flex flex-col lg:flex-row justify-between items-stretch lg:items-center bg-gradient-to-r from-slate-900 via-slate-800 to-slate-950 p-4 rounded-3xl shadow-xl border border-slate-800 gap-4 mb-4">

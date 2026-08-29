@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   checkBackendHealth: async () => {
     return await ipcRenderer.invoke('check-backend-health');
+  },
+  clearRendererCache: async () => {
+    return await ipcRenderer.invoke('clear-renderer-cache');
   }
 });
 

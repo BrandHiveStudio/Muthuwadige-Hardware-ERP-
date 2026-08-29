@@ -20,6 +20,7 @@ import { useCurrency } from '../context/CurrencyContext'; // Global currency syn
 import type { Customer, SaleOrder } from '../types';
 import { calculateSaleAccounting, isCreditSaleRecord } from '../utils/accounting';
 import { openExternalUrl, formatWhatsAppUrl } from '../utils/openExternalUrl';
+import { recordCreditSettlement, resolveAuthorName, type CurrentUserSession } from '../services/creditService';
 
 const emptyCustomer: Omit<Customer, 'id'> = {
   name: '',
@@ -31,11 +32,16 @@ const emptyCustomer: Omit<Customer, 'id'> = {
   joinDate: new Date().toISOString().split('T')[0]
 };
 
-export function Customers() {
+interface CustomersProps {
+  currentUser?: CurrentUserSession | null;
+}
+
+export function Customers({ currentUser }: CustomersProps = {}) {
   const { currency, exchangeRate = 300 } = useCurrency(); 
   const symbol = 'Rs.';
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const isPrintingRef = useRef(false);
 
   const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -369,20 +375,8 @@ export function Customers() {
 
         await supabase.from('sales').update({ status: 'Fully Settled', payment_received: newPaymentReceived }).eq('id', id);
 
-        // Record income transaction for Cash Book / Finance / Dashboard
-        await supabase.from('transactions').insert([{
-          id: 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-          type: 'income',
-          category: 'Sales Income (Credit Settlement)',
-          description: `Credit Settlement for Invoice ${invNo} (${settleCustomer.name})`,
-          amount: paidThisTime,
-          date: new Date().toLocaleDateString('sv-SE'),
-          reference: invNo
-        }]);
-
-        // Record Credit Payment History log
-        await supabase.from('credit_payments').insert([{
-          id: 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+        // Record credit settlement & cash flow transactions log using unified session user
+        await recordCreditSettlement({
           sale_id: id,
           invoice_no: invNo,
           customer_id: settleCustomer.id,
@@ -390,9 +384,8 @@ export function Customers() {
           amount_paid: paidThisTime,
           remaining_balance: 0,
           payment_method: settlementPaymentMethod,
-          payment_date: new Date().toISOString(),
-          recorded_by: 'system'
-        }]);
+          payment_date: new Date().toISOString()
+        }, currentUser);
       }
 
       // If there's remaining money and still unpaid invoices, record partial payment on the next invoice
@@ -412,18 +405,7 @@ export function Customers() {
           settledInvoicesInfo.push({ invoiceNo: invNo, amount: paidThisTime });
           invoicesFullySettled.push(nextInvoice.id);
 
-          await supabase.from('transactions').insert([{
-            id: 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-            type: 'income',
-            category: 'Sales Income (Credit Settlement)',
-            description: `Credit Settlement for Invoice ${invNo} (${settleCustomer.name})`,
-            amount: paidThisTime,
-            date: new Date().toLocaleDateString('sv-SE'),
-            reference: invNo
-          }]);
-
-          await supabase.from('credit_payments').insert([{
-            id: 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+          await recordCreditSettlement({
             sale_id: nextInvoice.id,
             invoice_no: invNo,
             customer_id: settleCustomer.id,
@@ -431,9 +413,8 @@ export function Customers() {
             amount_paid: paidThisTime,
             remaining_balance: 0,
             payment_method: settlementPaymentMethod,
-            payment_date: new Date().toISOString(),
-            recorded_by: 'system'
-          }]);
+            payment_date: new Date().toISOString()
+          }, currentUser);
 
           remainingToPay = remainingToPay - paidThisTime;
         } else if (remainingToPay > 0) {
@@ -445,18 +426,7 @@ export function Customers() {
 
           const remainingBal = remainingOnNext - paidThisTime;  // Remaining after this partial payment
 
-          await supabase.from('transactions').insert([{
-            id: 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-            type: 'income',
-            category: 'Sales Income (Partial Credit Settlement)',
-            description: `Partial Credit Payment for Invoice ${invNo} (${settleCustomer.name})`,
-            amount: paidThisTime,
-            date: new Date().toLocaleDateString('sv-SE'),
-            reference: invNo
-          }]);
-
-          await supabase.from('credit_payments').insert([{
-            id: 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+          await recordCreditSettlement({
             sale_id: nextInvoice.id,
             invoice_no: invNo,
             customer_id: settleCustomer.id,
@@ -464,9 +434,8 @@ export function Customers() {
             amount_paid: paidThisTime,
             remaining_balance: remainingBal,
             payment_method: settlementPaymentMethod,
-            payment_date: new Date().toISOString(),
-            recorded_by: 'system'
-          }]);
+            payment_date: new Date().toISOString()
+          }, currentUser);
 
           remainingToPay = 0;
         }
@@ -498,20 +467,19 @@ export function Customers() {
     }
   };
 
-  const handlePrintSettleReceipt = (receipt: any) => {
-    
+  const generateSettlementReceiptHTML = (receipt: any) => {
     const shopName = shopSettings?.shop_name || 'MUTHUWADIGE HARDWARE';
     const shopAddress = shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo';
     const shopPhone = shopSettings?.phone || '077 076 076 7';
     
-    const settledRows = receipt.settledInvoices.map((inv: any) => `
+    const settledRows = (receipt.settledInvoices || []).map((inv: any) => `
       <tr style="border-bottom: 1px solid #e5e7eb;">
         <td style="padding: 10px; font-weight: bold; color: #464646; text-align: left;">${inv.invoiceNo}</td>
         <td style="padding: 10px; text-align: right; color: #464646; font-weight: bold;">${symbol} ${convert(inv.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
       </tr>
     `).join('');
 
-    const htmlContent = `
+    return `
       <!DOCTYPE html>
       <html>
         <head>
@@ -728,39 +696,82 @@ export function Customers() {
               <p style="font-weight: bold;">${t('Thank you for your business!', 'ඔබගේ ගනුදෙනුවට ස්තූතියි!')}</p>
             </div>
           </div>
-          <script>
-            window.onload = function() {
-              setTimeout(function() {
-                window.print();
-              }, 300);
-            }
-          </script>
         </body>
       </html>
     `;
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'fixed';
-    iframe.style.right = '0';
-    iframe.style.bottom = '0';
-    iframe.style.width = '0';
-    iframe.style.height = '0';
-    iframe.style.border = '0';
-    document.body.appendChild(iframe);
+  };
 
-    const doc = iframe.contentWindow?.document || iframe.contentDocument;
-    if (doc) {
-      doc.open();
-      doc.write(htmlContent);
-      doc.close();
+  const handlePrintSettleReceipt = (receipt: any) => {
+    if (!receipt) return;
+    // 1. Guard against duplicate rapid clicks / double triggers
+    if (isPrintingRef.current) return;
+    isPrintingRef.current = true;
+
+    try {
+      // 2. Clear active element focus to prevent keyboard / pointer capture
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+
+      // 3. Generate and trigger print slip with a single call
+      const htmlContent = generateSettlementReceiptHTML(receipt);
+      const printWindow = window.open('', '_blank', 'width=350,height=600');
+      
+      if (!printWindow) {
+        // Fallback to iframe
+        const iframe = document.createElement('iframe');
+        iframe.style.position = 'fixed';
+        iframe.style.right = '0';
+        iframe.style.bottom = '0';
+        iframe.style.width = '0';
+        iframe.style.height = '0';
+        iframe.style.border = '0';
+        document.body.appendChild(iframe);
+
+        const doc = iframe.contentWindow?.document || iframe.contentDocument;
+        if (doc) {
+          doc.open();
+          doc.write(htmlContent);
+          doc.close();
+        }
+
+        setTimeout(() => {
+          try {
+            iframe.contentWindow?.focus();
+            iframe.contentWindow?.print();
+          } catch (e) {
+            console.error('Print Error:', e);
+          } finally {
+            setTimeout(() => {
+              if (document.body.contains(iframe)) document.body.removeChild(iframe);
+              isPrintingRef.current = false;
+            }, 800);
+          }
+        }, 300);
+        return;
+      }
+
+      printWindow.document.write(htmlContent);
+      printWindow.document.close();
+
+      // 4. Safely execute print after render and release thread lock on close
+      printWindow.onload = () => {
+        printWindow.focus();
+        printWindow.print();
+        printWindow.close();
+        
+        setTimeout(() => {
+          isPrintingRef.current = false;
+        }, 500);
+      };
+
+      printWindow.onafterprint = () => {
+        isPrintingRef.current = false;
+      };
+    } catch (err) {
+      console.error('Print Error:', err);
+      isPrintingRef.current = false;
     }
-
-    setTimeout(() => {
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
-      setTimeout(() => {
-        document.body.removeChild(iframe);
-      }, 1000);
-    }, 300);
   };
 
   const handleSelectedSettle = async () => {
@@ -803,20 +814,8 @@ export function Customers() {
 
         await supabase.from('sales').update({ status: 'Fully Settled', payment_received: newPaymentReceived }).eq('id', id);
 
-        // Record income transaction for Cash Book / Finance / Dashboard
-        await supabase.from('transactions').insert([{
-          id: 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-          type: 'income',
-          category: 'Sales Income (Credit Settlement)',
-          description: `Credit Settlement for Invoice ${invNo} (${settleCustomer.name})`,
-          amount: paidThisTime,
-          date: new Date().toLocaleDateString('sv-SE'),
-          reference: invNo
-        }]);
-
-        // Record Credit Payment History log
-        await supabase.from('credit_payments').insert([{
-          id: 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+        // Record credit settlement & cash flow transactions log using unified session user
+        await recordCreditSettlement({
           sale_id: id,
           invoice_no: invNo,
           customer_id: settleCustomer.id,
@@ -824,9 +823,8 @@ export function Customers() {
           amount_paid: paidThisTime,
           remaining_balance: 0,
           payment_method: settlementPaymentMethod,
-          payment_date: new Date().toISOString(),
-          recorded_by: 'system'
-        }]);
+          payment_date: new Date().toISOString()
+        }, currentUser);
       }
 
       const allUnpaidTotal = settleCustomer.unpaidSales.reduce((sum: number, s: any) => {
@@ -2098,6 +2096,7 @@ export function Customers() {
               {/* Receipt Action Buttons */}
               <div className="flex gap-3 mt-2">
                 <button
+                  type="button"
                   onClick={() => handlePrintSettleReceipt(paymentReceipt)}
                   className="flex-1 py-3.5 bg-slate-800 hover:bg-slate-700 text-white rounded-2xl font-black uppercase tracking-widest text-xs transition-all shadow-lg flex items-center justify-center gap-2"
                 >
@@ -2105,7 +2104,11 @@ export function Customers() {
                   {t('Print', 'මුද්‍රණය')}
                 </button>
                 <button
-                  onClick={() => setPaymentReceipt(null)}
+                  type="button"
+                  onClick={() => {
+                    setPaymentReceipt(null);
+                    fetchData();
+                  }}
                   className="flex-1 py-3.5 bg-gradient-to-r from-[#DAA520] to-[#B8860B] hover:brightness-110 text-white rounded-2xl font-black uppercase tracking-widest text-xs transition-all shadow-lg shadow-[#DAA520]/20"
                 >
                   {t('Done', 'හරි')}

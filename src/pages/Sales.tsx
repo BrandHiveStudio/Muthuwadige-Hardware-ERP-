@@ -30,16 +30,18 @@ import {
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
+import { usePOSCart } from '../features/pos/hooks/usePOSCart';
 import { Modal } from '../components/Modal';
 import { notify } from '../components/Notifications';
 import { supabase } from '../lib/supabaseClient';
 import { useCurrency } from '../context/CurrencyContext';
 import { useScanner } from '../context/ScannerContext';
+import { useSettings } from '../context/SettingsContext';
 import { api, API_URL, BASE_URL, fetchWithTimeout } from '../lib/api'; 
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { SaleOrder, SaleItem, Customer, Product, Quotation, DeliveryNote, SalesReturn, CreditNote, CreditNoteUsage } from '../types';
-import { calculateSaleAccounting } from '../utils/sales/accounting';
+import { calculateSaleAccounting, calculateEffectiveUnitPricePaid } from '../utils/sales/accounting';
 import { formatStock } from '../utils/formatters';
 import { sinhalaFontBase64 } from '../utils/sinhalaFontBase64';
 import {
@@ -57,7 +59,7 @@ const safeParseJson = (data: any, fallback: any = []) => {
   if (typeof data === 'string') {
     try {
       return JSON.parse(data);
-    } catch (e) {
+    } catch (_) {
       return fallback;
     }
   }
@@ -77,8 +79,10 @@ const statusColors: Record<string, string> = {
 };
 
 function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }: { order: SaleOrder; isSinhala: boolean; customers?: Customer[]; salesReturns?: SalesReturn[] }) {
-  const symbol = isSinhala ? 'රු.' : 'Rs.';
+  const { settings } = useSettings();
+  const symbol = isSinhala ? 'රු.' : (settings.currency || 'Rs.');
   const formatNum = (num: number) => (num || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const items = Array.isArray(order.items) ? order.items : safeParseJson(order.items, []);
   
   const matchedCust = customers.find(c => 
     (order.customer_id && c.id === order.customer_id) || 
@@ -100,20 +104,28 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
 
   return (
     <div id="receipt-preview" className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-inner text-left max-w-2xl mx-auto my-4 font-sans leading-relaxed">
-      {/* Dark Header Banner */}
       <div className="bg-[#464646] p-6 text-white relative flex justify-between items-center h-[110px] overflow-visible">
         <div>
-          <h1 className="text-lg font-black tracking-wide m-0 leading-tight">MUTHUWADIGE HARDWARE</h1>
-          <p className="text-[10px] opacity-90 m-0 mt-1 font-semibold">No: 80, Mahahunupitiya, Negombo</p>
-          <p className="text-[10px] opacity-90 m-0 mt-0.5 font-semibold">Contact: 077 076 076 7</p>
+          <h1 className="text-lg font-black tracking-wide m-0 leading-tight">
+            {settings.storeName || settings.shop_name || 'MUTHUWADIGE HARDWARE'}
+          </h1>
+          <p className="text-[10px] opacity-90 m-0 mt-1 font-semibold">
+            {settings.address || 'No: 80, Mahahunupitiya, Negombo'}
+          </p>
+          <p className="text-[10px] opacity-90 m-0 mt-0.5 font-semibold">
+            Contact: {settings.phone || settings.telephone || '077 076 076 7'}
+          </p>
         </div>
-        {/* Wider Black Protruding Logo Container */}
         <div className="absolute right-8 top-0 bg-black border border-gray-900 border-t-0 rounded-b-lg w-[170px] h-[138px] flex items-center justify-center shadow-md z-10 p-0 overflow-hidden">
-          <img src="./images/logo.png" alt="Logo" className="w-full h-full object-contain scale-115 transition-transform" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+          <img 
+            src={settings.logoUrl || settings.logo_path || "./images/logo.png"} 
+            alt="Logo" 
+            className="w-full h-full object-contain scale-115 transition-transform" 
+            onError={(e) => { e.currentTarget.style.display = 'none'; }} 
+          />
         </div>
       </div>
       
-      {/* Title */}
       <div className="mt-8 text-center flex flex-col items-center justify-center">
         {(order.payment_method === 'Credit' || order.status === 'Non Paid') ? (
           <div className="bg-slate-900 border-2 border-amber-500 px-8 py-2.5 rounded-2xl shadow-lg shadow-slate-900/15 inline-block">
@@ -128,7 +140,6 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
         )}
       </div>
       
-      {/* Meta details */}
       <div className="mx-6 my-4 flex justify-between items-start text-xs gap-4">
         <div>
           <h3 className="text-[#595959] text-[9px] font-black uppercase tracking-wider mb-1">{isSinhala ? 'පාරිභෝගිකයා:' : 'BILL TO:'}</h3>
@@ -144,13 +155,13 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
           <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'ඉන්වොයිස් අංකය:' : 'INVOICE NO:'}</span> <strong className="text-slate-800 font-black">{order.invoiceNo || order.invoice_no}</strong></p>
           <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'නිකුත් කළ දිනය:' : 'ISSUE DATE:'}</span> {formatInvoiceDateTime(order.created_at, order.date)}</p>
           <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'ගෙවීම් ක්‍රමය:' : 'PAYMENT METHOD:'}</span> <strong className="uppercase text-slate-900 font-black bg-amber-100 text-amber-900 px-2 py-0.5 rounded text-[10px] border border-amber-300">{(order.payment_method || (order as any).paymentMethod || (order.status === 'Non Paid' ? 'CREDIT' : 'CASH')).toUpperCase()}</strong></p>
+          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'අයකැමි:' : 'CASHIER:'}</span> <strong className="text-slate-800 font-black">{order.cashier || (order as any).cashier_name || (order as any).user_name || (settings?.shop_name || 'Sanoj Hardware')}</strong></p>
           {((order.payment_method || (order as any).paymentMethod || '').toLowerCase() === 'credit' || order.status === 'Non Paid') && (
             <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'තත්ත්වය:' : 'STATUS:'}</span> <span className="inline-block bg-rose-50 border border-rose-200 text-rose-700 text-[10px] font-black px-2.5 py-0.5 rounded uppercase">{isSinhala ? `නොගෙවූ / හිඟ (ණය කාලය: ${(order as any).credit_period || (order as any).payment_terms || order.credit_period_days || 30} දින)` : `UNPAID / OUTSTANDING (Credit Period: ${(order as any).credit_period || (order as any).payment_terms || order.credit_period_days || 30} Days)`}</span></p>
           )}
         </div>
       </div>
       
-      {/* Table with precise geometry */}
       <div className="mx-6 my-4 overflow-hidden border border-gray-100 rounded-lg">
         <table className="w-full text-xs border-collapse">
           <thead>
@@ -162,7 +173,7 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {(Array.isArray(order.items) ? order.items : (typeof order.items === 'string' ? (() => { try { return JSON.parse(order.items); } catch(e) { return []; } })() : [])).map((item: any, idx: number) => {
+            {items.map((item: any, idx: number) => {
               const qty = Number(item.quantity || item.qty || 1);
               const price = Number(item.unit_price || item.price || 0);
               const grossRowTotal = qty * price;
@@ -179,7 +190,6 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
         </table>
       </div>
 
-      {/* Associated Sales Returns & Exchange Activity Card */}
       {activeOrderReturns.length > 0 && (
         <div className="mx-6 my-4 bg-amber-50/50 border border-amber-200 rounded-xl p-4 space-y-3">
           <h4 className="text-xs font-black text-amber-900 uppercase tracking-widest flex items-center gap-1.5 border-b border-amber-200/60 pb-2">
@@ -200,7 +210,6 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
                   <span className="text-gray-400 text-[10px]">{formatInvoiceDateTime(retRecord.created_at)}</span>
                 </div>
 
-                {/* Returned Sub-Items */}
                 {retItems.length > 0 && (
                   <div>
                     <span className="text-[10px] font-black text-rose-700 uppercase block mb-1">↩ {isSinhala ? 'ආපසු භාරගත් භාණ්ඩ:' : 'Returned Sub-Items:'}</span>
@@ -215,7 +224,6 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
                   </div>
                 )}
 
-                {/* Exchange Replacement Sub-Items */}
                 {exItems.length > 0 && (
                   <div className="pt-1">
                     <span className="text-[10px] font-black text-emerald-700 uppercase block mb-1">⇄ {isSinhala ? 'හුවමාරු ලබාදුන් නව භාණ්ඩ:' : 'Exchange Replacement Sub-Items:'}</span>
@@ -235,16 +243,13 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
         </div>
       )}
       
-      {/* Bottom section matching paper output exactly */}
       <div className="mx-6 mt-12 mb-4 flex justify-between items-start flex-wrap gap-4 text-xs">
-        {/* Notes on bottom left */}
         <div className="w-[45%]">
           <h3 className="text-[#d29d2b] text-[9px] font-black uppercase tracking-wider mb-1">{isSinhala ? 'සටහන්' : 'NOTES'}</h3>
           <p className="text-gray-400 font-semibold mb-1 text-[10px]">{isSinhala ? 'කිසියම් ප්‍රශ්නයක් ඇත්නම් කරුණාකර අප හා සම්බන්ධ වන්න.' : 'Please feel free to contact us in case of any questions.'}</p>
           <p className="text-[#4b5563] font-bold text-[10px]">{isSinhala ? 'ඔබගේ ව්‍යාපාරයට ස්තූතියි!' : 'Thank you for your business!'}</p>
         </div>
         
-        {/* Totals with exact light grey styling & right margin safety */}
         <div className="w-[48%] space-y-2 text-right pr-3">
           <div className="flex justify-between font-semibold text-gray-500">
             <span>{isSinhala ? 'උප එකතුව:' : 'Sub Total:'}</span>
@@ -311,7 +316,6 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
         </div>
       </div>
       
-      {/* Signature */}
       <div className="mx-6 mt-16 mb-6 text-right">
         <div className="inline-block border-t border-gray-300 pt-1.5 w-40 text-center text-[10px] italic text-gray-400 font-semibold">
           {isSinhala ? 'බලයලත් අත්සන' : 'Authorized Signee'}
@@ -321,7 +325,6 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
   );
 }
 
-// Return Receipt Preview Component
 function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: SalesReturn; isSinhala: boolean }) {
   const symbol = isSinhala ? 'රු.' : 'Rs.';
   const formatNum = (num: number) => (num || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -345,9 +348,15 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
       ? (isSinhala ? 'ණය සටහන් රසීදුව' : 'CREDIT NOTE RECEIPT')
       : (isSinhala ? 'ආපසු භාරගැනීමේ රසීදුව' : 'RETURN RECEIPT');
 
+  const grossReturnVal = returnedItemsList.reduce((sum: number, i: any) => sum + ((i.qty || 1) * Number(i.originalStickerPrice || i.originalUnitPrice || i.price || 0)), 0);
+  const discountReturnVal = returnedItemsList.reduce((sum: number, i: any) => sum + ((i.qty || 1) * Number(i.unitDiscount || (i.discount ? (Number(i.discount) / Number(i.qty || 1)) : 0))), 0);
+  const returnCreditValue = Number(returnRecord.returnAmount !== undefined ? returnRecord.returnAmount : (returnRecord.totalRefunded || (grossReturnVal - discountReturnVal) || 0));
+  const exchangeTotal = Number(returnRecord.exchangeAmount !== undefined ? returnRecord.exchangeAmount : exchangeItemsList.reduce((sum: number, i: any) => sum + (Number(i.qty || 1) * Number(i.price || i.unitPrice || 0)), 0));
+  const priceDifference = exchangeTotal - returnCreditValue;
+  const settlementMode = returnRecord.differencePaymentMethod || (returnRecord as any).difference_payment_method || (returnRecord as any).paymentMethod || (isCreditBill ? 'Customer Credit Debt' : 'Cash');
+
   return (
     <div id="return-receipt-preview" className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-inner text-left max-w-2xl mx-auto my-4 font-sans leading-relaxed">
-      {/* Header Banner */}
       <div className="bg-[#464646] p-6 text-white relative flex justify-between items-center h-[110px] overflow-visible">
         <div>
           <h1 className="text-lg font-black tracking-wide m-0 leading-tight">MUTHUWADIGE HARDWARE</h1>
@@ -359,7 +368,6 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
         </div>
       </div>
 
-      {/* Title */}
       <div className="mt-8 text-center flex flex-col items-center justify-center">
         <div className="bg-amber-500 border-2 border-amber-600 px-6 py-2 rounded-2xl shadow-md inline-block">
           <h2 className="text-slate-950 text-base font-black tracking-widest uppercase m-0">
@@ -368,7 +376,6 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
         </div>
       </div>
 
-      {/* Meta details */}
       <div className="mx-6 my-4 flex justify-between items-start text-xs gap-4 border-b border-gray-100 pb-3">
         <div>
           <h3 className="text-[#595959] text-[9px] font-black uppercase tracking-wider mb-1">{isSinhala ? 'පාරිභෝගිකයා:' : 'CUSTOMER:'}</h3>
@@ -381,10 +388,10 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
           <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'ආපසු අංකය:' : 'Return No:'}</span> <span className="font-mono text-slate-800 font-bold">{returnRecord.returnNo || returnRecord.return_no || returnRecord.id}</span></p>
           <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'මුල් ඉන්වොයිසිය:' : 'Original Inv:'}</span> <span className="font-mono text-amber-600 font-bold">{returnRecord.invoiceNo || returnRecord.invoice_no}</span></p>
           <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'දිනය:' : 'Date:'}</span> {formatInvoiceDateTime(returnRecord.created_at)}</p>
+          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'ක්‍රමය:' : 'Method:'}</span> <span className="font-bold text-slate-800">{displayReturnMethod}</span></p>
         </div>
       </div>
 
-      {/* Returned Items Table */}
       <div className="mx-6 my-3">
         <h4 className="text-xs font-black text-rose-700 uppercase tracking-wider mb-2 flex items-center gap-1">
           <span>↩</span> {isSinhala ? 'ආපසු භාරගත් භාණ්ඩ' : 'Returned Products'}
@@ -395,29 +402,43 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
               <tr className="bg-rose-50 text-rose-800 font-black uppercase text-[10px] tracking-wider">
                 <th className="py-2 px-3 text-left">{isSinhala ? 'විස්තරය' : 'Description'}</th>
                 <th className="py-2 px-3 text-center">{isSinhala ? 'ප්‍රමාණය' : 'Qty'}</th>
-                <th className="py-2 px-3 text-right">{isSinhala ? 'ඒකක මිල' : 'Unit Price'}</th>
+                <th className="py-2 px-3 text-right">{isSinhala ? 'ශුද්ධ ඒකක මිල' : 'Net Unit Price'}</th>
                 <th className="py-2 px-3 text-right">{isSinhala ? 'එකතුව' : 'Total'}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-rose-50">
-              {returnedItemsList.map((item: any, idx: number) => (
-                <tr key={idx} className="hover:bg-rose-50/30">
-                  <td className="py-2 px-3 font-bold text-slate-800">{item.productName}</td>
-                  <td className="py-2 px-3 text-center text-slate-600 font-semibold">{item.qty} {item.unit || ''}</td>
-                  <td className="py-2 px-3 text-right text-slate-600 font-semibold">{symbol} {formatNum(item.price)}</td>
-                  <td className="py-2 px-3 text-right font-bold text-rose-700">{symbol} {formatNum(item.qty * item.price)}</td>
-                </tr>
-              ))}
+              {returnedItemsList.map((item: any, idx: number) => {
+                const origPrice = Number(item.originalStickerPrice || item.originalUnitPrice || item.price || 0);
+                const { effectivePrice, unitDiscount } = calculateEffectiveUnitPricePaid(item, returnRecord);
+                const effectiveUnitPrice = item.netUnitPrice !== undefined ? Number(item.netUnitPrice) : effectivePrice;
+                const unitDisc = item.unitDiscount !== undefined ? Number(item.unitDiscount) : unitDiscount;
+                const lineTotal = Number(item.qty || 1) * effectiveUnitPrice;
+
+                return (
+                  <tr key={idx} className="hover:bg-rose-50/30">
+                    <td className="py-2 px-3 font-bold text-slate-800">
+                      <div>{item.productName || item.name}</div>
+                      {unitDisc > 0 && (
+                        <div className="text-[10px] text-rose-600 font-normal mt-0.5">
+                          {symbol} {formatNum(origPrice)} - {symbol} {formatNum(unitDisc)} disc = {symbol} {formatNum(effectiveUnitPrice)}/unit
+                        </div>
+                      )}
+                    </td>
+                    <td className="py-2 px-3 text-center text-slate-600 font-semibold">{item.qty} {item.unit || ''}</td>
+                    <td className="py-2 px-3 text-right text-slate-600 font-semibold">{symbol} {formatNum(effectiveUnitPrice)}</td>
+                    <td className="py-2 px-3 text-right font-bold text-rose-700">{symbol} {formatNum(lineTotal)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Exchange Items Table (if any) */}
       {exchangeItemsList.length > 0 && (
         <div className="mx-6 my-3">
           <h4 className="text-xs font-black text-emerald-700 uppercase tracking-wider mb-2 flex items-center gap-1">
-            <span>⇄</span> {isSinhala ? 'හුවමාරු ලැබුණු භාණ්ඩ' : 'Exchange Replacement Products'}
+            <span>⇄</span> {isSinhala ? 'හුවමාරු ලැබුණු නව භාණ්ඩ' : 'Exchange Replacement Products'}
           </h4>
           <div className="overflow-hidden border border-emerald-100 rounded-lg">
             <table className="w-full text-xs border-collapse">
@@ -430,25 +451,31 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
                 </tr>
               </thead>
               <tbody className="divide-y divide-emerald-50">
-                {exchangeItemsList.map((item: any, idx: number) => (
-                  <tr key={idx} className="hover:bg-emerald-50/30">
-                    <td className="py-2 px-3 font-bold text-slate-800">{item.productName}</td>
-                    <td className="py-2 px-3 text-center text-slate-600 font-semibold">{item.qty} {item.unit || ''}</td>
-                    <td className="py-2 px-3 text-right text-slate-600 font-semibold">{symbol} {formatNum(item.price)}</td>
-                    <td className="py-2 px-3 text-right font-bold text-emerald-700">{symbol} {formatNum(item.qty * item.price)}</td>
-                  </tr>
-                ))}
+                {exchangeItemsList.map((item: any, idx: number) => {
+                  const unitPrice = Number(item.price || item.unitPrice || 0);
+                  const total = Number(item.total !== undefined ? item.total : (Number(item.qty || 1) * unitPrice));
+                  return (
+                    <tr key={idx} className="hover:bg-emerald-50/30">
+                      <td className="py-2 px-3 font-bold text-slate-800">⇄ {item.productName || item.name}</td>
+                      <td className="py-2 px-3 text-center text-slate-600 font-semibold">{item.qty} {item.unit || ''}</td>
+                      <td className="py-2 px-3 text-right text-slate-600 font-semibold">{symbol} {formatNum(unitPrice)}</td>
+                      <td className="py-2 px-3 text-right font-bold text-emerald-700">{symbol} {formatNum(total)}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         </div>
       )}
 
-      {/* Financial Summary */}
-      <div className="mx-6 mt-4 mb-4 flex justify-between items-start flex-wrap gap-4 text-xs">
-        <div className="w-[45%]">
+      <div className="mx-6 mt-4 mb-4 flex justify-between items-start flex-wrap gap-4 text-xs font-mono">
+        <div className="w-[45%] font-sans">
           <h3 className="text-[#d29d2b] text-[9px] font-black uppercase tracking-wider mb-1">{isSinhala ? 'ආපසු ගෙවීමේ ක්‍රමය' : 'RETURN METHOD'}</h3>
           <p className="text-slate-800 font-black text-xs">{displayReturnMethod}</p>
+          <div className="mt-2 text-[11px] text-slate-600">
+            <span className="font-bold text-slate-700">{isSinhala ? 'පියවීමේ ක්‍රමය:' : 'Settlement Mode:'}</span> <span className="font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">{settlementMode}</span>
+          </div>
           {returnRecord.creditNoteNo && (
             <p className="text-amber-600 font-bold text-xs mt-1">Credit Note: {returnRecord.creditNoteNo}</p>
           )}
@@ -457,38 +484,64 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
           )}
         </div>
 
-        <div className="w-[45%] space-y-1.5 text-right">
+        <div className="w-[50%] space-y-1.5 text-right">
           <div className="flex justify-between font-semibold text-gray-500">
-            <span>{isSinhala ? 'ආපසු භාරගත් අගය:' : 'Return Total:'}</span>
-            <span className="font-bold text-rose-600">{symbol} {formatNum(returnRecord.returnAmount || returnRecord.totalRefunded || 0)}</span>
+            <span>{isSinhala ? 'ආපසු වටිනාකම (ශුද්ධ):' : 'Return Credit (Net):'}</span>
+            <span className="font-bold text-rose-600">{symbol} {formatNum(returnCreditValue)}</span>
           </div>
-          {returnRecord.exchangeAmount ? (
-            <div className="flex justify-between font-semibold text-gray-500">
-              <span>{isSinhala ? 'හුවමාරු භාණ්ඩ අගය:' : 'Exchange Total:'}</span>
-              <span className="font-bold text-emerald-600">{symbol} {formatNum(returnRecord.exchangeAmount)}</span>
+
+          {exchangeItemsList.length > 0 && (
+            <>
+              <div className="flex justify-between font-semibold text-gray-500">
+                <span>{isSinhala ? 'නව හුවමාරු මුළු එකතුව:' : 'Exchange New Total:'}</span>
+                <span className="font-bold text-emerald-600">{symbol} {formatNum(exchangeTotal)}</span>
+              </div>
+
+              <div className="border-t border-dashed border-slate-300 my-1"></div>
+
+              {priceDifference > 0 ? (
+                <div className="flex justify-between items-center py-2 px-2.5 bg-amber-50 rounded-lg border border-amber-200 text-amber-950 font-black text-xs">
+                  <span>{isSinhala ? 'පාරිභෝගිකයා අමතරව ගෙවිය යුතු මුදල:' : 'CUSTOMER EXTRA PAYABLE:'}</span>
+                  <span className="text-sm font-black text-amber-700">{symbol} {formatNum(priceDifference)}</span>
+                </div>
+              ) : priceDifference < 0 ? (
+                <div className="flex justify-between items-center py-2 px-2.5 bg-emerald-50 rounded-lg border border-emerald-200 text-emerald-950 font-black text-xs">
+                  <span>{isCreditBill ? (isSinhala ? 'ණය සැකසුම:' : 'CREDIT REDUCTION:') : (isSinhala ? 'ආපසු ගෙවිය යුතු මුදල:' : 'STORE REFUND TO CUSTOMER:')}</span>
+                  <span className="text-sm font-black text-emerald-700">{symbol} {formatNum(Math.abs(priceDifference))}</span>
+                </div>
+              ) : (
+                <div className="flex justify-between items-center py-2 px-2.5 bg-slate-100 rounded-lg border border-slate-200 text-slate-800 font-black text-xs">
+                  <span>{isSinhala ? 'ශුද්ධ ශේෂය:' : 'NET BALANCE:'}</span>
+                  <span>{symbol} 0.00 ({isSinhala ? 'සම ශේෂ හුවමාරුව' : 'Even Exchange'})</span>
+                </div>
+              )}
+
+              {Number(returnRecord.customerPaid || 0) > 0 && (
+                <div className="flex justify-between font-semibold text-slate-700 pt-0.5">
+                  <span>{isSinhala ? 'පාරිභෝගිකයා ගෙවූ මුදල:' : 'Customer Paid:'}</span>
+                  <span className="font-bold text-slate-900">{symbol} {formatNum(Number(returnRecord.customerPaid))}</span>
+                </div>
+              )}
+              {Number(returnRecord.changeGiven || 0) > 0 && (
+                <div className="flex justify-between font-semibold text-slate-700">
+                  <span>{isSinhala ? 'ඉතිරි මුදල:' : 'Change Given:'}</span>
+                  <span className="font-bold text-slate-900">{symbol} {formatNum(Number(returnRecord.changeGiven))}</span>
+                </div>
+              )}
+            </>
+          )}
+
+          {exchangeItemsList.length === 0 && (
+            <div className="flex justify-between items-center py-2 px-3 bg-slate-100 rounded-lg text-xs font-black text-slate-800 mt-2 border border-slate-200">
+              <span>{isCreditBill ? (isSinhala ? 'ණය සැකසුම:' : 'Credit Adjustment:') : (isSinhala ? 'මුළු ආපසු මුදල:' : 'Total Refunded:')}</span>
+              <span className="text-sm font-black text-emerald-700">{symbol} {formatNum(returnCreditValue)}</span>
             </div>
-          ) : null}
-          {returnRecord.customerPaid ? (
-            <div className="flex justify-between font-semibold text-gray-500">
-              <span>{isSinhala ? 'පාරිභෝගිකයා ගෙවූ මුදල:' : 'Customer Paid:'}</span>
-              <span className="font-bold text-slate-800">+{symbol} {formatNum(returnRecord.customerPaid)}</span>
-            </div>
-          ) : null}
-          {returnRecord.changeGiven ? (
-            <div className="flex justify-between font-semibold text-gray-500">
-              <span>{isSinhala ? 'ඉතිරි මුදල:' : 'Change Given:'}</span>
-              <span className="font-bold text-slate-800">-{symbol} {formatNum(returnRecord.changeGiven)}</span>
-            </div>
-          ) : null}
-          <div className="flex justify-between items-center py-2 px-3 bg-slate-100 rounded-lg text-xs font-black text-slate-800 mt-2 border border-slate-200">
-            <span>{isCreditBill ? (isSinhala ? 'ණය සැකසුම:' : 'Credit Adjustment:') : (isSinhala ? 'මුළු ආපසු/ගෙවූ මුදල:' : 'Net Refund/Paid:')}</span>
-            <span className="text-sm font-black text-emerald-700">{symbol} {formatNum(isCreditBill ? (returnRecord.returnAmount || returnRecord.totalRefunded || 0) : (returnRecord.totalRefunded || returnRecord.returnAmount || 0))}</span>
-          </div>
+          )}
         </div>
       </div>
 
       {/* Signature */}
-      <div className="mx-6 mt-10 mb-6 text-right">
+      <div className="mx-6 mt-8 mb-6 text-right">
         <div className="inline-block border-t border-gray-300 pt-1.5 w-40 text-center text-[10px] italic text-gray-400 font-semibold">
           {isSinhala ? 'බලයලත් අත්සන' : 'Authorized Signee'}
         </div>
@@ -499,7 +552,8 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
 
 // Credit Note Receipt Preview Component
 function CreditNoteReceiptPreview({ creditNoteRecord, isSinhala }: { creditNoteRecord: CreditNote; isSinhala: boolean }) {
-  const symbol = isSinhala ? 'රු.' : 'Rs.';
+  const { settings } = useSettings();
+  const symbol = isSinhala ? 'රු.' : (settings.currency || 'Rs.');
   const formatNum = (num: number) => (num || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const itemsList = Array.isArray(creditNoteRecord.items)
@@ -511,12 +565,23 @@ function CreditNoteReceiptPreview({ creditNoteRecord, isSinhala }: { creditNoteR
       {/* Header Banner */}
       <div className="bg-[#464646] p-6 text-white relative flex justify-between items-center h-[110px] overflow-visible">
         <div>
-          <h1 className="text-lg font-black tracking-wide m-0 leading-tight">MUTHUWADIGE HARDWARE</h1>
-          <p className="text-[10px] opacity-90 m-0 mt-1 font-semibold">No: 80, Mahahunupitiya, Negombo</p>
-          <p className="text-[10px] opacity-90 m-0 mt-0.5 font-semibold">Contact: 077 076 076 7</p>
+          <h1 className="text-lg font-black tracking-wide m-0 leading-tight">
+            {settings.storeName || settings.shop_name || 'MUTHUWADIGE HARDWARE'}
+          </h1>
+          <p className="text-[10px] opacity-90 m-0 mt-1 font-semibold">
+            {settings.address || 'No: 80, Mahahunupitiya, Negombo'}
+          </p>
+          <p className="text-[10px] opacity-90 m-0 mt-0.5 font-semibold">
+            Contact: {settings.phone || settings.telephone || '077 076 076 7'}
+          </p>
         </div>
         <div className="absolute right-8 top-0 bg-black border border-gray-900 border-t-0 rounded-b-lg w-[170px] h-[138px] flex items-center justify-center shadow-md z-10 p-0 overflow-hidden">
-          <img src="./images/logo.png" alt="Logo" className="w-full h-full object-contain scale-115 transition-transform" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+          <img 
+            src={settings.logoUrl || settings.logo_path || "./images/logo.png"} 
+            alt="Logo" 
+            className="w-full h-full object-contain scale-115 transition-transform" 
+            onError={(e) => { e.currentTarget.style.display = 'none'; }} 
+          />
         </div>
       </div>
 
@@ -741,12 +806,6 @@ function QuotationPreview({ quote, isSinhala, shopSettings }: { quote: any; isSi
                   <span>+{symbol} {convert(quote.transportation_fee).toLocaleString()}</span>
                 </div>
               )}
-              {quote.tax_amount && quote.tax_amount > 0 && (
-                <div className="flex justify-between text-amber-800">
-                  <span>{isSinhala ? 'බදු:' : 'Tax:'}</span>
-                  <span>+{symbol} {convert(quote.tax_amount).toLocaleString()}</span>
-                </div>
-              )}
               <div className="flex justify-between text-sm font-black text-amber-950 border-t border-amber-300 pt-2 mt-1">
                 <span>{isSinhala ? 'මුළු එකතුව:' : 'Grand Total:'}</span>
                 <span className="text-amber-600">{symbol} {convert(quote.total).toLocaleString()}</span>
@@ -762,6 +821,7 @@ function QuotationPreview({ quote, isSinhala, shopSettings }: { quote: any; isSi
 interface SalesProps {
   userRole?: string;
   initialTab?: Tab;
+  currentUser?: any;
 }
 
 interface UnitOption {
@@ -830,7 +890,7 @@ const getUnitOptions = (product: Product | undefined): UnitOption[] => {
 };
 
 
-export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' }: SalesProps) {
+export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new', currentUser }: SalesProps) {
   const [userRole, setUserRole] = useState(initialUserRole);
   const [tab, setTab] = useState<Tab>(initialTab);
   useEffect(() => {
@@ -852,6 +912,36 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       setTab('new');
     }
   }, [tab, userRole]);
+
+  const resolveCurrentCashierName = (): string => {
+    const active = currentUser || (() => {
+      try {
+        if (typeof window !== 'undefined') {
+          const stored = localStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user');
+          if (stored) return JSON.parse(stored);
+        }
+      } catch (_) {}
+      return null;
+    })();
+
+    const isSuperAdmin = !active || 
+      active.email === 'admin@hardware.com' || 
+      active.email === 'sanojhardware@gmail.com' ||
+      (active.role || '').toLowerCase() === 'super_admin' || 
+      (active.role || '').toLowerCase() === 'super admin' ||
+      active.id === 'u1' || 
+      active.id === 'u2' || 
+      active.id === 'admin_super';
+
+    if (isSuperAdmin) {
+      return shopSettings?.shop_name || 'Sanoj Hardware';
+    }
+
+    if (active?.name && active.name.trim()) return active.name.trim();
+    if (active?.fullName && active.fullName.trim()) return active.fullName.trim();
+    if (active?.username && active.username.trim()) return active.username.trim();
+    return shopSettings?.shop_name || 'Sanoj Hardware';
+  };
 
   const [shopSettings, setShopSettings] = useState<any>(null);
 
@@ -928,9 +1018,17 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   // Held and Payment Methods States
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'Card' | 'Bank Transfer' | 'Credit'>('Cash');
   const [showHeldBillsModal, setShowHeldBillsModal] = useState(false);
-  const [heldBills, setHeldBills] = useState<any[]>([]);
   const [holdNameInput, setHoldNameInput] = useState('');
   const [showHoldNameModal, setShowHoldNameModal] = useState(false);
+
+  // Parked / Held Invoices Hook
+  const {
+    parkedInvoices,
+    handleParkInvoice,
+    handleRestoreParkedInvoice,
+    handleDeleteParkedInvoice,
+    fetchParkedInvoices
+  } = usePOSCart();
 
   // Wireless Mobile Barcode Scanner Bridge Context
   const {
@@ -998,8 +1096,6 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   const [quoteDiscountType, setQuoteDiscountType] = useState<'amount' | 'percentage'>('amount');
   const [quoteDiscountValue, setQuoteDiscountValue] = useState<number | ''>('');
   const [quoteTransportationFee, setQuoteTransportationFee] = useState<number | ''>('');
-  const [quoteTaxType, setQuoteTaxType] = useState<'percentage' | 'amount'>('percentage');
-  const [quoteTaxValue, setQuoteTaxValue] = useState<number | ''>('');
 
   // Quotation Preview Modal State
   const [showQuotePreviewModal, setShowQuotePreviewModal] = useState(false);
@@ -1089,6 +1185,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   const [exchangeCategoryFilter, setExchangeCategoryFilter] = useState<string>('All');
   const [exchangeCustomerPaid, setExchangeCustomerPaid] = useState<number>(0);
   const [exchangeRefundGiven, setExchangeRefundGiven] = useState<number>(0);
+  const [exchangeDifferencePaymentMethod, setExchangeDifferencePaymentMethod] = useState<string>('Cash');
 
   // Return & Credit Note History Preview Modals
   const [showReturnPreviewModal, setShowReturnPreviewModal] = useState(false);
@@ -1177,120 +1274,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   };
 
   const generateReturnPrintHTML = (sr: SalesReturn, shopSettings: any, isSi: boolean) => {
-    const symbolStr = isSi ? 'රු.' : 'Rs.';
-    const formatNum = (num: number) => num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const isCreditBill = sr.isCredit === true || (sr as any).is_credit === 1 || (sr as any).is_credit === true;
-    const title = isSi ? 'විකුණුම් ආපසු ලදුපත' : 'SALES RETURN RECEIPT';
-
-    const retItems = Array.isArray(sr.returnedItems) ? sr.returnedItems : safeParseJson(sr.returnedItems, []);
-    const exItems = Array.isArray(sr.exchangeItems) ? sr.exchangeItems : safeParseJson(sr.exchangeItems, []);
-
-    const retRows = retItems.map((i: any) => `
-      <tr style="border-bottom: 1px dashed #e5e7eb;">
-        <td style="padding: 5px 0 2px 0; font-weight: bold; text-align: left; color: #1f2937; font-size: 13px;">${i.productName || i.name}</td>
-        <td style="padding: 5px 0 2px 0; text-align: center; color: #374151; font-size: 12px;">${i.qty} ${i.unit || ''}</td>
-        <td style="padding: 5px 0 2px 0; text-align: right; color: #1f2937; font-weight: bold; font-size: 13px;">${symbolStr} ${formatNum(i.qty * i.price)}</td>
-      </tr>
-    `).join('');
-
-    const exRows = exItems.map((i: any) => `
-      <tr style="border-bottom: 1px dashed #e5e7eb;">
-        <td style="padding: 5px 0 2px 0; font-weight: bold; text-align: left; color: #047857; font-size: 13px;">⇄ ${i.productName || i.name}</td>
-        <td style="padding: 5px 0 2px 0; text-align: center; color: #374151; font-size: 12px;">${i.qty} ${i.unit || ''}</td>
-        <td style="padding: 5px 0 2px 0; text-align: right; color: #047857; font-weight: bold; font-size: 13px;">${symbolStr} ${formatNum(i.qty * i.price)}</td>
-      </tr>
-    `).join('');
-
-    return `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8" />
-          <title>Sales Return - ${sr.returnNo || sr.id}</title>
-          <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Sinhala:wght@400;600;700;800&display=swap" rel="stylesheet">
-          <style>
-            @page { margin: 0; size: 80mm auto; }
-            body { font-family: 'Inter', 'Noto Sans Sinhala', sans-serif; margin: 0; padding: 10px; font-size: 12px; color: #111827; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-            .receipt-container { width: 100%; max-width: 80mm; margin: 0 auto; box-sizing: border-box; }
-            .header { text-align: center; border-bottom: 2px dashed #374151; padding-bottom: 8px; margin-bottom: 8px; }
-            .title { text-align: center; font-weight: 800; font-size: 14px; margin: 8px 0; text-transform: uppercase; border: 1px solid #1f2937; padding: 4px; background: #f9fafb; }
-            .table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-            .table th { border-bottom: 1px solid #374151; text-align: left; padding: 4px 0; font-size: 11px; }
-            .summary { border-top: 2px dashed #374151; margin-top: 10px; padding-top: 6px; }
-            .summary-row { display: flex; justify-content: space-between; padding: 2px 0; font-weight: bold; }
-          </style>
-        </head>
-        <body>
-          <div class="receipt-container">
-            <div class="header">
-              <h2 style="margin:0; font-size: 16px;">${shopSettings?.shop_name || 'MUTUWADIGE HARDWARE'}</h2>
-              <p style="margin:2px 0;">${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</p>
-              <p style="margin:2px 0;">Tel: ${shopSettings?.phone || '077 076 076 7'}</p>
-            </div>
-            <div class="title">${title}</div>
-            <div>
-              <div><b>${isSi ? 'ආපසු අංකය:' : 'Return No:'}</b> ${sr.returnNo || sr.return_no || sr.id}</div>
-              <div><b>${isSi ? 'ඉන්වොයිස් අංකය:' : 'Orig Invoice:'}</b> ${sr.invoiceNo || sr.invoice_no}</div>
-              <div><b>${isSi ? 'පාරිභෝගිකයා:' : 'Customer:'}</b> ${sr.customerName || sr.customer_name || 'Guest'}</div>
-              <div><b>${isSi ? 'දිනය:' : 'Date:'}</b> ${new Date(sr.created_at).toLocaleString()}</div>
-              <div><b>${isSi ? 'ක්‍රමය:' : 'Method:'}</b> ${sr.returnMethod}</div>
-            </div>
-
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>${isSi ? 'ආපසු භාණ්ඩ' : 'Returned Item'}</th>
-                  <th style="text-align:center;">${isSi ? 'ප්‍රමාණය' : 'Qty'}</th>
-                  <th style="text-align:right;">${isSi ? 'එකතුව' : 'Total'}</th>
-                </tr>
-              </thead>
-              <tbody>${retRows}</tbody>
-            </table>
-
-            ${exItems.length > 0 ? `
-              <table class="table" style="margin-top: 10px;">
-                <thead>
-                  <tr>
-                    <th style="color:#047857;">${isSi ? 'හුවමාරු භාණ්ඩ' : 'Exchange Item'}</th>
-                    <th style="text-align:center;">${isSi ? 'ප්‍රමාණය' : 'Qty'}</th>
-                    <th style="text-align:right;">${isSi ? 'එකතුව' : 'Total'}</th>
-                  </tr>
-                </thead>
-                <tbody>${exRows}</tbody>
-              </table>
-            ` : ''}
-
-            <div class="summary">
-              <div class="summary-row">
-                <span>${isSi ? 'ආපසු ලැබුණු වටිනාකම:' : 'Return Total Value:'}</span>
-                <span>${symbolStr} ${formatNum(sr.returnAmount || sr.totalRefunded || 0)}</span>
-              </div>
-              ${sr.returnMethod === 'Credit Note' ? `
-                <div class="summary-row" style="color: #d97706;">
-                  <span>${isSi ? 'නිකුත් කළ ණය සටහන් අංකය:' : 'Credit Note Issued:'}</span>
-                  <span>${sr.creditNoteNo || 'CN-ISSUED'}</span>
-                </div>
-              ` : ''}
-              ${sr.returnMethod === 'Cash Refund' && !isCreditBill ? `
-                <div class="summary-row" style="color: #dc2626;">
-                  <span>${isSi ? 'ආපසු ගෙවූ මුදල:' : 'Cash Refunded:'}</span>
-                  <span>${symbolStr} ${formatNum(sr.totalRefunded || 0)}</span>
-                </div>
-              ` : ''}
-              ${isCreditBill ? `
-                <div class="summary-row" style="color: #0284c7;">
-                  <span>${isSi ? 'ණය සැකසුම:' : 'Credit Adjustment:'}</span>
-                  <span>${symbolStr} ${formatNum(sr.returnAmount || sr.totalRefunded || 0)}</span>
-                </div>
-              ` : ''}
-            </div>
-            <div style="text-align:center; margin-top: 15px; font-size: 11px; color: #6b7280;">
-              ${isSi ? 'ස්තූතියි!' : 'Thank you!'}
-            </div>
-          </div>
-        </body>
-      </html>
-    `;
+    return generateReturnPrintHTML_Outer(sr, isSi, shopSettings);
   };
 
   const generateCreditNotePrintHTML = (cn: CreditNote, shopSettings: any, isSi: boolean) => {
@@ -1714,6 +1698,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
       const creditTaxAmt = 0;
       const creditTotal = creditNetSubtotal + (Number(creditTransportationFee) || 0);
 
+      const activeCashierName = resolveCurrentCashierName();
+      const activeUserEmail = currentUser?.email || user?.email || 'admin@hardware.erp';
+      const activeUserId = currentUser?.id || user?.id || 'u1';
+
       const newOrderData = {
         invoice_no: `INV-${Date.now()}`,
         customer_id: customerId,
@@ -1727,7 +1715,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         tax_rate: 0,
         total_amount: creditTotal,
         status: 'Non Paid',
-        user_id: user?.id,
+        user_id: activeUserId,
+        user_email: activeUserEmail,
+        cashier: activeCashierName,
         due_date: calculateDueDate(creditTabPeriodDays),
         credit_period_days: creditTabPeriodDays,
         payment_method: 'Credit',
@@ -1759,7 +1749,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         customer_phone: finalCustomerPhone,
         customerAddress: finalCustomerAddress,
         customer_address: finalCustomerAddress,
-        cashier: user?.email || 'system',
+        cashier: activeCashierName,
         date: new Date().toLocaleDateString(),
         items: creditCartItems,
         created_at: saleRecord?.created_at || new Date().toISOString(),
@@ -1773,6 +1763,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         due_date: newOrderData.due_date,
         credit_period_days: newOrderData.credit_period_days,
         payment_method: 'Credit',
+        user_id: activeUserId,
+        user_email: activeUserEmail,
         transportation_fee: Number(creditTransportationFee) || 0,
         transportationFee: Number(creditTransportationFee) || 0
       };
@@ -1953,7 +1945,21 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     }
   };
 
-  useEffect(() => { fetchData(); }, [tab]);
+  useEffect(() => { 
+    fetchData(); 
+  }, [tab]);
+
+  useEffect(() => {
+    const handleRefresh = () => {
+      fetchData();
+    };
+    window.addEventListener('refresh-all-data', handleRefresh);
+    window.addEventListener('refresh-sales', handleRefresh);
+    return () => {
+      window.removeEventListener('refresh-all-data', handleRefresh);
+      window.removeEventListener('refresh-sales', handleRefresh);
+    };
+  }, []);
 
   // Download Sales Receipt PDF using the exact Preview design
   const downloadReceiptPDF = async (order: SaleOrder) => {
@@ -2643,6 +2649,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
       const activeCNCode = selectedCreditNoteCode || (availableCustomerCreditNotes[0]?.credit_note_no || availableCustomerCreditNotes[0]?.code || '');
 
+      const activeCashierName = resolveCurrentCashierName();
+      const activeUserEmail = currentUser?.email || user?.email || 'admin@hardware.erp';
+      const activeUserId = currentUser?.id || user?.id || 'u1';
+
       const newOrderData = {
         invoice_no: `INV-${Date.now()}`,
         customer_id: isGuest ? null : selectedCustomer?.id, 
@@ -2657,8 +2667,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         total_amount: totalAmountValue,
         status: paymentMethod === 'Credit' ? 'Non Paid' : 'paid',
         payment_method: paymentMethod,
-        user_id: user?.id,
-        user_email: user?.email || 'system',
+        user_id: activeUserId,
+        user_email: activeUserEmail,
+        cashier: activeCashierName,
         due_date: paymentMethod === 'Credit' ? calculateDueDate(creditPeriodDays) : null,
         credit_period_days: paymentMethod === 'Credit' ? creditPeriodDays : 0,
         transportation_fee: Number(transportationFee) || 0,
@@ -2692,7 +2703,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         customer_phone: finalCustomerPhone,
         customerAddress: finalCustomerAddress,
         customer_address: finalCustomerAddress,
-        cashier: user?.email || 'system',
+        cashier: activeCashierName,
         date: new Date().toLocaleDateString(),
         items: cartItems,
         created_at: saleRecord?.created_at || new Date().toISOString(),
@@ -2706,6 +2717,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
         due_date: newOrderData.due_date || undefined,
         credit_period_days: newOrderData.credit_period_days,
         payment_method: paymentMethod,
+        user_id: activeUserId,
+        user_email: activeUserEmail,
         transportation_fee: Number(transportationFee) || 0,
         transportationFee: Number(transportationFee) || 0,
         credit_note_applied: numCreditNoteApplied,
@@ -2725,74 +2738,83 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     }
   };
 
-  const handleHoldBill = async (holdName: string) => {
+  const handleHoldBill = (customHoldName?: string) => {
     if (cartItems.length === 0) return;
     if (cartItems.some(i => i.qty <= 0)) {
-        return alert(t("Please enter a valid quantity greater than 0 for all items.", "කරුණාකර සියලුම භාණ්ඩ සඳහා 0 ට වැඩි වලංගු ප්‍රමාණයක් ඇතුළත් කරන්න."));
+      return alert(t("Please enter a valid quantity greater than 0 for all items.", "කරුණාකර සියලුම භාණ්ඩ සඳහා 0 ට වැඩි වලංගු ප්‍රමාණයක් ඇතුළත් කරන්න."));
     }
-    try {
-      setIsLoading(true);
-      const holdId = 'hb_' + Date.now();
-      const payload = {
-        id: holdId,
-        hold_name: holdName || `Hold #${Date.now().toString().slice(-4)}`,
-        customer_id: isGuest ? null : selectedCustomer?.id,
-        customer_name: isGuest ? guestName : selectedCustomer?.name || 'Guest Customer',
-        items: JSON.stringify(cartItems),
-        subtotal: subtotal,
-        discount: discountAmt,
-        tax: taxAmt,
-        total_amount: totalAmountValue
-      };
-      
-      const { error } = await supabase.from('bill_holds').insert([payload]);
-      if (error) throw error;
-      
-      alert(t("Bill put on hold successfully!", "බිල්පත තාවකාලිකව රඳවා ගන්නා ලදී!"));
-      resetNewSale();
-      setHoldNameInput('');
-      setShowHoldNameModal(false);
-      fetchHeldBills();
-    } catch (e: any) {
-      alert("Failed to hold bill: " + e.message);
-    } finally {
-      setIsLoading(false);
-    }
+    
+    const nameToUse = (typeof customHoldName === 'string' && customHoldName.trim())
+      ? customHoldName.trim()
+      : holdNameInput.trim()
+      ? holdNameInput.trim()
+      : `Hold #${Date.now().toString().slice(-4)}`;
+
+    handleParkInvoice({
+      holdName: nameToUse,
+      customer: isGuest ? null : selectedCustomer,
+      isGuest,
+      guestName,
+      guestPhone,
+      guestAddress,
+      items: cartItems,
+      discount: discountAmt,
+      transportFee: Number(transportationFee) || 0,
+      subtotal,
+      tax: taxAmt,
+      totalAmount: totalAmountValue,
+      paymentMethod
+    });
+
+    alert(t("Bill parked successfully!", "බිල්පත තාවකාලිකව රඳවා ගන්නා ලදී!"));
+    resetNewSale();
+    setHoldNameInput('');
+    setShowHoldNameModal(false);
   };
 
-  const fetchHeldBills = async () => {
-    try {
-      const { data } = await supabase.from('bill_holds').select('*');
-      if (data) setHeldBills(data);
-    } catch (e) {
-      console.error("Failed to fetch held bills:", e);
-    }
-  };
-
-  const handleRetrieveHoldBill = async (hold: any) => {
+  const handleRetrieveHoldBill = (hold: any) => {
     try {
       setIsLoading(true);
-      const items = JSON.parse(hold.items);
+      const target = handleRestoreParkedInvoice(hold.id) || hold;
+
+      const items = Array.isArray(target.items)
+        ? target.items
+        : typeof target.items === 'string'
+        ? JSON.parse(target.items)
+        : [];
+
       setCartItems(items);
-      
-      if (hold.customer_id) {
-        const cust = customers.find(c => c.id === hold.customer_id);
+
+      if (target.customer && target.customer.id) {
+        const cust = customers.find(c => c.id === target.customer.id) || target.customer;
+        setSelectedCustomer(cust);
+        setIsGuest(false);
+      } else if (target.customer_id) {
+        const cust = customers.find(c => c.id === target.customer_id);
         if (cust) {
           setSelectedCustomer(cust);
           setIsGuest(false);
         }
-      } else if (hold.customer_name && hold.customer_name !== 'Guest Customer') {
+      } else if (target.guestName || (target.customer_name && target.customer_name !== 'Guest Customer')) {
         setIsGuest(true);
-        setGuestName(hold.customer_name);
+        setGuestName(target.guestName || target.customer_name || 'Guest Customer');
+        setGuestPhone(target.guestPhone || target.customer_phone || '');
+        setGuestAddress(target.guestAddress || target.customer_address || '');
+        setSelectedCustomer(null);
       } else {
         setIsGuest(false);
         setSelectedCustomer(null);
       }
-      
-      const discPercent = hold.subtotal > 0 ? (hold.discount / hold.subtotal) * 100 : 0;
+
+      if (target.transportFee !== undefined || target.transportation_fee !== undefined) {
+        setTransportationFee(Number(target.transportFee || target.transportation_fee || 0));
+      }
+
+      const discVal = Number(target.discount || 0);
+      const subtotalVal = Number(target.subtotal || 0);
+      const discPercent = subtotalVal > 0 ? (discVal / subtotalVal) * 100 : 0;
       setDiscount(Math.round(discPercent));
-      
-      await supabase.from('bill_holds').delete().eq('id', hold.id);
+
       setShowHeldBillsModal(false);
     } catch (e: any) {
       alert("Failed to retrieve hold bill: " + e.message);
@@ -3569,11 +3591,16 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
               </h3>
               <button 
                 type="button" 
-                onClick={() => { fetchHeldBills(); setShowHeldBillsModal(true); }}
-                className="text-[9px] font-black uppercase tracking-widest px-3 py-2 bg-amber-500/10 hover:bg-amber-500 hover:text-slate-900 text-amber-600 rounded-xl transition-all border border-amber-500/10 shadow-sm flex items-center gap-1"
+                onClick={() => { fetchParkedInvoices(); setShowHeldBillsModal(true); }}
+                className="text-[9px] font-black uppercase tracking-widest px-3 py-2 bg-amber-500/10 hover:bg-amber-500 hover:text-slate-900 text-amber-600 rounded-xl transition-all border border-amber-500/10 shadow-sm flex items-center gap-1.5"
               >
-                <PauseIcon className="w-3 h-3" />
-                {t('Parked Invoices', 'රඳවා ඇති බිල්')}
+                <PauseIcon className="w-3.5 h-3.5" />
+                <span>{t('Parked Invoices', 'රඳවා ඇති බිල්')}</span>
+                {parkedInvoices.length > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black bg-amber-500 text-slate-950 font-mono shadow-sm">
+                    {parkedInvoices.length}
+                  </span>
+                )}
               </button>
             </div>
             
@@ -4900,9 +4927,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
             };
 
             // Financial Calculations
+            // Financial Calculations
             const numDiscountValue = Number(quoteDiscountValue || 0);
             const numTransportationFee = Number(quoteTransportationFee || 0);
-            const numTaxValue = Number(quoteTaxValue || 0);
 
             const quoteGrossSubtotal = quoteCart.reduce((sum, item) => sum + (item.qty * item.price), 0);
             const quoteProductDiscounts = quoteCart.reduce((sum, item) => {
@@ -4918,10 +4945,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
               ? (quoteNetItemSubtotal * numDiscountValue / 100) 
               : numDiscountValue;
             const netAfterOverallDiscount = Math.max(0, quoteNetItemSubtotal - quoteOverallDiscountAmount);
-            const quoteTaxAmount = quoteTaxType === 'percentage' 
-              ? (netAfterOverallDiscount * numTaxValue / 100) 
-              : numTaxValue;
-            const quoteGrandTotal = Math.max(0, netAfterOverallDiscount + numTransportationFee + quoteTaxAmount);
+            const quoteGrandTotal = Math.max(0, netAfterOverallDiscount + numTransportationFee);
             const quoteTotalSavings = quoteProductDiscounts + quoteOverallDiscountAmount;
 
             const handleSaveQuotation = async (action: 'save' | 'print' | 'pdf' = 'save') => {
@@ -4944,7 +4968,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                 discount_value: numDiscountValue,
                 discount_amount: quoteOverallDiscountAmount,
                 transportation_fee: numTransportationFee,
-                tax_amount: quoteTaxAmount,
+                tax_amount: 0,
                 total: quoteGrandTotal,
                 status: 'Active'
               };
@@ -5004,7 +5028,6 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                 setQuoteCustomerAddress('');
                 setQuoteDiscountValue('');
                 setQuoteTransportationFee('');
-                setQuoteTaxValue('');
                 setIsCreatingQuote(false);
                 await fetchData();
               } catch (err: any) {
@@ -5348,51 +5371,27 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                         </table>
                       </div>
 
-                      {/* Additional Charges Section (Transportation, Tax) */}
+                      {/* Additional Charges Section (Transportation Fee) */}
                       <div className="mt-4 pt-4 border-t border-slate-200/80 bg-slate-50/70 p-4 rounded-xl space-y-3">
                         <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{t('Optional Charges & Adjustments:', 'අමතර ගාස්තු:')}</div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           {/* Transportation Fee */}
                           <div className="bg-white p-2.5 rounded-xl border border-slate-200 space-y-1">
                             <label className="text-[10px] font-bold text-slate-600 block">{t('Transportation Fee (Rs.)', 'ප්‍රවාහන ගාස්තු')}</label>
                             <input
                               type="number"
                               min={0}
-                              placeholder="0"
+                              placeholder="0.00"
                               value={quoteTransportationFee}
                               onChange={(e) => {
                                 const val = e.target.value;
                                 setQuoteTransportationFee(val === '' ? '' : Math.max(0, parseFloat(val) || 0));
                               }}
-                              className="w-full px-2 py-1 border border-slate-200 rounded text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                              className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg font-bold text-slate-800 outline-none focus:border-amber-500 bg-white"
                             />
                           </div>
 
-                          {/* Tax */}
-                          <div className="bg-white p-2.5 rounded-xl border border-slate-200 space-y-1">
-                            <label className="text-[10px] font-bold text-slate-600 block">{t('Tax', 'බදු')}</label>
-                            <div className="flex gap-1">
-                              <select
-                                value={quoteTaxType}
-                                onChange={(e) => setQuoteTaxType(e.target.value as any)}
-                                className="bg-slate-100 text-xs font-bold text-slate-700 px-1.5 py-1 rounded border border-slate-200 outline-none"
-                              >
-                                <option value="percentage">%</option>
-                                <option value="amount">Rs.</option>
-                              </select>
-                              <input
-                                type="number"
-                                min={0}
-                                placeholder="0"
-                                value={quoteTaxValue}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setQuoteTaxValue(val === '' ? '' : Math.max(0, parseFloat(val) || 0));
-                                }}
-                                className="w-full px-2 py-1 border border-slate-200 rounded text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
-                              />
-                            </div>
-                          </div>
+                          {/* TAX INPUT REMOVED COMPLETELY */}
                         </div>
                       </div>
 
@@ -5406,7 +5405,6 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                             </div>
                           )}
                           {numTransportationFee > 0 && <div className="text-blue-600">{t('Transportation:', 'ප්‍රවාහන ගාස්තු:')} +{symbol} {convert(numTransportationFee).toLocaleString()}</div>}
-                          {quoteTaxAmount > 0 && <div className="text-amber-700">{t('Tax:', 'බදු:')} +{symbol} {convert(quoteTaxAmount).toLocaleString()}</div>}
                           <div className="text-sm font-black text-amber-900 border-t border-amber-200 pt-1">
                             {t('Grand Total:', 'මුළු එකතුව:')} <span className="text-amber-600">{symbol} {convert(quoteGrandTotal).toLocaleString()}</span>
                           </div>
@@ -5429,7 +5427,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                 discount_value: numDiscountValue,
                                 discount_amount: quoteOverallDiscountAmount,
                                 transportation_fee: numTransportationFee,
-                                tax_amount: quoteTaxAmount,
+                                tax_amount: 0,
                                 total: quoteGrandTotal,
                                 status: 'Draft',
                                 created_at: new Date().toISOString()
@@ -5904,11 +5902,17 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                 .map((item: any, idx: number) => {
                   const lKey = getItemLineKey(item, idx);
                   const qtyVal = returnQtys[lKey] !== undefined ? returnQtys[lKey] : 0;
+                  const { effectivePrice, unitDiscount } = calculateEffectiveUnitPricePaid(item, targetReturnInvoice);
                   return {
                     ...item,
                     lineId: lKey,
                     lineIndex: idx,
-                    qty: qtyVal
+                    qty: qtyVal,
+                    originalQty: item.qty || item.quantity || 1,
+                    originalUnitPrice: item.price || item.unit_price || 0,
+                    originalStickerPrice: item.price || item.unit_price || 0,
+                    unitDiscount,
+                    netUnitPrice: effectivePrice
                   };
                 });
 
@@ -5964,9 +5968,16 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                 const calculatedPaid = (!isCreditCustomer && effectiveReturnMethod === 'Exchange' && customerBalanceDue > 0) ? (exchangeCustomerPaid || customerBalanceDue) : 0;
                 const calculatedChange = (!isCreditCustomer && effectiveReturnMethod === 'Exchange' && customerBalanceDue > 0) ? Math.max(0, (exchangeCustomerPaid || customerBalanceDue) - customerBalanceDue) : 0;
 
+                const effectiveDifferencePaymentMethod = isCreditCustomer
+                  ? 'Customer Credit Debt'
+                  : (effectiveReturnMethod === 'Exchange'
+                      ? (exchangeDifferencePaymentMethod || 'Cash')
+                      : (effectiveReturnMethod === 'Credit Note' ? 'Credit Note' : 'Cash'));
+
                 try {
                   setIsLoading(true);
-                  const { data: { user } } = await supabase.auth.getUser();
+                  const activeCashierName = resolveCurrentCashierName();
+                  const activeUserEmail = currentUser?.email || 'admin@hardware.erp';
                   const res = await fetchWithTimeout(`${API_URL}/sales/returns`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -5981,9 +5992,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                       totalRefunded: calculatedRefund,
                       customerPaid: calculatedPaid,
                       changeGiven: calculatedChange,
+                      differencePaymentMethod: effectiveDifferencePaymentMethod,
                       customerName: targetReturnInvoice.customerName,
                       customerPhone: targetReturnInvoice.customerPhone,
-                      userEmail: user?.email || 'system',
+                      userEmail: activeUserEmail,
+                      cashier: activeCashierName,
                       reason: returnReason,
                       isCredit: isCreditCustomer,
                       is_credit: isCreditCustomer ? 1 : 0
@@ -6010,6 +6023,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                     totalRefunded: calculatedRefund,
                     customerPaid: calculatedPaid,
                     changeGiven: calculatedChange,
+                    differencePaymentMethod: effectiveDifferencePaymentMethod,
                     creditNoteNo: result.creditNoteNo,
                     status: 'active',
                     reason: returnReason,
@@ -6027,6 +6041,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                   setReturnReason('');
                   setExchangeCustomerPaid(0);
                   setExchangeRefundGiven(0);
+                  setExchangeDifferencePaymentMethod('Cash');
                   fetchSalesReturns();
                   fetchCreditNotes();
                   fetchData();
@@ -6340,9 +6355,18 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                     const categoriesList = ['All', ...Array.from(new Set(allCatalogSelectables.map(i => i.category).filter(Boolean)))];
 
                     const handleAddSelectableToCart = (item: typeof matchingExchangeSelectables[0]) => {
+                      if (Number(item.stock || 0) <= 0) {
+                        return alert(t(`Cannot exchange: "${item.displayName}" is currently OUT OF STOCK (0 pcs available).`, `හුවමාරු කළ නොහැක: "${item.displayName}" භාණ්ඩයේ තොග අවසන් වී ඇත (0 pcs).`));
+                      }
+
                       setExchangeCartItems(prev => {
                         const existingIdx = prev.findIndex(i => i.productId === item.productId && (i.unit || '').toLowerCase() === item.unit.toLowerCase());
                         if (existingIdx >= 0) {
+                          const currentQty = prev[existingIdx].qty;
+                          if (currentQty + 1 > Number(item.stock || 0)) {
+                            alert(t(`Cannot add more: Only ${item.stock} pcs of "${item.displayName}" available in stock.`, `තව එකතු කළ නොහැක: "${item.displayName}" සඳහා තොගයේ ඇත්තේ ${item.stock} pcs පමණි.`));
+                            return prev;
+                          }
                           const updated = [...prev];
                           updated[existingIdx].qty += 1;
                           updated[existingIdx].total = updated[existingIdx].qty * updated[existingIdx].price;
@@ -6441,36 +6465,60 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                                   {t('No matching product or sub-item found.', 'ගැලපෙන කිසිවක් හමු නොවීය.')}
                                 </div>
                               ) : (
-                                matchingSelectables.map((item) => (
-                                  <button
-                                    key={item.key}
-                                    type="button"
-                                    onClick={() => {
-                                      handleAddSelectableToCart(item);
-                                      setExchangeProductSearch('');
-                                    }}
-                                    className="w-full text-left p-2 hover:bg-emerald-50/70 rounded-lg transition-colors flex justify-between items-center group"
-                                  >
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-bold text-xs text-slate-800 group-hover:text-emerald-700">{item.displayName}</span>
-                                      {item.isSubItem && (
-                                        <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 font-black text-[9px] rounded uppercase">
-                                          Sub-Item ({item.unit})
+                                matchingSelectables.map((item) => {
+                                  const isOutOfStock = Number(item.stock || 0) <= 0;
+                                  return (
+                                    <button
+                                      key={item.key}
+                                      type="button"
+                                      disabled={isOutOfStock}
+                                      onClick={() => {
+                                        if (isOutOfStock) {
+                                          alert(t(`Cannot exchange: "${item.displayName}" is currently OUT OF STOCK (0 pcs available).`, `හුවමාරු කළ නොහැක: "${item.displayName}" භාණ්ඩයේ තොග අවසන් වී ඇත.`));
+                                          return;
+                                        }
+                                        handleAddSelectableToCart(item);
+                                        setExchangeProductSearch('');
+                                      }}
+                                      className={`w-full text-left p-2 rounded-lg transition-colors flex justify-between items-center group ${
+                                        isOutOfStock
+                                          ? 'bg-slate-100/80 opacity-50 cursor-not-allowed border border-dashed border-slate-300'
+                                          : 'hover:bg-emerald-50/70'
+                                      }`}
+                                    >
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className={`font-bold text-xs ${isOutOfStock ? 'text-slate-500 line-through' : 'text-slate-800 group-hover:text-emerald-700'}`}>
+                                          {item.displayName}
                                         </span>
-                                      )}
-                                      <span className="text-[9px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">{item.category}</span>
-                                    </div>
-                                    <div className="text-right flex items-center gap-3">
-                                      <div>
-                                        <span className="font-black text-xs text-emerald-700">{symbol} {convert(item.price).toLocaleString()}</span>
-                                        <span className="text-[10px] text-slate-400 block font-semibold">Stock: {item.stock}</span>
+                                        {isOutOfStock ? (
+                                          <span className="px-2 py-0.5 bg-rose-100 text-rose-800 font-black text-[9px] rounded-full border border-rose-200 uppercase">
+                                            OUT OF STOCK / තොග අවසන්
+                                          </span>
+                                        ) : item.isSubItem ? (
+                                          <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 font-black text-[9px] rounded uppercase">
+                                            Sub-Item ({item.unit})
+                                          </span>
+                                        ) : null}
+                                        <span className="text-[9px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">{item.category}</span>
                                       </div>
-                                      <span className="px-2 py-1 bg-emerald-600 text-white rounded-lg text-[10px] font-black uppercase shadow-sm group-hover:bg-emerald-700">
-                                        + Add
-                                      </span>
-                                    </div>
-                                  </button>
-                                ))
+                                      <div className="text-right flex items-center gap-3 shrink-0">
+                                        <div>
+                                          <span className="font-black text-xs text-emerald-700">{symbol} {convert(item.price).toLocaleString()}</span>
+                                          <span className={`text-[10px] block font-bold ${isOutOfStock ? 'text-rose-600' : 'text-slate-400'}`}>
+                                            Stock: {item.stock}
+                                          </span>
+                                        </div>
+                                        <span className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase shadow-sm ${
+                                          isOutOfStock 
+                                            ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                                            : 'bg-emerald-600 text-white group-hover:bg-emerald-700'
+                                        }`}>
+                                          {isOutOfStock ? 'Empty' : '+ Add'}
+                                        </span>
+                                      </div>
+                                    </button>
+                                  );
+                                })
                               )}
                             </div>
                           )}
@@ -6484,30 +6532,52 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                               <span className="text-slate-400 font-semibold">{matchingSelectables.length} available</span>
                             </div>
                             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-48 overflow-y-auto p-1 bg-white/70 rounded-xl border border-slate-200/80">
-                              {matchingSelectables.slice(0, 16).map((item) => (
-                                <button
-                                  key={item.key}
-                                  type="button"
-                                  onClick={() => handleAddSelectableToCart(item)}
-                                  className="p-2 bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 rounded-xl text-left transition-all shadow-sm flex flex-col justify-between group"
-                                >
-                                  <div>
-                                    <div className="font-bold text-xs text-slate-800 line-clamp-1 group-hover:text-emerald-700">{item.displayName}</div>
-                                    <div className="flex items-center gap-1 mt-0.5">
-                                      <span className="text-[9px] font-semibold text-slate-400">{item.category}</span>
-                                      {item.isSubItem && (
-                                        <span className="px-1 py-0.2 bg-amber-100 text-amber-800 text-[8px] font-black rounded">
-                                          Sub
-                                        </span>
-                                      )}
+                              {matchingSelectables.slice(0, 16).map((item) => {
+                                const isOutOfStock = Number(item.stock || 0) <= 0;
+                                return (
+                                  <button
+                                    key={item.key}
+                                    type="button"
+                                    disabled={isOutOfStock}
+                                    onClick={() => {
+                                      if (isOutOfStock) {
+                                        alert(t(`Cannot exchange: "${item.displayName}" is currently OUT OF STOCK (0 pcs available).`, `හුවමාරු කළ නොහැක: "${item.displayName}" භාණ්ඩයේ තොග අවසන් වී ඇත.`));
+                                        return;
+                                      }
+                                      handleAddSelectableToCart(item);
+                                    }}
+                                    className={`p-2 rounded-xl text-left transition-all shadow-sm flex flex-col justify-between group border ${
+                                      isOutOfStock
+                                        ? 'bg-slate-100 opacity-50 border-dashed border-slate-300 cursor-not-allowed'
+                                        : 'bg-white hover:bg-emerald-50 border-slate-200 hover:border-emerald-300'
+                                    }`}
+                                  >
+                                    <div>
+                                      <div className={`font-bold text-xs line-clamp-1 ${isOutOfStock ? 'text-slate-500 line-through' : 'text-slate-800 group-hover:text-emerald-700'}`}>
+                                        {item.displayName}
+                                      </div>
+                                      <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                                        <span className="text-[9px] font-semibold text-slate-400">{item.category}</span>
+                                        {isOutOfStock ? (
+                                          <span className="px-1 py-0.2 bg-rose-100 text-rose-800 text-[8px] font-black rounded uppercase">
+                                            Out of stock
+                                          </span>
+                                        ) : item.isSubItem ? (
+                                          <span className="px-1 py-0.2 bg-amber-100 text-amber-800 text-[8px] font-black rounded">
+                                            Sub
+                                          </span>
+                                        ) : null}
+                                      </div>
                                     </div>
-                                  </div>
-                                  <div className="mt-1.5 flex justify-between items-center border-t border-slate-100 pt-1">
-                                    <span className="font-black text-xs text-emerald-700">{symbol} {convert(item.price).toLocaleString()}</span>
-                                    <span className="text-[9px] font-black text-emerald-600 uppercase">+ Add</span>
-                                  </div>
-                                </button>
-                              ))}
+                                    <div className="mt-1.5 flex justify-between items-center border-t border-slate-100 pt-1">
+                                      <span className="font-black text-xs text-emerald-700">{symbol} {convert(item.price).toLocaleString()}</span>
+                                      <span className={`text-[9px] font-black uppercase ${isOutOfStock ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                        {isOutOfStock ? '0 pcs' : '+ Add'}
+                                      </span>
+                                    </div>
+                                  </button>
+                                );
+                              })}
                             </div>
                           </div>
                         )}
@@ -6596,33 +6666,101 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
 
                         {/* Customer Pays Balance Due Scenario */}
                         {netExchangeBalance > 0 && (
-                          <div className="bg-amber-50/60 p-3 rounded-xl border border-amber-200">
-                            <label className="text-[10px] font-black text-amber-900 uppercase tracking-wider block mb-1">
-                              {t('Balance Due from Customer:', 'පාරිභෝගිකයාගෙන් අයවිය යුතු ශේෂය:')}
-                            </label>
-                            <div className="text-base font-black text-amber-700">{symbol} {convert(netExchangeBalance).toLocaleString()}</div>
+                          <div className="bg-amber-50/70 p-3.5 rounded-xl border border-amber-200 space-y-3">
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <label className="text-[10px] font-black text-amber-900 uppercase tracking-wider block">
+                                  {t('Balance Due from Customer:', 'පාරිභෝගිකයාගෙන් අයවිය යුතු ශේෂය:')}
+                                </label>
+                                <div className="text-lg font-black text-amber-700">{symbol} {convert(netExchangeBalance).toLocaleString()}</div>
+                              </div>
+                              {isCreditCustomer && (
+                                <span className="px-2.5 py-1 bg-amber-100 border border-amber-300 text-amber-950 rounded-lg font-black text-[10px] uppercase">
+                                  {t('Added to Customer Credit Debt', 'පාරිභෝගික ණය ගිණුමට එකතු කෙරේ')}
+                                </span>
+                              )}
+                            </div>
+
+                            {!isCreditCustomer && (
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-amber-200/70">
+                                <div>
+                                  <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider block mb-1">
+                                    {t('Settlement Mode:', 'පියවීමේ ක්‍රමය:')}
+                                  </label>
+                                  <select
+                                    value={exchangeDifferencePaymentMethod}
+                                    onChange={(e) => setExchangeDifferencePaymentMethod(e.target.value)}
+                                    className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
+                                  >
+                                    <option value="Cash">{t('Cash', 'මුදල් (Cash)')}</option>
+                                    <option value="Card">{t('Card', 'කාඩ්පත් (Card)')}</option>
+                                    <option value="Customer Credit Debt">{t('Customer Credit Debt', 'ණය ගිණුම (Credit Debt)')}</option>
+                                    <option value="Bank Transfer">{t('Bank Transfer', 'බැංකු හුවමාරුව (Bank Transfer)')}</option>
+                                    <option value="Cheque">{t('Cheque', 'චෙක්පත් (Cheque)')}</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider block mb-1">
+                                    {t('Customer Paid:', 'පාරිභෝගිකයා ගෙවූ මුදල:')}
+                                  </label>
+                                  <input
+                                    type="number"
+                                    value={exchangeCustomerPaid || ''}
+                                    placeholder={netExchangeBalance.toString()}
+                                    onChange={(e) => setExchangeCustomerPaid(parseFloat(e.target.value) || 0)}
+                                    className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-black text-slate-800 text-xs outline-none focus:border-amber-500"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider block mb-1">
+                                    {t('Change Given:', 'ඉතිරි මුදල:')}
+                                  </label>
+                                  <div className="px-2.5 py-1.5 bg-slate-100 border border-slate-200 rounded-lg font-black text-slate-800 text-xs">
+                                    {symbol} {convert(Math.max(0, (exchangeCustomerPaid || netExchangeBalance) - netExchangeBalance)).toLocaleString()}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         )}
 
                         {/* Customer Gets Refund Due Scenario (Non-credit sales only) */}
                         {netExchangeBalance < 0 && !isCreditCustomer && (
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 bg-blue-50/60 p-3 rounded-xl border border-blue-200">
-                            <div>
-                              <label className="text-[10px] font-black text-blue-900 uppercase tracking-wider block mb-1">
-                                {t('Refund Due to Customer:', 'පාරිභෝගිකයාට ආපසු ගෙවිය යුතු මුදල:')}
-                              </label>
-                              <div className="text-base font-black text-blue-700">{symbol} {convert(Math.abs(netExchangeBalance)).toLocaleString()}</div>
+                          <div className="bg-blue-50/70 p-3.5 rounded-xl border border-blue-200 space-y-3">
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <label className="text-[10px] font-black text-blue-900 uppercase tracking-wider block">
+                                  {t('Refund Due to Customer:', 'පාරිභෝගිකයාට ආපසු ගෙවිය යුතු මුදල:')}
+                                </label>
+                                <div className="text-lg font-black text-blue-700">{symbol} {convert(Math.abs(netExchangeBalance)).toLocaleString()}</div>
+                              </div>
                             </div>
-                            <div>
-                              <label className="text-[10px] font-black text-slate-600 uppercase tracking-wider block mb-1">
-                                {t('Confirm Refund Amount:', 'ආපසු ගෙවන මුදල තහවුරු කරන්න:')}
-                              </label>
-                              <input
-                                type="number"
-                                value={exchangeRefundGiven || Math.abs(netExchangeBalance)}
-                                onChange={(e) => setExchangeRefundGiven(parseFloat(e.target.value) || 0)}
-                                className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg font-black text-slate-800 text-sm outline-none focus:border-amber-500"
-                              />
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-blue-200/70">
+                              <div>
+                                <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider block mb-1">
+                                  {t('Refund Settlement Mode:', 'ආපසු ගෙවීමේ ක්‍රමය:')}
+                                </label>
+                                <select
+                                  value={exchangeDifferencePaymentMethod}
+                                  onChange={(e) => setExchangeDifferencePaymentMethod(e.target.value)}
+                                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-bold text-slate-800 text-xs outline-none focus:border-blue-500"
+                                >
+                                  <option value="Cash">{t('Cash Refund', 'මුදල් ආපසු (Cash)')}</option>
+                                  <option value="Customer Credit Debt">{t('Customer Credit Reduction', 'ණය අඩු කිරීම (Credit Reduction)')}</option>
+                                  <option value="Bank Transfer">{t('Bank Transfer', 'බැංකු හුවමාරුව (Bank Transfer)')}</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider block mb-1">
+                                  {t('Confirm Refund Amount:', 'ආපසු ගෙවන මුදල තහවුරු කරන්න:')}
+                                </label>
+                                <input
+                                  type="number"
+                                  value={exchangeRefundGiven || Math.abs(netExchangeBalance)}
+                                  onChange={(e) => setExchangeRefundGiven(parseFloat(e.target.value) || 0)}
+                                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-black text-slate-800 text-xs outline-none focus:border-blue-500"
+                                />
+                              </div>
                             </div>
                           </div>
                         )}
@@ -7483,6 +7621,233 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                 {t('Close Preview', 'වසා දමන්න')}
               </button>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Hold Bill / Park Invoice Confirmation Modal */}
+      {showHoldNameModal && (
+        <Modal
+          isOpen={showHoldNameModal}
+          onClose={() => setShowHoldNameModal(false)}
+          title={t('Hold / Park Current Bill', 'බිල්පත රඳවා තැබීම')}
+        >
+          <div className="space-y-4 p-2 text-left">
+            <div className="bg-amber-50 border border-amber-200/70 rounded-2xl p-4 flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                <PauseIcon className="w-5 h-5" />
+              </div>
+              <div className="text-xs">
+                <h4 className="font-black text-slate-900 uppercase tracking-wider">{t('Park Active Cart', 'ක්‍රියාකාරී කාට් එක රඳවන්න')}</h4>
+                <p className="text-slate-600 mt-0.5">
+                  {t('This will temporarily save the current cart items, selected customer, and discounts so you can serve another customer.', 'වෙනත් පාරිභෝගිකයෙකුට සේවය කිරීම සඳහා මෙම කාට් එක තාවකාලිකව සුරැකෙනු ඇත.')}
+                </p>
+              </div>
+            </div>
+
+            {/* Cart quick summary */}
+            <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5 space-y-1.5 text-xs">
+              <div className="flex justify-between text-slate-600 font-medium">
+                <span>{t('Items in cart:', 'කාට් එකේ භාණ්ඩ:')}</span>
+                <span className="font-bold text-slate-800 font-mono">{cartItems.length} {t('items', 'භාණ්ඩ')}</span>
+              </div>
+              <div className="flex justify-between text-slate-600 font-medium">
+                <span>{t('Customer:', 'පාරිභෝගිකයා:')}</span>
+                <span className="font-bold text-slate-800">{isGuest ? guestName : selectedCustomer?.name || 'Guest Customer'}</span>
+              </div>
+              <div className="flex justify-between text-slate-800 font-black border-t border-slate-200/80 pt-2 mt-2">
+                <span>{t('Total Amount:', 'මුළු මුදල:')}</span>
+                <span className="text-amber-600 font-mono font-bold text-sm">Rs. {totalAmountValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block mb-1.5 ml-1">
+                {t('Hold Name / Reference Note (Optional):', 'රඳවන නම / සටහන (අවශ්‍ය නම්):')}
+              </label>
+              <input
+                type="text"
+                value={holdNameInput}
+                onChange={(e) => setHoldNameInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleHoldBill(holdNameInput);
+                  }
+                }}
+                placeholder={t('e.g. Counter 1 / Kamal / White Car', 'උදා: කවුන්ටර් 1 / කමල් / සුදු වාහනය')}
+                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all"
+                autoFocus
+              />
+            </div>
+
+            <div className="flex gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowHoldNameModal(false);
+                  setHoldNameInput('');
+                }}
+                className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-black text-xs uppercase tracking-widest rounded-xl transition-all"
+              >
+                {t('Cancel', 'අවලංගු කරන්න')}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleHoldBill(holdNameInput)}
+                className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 active:scale-[0.99] text-slate-950 font-black text-xs uppercase tracking-widest rounded-xl transition-all shadow-md shadow-amber-500/20 flex items-center justify-center gap-1.5"
+              >
+                <PauseIcon className="w-4 h-4" />
+                {t('Confirm & Park Bill', 'බිල්පත රඳවන්න')}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Retrieve / Manage Parked Invoices Modal */}
+      {showHeldBillsModal && (
+        <Modal
+          isOpen={showHeldBillsModal}
+          onClose={() => setShowHeldBillsModal(false)}
+          title={t('🅿️ Parked Invoices / Held Bills', '🅿️ රඳවා ඇති බිල්පත්')}
+        >
+          <div className="space-y-4 p-2 text-left max-w-2xl mx-auto">
+            <div className="flex justify-between items-center bg-slate-50 border border-slate-200/80 p-3 rounded-2xl">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
+                <span className="text-xs font-black text-slate-700 uppercase tracking-wider">
+                  {parkedInvoices.length} {t('Parked Cart(s) Active', 'රඳවා ඇති බිල්පත් ගණන')}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => fetchParkedInvoices()}
+                className="text-[10px] font-black uppercase tracking-wider px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-600 rounded-lg border border-slate-200 transition-all flex items-center gap-1"
+              >
+                <RefreshCwIcon className="w-3 h-3" />
+                {t('Refresh', 'යාවත්කාලීන')}
+              </button>
+            </div>
+
+            {parkedInvoices.length === 0 ? (
+              <div className="py-12 px-4 text-center bg-slate-50 border border-dashed border-slate-200 rounded-2xl">
+                <div className="w-14 h-14 bg-amber-100 text-amber-600 rounded-2xl flex items-center justify-center mx-auto mb-3">
+                  <PauseIcon className="w-7 h-7" />
+                </div>
+                <h4 className="text-sm font-black text-slate-800 uppercase tracking-wider">
+                  {t('No Parked Invoices', 'රඳවා ඇති බිල්පත් නොමැත')}
+                </h4>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1 font-medium">
+                  {t('When you put active sales on hold during busy checkout, they will appear here for instant retrieval.', 'කාර්යබහුල වේලාවන්හිදී රඳවා තබන බිල්පත් මෙතැනින් නැවත ලබාගත හැක.')}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1 custom-scrollbar">
+                {parkedInvoices.map((park) => {
+                  const itemsList = Array.isArray(park.items)
+                    ? park.items
+                    : typeof park.items === 'string'
+                    ? JSON.parse(park.items || '[]')
+                    : [];
+                  const calcTotal = Number(
+                    park.totalAmount !== undefined
+                      ? park.totalAmount
+                      : itemsList.reduce((sum: number, item: any) => sum + Number(item.total || item.price * item.qty || 0), 0)
+                  );
+                  const custName = park.customer?.name || park.guestName || (park as any).customer_name || 'Guest Customer';
+
+                  return (
+                    <div
+                      key={park.id}
+                      className="bg-white border border-slate-200 hover:border-amber-400 rounded-2xl p-4 shadow-sm hover:shadow-md transition-all space-y-3"
+                    >
+                      <div className="flex justify-between items-start gap-2">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 rounded-lg text-[10px] font-black uppercase tracking-wider font-mono">
+                              {park.id}
+                            </span>
+                            <h4 className="text-xs font-black text-slate-900">
+                              {park.holdName || (park as any).hold_name || `Hold #${park.id.slice(-4)}`}
+                            </h4>
+                          </div>
+                          <div className="flex items-center gap-3 text-[11px] text-slate-500 font-medium mt-1">
+                            <span>👤 {custName}</span>
+                            <span>•</span>
+                            <span>🕒 {new Date(park.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          </div>
+                        </div>
+
+                        <div className="text-right">
+                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">{t('Total Amount', 'මුළු මුදල')}</span>
+                          <span className="text-sm font-black text-emerald-600 font-mono">
+                            Rs. {calcTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Items preview snippet */}
+                      <div className="bg-slate-50/80 rounded-xl p-2.5 text-[11px] text-slate-600 space-y-1">
+                        <div className="font-bold text-[10px] uppercase text-slate-400 tracking-wider">
+                          {itemsList.length} {t('Item(s)', 'භාණ්ඩ')}:
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {itemsList.map((itm: any, itmIdx: number) => (
+                            <span
+                              key={itmIdx}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 bg-white border border-slate-200 rounded text-[10px] font-medium text-slate-700"
+                            >
+                              <span className="font-bold text-slate-900">{itm.qty || 1}x</span>
+                              <span className="truncate max-w-[120px]">{itm.name || itm.productName || 'Item'}</span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex justify-between items-center pt-1 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm(t('Are you sure you want to delete this parked invoice?', 'මෙම රඳවා ඇති බිල්පත මකා දැමීමට ඔබට විශ්වාසද?'))) {
+                              handleDeleteParkedInvoice(park.id);
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-xl text-red-600 hover:bg-red-50 text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1 border border-transparent hover:border-red-200"
+                        >
+                          <Trash2Icon className="w-3.5 h-3.5" />
+                          {t('Discard', 'ඉවත් කරන්න')}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (cartItems.length > 0) {
+                              if (!window.confirm(t('Your active cart already has items. Restoring this bill will replace current cart items. Continue?', 'ඔබගේ සක්‍රිය කාට් එකේ දැනටමත් භාණ්ඩ ඇත. මෙම බිල්පත ලබා ගැනීමෙන් වත්මන් භාණ්ඩ ප්‍රතිස්ථාපනය වේ. ඉදිරියට යන්නද?'))) {
+                                return;
+                              }
+                            }
+                            handleRetrieveHoldBill(park);
+                          }}
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-xl text-[11px] font-black uppercase tracking-wider transition-all shadow-sm flex items-center gap-1.5"
+                        >
+                          <ShoppingCartIcon className="w-3.5 h-3.5" />
+                          {t('Restore to Cart', 'කාට් එකට ගන්න')}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setShowHeldBillsModal(false)}
+              className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs uppercase tracking-widest rounded-xl transition-all"
+            >
+              {t('Close', 'වසා දමන්න')}
+            </button>
           </div>
         </Modal>
       )}

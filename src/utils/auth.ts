@@ -1,23 +1,29 @@
-import { ROLE_PERMISSIONS } from './permissions';
+import { ROLE_PERMISSIONS, getDefaultRolePermissions } from './permissions';
 
 /**
- * Checks whether a user has a specific permission capability key.
+ * Checks whether a user has a specific permission capability key or access to a navigation module.
  *
  * Evaluation order:
  * 1. Root Admin / Super Admin role override (always returns true).
- * 2. Explicit user.permissions array or string (if attached to user profile).
- * 3. Dynamic Permissions Matrix (ROLE_PERMISSIONS) loaded from DB / LocalStorage.
+ * 2. Explicit user.permissions array or JSON string.
+ * 3. Base role default preset (getDefaultRolePermissions).
+ * 4. Fallback to dynamic Permissions Matrix (ROLE_PERMISSIONS).
  *
  * @param user User profile object
- * @param permissionKey Capability key (e.g. 'sales_history', 'sales_returns', 'reports')
+ * @param permissionKey Capability key or page name
  * @returns boolean
  */
 export const hasUserPermission = (user: any, permissionKey: string): boolean => {
   if (!user) return false;
 
-  const roleStr = (user.role || '').toLowerCase();
+  const roleStr = (user.role || '').toLowerCase().trim();
   // Super Admin / Admin role always has root override
-  if (roleStr === 'admin' || roleStr === 'super admin' || roleStr === 'super_admin') {
+  if (roleStr === 'admin' || roleStr === 'super admin' || roleStr === 'super_admin' || user.email === 'admin@hardware.com') {
+    return true;
+  }
+
+  // Dashboard is accessible to all logged-in staff members
+  if (permissionKey === 'dashboard') {
     return true;
   }
 
@@ -31,6 +37,9 @@ export const hasUserPermission = (user: any, permissionKey: string): boolean => 
     } catch {
       permissions = user.permissions.split(',').map((p: string) => p.trim());
     }
+  } else {
+    // If user has no custom overrides, use their default role preset
+    permissions = getDefaultRolePermissions(user.role);
   }
 
   if (permissions.length > 0) {
@@ -39,26 +48,72 @@ export const hasUserPermission = (user: any, permissionKey: string): boolean => 
     }
   }
 
+  // Granular capability mappings for navigation pages & modules:
+  if (permissionKey === 'sales' || permissionKey === 'sales_create') {
+    return permissions.includes('pos_create_sales') || permissions.includes('pos_view_all_history') || permissions.includes('pos_process_returns');
+  }
+
+  if (permissionKey === 'sales_returns') {
+    return permissions.includes('pos_process_returns');
+  }
+
+  if (permissionKey === 'sales_history' || permissionKey === 'sales_all_history') {
+    return permissions.includes('pos_view_all_history');
+  }
+
+  if (permissionKey === 'sales_own_history' || permissionKey === 'sales_today') {
+    return permissions.includes('pos_create_sales') || permissions.includes('pos_view_all_history');
+  }
+
+  if (permissionKey === 'inventory') {
+    // Inventory search/lookup is accessible to all staff, detailed costs/adjustments are checked individually
+    return true;
+  }
+
+  if (permissionKey === 'barcode-print' || permissionKey === 'barcode_print' || permissionKey === 'barcodes') {
+    return true;
+  }
+
+  if (permissionKey === 'customers') {
+    return permissions.includes('credit_record_settlement') || permissions.includes('credit_edit_customer') || permissions.includes('credit_issue_invoices') || permissions.includes('pos_create_sales');
+  }
+
+  if (permissionKey === 'credit_create_sale') {
+    return permissions.includes('credit_issue_invoices');
+  }
+
+  if (permissionKey === 'credit_record_payment') {
+    return permissions.includes('credit_record_settlement');
+  }
+
+  if (permissionKey === 'credit_edit') {
+    return permissions.includes('credit_edit_customer');
+  }
+
+  if (permissionKey === 'credit_delete_void') {
+    return permissions.includes('credit_void_records');
+  }
+
+  if (permissionKey === 'purchasing' || permissionKey === 'suppliers') {
+    return permissions.includes('po_create_and_receive');
+  }
+
+  if (permissionKey === 'reports' || permissionKey === 'finance') {
+    return permissions.includes('reports_view_financials');
+  }
+
+  if (permissionKey === 'database' || permissionKey === 'settings') {
+    return permissions.includes('system_backup_manage');
+  }
+
+  if (permissionKey === 'users' || permissionKey === 'audit_logs') {
+    return roleStr === 'admin' || roleStr === 'super admin' || roleStr === 'super_admin';
+  }
+
   // Fallback to active Permissions Matrix for the user's role
   const rolePerms = ROLE_PERMISSIONS[user.role] || [];
   if (rolePerms.includes(permissionKey as any)) {
     return true;
-  }
-
-  // Capability key aliases for sub-tabs and actions
-  if (permissionKey === 'sales_history' || permissionKey === 'sales_all_history' || permissionKey === 'sales_own_history') {
-    return rolePerms.includes('sales' as any) ||
-           rolePerms.includes('sales_history' as any) ||
-           rolePerms.includes('sales_all_history' as any) ||
-           rolePerms.includes('sales_own_history' as any);
-  }
-
-  if (permissionKey === 'sales_returns') {
-    return rolePerms.includes('sales_returns' as any) || rolePerms.includes('sales' as any);
-  }
-
-  if (permissionKey === 'credit_delete_void') {
-    return rolePerms.includes('credit_delete_void' as any) || rolePerms.includes('settings' as any);
   }
 
   return false;

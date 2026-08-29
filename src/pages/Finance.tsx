@@ -54,6 +54,7 @@ export function Finance() {
   const [filterPeriodType, setFilterPeriodType] = useState<'all' | 'day' | 'month'>('all');
   const [filterDate, setFilterDate] = useState(new Date().toLocaleDateString('sv-SE'));
   const [filterMonth, setFilterMonth] = useState(new Date().toLocaleDateString('sv-SE').slice(0, 7));
+  const [isRefreshingData, setIsRefreshingData] = useState(false);
 
   useEffect(() => {
     if (toast) {
@@ -64,6 +65,7 @@ export function Finance() {
 
   const fetchData = async () => {
     setIsLoading(true);
+    setIsRefreshingData(true);
     try {
       const { data } = await supabase
         .from('transactions')
@@ -76,6 +78,7 @@ export function Finance() {
       console.error("Error loading transactions:", error);
     } finally {
       setIsLoading(false);
+      setTimeout(() => setIsRefreshingData(false), 600);
     }
   };
 
@@ -462,7 +465,7 @@ export function Finance() {
   };
 
   return (
-    <div className="p-4 sm:p-6 space-y-6 animate-in fade-in duration-500 text-left">
+    <div className={`p-4 sm:p-6 space-y-6 animate-in fade-in duration-500 text-left transition-all duration-300 ${isRefreshingData ? 'opacity-60 scale-[0.99] blur-[0.5px]' : 'opacity-100 scale-100'}`}>
       {/* Financial Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
         {/* Net Cash Balance */}

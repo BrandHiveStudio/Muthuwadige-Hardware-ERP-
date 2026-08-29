@@ -43,12 +43,14 @@ export const getSystemBranding = (shopSettings?: any) => {
     }
   }
   return {
-    shopName: settings?.shop_name || settings?.shopName || 'MUTHUWADIGE HARDWARE',
-    address: settings?.address || 'No. 123, Main Street, Colombo, Sri Lanka',
-    phone: settings?.phone || settings?.telephone || '+94 77 123 4567',
-    email: settings?.email || 'info@muthuwadige.lk',
+    shopName: settings?.shop_name || settings?.storeName || settings?.shopName || 'MUTHUWADIGE HARDWARE',
+    address: settings?.address || 'No: 80, Mahahunupitiya, Negombo',
+    phone: settings?.phone || settings?.telephone || '077 076 076 7',
+    email: settings?.email || 'sanojhardware@gmail.com',
     footer: settings?.invoice_footer || settings?.receiptFooter || settings?.footer_text || 'Thank you for your business! Come again.',
-    logoPath: settings?.logo_path || settings?.logoPath || './images/logo.png',
+    logoPath: settings?.logoUrl || settings?.logo_path || settings?.logoPath || './images/logo.png',
+    currency: settings?.currency || settings?.currency_symbol || 'Rs.',
+    currencySymbol: settings?.currency || settings?.currency_symbol || 'Rs.',
     printerSettings: settings?.printer_settings 
       ? (typeof settings.printer_settings === 'object' 
           ? settings.printer_settings 
@@ -1520,6 +1522,10 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
                 <td>${isSi ? 'ගෙවීම් ක්‍රමය:' : 'PAYMENT METHOD:'}</td>
                 <td class="value"><span style="display: inline-block; padding: 2px 8px; background-color: #f59e0b; color: #000000; font-weight: 800; text-transform: uppercase; font-size: 11px; border: 1px solid #d97706; border-radius: 4px;">${(order.payment_method || (order as any).paymentMethod || (order.status === 'Non Paid' ? 'CREDIT' : 'CASH')).toUpperCase()}</span></td>
               </tr>
+              <tr>
+                <td>${isSi ? 'අයකැමි:' : 'CASHIER:'}</td>
+                <td class="value" style="font-weight: 700;">${order.cashier || (order as any).cashier_name || (order as any).user_name || shopSettings?.shop_name || 'Sanoj Hardware'}</td>
+              </tr>
               ${((order.payment_method || (order as any).paymentMethod || '').toLowerCase() === 'credit' || order.status === 'Non Paid') ? `
               <tr>
                 <td>${isSi ? 'තත්ත්වය:' : 'STATUS:'}</td>
@@ -1958,6 +1964,10 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
                   <td class="label">${isSi ? 'ගෙවීම් ක්‍රමය:' : 'PAYMENT METHOD:'}</td>
                   <td class="value"><span style="display: inline-block; padding: 2px 8px; background-color: #f59e0b; color: #000000; font-weight: 800; text-transform: uppercase; font-size: 10px; border: 1px solid #d97706; border-radius: 4px;">${(order.payment_method || (order as any).paymentMethod || (order.status === 'Non Paid' ? 'CREDIT' : 'CASH')).toUpperCase()}</span></td>
                 </tr>
+                <tr>
+                  <td class="label">${isSi ? 'අයකැමි:' : 'CASHIER:'}</td>
+                  <td class="value" style="font-weight: 700; color: #1f2937;">${order.cashier || (order as any).cashier_name || (order as any).user_name || shopSettings?.shop_name || 'Sanoj Hardware'}</td>
+                </tr>
                 ${((order.payment_method || (order as any).paymentMethod || '').toLowerCase() === 'credit' || order.status === 'Non Paid') ? `
                 <tr>
                   <td class="label">${isSi ? 'තත්ත්වය:' : 'STATUS:'}</td>
@@ -2050,8 +2060,19 @@ const formatInvoiceDateTime = (created_at?: string, fallbackDate?: string) => {
 // generateReturnPrintHTML (Outer/Primary definition)
 // ============================================
 
-const generateReturnPrintHTML = (sr: SalesReturn, isSi: boolean, shopSettings?: any) => {
-  const symbolStr = isSi ? 'රු.' : 'Rs.';
+const generateReturnPrintHTML = (
+  sr: SalesReturn, 
+  isSiOrSettings?: boolean | any, 
+  settingsOrIsSi?: any | boolean
+) => {
+  const isSi = typeof isSiOrSettings === 'boolean' 
+    ? isSiOrSettings 
+    : (typeof settingsOrIsSi === 'boolean' ? settingsOrIsSi : false);
+  const shopSettings = (typeof isSiOrSettings === 'object' && isSiOrSettings !== null) 
+    ? isSiOrSettings 
+    : ((typeof settingsOrIsSi === 'object' && settingsOrIsSi !== null) ? settingsOrIsSi : {});
+
+  const symbolStr = isSi ? 'රු.' : (shopSettings?.currency || shopSettings?.currency_symbol || 'Rs.');
   const formatNum = (num: number) => (num || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const returnedItems = Array.isArray(sr.returnedItems) ? sr.returnedItems : safeParseJson(sr.returnedItems, []);
   const exchangeItems = Array.isArray(sr.exchangeItems) ? sr.exchangeItems : safeParseJson(sr.exchangeItems, []);
@@ -2066,35 +2087,42 @@ const generateReturnPrintHTML = (sr: SalesReturn, isSi: boolean, shopSettings?: 
 
   const grossReturnVal = returnedItems.reduce((sum: number, i: any) => sum + ((i.qty || 1) * Number(i.originalStickerPrice || i.originalUnitPrice || i.price || 0)), 0);
   const discountReturnVal = returnedItems.reduce((sum: number, i: any) => sum + ((i.qty || 1) * Number(i.unitDiscount || 0)), 0);
-  const netReturnVal = Number(sr.returnAmount || (grossReturnVal - discountReturnVal) || 0);
+  const returnCreditValue = Number(sr.returnAmount !== undefined ? sr.returnAmount : (sr.totalRefunded || (grossReturnVal - discountReturnVal) || 0));
+  const exchangeTotal = Number(sr.exchangeAmount !== undefined ? sr.exchangeAmount : exchangeItems.reduce((sum: number, i: any) => sum + ((i.qty || 1) * Number(i.price || i.unitPrice || 0)), 0));
+  const priceDifference = exchangeTotal - returnCreditValue;
+  const settlementMode = sr.differencePaymentMethod || (sr as any).difference_payment_method || (sr as any).paymentMethod || (isCreditBill ? 'Customer Credit Debt' : 'Cash');
 
   const retRows = returnedItems.map((i: any) => {
     const origPrice = Number(i.originalStickerPrice || i.originalUnitPrice || i.price || 0);
-    const rawDisc = Number(i.unitDiscount !== undefined ? i.unitDiscount : (i.discount || 0));
-    const itemQty = Number(i.originalQty || i.quantity || i.qty || 1);
-    const { unitDiscount: unitDisc, netUnitPrice: netPrice } = calculateEffectiveUnitPricePaid(origPrice, rawDisc, itemQty);
-    const lineTotal = Number(i.qty || 1) * netPrice;
+    const { effectivePrice, unitDiscount } = calculateEffectiveUnitPricePaid(i, sr);
+    const effectiveUnitPrice = i.netUnitPrice !== undefined ? Number(i.netUnitPrice) : effectivePrice;
+    const unitDisc = i.unitDiscount !== undefined ? Number(i.unitDiscount) : unitDiscount;
+    const lineTotal = Number(i.qty || 1) * effectiveUnitPrice;
     return `
       <tr style="border-bottom: 1px dashed #e5e7eb;">
-        <td style="padding: 4px 0; text-align: left; color: #1f2937; font-weight: bold;">
-          ${i.productName}
-          ${unitDisc > 0 ? `<div style="font-size: 9px; color: #dc2626; font-weight: normal;">-${symbolStr} ${formatNum(unitDisc)}/pc disc</div>` : ''}
+        <td style="padding: 5px 0 3px 0; text-align: left; color: #1f2937; font-weight: bold; font-size: 11px;">
+          ${i.productName || i.name}
+          ${unitDisc > 0 ? `<div style="font-size: 9px; color: #dc2626; font-weight: normal;">${symbolStr} ${formatNum(origPrice)} - ${symbolStr} ${formatNum(unitDisc)} disc = ${symbolStr} ${formatNum(effectiveUnitPrice)}/pc</div>` : ''}
         </td>
-        <td style="padding: 4px 0; text-align: center;">${i.qty} ${i.unit || ''}</td>
-        <td style="padding: 4px 0; text-align: right; color: #6b7280;">${symbolStr} ${formatNum(origPrice)}</td>
-        <td style="padding: 4px 0; text-align: right; font-weight: bold;">${symbolStr} ${formatNum(netPrice)}</td>
-        <td style="padding: 4px 0; text-align: right; font-weight: bold; color: #dc2626;">${symbolStr} ${formatNum(lineTotal)}</td>
+        <td style="padding: 5px 0 3px 0; text-align: center; font-size: 11px;">${i.qty} ${i.unit || ''}</td>
+        <td style="padding: 5px 0 3px 0; text-align: right; font-weight: bold; font-size: 11px;">${symbolStr} ${formatNum(effectiveUnitPrice)}</td>
+        <td style="padding: 5px 0 3px 0; text-align: right; font-weight: bold; color: #dc2626; font-size: 11px;">${symbolStr} ${formatNum(lineTotal)}</td>
       </tr>
     `;
   }).join('');
 
-  const exRows = exchangeItems.map((i: any) => `
-    <tr style="border-bottom: 1px dashed #e5e7eb;">
-      <td style="padding: 4px 0; text-align: left; color: #1f2937; font-weight: bold;">${i.productName}</td>
-      <td style="padding: 4px 0; text-align: center;">${i.qty} ${i.unit || ''}</td>
-      <td style="padding: 4px 0; text-align: right; font-weight: bold; color: #059669;">${symbolStr} ${formatNum(i.qty * i.price)}</td>
-    </tr>
-  `).join('');
+  const exRows = exchangeItems.map((i: any) => {
+    const unitPrice = Number(i.price || i.unitPrice || 0);
+    const lineTotal = Number(i.total !== undefined ? i.total : (Number(i.qty || 1) * unitPrice));
+    return `
+      <tr style="border-bottom: 1px dashed #e5e7eb;">
+        <td style="padding: 5px 0 3px 0; text-align: left; color: #1f2937; font-weight: bold; font-size: 11px;">⇄ ${i.productName || i.name}</td>
+        <td style="padding: 5px 0 3px 0; text-align: center; font-size: 11px;">${i.qty} ${i.unit || ''}</td>
+        <td style="padding: 5px 0 3px 0; text-align: right; font-size: 11px;">${symbolStr} ${formatNum(unitPrice)}</td>
+        <td style="padding: 5px 0 3px 0; text-align: right; font-weight: bold; color: #059669; font-size: 11px;">${symbolStr} ${formatNum(lineTotal)}</td>
+      </tr>
+    `;
+  }).join('');
 
   return `
     <!DOCTYPE html>
@@ -2102,50 +2130,138 @@ const generateReturnPrintHTML = (sr: SalesReturn, isSi: boolean, shopSettings?: 
       <head>
         <meta charset="utf-8" />
         <title>${title} - ${sr.returnNo || sr.return_no || sr.id}</title>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&family=Noto+Sans+Sinhala:wght@400;600;700;800&family=Roboto+Mono:wght@400;600;700&display=swap" rel="stylesheet">
         <style>
           @page { margin: 0; size: 80mm auto; }
-          body { font-family: 'Inter', sans-serif; margin: 0; padding: 10px; font-size: 12px; }
-          .title { font-weight: 900; font-size: 14px; text-align: center; margin: 8px 0; text-transform: uppercase; }
-          table { width: 100%; border-collapse: collapse; }
-          th { text-align: left; border-bottom: 1px solid #000; padding: 3px 0; font-size: 10px; }
+          body { font-family: 'Inter', 'Noto Sans Sinhala', sans-serif; margin: 0; padding: 12px; font-size: 12px; color: #111827; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          .receipt-container { width: 100%; max-width: 78mm; margin: 0 auto; }
+          .header { text-align: center; border-bottom: 2px dashed #9ca3af; padding-bottom: 6px; margin-bottom: 6px; }
+          .title { font-weight: 900; font-size: 13px; text-align: center; margin: 6px 0; text-transform: uppercase; border: 1px solid #374151; padding: 3px; background: #f9fafb; border-radius: 4px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+          th { text-align: left; border-bottom: 1px solid #374151; padding: 3px 0; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+          .font-mono { font-family: 'Roboto Mono', monospace; }
         </style>
       </head>
       <body>
-        <div style="text-align: center; font-weight: 900; font-size: 15px;">MUTHUWADIGE HARDWARE</div>
-        <div style="text-align: center; font-size: 10px; color: #4b5563;">Negombo | Tel: 077 076 076 7</div>
-        <div style="text-align:center; font-weight:bold; margin: 10px 0;">${title}</div>
-        <div style="font-size: 11px; margin-bottom: 8px;">
-          <div><strong>Return No:</strong> ${sr.returnNo || sr.return_no || sr.id}</div>
-          <div><strong>Original Inv:</strong> ${sr.invoiceNo || sr.invoice_no}</div>
-          <div><strong>Customer:</strong> ${sr.customerName || sr.customer_name || 'Guest'}</div>
-          <div><strong>Date:</strong> ${new Date(sr.created_at).toLocaleString()}</div>
-          <div><strong>Method:</strong> ${displayMethod}</div>
-        </div>
-        
-        <div style="font-weight: bold; margin-top: 6px; font-size: 11px; color: #dc2626;">Returned Products:</div>
-        <table>
-          <thead><tr><th>Item Description</th><th style="text-align:center;">Qty</th><th style="text-align:right;">Orig</th><th style="text-align:right;">Net Price</th><th style="text-align:right;">Total</th></tr></thead>
-          <tbody>${retRows}</tbody>
-        </table>
-
-        ${exchangeItems.length > 0 ? `
-          <div style="font-weight: bold; margin-top: 10px; font-size: 11px; color: #059669;">Exchange Replacement Products:</div>
+        <div class="receipt-container">
+          <div class="header">
+            <div style="font-weight: 900; font-size: 15px; letter-spacing: 0.5px;">${shopSettings?.storeName || shopSettings?.shop_name || 'MUTHUWADIGE HARDWARE'}</div>
+            <div style="font-size: 10px; color: #4b5563; margin-top: 2px;">${shopSettings?.address || 'No: 80, Mahahunupitiya, Negombo'}</div>
+            <div style="font-size: 10px; color: #4b5563;">Tel: ${shopSettings?.phone || shopSettings?.telephone || '077 076 076 7'}</div>
+          </div>
+          
+          <div class="title">${title}</div>
+          
+          <div style="font-size: 11px; margin-bottom: 8px; line-height: 1.4;">
+            <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'ආපසු අංකය:' : 'Return No:'}</strong> <span class="font-mono" style="font-weight: bold;">${sr.returnNo || sr.return_no || sr.id}</span></div>
+            <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'මුල් ඉන්වොයිසිය:' : 'Original Inv:'}</strong> <span class="font-mono">${sr.invoiceNo || sr.invoice_no}</span></div>
+            <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'පාරිභෝගිකයා:' : 'Customer:'}</strong> <span>${sr.customerName || sr.customer_name || (isSi ? 'පාරිභෝගිකයා' : 'Guest Customer')}</span></div>
+            <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'අයකැමි:' : 'Cashier:'}</strong> <span>${sr.cashier || (sr as any).cashier_name || (sr as any).user_name || shopSettings?.shop_name || 'Sanoj Hardware'}</span></div>
+            <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'දිනය:' : 'Date:'}</strong> <span>${new Date(sr.created_at || new Date()).toLocaleString()}</span></div>
+            <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'ක්‍රමය:' : 'Method:'}</strong> <span style="font-weight: bold;">${displayMethod}</span></div>
+          </div>
+          
+          <div style="font-weight: 800; margin-top: 8px; font-size: 11px; color: #dc2626; text-transform: uppercase;">${isSi ? 'ආපසු භාරගත් භාණ්ඩ:' : 'Returned Item(s):'}</div>
           <table>
-            <thead><tr><th>Item</th><th style="text-align:center;">Qty</th><th style="text-align:right;">Total</th></tr></thead>
-            <tbody>${exRows}</tbody>
+            <thead>
+              <tr>
+                <th>${isSi ? 'විස්තරය' : 'Item Description'}</th>
+                <th style="text-align:center;">${isSi ? 'ප්‍රමාණය' : 'Qty'}</th>
+                <th style="text-align:right;">${isSi ? 'ශුද්ධ මිල' : 'Net Price'}</th>
+                <th style="text-align:right;">${isSi ? 'එකතුව' : 'Total'}</th>
+              </tr>
+            </thead>
+            <tbody>${retRows}</tbody>
           </table>
-        ` : ''}
 
-        <div style="margin-top: 10px; border-top: 1px solid #000; padding-top: 6px; text-align: right; font-weight: bold;">
-          <div>Gross Item Value: ${symbolStr} ${formatNum(grossReturnVal)}</div>
-          ${discountReturnVal > 0 ? `<div style="color: #dc2626;">Less: Proportional Discounts: -${symbolStr} ${formatNum(discountReturnVal)}</div>` : ''}
-          <div style="font-size: 13px; margin-top: 4px; color: #059669;">Total Refund / Credit Adjustment: ${symbolStr} ${formatNum(netReturnVal)}</div>
-          ${sr.returnMethod === 'Exchange' ? `
-            ${sr.exchangeAmount ? `<div>Exchange Replacement Total: ${symbolStr} ${formatNum(sr.exchangeAmount)}</div>` : ''}
-            <div>Net Exchange Balance: ${symbolStr} ${formatNum(Math.abs((sr.exchangeAmount || 0) - (sr.returnAmount || 0)))} (${(sr.exchangeAmount || 0) >= (sr.returnAmount || 0) ? 'Customer Owed' : 'Refund Due'})</div>
-            ${sr.customerPaid ? `<div>Customer Paid: ${symbolStr} ${formatNum(sr.customerPaid)}</div>` : ''}
-            ${sr.changeGiven ? `<div>Change Given: ${symbolStr} ${formatNum(sr.changeGiven)}</div>` : ''}
+          ${exchangeItems.length > 0 ? `
+            <div style="font-weight: 800; margin-top: 10px; font-size: 11px; color: #059669; text-transform: uppercase;">${isSi ? 'හුවමාරු ලැබුණු නව භාණ්ඩ:' : 'Exchange Replacement Item(s):'}</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>${isSi ? 'විස්තරය' : 'Item Description'}</th>
+                  <th style="text-align:center;">${isSi ? 'ප්‍රමාණය' : 'Qty'}</th>
+                  <th style="text-align:right;">${isSi ? 'මිල' : 'Price'}</th>
+                  <th style="text-align:right;">${isSi ? 'එකතුව' : 'Total'}</th>
+                </tr>
+              </thead>
+              <tbody>${exRows}</tbody>
+            </table>
           ` : ''}
+
+          {/* Calculation & Balance Breakdown */}
+          <div class="font-mono" style="margin-top: 10px; border-top: 2px dashed #374151; padding-top: 6px; font-size: 11px; line-height: 1.5;">
+            <div style="display: flex; justify-content: space-between;">
+              <span>${isSi ? 'ආපසු වටිනාකම (ශුද්ධ):' : 'Return Credit (Net):'}</span>
+              <span style="font-weight: bold;">${symbolStr} ${formatNum(returnCreditValue)}</span>
+            </div>
+
+            ${exchangeItems.length > 0 ? `
+              <div style="display: flex; justify-content: space-between;">
+                <span>${isSi ? 'නව හුවමාරු මුළු එකතුව:' : 'Exchange New Total:'}</span>
+                <span style="font-weight: bold; color: #059669;">${symbolStr} ${formatNum(exchangeTotal)}</span>
+              </div>
+              
+              <div style="border-top: 1px solid #9ca3af; margin: 4px 0;"></div>
+
+              ${priceDifference > 0 ? `
+                <div style="display: flex; justify-content: space-between; font-weight: 900; font-size: 12px; background: #f3f4f6; padding: 4px 6px; border-radius: 4px; color: #111827; border: 1px solid #e5e7eb;">
+                  <span>${isSi ? 'පාරිභෝගිකයා අමතරව ගෙවිය යුතු මුදල:' : 'CUSTOMER EXTRA PAYABLE:'}</span>
+                  <span style="color: #b45309;">${symbolStr} ${formatNum(priceDifference)}</span>
+                </div>
+              ` : priceDifference < 0 ? `
+                <div style="display: flex; justify-content: space-between; font-weight: 900; font-size: 12px; background: #f3f4f6; padding: 4px 6px; border-radius: 4px; color: #111827; border: 1px solid #e5e7eb;">
+                  <span>${isCreditBill ? (isSi ? 'ණය ගිණුමෙන් අඩුකළ මුදල:' : 'CREDIT REDUCTION:') : (isSi ? 'පාරිභෝගිකයාට ආපසු ගෙවිය යුතු මුදල:' : 'STORE REFUND TO CUSTOMER:')}</span>
+                  <span style="color: #059669;">${symbolStr} ${formatNum(Math.abs(priceDifference))}</span>
+                </div>
+              ` : `
+                <div style="display: flex; justify-content: space-between; font-weight: 900; font-size: 12px; background: #f3f4f6; padding: 4px 6px; border-radius: 4px; color: #111827; border: 1px solid #e5e7eb;">
+                  <span>${isSi ? 'ශුද්ධ ශේෂය:' : 'NET BALANCE:'}</span>
+                  <span>${symbolStr} 0.00 (${isSi ? 'සම ශේෂ හුවමාරුව' : 'Even Exchange'})</span>
+                </div>
+              `}
+
+              <div style="display: flex; justify-content: space-between; font-size: 10px; color: #4b5563; font-style: italic; margin-top: 4px;">
+                <span>${isSi ? 'පියවීමේ ක්‍රමය:' : 'Settlement Mode:'}</span>
+                <span style="font-weight: bold; color: #111827;">${settlementMode}</span>
+              </div>
+
+              ${Number(sr.customerPaid || 0) > 0 ? `
+                <div style="display: flex; justify-content: space-between; font-size: 11px; margin-top: 2px;">
+                  <span>${isSi ? 'පාරිභෝගිකයා ගෙවූ මුදල:' : 'Customer Paid:'}</span>
+                  <span style="font-weight: bold;">${symbolStr} ${formatNum(Number(sr.customerPaid))}</span>
+                </div>
+              ` : ''}
+              ${Number(sr.changeGiven || 0) > 0 ? `
+                <div style="display: flex; justify-content: space-between; font-size: 11px; margin-top: 2px;">
+                  <span>${isSi ? 'ඉතිරි මුදල:' : 'Change Given:'}</span>
+                  <span style="font-weight: bold;">${symbolStr} ${formatNum(Number(sr.changeGiven))}</span>
+                </div>
+              ` : ''}
+            ` : `
+              ${sr.returnMethod === 'Credit Note' ? `
+                <div style="display: flex; justify-content: space-between; margin-top: 4px; color: #d97706; font-weight: bold;">
+                  <span>${isSi ? 'නිකුත් කළ ණය සටහන:' : 'Credit Note Issued:'}</span>
+                  <span>${sr.creditNoteNo || 'CN-ISSUED'}</span>
+                </div>
+              ` : sr.returnMethod === 'Cash Refund' && !isCreditBill ? `
+                <div style="display: flex; justify-content: space-between; margin-top: 4px; color: #dc2626; font-weight: bold;">
+                  <span>${isSi ? 'ආපසු ගෙවූ මුදල:' : 'Cash Refunded:'}</span>
+                  <span>${symbolStr} ${formatNum(sr.totalRefunded || returnCreditValue)}</span>
+                </div>
+              ` : isCreditBill ? `
+                <div style="display: flex; justify-content: space-between; margin-top: 4px; color: #0284c7; font-weight: bold;">
+                  <span>${isSi ? 'ණය සැකසුම:' : 'Credit Adjustment:'}</span>
+                  <span>${symbolStr} ${formatNum(sr.totalRefunded || returnCreditValue)}</span>
+                </div>
+              ` : ''}
+            `}
+          </div>
+
+          <div style="text-align: center; margin-top: 14px; font-size: 10px; color: #6b7280; border-top: 1px dashed #d1d5db; padding-top: 6px;">
+            <div>${shopSettings?.invoice_footer || shopSettings?.receiptFooter || shopSettings?.footer_text || (isSi ? 'ඔබගේ ව්‍යාපාරයට ස්තූතියි! නැවත එන්න.' : 'Thank you for your business! Come again.')}</div>
+            <div style="font-size: 8px; color: #9ca3af; margin-top: 2px;">Software by Muthuwadige Hardware ERP</div>
+          </div>
         </div>
       </body>
     </html>

@@ -284,6 +284,18 @@ ipcMain.handle('check-backend-health', async () => {
   return await waitForServerReady(5001, 1500);
 });
 
+ipcMain.handle('clear-renderer-cache', async () => {
+  try {
+    if (mainWindow && mainWindow.webContents) {
+      await mainWindow.webContents.session.clearCache();
+    }
+    return { success: true };
+  } catch (err) {
+    console.error('Error clearing renderer cache:', err);
+    return { success: false, error: err.message };
+  }
+});
+
 app.on('before-quit', () => {
   stopBackendServer();
 });

@@ -15,20 +15,63 @@ export function calculateLineGrossTotal(quantity: number, unitPrice: number): nu
 }
 
 export function calculateEffectiveUnitPricePaid(
-  unitPrice: number,
-  itemDiscountTotalOrUnit: number,
-  soldQty: number
-): { unitDiscount: number; netUnitPrice: number } {
-  const price = Math.max(0, Number(unitPrice) || 0);
-  const qty = Math.max(1, Number(soldQty) || 1);
-  const rawDiscount = Math.abs(Number(itemDiscountTotalOrUnit) || 0);
+  itemOrPrice: any,
+  invoiceOrDiscount?: any,
+  soldQty?: number,
+  optionalInvoice?: any
+): { effectivePrice: number; unitDiscount: number; netUnitPrice: number } {
+  let originalUnitPrice = 0;
+  let itemQty = 1;
+  let unitDiscount = 0;
+  let item: any = null;
+  let invoice: any = null;
 
-  // If discount provided is total line discount (> unitPrice or total), divide by qty once;
-  // If discount is already per-unit, do not divide by qty again.
-  const unitDiscount = rawDiscount > price ? rawDiscount / qty : rawDiscount;
-  const netUnitPrice = Math.max(0, price - unitDiscount);
+  if (typeof itemOrPrice === 'object' && itemOrPrice !== null) {
+    item = itemOrPrice;
+    invoice = invoiceOrDiscount;
+    originalUnitPrice = Number(item.originalStickerPrice || item.originalUnitPrice || item.price || item.unit_price || item.unitPrice) || 0;
+    itemQty = Number(item.originalQty || item.quantity || item.qty) || 1;
+  } else {
+    originalUnitPrice = Math.max(0, Number(itemOrPrice) || 0);
+    itemQty = Math.max(1, Number(soldQty) || 1);
+    unitDiscount = Math.abs(Number(invoiceOrDiscount) || 0);
+    invoice = optionalInvoice;
+  }
 
-  return { unitDiscount, netUnitPrice };
+  if (item) {
+    if (item.unitDiscount !== undefined && item.unitDiscount !== null && Number(item.unitDiscount) >= 0) {
+      unitDiscount = Number(item.unitDiscount);
+    } else if (item.discount_amount !== undefined && item.discount_amount !== null) {
+      unitDiscount = Number(item.discount_amount) / itemQty;
+    } else if (item.discount_percentage !== undefined && item.discount_percentage !== null) {
+      unitDiscount = originalUnitPrice * (Number(item.discount_percentage) / 100);
+    } else if (item.discountRate !== undefined && item.discountRate !== null) {
+      unitDiscount = originalUnitPrice * (Number(item.discountRate) / 100);
+    } else if ((item.discountType === '%' || item.discountType === 'percent' || item.discountType === 'percentage') && item.discount !== undefined) {
+      unitDiscount = originalUnitPrice * (Number(item.discount) / 100);
+    } else if (item.discount !== undefined && item.discount !== null && Number(item.discount) > 0) {
+      const discVal = Number(item.discount);
+      unitDiscount = discVal > originalUnitPrice ? (discVal / itemQty) : discVal;
+    } else if (invoice && (invoice.discount_amount || invoice.discount) && (invoice.subtotal || invoice.grossSubtotal)) {
+      // Proportional bill-level discount distribution
+      const invDiscount = Number(invoice.discount_amount || invoice.discount || 0);
+      const invSubtotal = Number(invoice.subtotal || invoice.grossSubtotal || 0);
+      if (invSubtotal > 0 && invDiscount > 0) {
+        const invoiceDiscountRatio = invDiscount / invSubtotal;
+        unitDiscount = originalUnitPrice * invoiceDiscountRatio;
+      }
+    }
+  } else if (invoice && (invoice.discount_amount || invoice.discount) && (invoice.subtotal || invoice.grossSubtotal)) {
+    const invDiscount = Number(invoice.discount_amount || invoice.discount || 0);
+    const invSubtotal = Number(invoice.subtotal || invoice.grossSubtotal || 0);
+    if (invSubtotal > 0 && invDiscount > 0) {
+      const invoiceDiscountRatio = invDiscount / invSubtotal;
+      unitDiscount = originalUnitPrice * invoiceDiscountRatio;
+    }
+  }
+
+  const effectivePrice = Math.max(0, originalUnitPrice - unitDiscount);
+  return { effectivePrice, unitDiscount, netUnitPrice: effectivePrice };
 }
 
 /**

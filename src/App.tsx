@@ -17,6 +17,7 @@ import { AuditLogs } from './pages/AuditLogs';
 import { BarcodePrint } from './pages/BarcodePrint';
 import { CurrencyProvider } from './context/CurrencyContext';
 import { ScannerProvider } from './context/ScannerContext';
+import { SettingsProvider } from './context/SettingsContext';
 import { ROLE_PERMISSIONS } from './utils/permissions';
 import { hasUserPermission } from './utils/auth';
 import { API_URL, fetchWithTimeout } from './lib/api';
@@ -393,7 +394,7 @@ export function App() {
             }
             setCurrentPage(page as PageName);
           }} /> 
-        : <Sales initialTab={salesTab} />;
+        : <Sales initialTab={salesTab} currentUser={currentUser} />;
     }
 
     switch (currentPage) {
@@ -408,11 +409,11 @@ export function App() {
         />
       );
       case 'inventory': return <Inventory />;
-      case 'sales': return <Sales initialTab={salesTab} />;
+      case 'sales': return <Sales initialTab={salesTab} currentUser={currentUser} />;
       case 'purchasing': return <Purchasing />;
-      case 'customers': return <Customers />;
+      case 'customers': return <Customers currentUser={currentUser} />;
       case 'suppliers': return <Suppliers />;
-      case 'reports': return <Reports />;
+      case 'reports': return <Reports currentUser={currentUser} />;
       case 'users': return <Users />;
       case 'database': return <Database />;
       case 'settings': return <Settings />;
@@ -437,7 +438,8 @@ export function App() {
 
   return (
     <ScannerProvider>
-      <CurrencyProvider>
+      <SettingsProvider>
+        <CurrencyProvider>
       <div className="flex h-screen w-full bg-gray-50 overflow-hidden animate-in fade-in duration-700">
         <Sidebar
           currentPage={currentPage}
@@ -449,7 +451,7 @@ export function App() {
           setSalesTab={setSalesTab}
         />
 
-        <div className="flex-1 flex flex-col min-w-0 lg:ml-64 relative">
+        <div className="flex-1 flex flex-col min-w-0 h-full relative overflow-hidden">
           <Header
             currentPage={currentPage}
             currentUser={currentUser}
@@ -591,7 +593,8 @@ export function App() {
           )}
         </div>
       </div>
-      </CurrencyProvider>
+        </CurrencyProvider>
+      </SettingsProvider>
     </ScannerProvider>
   );
 }

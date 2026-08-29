@@ -870,6 +870,8 @@ async function initializeDatabase() {
       payment_method TEXT DEFAULT 'Cash',
       payment_date TEXT DEFAULT CURRENT_TIMESTAMP,
       recorded_by TEXT,
+      created_by TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       notes TEXT
     )
   `);
@@ -886,9 +888,19 @@ async function initializeDatabase() {
     )
   `);
 
+  // Auto-migrate column additions for author & cashier identity
+  try { await db.exec('ALTER TABLE sales ADD COLUMN cashier TEXT;'); } catch (_) {}
+  try { await db.exec('ALTER TABLE sales ADD COLUMN user_email TEXT;'); } catch (_) {}
+  try { await db.exec('ALTER TABLE sales ADD COLUMN user_name TEXT;'); } catch (_) {}
+  try { await db.exec('ALTER TABLE credit_payments ADD COLUMN cashier TEXT;'); } catch (_) {}
+  try { await db.exec('ALTER TABLE credit_payments ADD COLUMN user_email TEXT;'); } catch (_) {}
+
   // Dynamic migration: Ensure new columns exist on existing DB files
   try {
     await db.exec("ALTER TABLE profiles ADD COLUMN password TEXT DEFAULT '123456'");
+  } catch(e) {}
+  try {
+    await db.exec("ALTER TABLE profiles ADD COLUMN permissions TEXT");
   } catch(e) {}
   try {
     await db.exec("ALTER TABLE profiles ADD COLUMN reset_token TEXT");
@@ -956,6 +968,8 @@ async function initializeDatabase() {
   try {
     await db.exec("ALTER TABLE bill_holds ADD COLUMN transportation_fee REAL DEFAULT 0");
   } catch(e) {}
+  try { await db.exec("ALTER TABLE credit_payments ADD COLUMN created_by TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE credit_payments ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP"); } catch(e) {}
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN return_no TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN customer_name TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN customer_phone TEXT"); } catch(e) {}
@@ -1029,9 +1043,11 @@ async function initializeDatabase() {
       user_id TEXT,
       status TEXT DEFAULT 'active',
       reason TEXT,
-      created_at TEXT
+      created_at TEXT,
+      difference_payment_method TEXT DEFAULT 'Cash'
     )
   `);
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN difference_payment_method TEXT DEFAULT 'Cash'"); } catch (e) {}
 
   // Performance Indexes for fast barcode, invoice, and customer lookups
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)"); } catch(e) {}
@@ -1049,6 +1065,19 @@ async function initializeDatabase() {
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_credit_notes_customer_id ON credit_notes(customer_id)"); } catch(e) {}
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_returns_status ON sales_returns(status)"); } catch(e) {}
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_audit_logs_action_date ON audit_logs(action, timestamp)"); } catch(e) {}
+
+  // Database Engine Level Constraint Trigger: Prevent negative stock
+  try {
+    await db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_prevent_negative_product_stock
+      BEFORE UPDATE OF stock ON products
+      FOR EACH ROW
+      WHEN NEW.stock < 0
+      BEGIN
+        SELECT RAISE(ABORT, 'Database Constraint Violation: Stock cannot drop below 0');
+      END;
+    `);
+  } catch(e) {}
 
   try { await db.exec("ALTER TABLE credit_notes ADD COLUMN credit_note_no TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE credit_notes ADD COLUMN code TEXT"); } catch(e) {}
@@ -1501,6 +1530,13 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'Incorrect password.' });
     }
 
+    let parsedPermissions = undefined;
+    if (profile.permissions) {
+      try {
+        parsedPermissions = typeof profile.permissions === 'string' ? JSON.parse(profile.permissions) : profile.permissions;
+      } catch (_) {}
+    }
+
     // Return standard mock payload resembling Supabase structure
     res.json({
       user: {
@@ -1508,7 +1544,8 @@ app.post('/api/auth/login', async (req, res) => {
         email: profile.email,
         role: profile.role,
         name: profile.name,
-        avatar: profile.avatar
+        avatar: profile.avatar,
+        permissions: parsedPermissions
       }
     });
   } catch (err) {
@@ -1517,19 +1554,21 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 app.post('/api/auth/register', async (req, res) => {
-  const { email, password, name, role } = req.body;
+  const { email, password, name, role, permissions } = req.body;
   try {
-    const countRow = await db.get('SELECT COUNT(*) as count FROM profiles');
+    // Filter out super_admin / Admin when evaluating staff quota limit (3 max additional staff)
+    const countRow = await db.get("SELECT COUNT(*) as count FROM profiles WHERE LOWER(role) NOT IN ('super_admin', 'super admin', 'superadmin') AND email != 'admin@hardware.com'");
     if (countRow && countRow.count >= 3) {
       return res.status(400).json({ error: 'Staff quota limit reached. Maximum 3 staff accounts allowed.' });
     }
     const id = 'u_' + Date.now();
     const normalizedRole = role ? (role.charAt(0).toUpperCase() + role.slice(1).toLowerCase()) : 'Cashier';
+    const permsStr = permissions ? (typeof permissions === 'string' ? permissions : JSON.stringify(permissions)) : null;
     await db.run(
-      'INSERT INTO profiles (id, name, email, role, avatar, password) VALUES (?, ?, ?, ?, ?, ?)',
-      [id, name || 'Staff User', email, normalizedRole, email.charAt(0).toUpperCase(), password || '123456']
+      'INSERT INTO profiles (id, name, email, role, avatar, password, permissions) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [id, name || 'Staff User', email, normalizedRole, email.charAt(0).toUpperCase(), password || '123456', permsStr]
     );
-    res.json({ success: true, user: { id, email, role: normalizedRole, name: name || 'Staff User' } });
+    res.json({ success: true, user: { id, email, role: normalizedRole, name: name || 'Staff User', permissions: permissions || undefined } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1553,18 +1592,31 @@ app.post('/api/auth/forgot-password', async (req, res) => {
     );
 
     const emailResult = await sendResetEmail(email, resetCode);
-    if (!emailResult.success && emailResult.reason === 'GMAIL_PASS missing') {
-      console.warn(`[Reset Password Simulation] Reset code for ${email} is ${resetCode}`);
-      return res.json({ success: true, message: 'Reset code generated (simulated in console).' });
+    if (emailResult.success) {
+      return res.json({ 
+        success: true, 
+        message: 'Password reset code has been sent to your email address.',
+        emailDelivered: true,
+        messageId: emailResult.messageId 
+      });
     }
 
-    if (!emailResult.success) {
-      throw new Error(emailResult.error || 'Failed to send password reset email.');
+    if (emailResult.reason === 'GMAIL_PASS missing' || emailResult.error === 'SMTP credentials missing') {
+      console.warn(`[Reset Password Simulation] Missing SMTP credentials. Reset code for ${email} is ${resetCode}`);
+      return res.json({ 
+        success: true, 
+        message: 'SMTP credentials not configured. Reset code generated and logged to console.',
+        emailDelivered: false,
+        simulated: true 
+      });
     }
 
-    res.json({ success: true, message: 'Password reset code has been sent to your email address.' });
+    return res.status(500).json({ 
+      error: `Failed to transmit password reset email via SMTP: ${emailResult.error || 'Transport error'}`,
+      emailDelivered: false 
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, emailDelivered: false });
   }
 });
 
@@ -1932,6 +1984,9 @@ app.get('/api/sales', async (req, res) => {
       total: s.total_amount,
       status: s.status,
       payment_method: s.payment_method || 'Cash',
+      user_id: s.user_id,
+      user_email: s.user_email || s.user_id || '',
+      cashier: s.cashier || s.user_name || s.user_id || 'Admin',
       date: new Date(s.created_at).toLocaleDateString(),
       created_at: s.created_at,
       due_date: s.due_date,
@@ -2082,9 +2137,11 @@ app.post('/api/sales', async (req, res) => {
     });
 
     // 2. Insert Sale Order
+    const cashierName = s.cashier || s.user_name || s.user_id || 'Admin';
+    const userEmail = s.user_email || 'admin@hardware.erp';
     await db.run(
-      'INSERT INTO sales (id, invoice_no, customer_id, customer_name, customer_phone, customer_address, items, subtotal, discount, tax, tax_rate, total_amount, status, user_id, payment_method, created_at, due_date, credit_period_days, payment_received, transportation_fee, credit_note_applied, credit_note_code, client_tx_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, finalInvoiceNo, s.customer_id, customerNameVal, customerPhoneVal, customerAddressVal, JSON.stringify(enrichedItems), s.subtotal, s.discount, 0, 0, s.total_amount, s.status, s.user_id, s.payment_method || 'Cash', created_at, s.due_date || null, s.credit_period_days || 0, s.payment_received || 0, transportationFeeVal, creditNoteApplied, creditNoteCode, clientTxId]
+      'INSERT INTO sales (id, invoice_no, customer_id, customer_name, customer_phone, customer_address, items, subtotal, discount, tax, tax_rate, total_amount, status, user_id, user_email, cashier, payment_method, created_at, due_date, credit_period_days, payment_received, transportation_fee, credit_note_applied, credit_note_code, client_tx_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, finalInvoiceNo, s.customer_id, customerNameVal, customerPhoneVal, customerAddressVal, JSON.stringify(enrichedItems), s.subtotal, s.discount, 0, 0, s.total_amount, s.status, s.user_id, userEmail, cashierName, s.payment_method || 'Cash', created_at, s.due_date || null, s.credit_period_days || 0, s.payment_received || 0, transportationFeeVal, creditNoteApplied, creditNoteCode, clientTxId]
     );
 
     // 3. Decrement Product Stock levels & validate available stock
@@ -2337,41 +2394,84 @@ app.get('/api/credit_payments/sale/:saleId', async (req, res) => {
   }
 });
 
-app.post('/api/credit_payments', async (req, res) => {
-  const p = req.body;
+const handleCreditPaymentInsert = async (req, res) => {
+  const p = Array.isArray(req.body) ? req.body[0] : req.body;
+  if (!p) {
+    return res.status(400).json({ error: 'Payload is required' });
+  }
+
   const id = p.id || 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-  const paymentDate = p.payment_date || new Date().toISOString();
+  const paymentDate = p.payment_date || p.created_at || new Date().toISOString();
+  const createdAt = p.created_at || new Date().toISOString();
+
+  // Replace fallback string with active session username
+  const authorName =
+    (p.created_by && p.created_by !== 'system' ? p.created_by : null) ||
+    (p.recorded_by && p.recorded_by !== 'system' ? p.recorded_by : null) ||
+    req.headers['x-user-name'] ||
+    req.headers['x-user-email'] ||
+    'Super_admin';
+
+  const amountPaid = Number(
+    p.amount_paid !== undefined
+      ? p.amount_paid
+      : p.amount !== undefined
+      ? p.amount
+      : 0
+  );
+  const remainingBalance = Number(p.remaining_balance || 0);
+  const invoiceNo = p.invoice_no || p.invoice_id || 'INV';
+  const saleId = p.sale_id || p.invoice_id || invoiceNo;
+
   try {
     await db.run(
-      'INSERT INTO credit_payments (id, sale_id, invoice_no, customer_id, customer_name, amount_paid, remaining_balance, payment_method, payment_date, recorded_by, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO credit_payments (id, sale_id, invoice_no, customer_id, customer_name, amount_paid, remaining_balance, payment_method, payment_date, recorded_by, created_by, created_at, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         id,
-        p.sale_id,
-        p.invoice_no,
+        saleId,
+        invoiceNo,
         p.customer_id || null,
         p.customer_name || null,
-        Number(p.amount_paid) || 0,
-        Number(p.remaining_balance) || 0,
+        amountPaid,
+        remainingBalance,
         p.payment_method || 'Cash',
         paymentDate,
-        p.recorded_by || 'system',
+        authorName,
+        authorName,
+        createdAt,
         p.notes || ''
       ]
     );
 
     // Phase 2B Unified Accounting: Log transaction for credit repayments to reflect cash inflow in Finance page
-    const txAmt = Number(p.amount_paid) || 0;
-    if (txAmt > 0) {
+    if (amountPaid > 0) {
       const txId = 'tx_cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-      const txDate = (paymentDate || new Date().toISOString()).substring(0, 10);
-      const invNo = p.invoice_no || 'INV';
+      const txDate = (paymentDate || createdAt).substring(0, 10);
+      const isPartial = remainingBalance > 0.01;
+      const category = isPartial ? 'Sales Income (Partial Credit Settlement)' : 'Sales Income (Credit Settlement)';
+      const description = isPartial
+        ? `Partial Credit Payment for Invoice #${invoiceNo} (${p.customer_name || 'Customer'})`
+        : `Credit Settlement for Invoice #${invoiceNo} (${p.customer_name || 'Customer'})`;
+
       await db.run(
-        'INSERT INTO transactions (id, date, description, amount, type, category, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [txId, txDate, `Credit Repayment for Invoice #${invNo}`, txAmt, 'income', 'Credit Repayment', invNo, p.recorded_by || 'system']
+        'INSERT INTO transactions (id, date, description, amount, type, category, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [txId, txDate, description, amountPaid, 'income', category, invoiceNo, authorName, createdAt]
       ).catch(e => console.error('Error logging credit repayment transaction:', e));
     }
 
-    res.json({ success: true, id });
+    res.json({ success: true, id, authorName });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+app.post('/api/credit_payments', handleCreditPaymentInsert);
+app.post('/api/credit_settlements', handleCreditPaymentInsert);
+
+app.get('/api/credit_settlements', async (req, res) => {
+  try {
+    const records = await db.all('SELECT * FROM credit_payments ORDER BY payment_date DESC');
+    res.json(records || []);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2467,10 +2567,12 @@ app.get('/api/sales/returns', async (req, res) => {
         status TEXT DEFAULT 'active',
         reason TEXT,
         created_at TEXT,
-        is_credit INTEGER DEFAULT 0
+        is_credit INTEGER DEFAULT 0,
+        difference_payment_method TEXT DEFAULT 'Cash'
       )
     `);
     try { await db.exec("ALTER TABLE sales_returns ADD COLUMN is_credit INTEGER DEFAULT 0"); } catch (e) {}
+    try { await db.exec("ALTER TABLE sales_returns ADD COLUMN difference_payment_method TEXT DEFAULT 'Cash'"); } catch (e) {}
     const returns = await db.all('SELECT * FROM sales_returns ORDER BY created_at DESC');
     const mapped = returns.map(r => ({
       id: r.id,
@@ -2491,6 +2593,8 @@ app.get('/api/sales/returns', async (req, res) => {
       customerPaid: Number(r.customer_paid || 0),
       changeGiven: Number(r.change_given || 0),
       creditNoteNo: r.credit_note_no || '',
+      differencePaymentMethod: r.difference_payment_method || 'Cash',
+      difference_payment_method: r.difference_payment_method || 'Cash',
       userId: r.user_id,
       status: r.status || 'active',
       reason: r.reason || '',
@@ -2519,6 +2623,8 @@ app.post('/api/sales/returns', async (req, res) => {
     creditNoteNo = '',
     customerName = '',
     customerPhone = '',
+    differencePaymentMethod,
+    difference_payment_method,
     userEmail = 'system', 
     reason = '' 
   } = req.body;
@@ -2636,19 +2742,21 @@ app.post('/api/sales/returns', async (req, res) => {
       finalCreditNoteNo = 'CN-' + String(timestamp).slice(-6);
     }
 
+    const finalDiffMethod = differencePaymentMethod || difference_payment_method || (isCreditCustomer ? 'Customer Credit Debt' : 'Cash');
+
     // 2. Save Sales Return record
     await db.run(
       `INSERT INTO sales_returns (
         id, return_no, invoice_no, customer_name, customer_phone, 
         returned_items, exchange_items, return_method, return_amount, exchange_amount, 
         balance_amount, total_refunded, customer_paid, change_given, credit_note_no, 
-        user_id, status, reason, created_at, is_credit
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        user_id, status, reason, created_at, is_credit, difference_payment_method
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id, return_no, invoiceNo, resolvedCustName, resolvedCustPhone,
         JSON.stringify(returnedItems), JSON.stringify(exchangeItems), finalReturnMethod, calcReturnAmount, calcExchangeAmount,
         balanceAmount, finalTotalRefunded, finalCustomerPaid, finalChangeGiven, finalCreditNoteNo,
-        userEmail || 'system', 'active', reason || '', created_at, isCreditCustomer ? 1 : 0
+        userEmail || 'system', 'active', reason || '', created_at, isCreditCustomer ? 1 : 0, finalDiffMethod
       ]
     );
 
@@ -2670,15 +2778,27 @@ app.post('/api/sales/returns', async (req, res) => {
       );
     }
 
-    // 4. Handle Exchange items stock deduction
+    // 4. Handle Exchange items stock deduction with ATOMIC AVAILABILITY GUARD
     if (finalReturnMethod === 'Exchange' && exchangeItems.length > 0) {
       for (const exItem of exchangeItems) {
+        const exProdId = exItem.productId || exItem.product_id;
+        const prod = await db.get('SELECT id, name, sku, stock FROM products WHERE id = ? OR sku = ?', [exProdId, exProdId]);
+        
+        if (!prod) {
+          throw new Error(`Replacement product (ID/SKU: ${exProdId}) not found in inventory.`);
+        }
+
         const convRate = Number(exItem.conversionRate) || 1;
         const rawBaseDeduction = convRate > 0 ? (Number(exItem.qty || 0) / convRate) : Number(exItem.qty || 0);
         const baseQtyDeduction = Math.round(rawBaseDeduction * 1000000) / 1000000;
+
+        if (Number(prod.stock || 0) < baseQtyDeduction) {
+          throw new Error(`Insufficient inventory: "${prod.name}" only has ${prod.stock} available. Cannot fulfill exchange of ${exItem.qty} pcs.`);
+        }
+
         await db.run(
-          'UPDATE products SET stock = stock - ? WHERE id = ?',
-          [baseQtyDeduction, exItem.productId || exItem.product_id]
+          'UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?',
+          [baseQtyDeduction, prod.id]
         );
       }
     }
@@ -3237,6 +3357,109 @@ app.post('/api/sales/credit-notes/:id/void', async (req, res) => {
     await db.run("UPDATE credit_notes SET status = 'voided' WHERE id = ? OR credit_note_no = ?", [id, id]);
     await logAudit(userEmail || 'system', 'VOID_CREDIT_NOTE', `Voided Credit Note ${id}`);
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// CREDIT PAYMENTS & SETTLEMENTS API
+app.get('/api/credit_payments', async (req, res) => {
+  try {
+    const data = await db.all('SELECT * FROM credit_payments ORDER BY created_at DESC');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/credit-settlements', async (req, res) => {
+  try {
+    const data = await db.all('SELECT * FROM credit_payments ORDER BY created_at DESC');
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/credit_payments/sale/:saleId', async (req, res) => {
+  const { saleId } = req.params;
+  try {
+    const data = await db.all('SELECT * FROM credit_payments WHERE sale_id = ? OR invoice_no = ? ORDER BY created_at DESC', [saleId, saleId]);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/credit_payments', async (req, res) => {
+  const p = req.body;
+  const id = p.id || 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  const created_at = p.created_at || new Date().toISOString();
+  const payment_date = p.payment_date || created_at;
+  const author = p.recorded_by || p.created_by || p.cashier || 'Admin';
+
+  try {
+    await db.run(
+      `INSERT INTO credit_payments (
+        id, sale_id, invoice_no, customer_id, customer_name, amount_paid,
+        remaining_balance, payment_method, payment_date, recorded_by, created_by, cashier, user_email, created_at, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        p.sale_id || p.invoice_id || p.invoice_no || 'INV',
+        p.invoice_no || p.invoice_id || 'INV',
+        p.customer_id || null,
+        p.customer_name || null,
+        Number(p.amount_paid !== undefined ? p.amount_paid : (p.amount || 0)),
+        Number(p.remaining_balance || 0),
+        p.payment_method || 'Cash',
+        payment_date,
+        author,
+        author,
+        author,
+        p.user_email || 'admin@hardware.erp',
+        created_at,
+        p.notes || ''
+      ]
+    );
+    res.json({ success: true, id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/credit-settlements', async (req, res) => {
+  const p = req.body;
+  const id = p.id || 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  const created_at = p.created_at || new Date().toISOString();
+  const payment_date = p.payment_date || created_at;
+  const author = p.recorded_by || p.created_by || p.cashier || 'Admin';
+
+  try {
+    await db.run(
+      `INSERT INTO credit_payments (
+        id, sale_id, invoice_no, customer_id, customer_name, amount_paid,
+        remaining_balance, payment_method, payment_date, recorded_by, created_by, cashier, user_email, created_at, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        p.sale_id || p.invoice_id || p.invoice_no || 'INV',
+        p.invoice_no || p.invoice_id || 'INV',
+        p.customer_id || null,
+        p.customer_name || null,
+        Number(p.amount_paid !== undefined ? p.amount_paid : (p.amount || 0)),
+        Number(p.remaining_balance || 0),
+        p.payment_method || 'Cash',
+        payment_date,
+        author,
+        author,
+        author,
+        p.user_email || 'admin@hardware.erp',
+        created_at,
+        p.notes || ''
+      ]
+    );
+    res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -4045,7 +4268,19 @@ app.post('/api/settings/restore', async (req, res) => {
 app.get('/api/profiles', async (req, res) => {
   try {
     const profiles = await db.all('SELECT * FROM profiles ORDER BY created_at DESC');
-    res.json(profiles);
+    const mapped = profiles.map(pr => {
+      let parsedPerms = undefined;
+      if (pr.permissions) {
+        try {
+          parsedPerms = typeof pr.permissions === 'string' ? JSON.parse(pr.permissions) : pr.permissions;
+        } catch (_) {}
+      }
+      return {
+        ...pr,
+        permissions: parsedPerms
+      };
+    });
+    res.json(mapped);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -4055,10 +4290,21 @@ app.put('/api/profiles/:id', async (req, res) => {
   const { id } = req.params;
   const p = req.body;
   try {
-    await db.run(
-      'UPDATE profiles SET name = ?, role = ?, avatar = ? WHERE id = ?',
-      [p.name, p.role, p.avatar, id]
-    );
+    let permsVal = null;
+    if (p.permissions !== undefined) {
+      permsVal = p.permissions ? (typeof p.permissions === 'string' ? p.permissions : JSON.stringify(p.permissions)) : null;
+    }
+    if (p.permissions !== undefined) {
+      await db.run(
+        'UPDATE profiles SET name = ?, role = ?, avatar = ?, permissions = ? WHERE id = ?',
+        [p.name, p.role, p.avatar, permsVal, id]
+      );
+    } else {
+      await db.run(
+        'UPDATE profiles SET name = ?, role = ?, avatar = ? WHERE id = ?',
+        [p.name, p.role, p.avatar, id]
+      );
+    }
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

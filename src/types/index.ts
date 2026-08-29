@@ -71,10 +71,13 @@ export interface SaleOrder {
   status: string;
   date: string;
   cashier: string;
+  user_id?: string;
+  user_email?: string;
   total_amount?: number;
   created_at?: string;
   tax_rate?: number;
   payment_method?: string;
+  paymentMethod?: string;
   due_date?: string;
   credit_period_days?: number;
   payment_received?: number;
@@ -142,6 +145,7 @@ export interface User {
   email: string;
   role: UserRole; // Use the type defined above
   avatar: string;
+  permissions?: string[] | string;
 }
 
 // 3. Ensure PageName includes all your pages and granular permission keys
@@ -235,11 +239,16 @@ export interface SalesReturn {
   creditNoteNo?: string;
   userId?: string;
   user_id?: string;
+  user_email?: string;
+  cashier?: string;
+  cashier_name?: string;
   status?: string;
   reason?: string;
   created_at: string;
   isCredit?: boolean;
   is_credit?: boolean | number;
+  differencePaymentMethod?: string;
+  difference_payment_method?: string;
 }
 
 export interface CreditNote {

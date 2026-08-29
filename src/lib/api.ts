@@ -48,9 +48,10 @@ export const getAuthHeaders = (): Record<string, string> => {
     const userStr = localStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user') || sessionStorage.getItem('erp_user') || sessionStorage.getItem('hardware_erp_user');
     if (userStr) {
       const u = JSON.parse(userStr);
-      if (u && u.email) {
+      if (u && (u.email || u.name || u.username)) {
         return {
-          'x-user-email': u.email,
+          'x-user-email': u.email || 'admin@hardware.com',
+          'x-user-name': u.name || u.username || 'Super_admin',
           'x-user-role': u.role || 'super_admin'
         };
       }
@@ -58,6 +59,7 @@ export const getAuthHeaders = (): Record<string, string> => {
   } catch (_) {}
   return {
     'x-user-email': 'admin@hardware.com',
+    'x-user-name': 'Super_admin',
     'x-user-role': 'super_admin'
   };
 };
@@ -157,11 +159,11 @@ export const api = {
       }
       return { data, error: null };
     },
-    register: async (email: string, password?: string, name?: string, role?: string) => {
+    register: async (email: string, password?: string, name?: string, role?: string, permissions?: string[] | string) => {
       const res = await fetchWithTimeout(`${API_URL}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, name, role })
+        body: JSON.stringify({ email, password, name, role, permissions })
       });
       if (!res.ok) {
         let message = 'Registration failed';
@@ -613,6 +615,45 @@ export const api = {
         body: JSON.stringify(data)
       });
       if (!res.ok) throw new Error('Failed to save stock adjustment');
+      return res.json();
+    }
+  },
+
+  creditPayments: {
+    getAll: async () => {
+      const res = await fetchWithTimeout(`${API_URL}/credit_payments`);
+      if (!res.ok) throw new Error('Failed to fetch credit payments');
+      return res.json();
+    },
+    getBySale: async (saleId: string) => {
+      const res = await fetchWithTimeout(`${API_URL}/credit_payments/sale/${saleId}`);
+      if (!res.ok) throw new Error('Failed to fetch credit payments for sale');
+      return res.json();
+    },
+    save: async (data: any) => {
+      const res = await fetchWithTimeout(`${API_URL}/credit_payments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (!res.ok) throw new Error('Failed to save credit payment');
+      return res.json();
+    }
+  },
+
+  creditSettlements: {
+    getAll: async () => {
+      const res = await fetchWithTimeout(`${API_URL}/credit_payments`);
+      if (!res.ok) throw new Error('Failed to fetch credit settlements');
+      return res.json();
+    },
+    save: async (data: any) => {
+      const res = await fetchWithTimeout(`${API_URL}/credit_payments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (!res.ok) throw new Error('Failed to save credit settlement');
       return res.json();
     }
   }

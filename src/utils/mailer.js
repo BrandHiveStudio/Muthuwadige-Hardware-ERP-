@@ -42,11 +42,11 @@ export const createMailTransporter = (settings = {}) => {
 export const sendResetEmail = async (toEmail, code, settings = {}) => {
   try {
     const transporter = createMailTransporter(settings);
-    const user = settings.smtp_user || process.env.SMTP_USER || settings.email || process.env.GMAIL_USER;
+    const user = settings.smtp_user || process.env.SMTP_USER || settings.shop_email || settings.email || process.env.GMAIL_USER;
 
     if (!transporter) {
       console.warn(`[Reset Password Simulation] Missing SMTP credentials. Reset code for ${toEmail}: ${code}`);
-      return { success: false, reason: 'GMAIL_PASS missing' };
+      return { success: false, reason: 'GMAIL_PASS missing', error: 'SMTP credentials missing' };
     }
 
     const info = await transporter.sendMail({
@@ -70,7 +70,7 @@ export const sendResetEmail = async (toEmail, code, settings = {}) => {
     });
 
     console.log(`[Reset Password] Email sent successfully to ${toEmail} (Message ID: ${info.messageId})`);
-    return { success: true, messageId: info.messageId };
+    return { success: true, messageId: info.messageId, transmitted: true };
   } catch (err) {
     console.error('[Reset Password] Failed to send email:', err);
     return { success: false, error: err.message };
