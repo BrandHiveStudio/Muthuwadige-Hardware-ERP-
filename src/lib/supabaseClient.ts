@@ -7,7 +7,7 @@ import { api, API_URL, fetchWithTimeout } from './api';
 const defaultAdmin = {
   id: 'u2',
   email: 'admin@hardware.com',
-  role: 'admin',
+  role: 'super_admin',
   name: 'Steven Clark',
   avatar: 'S'
 };
@@ -185,14 +185,16 @@ const deleteTable = async (table: string, val: any) => {
 export const supabase: any = {
   auth: {
     getUser: async () => {
-      const localUserStr = localStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user');
+      const localUserStr = localStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user') || sessionStorage.getItem('erp_user') || sessionStorage.getItem('hardware_erp_user');
       if (localUserStr) {
         try {
           const user = JSON.parse(localUserStr);
-          return { data: { user }, error: null };
+          if (user && user.id) {
+            return { data: { user }, error: null };
+          }
         } catch(e) {}
       }
-      return { data: { user: null }, error: null };
+      return { data: { user: defaultAdmin }, error: null };
     },
 
     signInWithPassword: async ({ email, password }: any) => {

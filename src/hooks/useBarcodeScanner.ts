@@ -49,6 +49,11 @@ export function useBarcodeScanner({
   const bufferRef = useRef<string>('');
   const lastKeyTimeRef = useRef<number>(0);
   const timeoutIdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onScanRef = useRef(onScan);
+
+  useEffect(() => {
+    onScanRef.current = onScan;
+  }, [onScan]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -99,7 +104,7 @@ export function useBarcodeScanner({
         const scannedCode = bufferRef.current.trim();
         if (scannedCode.length >= minLength) {
           e.preventDefault();
-          onScan(scannedCode);
+          onScanRef.current(scannedCode);
         }
         bufferRef.current = '';
         return;
@@ -122,5 +127,5 @@ export function useBarcodeScanner({
       window.removeEventListener('keydown', handleGlobalKeyDown);
       if (timeoutIdRef.current) clearTimeout(timeoutIdRef.current);
     };
-  }, [onScan, minLength, timeOut, enabled]);
+  }, [minLength, timeOut, enabled]);
 }

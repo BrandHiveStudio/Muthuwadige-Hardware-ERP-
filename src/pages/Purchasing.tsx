@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   SearchIcon,
   PlusIcon,
@@ -42,7 +42,7 @@ export function Purchasing() {
   const [viewOrder, setViewOrder] = useState<PurchaseOrder | null>(null);
   const [selectedPoIds, setSelectedPoIds] = useState<string[]>([]);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
       const { data: prodData } = await supabase.from('products').select('*');
@@ -64,7 +64,7 @@ export function Purchasing() {
         .order('created_at', { ascending: false });
       
       if (poData) {
-        const mappedOrders = poData.map(po => ({
+        const mappedOrders = poData.map((po: any) => ({
           ...po,
           poNumber: po.po_number !== undefined ? po.po_number : po.poNumber,
           supplierName: po.supplier_name !== undefined ? po.supplier_name : po.supplierName,
@@ -78,7 +78,7 @@ export function Purchasing() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     setSelectedPoIds([]);
@@ -90,7 +90,7 @@ export function Purchasing() {
       window.removeEventListener('refresh-all-data', handleRefresh);
       window.removeEventListener('refresh-purchasing', handleRefresh);
     };
-  }, [tab]);
+  }, [tab, fetchData]);
 
   // --- PDF PURCHASE ORDER GENERATOR ---
   const downloadPO_PDF = (order: PurchaseOrder) => {

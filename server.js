@@ -12,6 +12,8 @@ import fs from 'fs';
 import dotenv from 'dotenv';
 import { exec, execSync, spawn } from 'child_process';
 import os from 'os';
+import https from 'https';
+import selfsigned from 'selfsigned';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -76,6 +78,8 @@ if (isPackagedApp && USER_DATA_PATH) {
 dotenv.config({ path: envPath });
 
 const app = express();
+const PORT = process.env.PORT || 5001;
+const HTTPS_PORT = process.env.HTTPS_PORT || 5443;
 
 const allowedOrigins = [
   'https://hardware-store-psi.vercel.app',
@@ -171,8 +175,6 @@ app.use((req, res, next) => {
   });
   next();
 });
-
-const PORT = 5001;
 
 let requestCounter = 0;
 let txnCounter = 0;
@@ -1073,6 +1075,27 @@ async function initializeDatabase() {
   try { await db.exec("ALTER TABLE quotations ADD COLUMN transportation_fee REAL DEFAULT 0"); } catch(e) {}
   try { await db.exec("ALTER TABLE quotations ADD COLUMN tax_amount REAL DEFAULT 0"); } catch(e) {}
   try { await db.exec("ALTER TABLE quotations ADD COLUMN status TEXT DEFAULT 'Active'"); } catch(e) {}
+
+  // Safe Non-Destructive Schema Migrations for Excel Import & Universal Operations
+  try { await db.exec("ALTER TABLE products ADD COLUMN min_stock INTEGER DEFAULT 5"); } catch(e) {}
+  try { await db.exec("ALTER TABLE customers ADD COLUMN total_purchases REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE customers ADD COLUMN join_date TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE suppliers ADD COLUMN credit_terms TEXT DEFAULT '30 Days'"); } catch(e) {}
+  try { await db.exec("ALTER TABLE suppliers ADD COLUMN payable_balance REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE employees ADD COLUMN department TEXT DEFAULT 'General'"); } catch(e) {}
+  try { await db.exec("ALTER TABLE employees ADD COLUMN attendance REAL DEFAULT 100"); } catch(e) {}
+  try { await db.exec("ALTER TABLE employees ADD COLUMN join_date TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE employees ADD COLUMN user_id TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE stock_adjustments ADD COLUMN old_qty REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE stock_adjustments ADD COLUMN new_qty REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE stock_adjustments ADD COLUMN user_email TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales ADD COLUMN user_id TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN due_date TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN user_id TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN po_no TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN return_method TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN total_refunded REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN user_id TEXT"); } catch(e) {}
 
   await seedInitialData();
 }
@@ -4142,7 +4165,7 @@ app.post('/api/system/reset-data', async (req, res) => {
       await db.run('DELETE FROM transactions');
       await db.run('DELETE FROM audit_logs');
       await db.run('DELETE FROM bill_holds');
-      await db.run('UPDATE customers SET current_credit = 0, credit_balance = 0');
+      await db.run('UPDATE customers SET current_credit = 0');
     }
 
     const auditId = 'al_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
@@ -4463,6 +4486,386 @@ app.post('/api/open-url', (req, res) => {
   });
 });
 
+// =========================================================================
+// WIRELESS MOBILE BARCODE SCANNER SIGNALING ENGINE
+// =========================================================================
+
+// Active SSE Connections Store for Desktop POS Listeners: Map<sessionId, Set<res>>
+const scannerClients = new Map();
+
+// Active Mobile Scanner Clients Map: Map<clientId, { id, ip, userAgent, deviceName, connectedAt, lastSeen, sessionId, res }>
+const connectedMobileClients = new Map();
+
+// Helper to parse human-readable device name from User-Agent
+function parseDeviceName(ua = '') {
+  if (!ua || typeof ua !== 'string') return 'Mobile Browser';
+  const lower = ua.toLowerCase();
+  if (lower.includes('iphone')) return 'Apple iPhone';
+  if (lower.includes('ipad')) return 'Apple iPad';
+  if (lower.includes('ipod')) return 'Apple iPod';
+  if (lower.includes('android')) {
+    const match = ua.match(/Android\s+[\d.]+;\s*([^;]+?)\s*(?:Build|;|\))/i);
+    if (match && match[1] && !match[1].toLowerCase().includes('k')) {
+      const model = match[1].trim();
+      return `Android (${model})`;
+    }
+    return 'Android Phone';
+  }
+  if (lower.includes('macintosh') || lower.includes('mac os')) return 'Mac Device';
+  if (lower.includes('windows')) return 'Windows PC';
+  if (lower.includes('linux')) return 'Linux Device';
+  if (lower.includes('cros')) return 'ChromeOS Device';
+  return 'Mobile Device';
+}
+
+// Helper to extract clean IPv4/IPv6 client address
+function getClientIp(req) {
+  const rawIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || req.ip || '127.0.0.1';
+  return rawIp.replace(/^.*:/, '') || rawIp;
+}
+
+// Helper to get mobile clients for a specific session or all sessions
+function getSessionClients(sessionId) {
+  const target = (sessionId || '').toString().trim();
+  const list = [];
+  for (const [, c] of connectedMobileClients.entries()) {
+    if (!target || target === '*' || c.sessionId === target || c.sessionId === '*') {
+      list.push({
+        id: c.id,
+        ip: c.ip,
+        deviceName: c.deviceName,
+        connectedAt: c.connectedAt,
+        sessionId: c.sessionId
+      });
+    }
+  }
+  return list;
+}
+
+// Helper to broadcast updated client list to desktop listeners
+function notifySessionClientsChanged(sessionId) {
+  const targetSession = (sessionId || 'default').toString().trim();
+  const clients = getSessionClients(targetSession);
+  const payload = JSON.stringify({
+    type: 'clients_update',
+    sessionId: targetSession,
+    count: clients.length,
+    clients
+  });
+
+  const sessionSet = scannerClients.get(targetSession);
+  if (sessionSet) {
+    sessionSet.forEach((clientRes) => {
+      try {
+        clientRes.write(`data: ${payload}\n\n`);
+      } catch (_) {}
+    });
+  }
+
+  const allSubscribers = scannerClients.get('*');
+  if (allSubscribers && targetSession !== '*') {
+    allSubscribers.forEach((clientRes) => {
+      try {
+        clientRes.write(`data: ${payload}\n\n`);
+      } catch (_) {}
+    });
+  }
+}
+
+// Helper to determine local Wi-Fi / LAN IP addresses
+function getLocalNetworkAddresses() {
+  const interfaces = os.networkInterfaces();
+  const addresses = [];
+
+  for (const [name, nets] of Object.entries(interfaces)) {
+    if (!nets) continue;
+    for (const net of nets) {
+      const isIPv4 = net.family === 'IPv4' || net.family === 4;
+      if (isIPv4 && !net.internal) {
+        addresses.push({
+          name,
+          address: net.address,
+          isWifi: name.toLowerCase().includes('wi-fi') || name.toLowerCase().includes('wifi') || name.toLowerCase().includes('wlan') || name.toLowerCase().includes('wireless')
+        });
+      }
+    }
+  }
+
+  // Sort Wi-Fi interfaces first
+  addresses.sort((a, b) => (b.isWifi ? 1 : 0) - (a.isWifi ? 1 : 0));
+
+  const primaryIp = addresses.length > 0 ? addresses[0].address : '127.0.0.1';
+  return { primaryIp, addresses };
+}
+
+// Helper to get or generate persistent self-signed SSL certificates for mobile HTTPS
+async function getOrCreateSslCertificate() {
+  const certDir = USER_DATA_PATH ? path.join(USER_DATA_PATH, 'certs') : path.join(__dirname, 'certs');
+  if (!fs.existsSync(certDir)) {
+    fs.mkdirSync(certDir, { recursive: true });
+  }
+  const certFile = path.join(certDir, 'cert.pem');
+  const keyFile = path.join(certDir, 'key.pem');
+
+  if (fs.existsSync(certFile) && fs.existsSync(keyFile)) {
+    try {
+      const cert = fs.readFileSync(certFile, 'utf8');
+      const key = fs.readFileSync(keyFile, 'utf8');
+      if (cert && key) {
+        return { cert, key };
+      }
+    } catch (e) {}
+  }
+
+  const { addresses } = getLocalNetworkAddresses();
+  const altNames = [
+    { type: 2, value: 'localhost' },
+    { type: 7, ip: '127.0.0.1' }
+  ];
+  addresses.forEach(a => {
+    if (a.address && a.address !== '127.0.0.1') {
+      altNames.push({ type: 7, ip: a.address });
+    }
+  });
+
+  const pems = await selfsigned.generate(
+    [
+      { name: 'commonName', value: 'Muthuwadige Hardware ERP Mobile Scanner' },
+      { name: 'organizationName', value: 'Muthuwadige Hardware' }
+    ],
+    {
+      days: 3650,
+      keySize: 2048,
+      algorithm: 'sha256',
+      extensions: [{ name: 'subjectAltName', altNames }]
+    }
+  );
+
+  fs.writeFileSync(certFile, pems.cert);
+  fs.writeFileSync(keyFile, pems.private);
+
+  return { cert: pems.cert, key: pems.private };
+}
+
+// 1. GET /api/scanner/local-ip
+app.get('/api/scanner/local-ip', (req, res) => {
+  const { primaryIp, addresses } = getLocalNetworkAddresses();
+  const scannerUrl = `https://${primaryIp}:${HTTPS_PORT}/mobile-scanner`;
+  const httpScannerUrl = `http://${primaryIp}:${PORT}/mobile-scanner`;
+  res.json({
+    success: true,
+    ip: primaryIp,
+    port: PORT,
+    httpsPort: HTTPS_PORT,
+    ips: addresses,
+    scannerUrl,
+    httpScannerUrl,
+    protocol: 'https'
+  });
+});
+
+// 2. GET /api/scanner/stream (Server-Sent Events)
+app.get('/api/scanner/stream', (req, res) => {
+  const sessionId = (req.query.sessionId || req.query.session || 'default').toString().trim();
+  const clientType = (req.query.clientType || req.query.type || 'desktop').toString().trim().toLowerCase();
+  const isMobile = clientType === 'mobile' || req.query.mobile === 'true';
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof res.flushHeaders === 'function') {
+    res.flushHeaders();
+  }
+
+  if (isMobile) {
+    const userAgent = req.headers['user-agent'] || '';
+    const ip = getClientIp(req);
+    const deviceName = parseDeviceName(userAgent);
+    const clientId = `mob_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    const clientRecord = {
+      id: clientId,
+      ip,
+      userAgent,
+      deviceName,
+      connectedAt: new Date().toISOString(),
+      lastSeen: Date.now(),
+      sessionId,
+      res
+    };
+
+    connectedMobileClients.set(clientId, clientRecord);
+
+    console.log(`📱 [Mobile Scanner Connected] ${deviceName} (${ip}) paired with session "${sessionId}" [ID: ${clientId}]`);
+
+    // Send immediate welcome handshake to mobile client
+    res.write(`data: ${JSON.stringify({ type: 'connected', role: 'mobile', clientId, sessionId, message: 'Mobile scanner registered successfully' })}\n\n`);
+
+    // Notify desktop POS clients listening to this session
+    notifySessionClientsChanged(sessionId);
+
+    // Emit periodic heartbeat (ping every 5s)
+    const pingInterval = setInterval(() => {
+      try {
+        res.write(': ping\n\n');
+      } catch (_) {
+        clearInterval(pingInterval);
+      }
+    }, 5000);
+
+    req.on('close', () => {
+      clearInterval(pingInterval);
+      connectedMobileClients.delete(clientId);
+      console.log(`📴 [Mobile Scanner Disconnected] ${deviceName} (${ip}) left session "${sessionId}"`);
+      notifySessionClientsChanged(sessionId);
+    });
+
+  } else {
+    // Desktop POS Listener (NOT counted as a mobile device)
+    if (!scannerClients.has(sessionId)) {
+      scannerClients.set(sessionId, new Set());
+    }
+    scannerClients.get(sessionId).add(res);
+
+    const currentClients = getSessionClients(sessionId);
+
+    // Send immediate welcome handshake with active mobile clients
+    res.write(`data: ${JSON.stringify({
+      type: 'connected',
+      role: 'desktop',
+      sessionId,
+      message: 'Connected to local POS scanner stream',
+      count: currentClients.length,
+      clients: currentClients
+    })}\n\n`);
+
+    // Heartbeat ping every 15s to keep desktop socket alive
+    const pingInterval = setInterval(() => {
+      try {
+        res.write(': ping\n\n');
+      } catch (_) {
+        clearInterval(pingInterval);
+      }
+    }, 15000);
+
+    req.on('close', () => {
+      clearInterval(pingInterval);
+      const sessionSet = scannerClients.get(sessionId);
+      if (sessionSet) {
+        sessionSet.delete(res);
+        if (sessionSet.size === 0) {
+          scannerClients.delete(sessionId);
+        }
+      }
+    });
+  }
+});
+
+// 3. GET /api/scanner/clients (Query Active Mobile Devices)
+app.get('/api/scanner/clients', (req, res) => {
+  const sessionId = (req.query.sessionId || req.query.session || '').toString().trim();
+  const clients = getSessionClients(sessionId);
+  return res.json({
+    success: true,
+    sessionId: sessionId || '*',
+    count: clients.length,
+    clients
+  });
+});
+
+// 4. POST /api/scanner/broadcast
+app.post('/api/scanner/broadcast', (req, res) => {
+  const { barcode, sessionId, scannerName, format } = req.body || {};
+
+  if (!barcode || typeof barcode !== 'string' || !barcode.trim()) {
+    return res.status(400).json({ error: 'Valid barcode string is required' });
+  }
+
+  const cleanBarcode = barcode.trim();
+  const targetSession = (sessionId || 'default').toString().trim();
+  const sessionSet = scannerClients.get(targetSession);
+
+  const payload = JSON.stringify({
+    type: 'scan',
+    barcode: cleanBarcode,
+    sessionId: targetSession,
+    scannerName: scannerName || 'Mobile Camera',
+    format: format || 'AUTO',
+    timestamp: Date.now()
+  });
+
+  let deliveredCount = 0;
+  if (sessionSet && sessionSet.size > 0) {
+    sessionSet.forEach((client) => {
+      try {
+        client.write(`data: ${payload}\n\n`);
+        deliveredCount++;
+      } catch (err) {
+        console.warn('[Scanner SSE] Failed to write to client:', err);
+      }
+    });
+  }
+
+  // Also broadcast to wildcard subscribers if any
+  const allSubscribers = scannerClients.get('*');
+  if (allSubscribers && targetSession !== '*') {
+    allSubscribers.forEach((client) => {
+      try {
+        client.write(`data: ${payload}\n\n`);
+        deliveredCount++;
+      } catch (_) {}
+    });
+  }
+
+  console.log(`📱 [Scanner Broadcast] Barcode "${cleanBarcode}" sent to session "${targetSession}" (Delivered to ${deliveredCount} client(s))`);
+
+  return res.json({
+    success: true,
+    delivered: deliveredCount,
+    barcode: cleanBarcode,
+    sessionId: targetSession
+  });
+});
+
+// 4. Standalone Mobile Scanner HTML Client Route
+const serveMobileScannerHtml = (req, res) => {
+  const candidatePaths = [
+    path.join(__dirname, 'public', 'mobile-scanner.html'),
+    path.join(__dirname, 'dist', 'mobile-scanner.html'),
+    path.join(__dirname, 'mobile-scanner.html'),
+    USER_DATA_PATH ? path.join(USER_DATA_PATH, 'mobile-scanner.html') : null
+  ].filter(Boolean);
+
+  let targetPath = null;
+  for (const p of candidatePaths) {
+    if (fs.existsSync(p)) {
+      targetPath = p;
+      break;
+    }
+  }
+
+  if (targetPath) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.sendFile(targetPath);
+  } else {
+    return res.status(404).send(`
+      <!DOCTYPE html>
+      <html>
+        <head><title>Mobile Scanner Not Found</title></head>
+        <body style="font-family: sans-serif; text-align: center; padding: 40px; background: #0f172a; color: white;">
+          <h2>Mobile Scanner Web App is initializing...</h2>
+          <p>Please ensure public/mobile-scanner.html exists or reload the page.</p>
+        </body>
+      </html>
+    `);
+  }
+};
+
+app.get('/mobile-scanner', serveMobileScannerHtml);
+app.get('/mobile-scanner.html', serveMobileScannerHtml);
+
 // Serve static React production build files from the 'dist' directory
 let distPath = path.join(__dirname, 'dist');
 try {
@@ -4490,15 +4893,28 @@ if (fs.existsSync(distPath)) {
   });
 }
 
-// Express server launch hook listening on all network interfaces
+// Express server launch hook listening on all network interfaces (HTTP & HTTPS)
 (async () => {
   try {
     console.log('[Startup] Initializing SQLite Database & Schema...');
     await initializeDatabase();
     await scheduleAutomaticBackups();
+
+    // 1. HTTP Server for desktop app and fast local REST API
     app.listen(PORT, '0.0.0.0', () => {
-      console.log(`🚀 REST API Server running on port ${PORT} (accepts local network connections)`);
+      console.log(`🚀 REST API Server running on http://0.0.0.0:${PORT}`);
     });
+
+    // 2. HTTPS Server for Mobile Camera Scanner (getUserMedia requires Secure Context)
+    try {
+      const ssl = await getOrCreateSslCertificate();
+      const httpsServer = https.createServer({ key: ssl.key, cert: ssl.cert }, app);
+      httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
+        console.log(`🔒 HTTPS Server running on https://0.0.0.0:${HTTPS_PORT} (Camera enabled for mobile devices)`);
+      });
+    } catch (sslErr) {
+      console.warn('⚠️ Could not start HTTPS listener for mobile scanner:', sslErr.message);
+    }
   } catch (err) {
     console.error('🔴 Failed to initialize local SQLite database:', err);
     process.exit(1);

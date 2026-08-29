@@ -16,6 +16,7 @@ import { Finance } from './pages/Finance';
 import { AuditLogs } from './pages/AuditLogs';
 import { BarcodePrint } from './pages/BarcodePrint';
 import { CurrencyProvider } from './context/CurrencyContext';
+import { ScannerProvider } from './context/ScannerContext';
 import { ROLE_PERMISSIONS } from './utils/permissions';
 import { hasUserPermission } from './utils/auth';
 import { API_URL, fetchWithTimeout } from './lib/api';
@@ -435,7 +436,8 @@ export function App() {
   };
 
   return (
-    <CurrencyProvider>
+    <ScannerProvider>
+      <CurrencyProvider>
       <div className="flex h-screen w-full bg-gray-50 overflow-hidden animate-in fade-in duration-700">
         <Sidebar
           currentPage={currentPage}
@@ -589,6 +591,7 @@ export function App() {
           )}
         </div>
       </div>
-    </CurrencyProvider>
+      </CurrencyProvider>
+    </ScannerProvider>
   );
 }

@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../lib/supabaseClient';
 import { useCurrency } from '../context/CurrencyContext';
+import { useScanner } from '../context/ScannerContext';
+import { QRCodeSVG } from 'qrcode.react';
 import { API_URL, BASE_URL, setApiUrl } from '../lib/api';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -10,14 +12,46 @@ import {
   DatabaseIcon, RefreshCcwIcon, XIcon, LockIcon,
   Trash2Icon, Edit2Icon, Loader2Icon, FileTextIcon,
   PackageIcon, ShoppingCartIcon, DollarSignIcon, TruckIcon, UsersIcon,
-  PrinterIcon, MapPinIcon, SearchIcon, MailIcon, EyeIcon, EyeOffIcon, TagIcon
+  PrinterIcon, MapPinIcon, SearchIcon, MailIcon, EyeIcon, EyeOffIcon, TagIcon,
+  SmartphoneIcon, CopyIcon, ExternalLinkIcon, ZapIcon, ChevronDownIcon, ChevronUpIcon
 } from 'lucide-react';
 
-type Tab = 'system' | 'backup' | 'network' | 'database';
+type Tab = 'system' | 'backup' | 'network' | 'scanner' | 'database';
 
 export function Settings() {
   const { currency, setCurrency } = useCurrency();
+  const {
+    scannerSessionId,
+    setScannerSessionId,
+    isMobileScannerConnected,
+    connectedDevicesCount,
+    connectedClients,
+    fetchConnectedClients,
+    isRefreshingClients,
+    recentScans,
+    clearRecentScans,
+    localScannerInfo,
+    fetchScannerInfo,
+    sendTestBarcode
+  } = useScanner();
+
   const [tab, setTab] = useState<Tab>('system');
+  const [selectedScannerIp, setSelectedScannerIp] = useState<string>('');
+  const [copiedScannerUrl, setCopiedScannerUrl] = useState(false);
+  const [testBarcodeInput, setTestBarcodeInput] = useState('');
+  const [showSimulatorAccordion, setShowSimulatorAccordion] = useState(false);
+
+  useEffect(() => {
+    if (localScannerInfo?.ip && !selectedScannerIp) {
+      setSelectedScannerIp(localScannerInfo.ip);
+    }
+  }, [localScannerInfo, selectedScannerIp]);
+
+  const activeScannerUrl = useMemo(() => {
+    const ip = selectedScannerIp || localScannerInfo?.ip || '127.0.0.1';
+    const httpsPort = localScannerInfo?.httpsPort || 5443;
+    return `https://${ip}:${httpsPort}/mobile-scanner?session=${encodeURIComponent(scannerSessionId)}`;
+  }, [selectedScannerIp, localScannerInfo, scannerSessionId]);
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -543,72 +577,68 @@ export function Settings() {
       return;
     }
 
-    setIsRestoring(true);
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      try {
-        const bstr = evt.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
+    try {
+      setIsRestoring(true);
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: 'array' });
 
-        const payload: any = {};
+      const payload: any = {};
 
-        wb.SheetNames.forEach(sheetName => {
-          const cleanName = sheetName.replace(/[^\w\s]/g, '').trim().toLowerCase();
-          const ws = wb.Sheets[sheetName];
-          const rawRows = XLSX.utils.sheet_to_json(ws);
+      wb.SheetNames.forEach(sheetName => {
+        const cleanName = sheetName.replace(/[^\w\s]/g, '').trim().toLowerCase();
+        const ws = wb.Sheets[sheetName];
+        const rawRows = XLSX.utils.sheet_to_json(ws);
 
-          if (cleanName.includes('inventory') || cleanName.includes('product')) {
-            payload.products = rawRows;
-          } else if (cleanName.includes('sales') || cleanName.includes('invoice')) {
-            payload.sales = rawRows;
-          } else if (cleanName.includes('ledger') || cleanName.includes('transaction') || cleanName.includes('accounting')) {
-            payload.transactions = rawRows;
-          } else if (cleanName.includes('customer')) {
-            payload.customers = rawRows;
-          } else if (cleanName.includes('employee') || cleanName.includes('staff')) {
-            payload.employees = rawRows;
-          } else if (cleanName.includes('profile') || cleanName.includes('user') || cleanName.includes('login')) {
-            payload.profiles = rawRows;
-          } else if (cleanName.includes('settings') || cleanName.includes('configuration')) {
-            payload.system_settings = rawRows;
-          } else if (cleanName.includes('supplier')) {
-            payload.suppliers = rawRows;
-          } else if (cleanName.includes('purchase')) {
-            payload.purchase_orders = rawRows;
-          } else if (cleanName.includes('adjustment')) {
-            payload.stock_adjustments = rawRows;
-          } else if (cleanName.includes('quote') || cleanName.includes('quotation')) {
-            payload.quotations = rawRows;
-          } else if (cleanName.includes('delivery')) {
-            payload.delivery_notes = rawRows;
-          } else if (cleanName.includes('branch')) {
-            payload.branches = rawRows;
-          }
-        });
-
-        const res = await fetch(`${API_URL}/settings/restore`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-
-        const result = await res.json();
-        if (res.ok) {
-          window.dispatchEvent(new Event('settings-updated'));
-          alert("Database successfully restored! Reloading system settings...");
-          fetchInitialData();
-        } else {
-          alert("Restore failed: " + (result.error || "Invalid file format"));
+        if (cleanName.includes('inventory') || cleanName.includes('product')) {
+          payload.products = rawRows;
+        } else if (cleanName.includes('sales') || cleanName.includes('invoice')) {
+          payload.sales = rawRows;
+        } else if (cleanName.includes('ledger') || cleanName.includes('transaction') || cleanName.includes('accounting')) {
+          payload.transactions = rawRows;
+        } else if (cleanName.includes('customer')) {
+          payload.customers = rawRows;
+        } else if (cleanName.includes('employee') || cleanName.includes('staff')) {
+          payload.employees = rawRows;
+        } else if (cleanName.includes('profile') || cleanName.includes('user') || cleanName.includes('login')) {
+          payload.profiles = rawRows;
+        } else if (cleanName.includes('settings') || cleanName.includes('configuration')) {
+          payload.system_settings = rawRows;
+        } else if (cleanName.includes('supplier')) {
+          payload.suppliers = rawRows;
+        } else if (cleanName.includes('purchase')) {
+          payload.purchase_orders = rawRows;
+        } else if (cleanName.includes('adjustment')) {
+          payload.stock_adjustments = rawRows;
+        } else if (cleanName.includes('quote') || cleanName.includes('quotation')) {
+          payload.quotations = rawRows;
+        } else if (cleanName.includes('delivery')) {
+          payload.delivery_notes = rawRows;
+        } else if (cleanName.includes('branch')) {
+          payload.branches = rawRows;
         }
-      } catch (err: any) {
-        console.error("Excel parse error", err);
-        alert("Failed to parse Excel file: " + err.message);
-      } finally {
-        setIsRestoring(false);
-        e.target.value = '';
+      });
+
+      const res = await fetch(`${API_URL}/settings/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await res.json();
+      if (res.ok) {
+        window.dispatchEvent(new Event('settings-updated'));
+        alert("Database successfully restored! Reloading system settings...");
+        fetchInitialData();
+      } else {
+        alert("Restore failed: " + (result.error || "Invalid file format"));
       }
-    };
-    reader.readAsBinaryString(file);
+    } catch (err: any) {
+      console.error("Excel parse error", err);
+      alert("Failed to parse Excel file: " + err.message);
+    } finally {
+      setIsRestoring(false);
+      e.target.value = '';
+    }
   };
 
   const handleChangePassword = async (e: React.FormEvent) => {
@@ -647,10 +677,16 @@ export function Settings() {
     <div className="p-4 sm:p-6 space-y-6 animate-in fade-in duration-500">
       {/* Tab Navigation */}
       <div className="flex gap-1 bg-white p-1 rounded-xl w-fit border border-gray-200 shadow-sm overflow-x-auto max-w-full">
-        {(['system', 'backup', 'network'] as Tab[]).map((t) => (
+        {(['system', 'backup', 'network', 'scanner'] as Tab[]).map((t) => (
           <button key={t} onClick={() => setTab(t)}
-            className={`px-6 py-2.5 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${tab === t ? 'bg-[#464646] text-white shadow-md' : 'text-gray-500 hover:text-[#464646] hover:bg-gray-50'}`}>
-            {t === 'system' ? 'System Settings' : t === 'backup' ? 'Backup & Restore' : 'Connection & Network'}
+            className={`px-6 py-2.5 rounded-lg text-sm font-bold transition-all whitespace-nowrap flex items-center gap-2 ${tab === t ? 'bg-[#464646] text-white shadow-md' : 'text-gray-500 hover:text-[#464646] hover:bg-gray-50'}`}>
+            {t === 'system' ? 'System Settings' : t === 'backup' ? 'Backup & Restore' : t === 'network' ? 'Connection & Network' : (
+              <>
+                <SmartphoneIcon className="w-4 h-4" />
+                <span>Mobile Camera Scanner</span>
+                {isMobileScannerConnected && <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>}
+              </>
+            )}
           </button>
         ))}
       </div>
@@ -1481,6 +1517,371 @@ export function Settings() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 📱 MOBILE CAMERA BARCODE SCANNER TAB */}
+      {tab === 'scanner' && (
+        <div className="space-y-6 animate-in slide-in-from-left-4 duration-500">
+          {/* Header Banner */}
+          <div className="bg-white rounded-3xl border border-gray-100 p-6 sm:p-8 shadow-md relative overflow-hidden">
+            <div className="absolute top-0 left-0 h-1.5 w-full bg-[#DAA520]" />
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-100/80 pb-6 text-left">
+              <div className="flex items-center gap-4">
+                <div className="w-14 h-14 bg-gradient-to-br from-amber-500 to-amber-600 rounded-2xl flex items-center justify-center shadow-lg shadow-amber-500/20 text-slate-950 shrink-0">
+                  <SmartphoneIcon className="w-7 h-7" />
+                </div>
+                <div>
+                  <h2 className="font-black text-xl text-[#464646] uppercase tracking-wider flex items-center gap-2 flex-wrap">
+                    Mobile Camera Barcode Scanner
+                    <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 font-bold uppercase tracking-widest">
+                      Wi-Fi Virtual Input
+                    </span>
+                  </h2>
+                  <p className="text-xs font-bold text-gray-400 mt-1">
+                    Turn any iPhone or Android camera into an instant wireless barcode scanner streaming directly into active input fields & POS.
+                  </p>
+                </div>
+              </div>
+
+              {/* Dynamic Connection Status Badge */}
+              <div className="flex items-center gap-3">
+                <div className={`px-4 py-2 rounded-2xl border text-xs font-black uppercase tracking-wider flex items-center gap-2.5 shadow-sm transition-all duration-300 ${
+                  connectedDevicesCount > 0
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200 shadow-emerald-500/10'
+                    : 'bg-amber-50/90 text-amber-800 border-amber-200'
+                }`}>
+                  <span className="relative flex h-3 w-3">
+                    {connectedDevicesCount > 0 && (
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    )}
+                    <span className={`relative inline-flex rounded-full h-3 w-3 ${
+                      connectedDevicesCount > 0 ? 'bg-emerald-500' : 'bg-amber-500'
+                    }`}></span>
+                  </span>
+                  <span>
+                    {connectedDevicesCount > 0
+                      ? `● ${connectedDevicesCount} DEVICE${connectedDevicesCount > 1 ? 'S' : ''} CONNECTED`
+                      : '○ WAITING FOR CONNECTION'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await Promise.all([fetchConnectedClients(), fetchScannerInfo()]);
+                  }}
+                  disabled={isRefreshingClients}
+                  className="p-2.5 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-600 rounded-xl transition-all shadow-sm flex items-center justify-center cursor-pointer disabled:opacity-70"
+                  title="Refresh Connected Devices & Signaling"
+                >
+                  <RefreshCcwIcon className={`w-4 h-4 transition-transform ${isRefreshingClients ? 'animate-spin text-amber-600' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            {/* Main Two-Column Pairing Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 pt-6">
+              {/* Left Column: High-Contrast QR Code Card & Connected Devices List */}
+              <div className="lg:col-span-5 flex flex-col items-center justify-center p-6 bg-slate-900 text-white rounded-3xl border border-slate-800 shadow-xl text-center space-y-4">
+                <div className="bg-white p-4 rounded-2xl shadow-2xl border-4 border-amber-500">
+                  <QRCodeSVG
+                    value={activeScannerUrl}
+                    size={210}
+                    level="H"
+                    includeMargin={false}
+                  />
+                </div>
+
+                <div className="space-y-1.5 w-full">
+                  <div className="flex items-center justify-center gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Pairing Session:</span>
+                    <span className="font-mono font-black text-amber-400 bg-slate-800/80 px-2.5 py-0.5 rounded-lg border border-slate-700 text-xs">
+                      {scannerSessionId}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextId = prompt('Enter POS Session ID to pair with:', scannerSessionId);
+                        if (nextId && nextId.trim()) setScannerSessionId(nextId.trim());
+                      }}
+                      className="text-[10px] text-slate-400 hover:text-amber-400 underline font-bold cursor-pointer"
+                    >
+                      Change
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-slate-400 font-medium">
+                    Point phone camera at this QR code to launch mobile scanner app
+                  </p>
+                </div>
+
+                {/* Connected Devices Card */}
+                <div className="w-full pt-4 border-t border-slate-800 text-left space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1.5">
+                      <SmartphoneIcon className="w-3.5 h-3.5 text-amber-400" />
+                      Connected Devices ({connectedDevicesCount})
+                    </span>
+                    {connectedDevicesCount > 0 && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 uppercase tracking-wider">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                        Live
+                      </span>
+                    )}
+                  </div>
+
+                  {connectedClients.length === 0 ? (
+                    <div className="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-3.5 text-center">
+                      <p className="text-xs text-slate-400 font-medium italic">
+                        No mobile devices paired yet.
+                      </p>
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        Scan QR code above with your phone camera to pair.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                      {connectedClients.map((client) => (
+                        <div
+                          key={client.id}
+                          className="flex items-center justify-between bg-slate-800/90 hover:bg-slate-800 border border-slate-700/80 p-3 rounded-2xl text-xs transition-colors shadow-sm"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span className="text-base shrink-0">📱</span>
+                            <div className="truncate">
+                              <p className="font-bold text-slate-200 text-xs truncate">
+                                {client.deviceName}
+                              </p>
+                              <p className="text-[10px] font-mono text-slate-400">
+                                {client.ip}
+                              </p>
+                            </div>
+                          </div>
+                          <span className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-black uppercase tracking-wider shrink-0 ml-2">
+                            Active
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Right Column: Connection Settings & Step-by-Step Guidance */}
+              <div className="lg:col-span-7 space-y-5 text-left">
+                {/* Wi-Fi Adapter Selector */}
+                <div className="bg-slate-50 border border-slate-200/80 p-5 rounded-2xl space-y-3">
+                  <label className="text-[10px] font-black text-[#464646] uppercase tracking-widest block">
+                    1. Select Host Wi-Fi Network Interface
+                  </label>
+                  {localScannerInfo?.ips && localScannerInfo.ips.length > 0 ? (
+                    <select
+                      value={selectedScannerIp}
+                      onChange={(e) => setSelectedScannerIp(e.target.value)}
+                      className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500 shadow-sm cursor-pointer"
+                    >
+                      {localScannerInfo.ips.map((net, i) => (
+                        <option key={i} value={net.address}>
+                          {net.isWifi ? '📶 Wi-Fi' : '🌐 LAN'}: {net.address} ({net.name})
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="text-xs text-gray-500 font-bold bg-white p-3 rounded-xl border border-slate-200">
+                      Primary IP: {localScannerInfo?.ip || '127.0.0.1'}
+                    </div>
+                  )}
+
+                  {/* Direct HTTPS Link with One-Click Copy */}
+                  <div className="space-y-1.5 pt-1">
+                    <label className="text-[9px] font-black text-gray-400 uppercase tracking-widest block">
+                      Direct Mobile Scanner Link (Secure HTTPS)
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={activeScannerUrl}
+                        className="flex-1 px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-700 select-all outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(activeScannerUrl);
+                          setCopiedScannerUrl(true);
+                          setTimeout(() => setCopiedScannerUrl(false), 2000);
+                        }}
+                        className="px-4 py-2.5 bg-[#464646] hover:bg-[#333333] active:scale-95 text-white rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-sm shrink-0"
+                      >
+                        {copiedScannerUrl ? <CheckIcon className="w-3.5 h-3.5 text-emerald-400" /> : <CopyIcon className="w-3.5 h-3.5" />}
+                        {copiedScannerUrl ? 'Copied!' : 'Copy'}
+                      </button>
+                      <a
+                        href={activeScannerUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="p-2.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl shrink-0 transition-colors flex items-center justify-center shadow-sm"
+                        title="Open in new browser tab"
+                      >
+                        <ExternalLinkIcon className="w-4 h-4" />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3-Step Setup Card */}
+                <div className="bg-amber-50/40 border border-amber-200/60 p-5 rounded-2xl space-y-3">
+                  <h4 className="text-xs font-black text-amber-900 uppercase tracking-wider">
+                    Quick 3-Step Phone Setup
+                  </h4>
+                  <div className="space-y-2.5 text-xs text-slate-700 font-medium">
+                    <div className="flex items-start gap-2.5">
+                      <span className="w-5 h-5 rounded-full bg-amber-500 text-slate-950 font-black text-[10px] flex items-center justify-center shrink-0">1</span>
+                      <p className="leading-tight">
+                        <b>Connect to Same Wi-Fi:</b> Ensure your smartphone is connected to the same Wi-Fi router as this computer.
+                      </p>
+                    </div>
+                    <div className="flex items-start gap-2.5">
+                      <span className="w-5 h-5 rounded-full bg-amber-500 text-slate-950 font-black text-[10px] flex items-center justify-center shrink-0">2</span>
+                      <p className="leading-tight">
+                        <b>Scan the QR Code:</b> Open the built-in Camera on your iPhone or Android and tap the scanned link.
+                      </p>
+                    </div>
+                    <div className="flex items-start gap-2.5">
+                      <span className="w-5 h-5 rounded-full bg-amber-500 text-slate-950 font-black text-[10px] flex items-center justify-center shrink-0">3</span>
+                      <p className="leading-tight">
+                        <b>Accept Local SSL Certificate:</b> If Safari or Chrome warns about the self-signed HTTPS certificate, tap <b>Advanced</b> &rarr; <b>Proceed to site</b> to allow camera access.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Recent Scans Activity Feed */}
+          <div className="bg-white rounded-3xl border border-gray-100 p-6 sm:p-8 shadow-md text-left space-y-4">
+            <div className="flex justify-between items-center border-b border-gray-100 pb-4">
+              <div>
+                <h3 className="font-black text-base text-[#464646] uppercase tracking-wider flex items-center gap-2">
+                  <span>⚡ Recent Scans Activity Feed</span>
+                  <span className="text-xs font-mono font-bold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-lg">
+                    {recentScans.length}
+                  </span>
+                </h3>
+                <p className="text-xs font-bold text-gray-400 mt-0.5">
+                  Live log of all barcodes received from connected wireless camera scanners
+                </p>
+              </div>
+
+              {recentScans.length > 0 && (
+                <button
+                  type="button"
+                  onClick={clearRecentScans}
+                  className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1"
+                >
+                  <Trash2Icon className="w-3.5 h-3.5" />
+                  Clear History
+                </button>
+              )}
+            </div>
+
+            {recentScans.length === 0 ? (
+              <div className="py-12 text-center text-gray-400 font-bold space-y-2">
+                <div className="w-12 h-12 bg-gray-100 rounded-2xl mx-auto flex items-center justify-center text-gray-400">
+                  <SmartphoneIcon className="w-6 h-6" />
+                </div>
+                <p className="text-sm text-gray-500 font-bold">No scans received yet</p>
+                <p className="text-xs text-gray-400">Scan any barcode with your paired mobile camera to see it appear here in real time.</p>
+              </div>
+            ) : (
+              <div className="max-h-72 overflow-y-auto divide-y divide-gray-100 rounded-2xl border border-gray-100">
+                {recentScans.map((scan) => (
+                  <div key={scan.id} className="p-3.5 flex items-center justify-between hover:bg-slate-50 transition-colors">
+                    <div className="flex items-center gap-3">
+                      <span className="px-2 py-1 bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-[10px] font-mono font-bold">
+                        {scan.format || 'BARCODE'}
+                      </span>
+                      <div>
+                        <span className="font-mono font-black text-slate-800 text-sm">{scan.barcode}</span>
+                        <div className="text-[10px] text-gray-400 font-semibold">{scan.scannerName}</div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-xs font-mono font-bold text-gray-500">
+                        {new Date(scan.timestamp).toLocaleTimeString()}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Collapsible Accordion: Advanced / Manual Test Simulator */}
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-md overflow-hidden text-left">
+            <button
+              type="button"
+              onClick={() => setShowSimulatorAccordion(!showSimulatorAccordion)}
+              className="w-full p-6 flex justify-between items-center hover:bg-slate-50 transition-colors"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-xl bg-slate-100 text-slate-600 flex items-center justify-center">
+                  <ZapIcon className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-black text-sm text-[#464646] uppercase tracking-wider">
+                    ▶ Advanced / Manual Test Simulator
+                  </h4>
+                  <p className="text-[10px] font-bold text-gray-400">
+                    Test the global virtual keyboard bridge from this desktop without needing a physical phone
+                  </p>
+                </div>
+              </div>
+              <div className="p-2 rounded-lg bg-slate-100 text-slate-500">
+                {showSimulatorAccordion ? <ChevronUpIcon className="w-4 h-4" /> : <ChevronDownIcon className="w-4 h-4" />}
+              </div>
+            </button>
+
+            {showSimulatorAccordion && (
+              <div className="p-6 pt-0 border-t border-gray-100 space-y-4 animate-in slide-in-from-top-2">
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-3 mt-4">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block">
+                    Simulate Inbound Scanned String
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={testBarcodeInput}
+                      onChange={(e) => setTestBarcodeInput(e.target.value)}
+                      onKeyDown={async (e) => {
+                        if (e.key === 'Enter' && testBarcodeInput.trim()) {
+                          await sendTestBarcode(testBarcodeInput.trim());
+                          setTestBarcodeInput('');
+                        }
+                      }}
+                      placeholder="e.g. 8901234567890 or SKU-PAINT-001"
+                      className="flex-1 px-4 py-3 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (testBarcodeInput.trim()) {
+                          await sendTestBarcode(testBarcodeInput.trim());
+                          setTestBarcodeInput('');
+                        }
+                      }}
+                      className="px-6 py-3 bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-md shrink-0"
+                    >
+                      Simulate Scan 🚀
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-gray-400 font-bold">
+                    Tip: If an input field or text box on screen is focused, the barcode will inject directly into that field. Otherwise, it will route to POS / active screen handler.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

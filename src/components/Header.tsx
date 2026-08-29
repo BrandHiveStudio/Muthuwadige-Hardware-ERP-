@@ -65,28 +65,19 @@ export function Header({
 
     setIsRefreshing(true);
 
-    // If a page-specific onRefresh callback is provided, invoke it
-    if (onRefresh) {
-      try {
+    try {
+      if (onRefresh) {
         await Promise.resolve(onRefresh());
-      } catch (err) {
-        console.error('Page refresh error:', err);
       }
+      // Broadcast single synchronized refresh event to all modules
+      window.dispatchEvent(new CustomEvent('refresh-all-data'));
+    } catch (err) {
+      console.error('Page refresh error:', err);
+    } finally {
+      setTimeout(() => {
+        setIsRefreshing(false);
+      }, 500);
     }
-
-    // Broadcast global synchronization events across all listening modules
-    window.dispatchEvent(new CustomEvent('refresh-all-data'));
-    window.dispatchEvent(new CustomEvent('refresh-dashboard'));
-    window.dispatchEvent(new CustomEvent('refresh-sales'));
-    window.dispatchEvent(new CustomEvent('refresh-inventory'));
-    window.dispatchEvent(new CustomEvent('refresh-reports'));
-    window.dispatchEvent(new CustomEvent('refresh-customers'));
-    window.dispatchEvent(new CustomEvent('refresh-suppliers'));
-    window.dispatchEvent(new CustomEvent('settings-updated'));
-
-    setTimeout(() => {
-      setIsRefreshing(false);
-    }, 750);
   };
 
   // Handle search input changes

@@ -170,11 +170,9 @@ export function Reports() {
     fetchSettings();
     window.addEventListener('settings-updated', fetchSettings);
     window.addEventListener('refresh-reports', fetchData);
-    window.addEventListener('focus', fetchData);
     return () => {
       window.removeEventListener('settings-updated', fetchSettings);
       window.removeEventListener('refresh-reports', fetchData);
-      window.removeEventListener('focus', fetchData);
     };
   }, []);
 

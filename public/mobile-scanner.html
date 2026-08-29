@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Muthuwadige Mobile Scanner</title>
+  
+  <!-- html5-qrcode Library with CDN fallback -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  
+  <style>
+    :root {
+      --amber-400: #fbbf24;
+      --amber-500: #f59e0b;
+      --amber-600: #d97706;
+      --emerald-500: #10b981;
+      --rose-500: #f43f5e;
+      --bg-dark: #090d16;
+      --card-bg: #131b2e;
+      --border-dark: #1e293b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-dark);
+      color: #f8fafc;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* Top Navigation Bar */
+    header {
+      background: linear-gradient(180deg, rgba(15, 23, 42, 0.98) 0%, rgba(15, 23, 42, 0.85) 100%);
+      backdrop-filter: blur(12px);
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border-dark);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-logo {
+      width: 32px;
+      height: 32px;
+      background: var(--amber-500);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      font-weight: 900;
+      color: #090d16;
+      box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+    }
+
+    .brand-text h1 {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      color: #ffffff;
+      text-transform: uppercase;
+    }
+
+    .brand-text p {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--amber-400);
+    }
+
+    .session-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #34d399;
+    }
+
+    .session-badge.disconnected {
+      background: rgba(244, 63, 94, 0.12);
+      border-color: rgba(244, 63, 94, 0.3);
+      color: var(--rose-500);
+    }
+
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      animation: pulse 1.8s infinite;
+    }
+
+    .disconnected .pulse-dot {
+      background: var(--rose-500);
+      animation: none;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(0.95); opacity: 0.9; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+      70% { transform: scale(1.1); opacity: 1; box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+      100% { transform: scale(0.95); opacity: 0.9; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+
+    /* Main Viewport / Camera Section */
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 12px;
+      gap: 12px;
+      max-width: 540px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .viewfinder-wrapper {
+      position: relative;
+      width: 100%;
+      height: 310px;
+      background: #000000;
+      border-radius: 20px;
+      overflow: hidden;
+      border: 2px solid var(--border-dark);
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.7);
+    }
+
+    #reader {
+      width: 100% !important;
+      height: 100% !important;
+      border: none !important;
+    }
+
+    #reader video {
+      width: 100% !important;
+      height: 100% !important;
+      object-fit: cover !important;
+    }
+
+    /* Laser Reticle & Scan Target UI Overlay */
+    .reticle-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+    }
+
+    .target-box {
+      width: 82%;
+      height: 70%;
+      max-width: 320px;
+      position: relative;
+      border-radius: 12px;
+    }
+
+    .corner {
+      position: absolute;
+      width: 24px;
+      height: 24px;
+      border-color: var(--amber-400);
+      border-style: solid;
+    }
+
+    .corner.tl { top: 0; left: 0; border-width: 3px 0 0 3px; border-top-left-radius: 10px; }
+    .corner.tr { top: 0; right: 0; border-width: 3px 3px 0 0; border-top-right-radius: 10px; }
+    .corner.bl { bottom: 0; left: 0; border-width: 0 0 3px 3px; border-bottom-left-radius: 10px; }
+    .corner.br { bottom: 0; right: 0; border-width: 0 3px 3px 0; border-bottom-right-radius: 10px; }
+
+    .laser-line {
+      position: absolute;
+      left: 6px;
+      right: 6px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, #f59e0b, #fbbf24, #f59e0b, transparent);
+      box-shadow: 0 0 12px #f59e0b, 0 0 4px #fbbf24;
+      animation: scanLaser 2.2s ease-in-out infinite alternate;
+    }
+
+    @keyframes scanLaser {
+      0% { top: 10%; opacity: 0.2; }
+      50% { opacity: 1; }
+      100% { top: 90%; opacity: 0.2; }
+    }
+
+    /* Green flash on scan success */
+    .flash-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(16, 185, 129, 0.45);
+      z-index: 20;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s ease-out;
+    }
+
+    .flash-overlay.active {
+      opacity: 1;
+    }
+
+    /* Quick Toolbar inside camera card */
+    .camera-tools {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      display: flex;
+      gap: 8px;
+      z-index: 30;
+    }
+
+    .tool-btn {
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #f8fafc;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      cursor: pointer;
+      transition: transform 0.1s, background 0.2s;
+    }
+
+    .tool-btn:active {
+      transform: scale(0.92);
+    }
+
+    .tool-btn.active {
+      background: var(--amber-500);
+      color: #090d16;
+    }
+
+    /* Last Scanned Result Card */
+    .result-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-dark);
+      border-radius: 18px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    }
+
+    .result-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .result-title {
+      font-size: 11px;
+      font-weight: 800;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .scan-counter {
+      font-size: 11px;
+      font-weight: 800;
+      background: rgba(245, 158, 11, 0.15);
+      color: var(--amber-400);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-family: monospace;
+    }
+
+    .barcode-display {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 20px;
+      font-weight: 900;
+      letter-spacing: 1.5px;
+      color: #ffffff;
+      background: #090d16;
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      word-break: break-all;
+    }
+
+    .barcode-display.empty {
+      color: #475569;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: normal;
+    }
+
+    .status-badge {
+      font-size: 10px;
+      font-weight: 800;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(16, 185, 129, 0.2);
+      color: #34d399;
+      text-transform: uppercase;
+    }
+
+    /* Manual Input & Controls Section */
+    .manual-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-dark);
+      border-radius: 18px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .manual-header {
+      font-size: 11px;
+      font-weight: 800;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .barcode-input {
+      flex: 1;
+      background: #090d16;
+      border: 1px solid var(--border-dark);
+      border-radius: 10px;
+      padding: 10px 14px;
+      color: #ffffff;
+      font-size: 14px;
+      font-weight: 700;
+      font-family: monospace;
+      outline: none;
+      user-select: text;
+    }
+
+    .barcode-input:focus {
+      border-color: var(--amber-500);
+      box-shadow: 0 0 0 1px var(--amber-500);
+    }
+
+    .btn-send {
+      background: linear-gradient(135deg, var(--amber-500), var(--amber-600));
+      color: #090d16;
+      border: none;
+      border-radius: 10px;
+      padding: 0 16px;
+      font-weight: 800;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      transition: transform 0.1s, filter 0.15s;
+    }
+
+    .btn-send:active {
+      transform: scale(0.95);
+    }
+
+    /* Preferences Drawer */
+    .toggles-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .toggle-chip {
+      flex: 1;
+      background: #090d16;
+      border: 1px solid var(--border-dark);
+      border-radius: 10px;
+      padding: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #94a3b8;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .toggle-chip.active {
+      background: rgba(245, 158, 11, 0.12);
+      border-color: rgba(245, 158, 11, 0.4);
+      color: var(--amber-400);
+    }
+
+    /* Status Banner for Camera Permission / Offline Warning */
+    #notice-banner {
+      display: none;
+      background: rgba(244, 63, 94, 0.15);
+      border: 1px solid rgba(244, 63, 94, 0.4);
+      color: #fda4af;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.4;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header -->
+  <header>
+    <div class="brand">
+      <div class="brand-logo">M</div>
+      <div class="brand-text">
+        <h1>Muthuwadige ERP</h1>
+        <p>Wireless POS Scanner</p>
+      </div>
+    </div>
+    <div id="session-badge" class="session-badge" onclick="promptChangeSession()">
+      <span class="pulse-dot"></span>
+      <span id="session-label">Session: ...</span>
+    </div>
+  </header>
+
+  <!-- Main Scanner Area -->
+  <main>
+    <div id="notice-banner"></div>
+
+    <div class="viewfinder-wrapper">
+      <!-- Html5Qrcode Scanner Target -->
+      <div id="reader"></div>
+
+      <!-- Laser Reticle -->
+      <div class="reticle-overlay">
+        <div class="target-box">
+          <div class="corner tl"></div>
+          <div class="corner tr"></div>
+          <div class="corner bl"></div>
+          <div class="corner br"></div>
+          <div class="laser-line"></div>
+        </div>
+      </div>
+
+      <!-- Green Flash Overlay -->
+      <div id="flash-overlay" class="flash-overlay"></div>
+
+      <!-- Camera Quick Tools -->
+      <div class="camera-tools">
+        <button id="btn-torch" class="tool-btn" onclick="toggleTorch()" title="Torch / Flashlight">🔦</button>
+        <button id="btn-switch-cam" class="tool-btn" onclick="switchCamera()" title="Switch Camera">🔄</button>
+      </div>
+    </div>
+
+    <!-- Last Scanned Card -->
+    <div class="result-card">
+      <div class="result-header">
+        <span class="result-title">Last Scanned Barcode</span>
+        <span class="scan-counter">Count: <span id="scan-count">0</span></span>
+      </div>
+      <div id="barcode-result" class="barcode-display empty">
+        Ready for next item...
+      </div>
+    </div>
+
+    <!-- Manual Barcode Entry -->
+    <div class="manual-card">
+      <div class="manual-header">Manual Barcode Input</div>
+      <div class="input-row">
+        <input type="text" id="manual-barcode-input" class="barcode-input" placeholder="Type or paste barcode..." autocomplete="off" />
+        <button class="btn-send" onclick="sendManualBarcode()">Send 🚀</button>
+      </div>
+    </div>
+
+    <!-- Toggles (Sound / Haptic / Continuous) -->
+    <div class="toggles-row">
+      <button id="chip-sound" class="toggle-chip active" onclick="toggleSound()">🔊 Beep: ON</button>
+      <button id="chip-vibrate" class="toggle-chip active" onclick="toggleVibration()">📳 Haptic: ON</button>
+      <button id="chip-continuous" class="toggle-chip active" onclick="toggleContinuous()">⚡ Cooldown: 1.2s</button>
+    </div>
+  </main>
+
+  <script>
+    // State Variables
+    let sessionId = 'POS-1';
+    let html5QrCode = null;
+    let currentCameraId = null;
+    let availableCameras = [];
+    let isTorchOn = false;
+    let soundEnabled = true;
+    let vibrationEnabled = true;
+    let scanCount = 0;
+    let lastScannedBarcode = '';
+    let lastScannedTime = 0;
+    const SCAN_COOLDOWN_MS = 1200;
+    let mobileEventSource = null;
+    let reconnectTimer = null;
+
+    // Connect to backend SSE stream as a registered mobile scanner client
+    function connectMobileStream() {
+      if (mobileEventSource) {
+        try {
+          mobileEventSource.close();
+        } catch (_) {}
+        mobileEventSource = null;
+      }
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+
+      try {
+        const streamUrl = `/api/scanner/stream?sessionId=${encodeURIComponent(sessionId)}&clientType=mobile`;
+        mobileEventSource = new EventSource(streamUrl);
+
+        mobileEventSource.onopen = () => {
+          console.log('📱 Mobile scanner connected & registered with POS session:', sessionId);
+          const badge = document.getElementById('session-badge');
+          if (badge) {
+            badge.style.borderColor = '#10b981';
+          }
+        };
+
+        mobileEventSource.onmessage = (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.type === 'connected') {
+              console.log('Handshake acknowledged by POS server');
+            }
+          } catch (_) {}
+        };
+
+        mobileEventSource.onerror = () => {
+          console.warn('⚠️ Mobile stream connection lost, reconnecting in 3s...');
+          if (mobileEventSource) {
+            mobileEventSource.close();
+            mobileEventSource = null;
+          }
+          const badge = document.getElementById('session-badge');
+          if (badge) {
+            badge.style.borderColor = '#f59e0b';
+          }
+          reconnectTimer = setTimeout(connectMobileStream, 3000);
+        };
+      } catch (err) {
+        console.error('Error creating mobile EventSource:', err);
+      }
+    }
+
+    // Parse session from URL query parameters (?session=POS-1234 or ?sessionId=POS-1234)
+    function initSession() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const sessionParam = urlParams.get('session') || urlParams.get('sessionId') || urlParams.get('s');
+      if (sessionParam) {
+        sessionId = sessionParam.trim();
+      } else {
+        const stored = localStorage.getItem('pos_scanner_session');
+        sessionId = stored || 'POS-1';
+      }
+      localStorage.setItem('pos_scanner_session', sessionId);
+      document.getElementById('session-label').textContent = `POS: ${sessionId}`;
+      connectMobileStream();
+    }
+
+    function promptChangeSession() {
+      const newSession = prompt('Enter POS Session ID to pair with:', sessionId);
+      if (newSession && newSession.trim()) {
+        sessionId = newSession.trim();
+        localStorage.setItem('pos_scanner_session', sessionId);
+        document.getElementById('session-label').textContent = `POS: ${sessionId}`;
+        connectMobileStream();
+      }
+    }
+
+    window.addEventListener('beforeunload', () => {
+      if (mobileEventSource) {
+        mobileEventSource.close();
+      }
+    });
+
+    // Synthesize POS Beep via Web Audio API (1760Hz crisp chime)
+    let audioCtx = null;
+    function playPosBeep() {
+      if (!soundEnabled) return;
+      try {
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume();
+        }
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(1760, audioCtx.currentTime); // High clear POS beep
+        gain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.08);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.08);
+      } catch (err) {
+        console.warn('Audio feedback error:', err);
+      }
+    }
+
+    // Trigger haptic vibration
+    function triggerHaptic() {
+      if (!vibrationEnabled) return;
+      if (typeof navigator.vibrate === 'function') {
+        try {
+          navigator.vibrate(100);
+        } catch (_) {}
+      }
+    }
+
+    // Visual green flash
+    function triggerFlash() {
+      const flash = document.getElementById('flash-overlay');
+      flash.classList.add('active');
+      setTimeout(() => flash.classList.remove('active'), 180);
+    }
+
+    // Transmit Barcode to Server POS
+    async function transmitBarcode(barcode, format = 'AUTO') {
+      const cleanCode = barcode.trim();
+      if (!cleanCode) return;
+
+      playPosBeep();
+      triggerHaptic();
+      triggerFlash();
+
+      scanCount++;
+      document.getElementById('scan-count').textContent = scanCount;
+
+      const resultBox = document.getElementById('barcode-result');
+      resultBox.classList.remove('empty');
+      resultBox.innerHTML = `<span>${cleanCode}</span><span class="status-badge">SENT</span>`;
+
+      try {
+        const response = await fetch('/api/scanner/broadcast', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            barcode: cleanCode,
+            sessionId: sessionId,
+            scannerName: 'Mobile Scanner (' + (navigator.userAgent.includes('iPhone') ? 'iPhone' : 'Android') + ')',
+            format: format
+          })
+        });
+
+        const data = await response.json();
+        if (data.success) {
+          resultBox.innerHTML = `<span>${cleanCode}</span><span class="status-badge">RECEIVED</span>`;
+        }
+      } catch (err) {
+        console.error('Broadcast failed:', err);
+        resultBox.innerHTML = `<span>${cleanCode}</span><span class="status-badge" style="background:rgba(244,63,94,0.2);color:#f43f5e;">OFFLINE</span>`;
+      }
+    }
+
+    // Handle scan event from Html5Qrcode
+    function onScanSuccess(decodedText, decodedResult) {
+      const now = Date.now();
+      const code = (decodedText || '').trim();
+      if (!code) return;
+
+      // Debounce identical barcode reads within 1.2s
+      if (code === lastScannedBarcode && (now - lastScannedTime < SCAN_COOLDOWN_MS)) {
+        return;
+      }
+
+      lastScannedBarcode = code;
+      lastScannedTime = now;
+
+      const formatName = decodedResult?.result?.format?.formatName || 'BARCODE';
+      transmitBarcode(code, formatName);
+    }
+
+    // Manual Barcode Send Handler
+    function sendManualBarcode() {
+      const input = document.getElementById('manual-barcode-input');
+      const val = input.value.trim();
+      if (!val) return;
+      transmitBarcode(val, 'MANUAL');
+      input.value = '';
+    }
+
+    document.getElementById('manual-barcode-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        sendManualBarcode();
+      }
+    });
+
+    // Toggle Functions
+    function toggleSound() {
+      soundEnabled = !soundEnabled;
+      const chip = document.getElementById('chip-sound');
+      chip.textContent = soundEnabled ? '🔊 Beep: ON' : '🔇 Beep: OFF';
+      chip.classList.toggle('active', soundEnabled);
+      if (soundEnabled) playPosBeep();
+    }
+
+    function toggleVibration() {
+      vibrationEnabled = !vibrationEnabled;
+      const chip = document.getElementById('chip-vibrate');
+      chip.textContent = vibrationEnabled ? '📳 Haptic: ON' : '📳 Haptic: OFF';
+      chip.classList.toggle('active', vibrationEnabled);
+      if (vibrationEnabled) triggerHaptic();
+    }
+
+    function toggleContinuous() {
+      // Toggle cooldown indicator
+      const chip = document.getElementById('chip-continuous');
+      chip.classList.toggle('active');
+    }
+
+    async function toggleTorch() {
+      if (!html5QrCode) return;
+      try {
+        isTorchOn = !isTorchOn;
+        await html5QrCode.applyVideoConstraints({
+          advanced: [{ torch: isTorchOn }]
+        });
+        document.getElementById('btn-torch').classList.toggle('active', isTorchOn);
+      } catch (err) {
+        console.warn('Torch control not supported:', err);
+      }
+    }
+
+    async function switchCamera() {
+      if (availableCameras.length <= 1) return;
+      const currentIdx = availableCameras.findIndex(c => c.id === currentCameraId);
+      const nextIdx = (currentIdx + 1) % availableCameras.length;
+      currentCameraId = availableCameras[nextIdx].id;
+
+      if (html5QrCode && html5QrCode.isScanning) {
+        await html5QrCode.stop();
+        startScannerWithCamera(currentCameraId);
+      }
+    }
+
+    function checkSecurityContext() {
+      const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+      const isHttps = location.protocol === 'https:';
+      if (!isHttps && !isLocal) {
+        const httpsUrl = 'https://' + location.hostname + ':5443' + location.pathname + location.search;
+        const banner = document.getElementById('notice-banner');
+        banner.innerHTML = `
+          <div style="font-weight:800;font-size:13px;margin-bottom:4px;">🔒 Camera Access Requires HTTPS</div>
+          <div style="font-size:11px;opacity:0.9;margin-bottom:8px;">Mobile browsers only allow camera streaming on secure HTTPS connections.</div>
+          <a href="${httpsUrl}" style="display:inline-block;background:#f59e0b;color:#090d16;font-weight:800;padding:8px 14px;border-radius:8px;text-decoration:none;font-size:12px;box-shadow:0 2px 8px rgba(245,158,11,0.4);">Switch to Secure HTTPS (Port 5443) 🚀</a>
+          <div style="font-size:10px;color:#cbd5e1;margin-top:6px;">If prompted by browser, tap <b>Advanced</b> &rarr; <b>Proceed</b> to trust local POS.</div>
+        `;
+        banner.style.display = 'block';
+        banner.style.background = 'rgba(245, 158, 11, 0.15)';
+        banner.style.borderColor = 'rgba(245, 158, 11, 0.4)';
+        banner.style.color = '#fbbf24';
+      }
+    }
+
+    // Start Scanner Engine
+    async function startScannerWithCamera(cameraIdOrConfig) {
+      const config = {
+        fps: 20,
+        qrbox: (viewfinderWidth, viewfinderHeight) => {
+          return {
+            width: Math.min(viewfinderWidth * 0.85, 320),
+            height: Math.min(viewfinderHeight * 0.75, 200)
+          };
+        },
+        aspectRatio: 1.0,
+        showTorchButtonIfSupported: false,
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.QR_CODE
+        ]
+      };
+
+      try {
+        await html5QrCode.start(
+          cameraIdOrConfig,
+          config,
+          onScanSuccess,
+          () => {} // Silent on non-match frame
+        );
+      } catch (err) {
+        console.error('Failed to start scanner with camera:', err);
+        const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+        const isHttps = location.protocol === 'https:';
+        if (!isHttps && !isLocal) {
+          checkSecurityContext();
+        } else {
+          showNotice('Camera initialization failed. Please allow camera permissions in browser settings. If using self-signed HTTPS, accept the certificate warning in browser.');
+        }
+      }
+    }
+
+    function showNotice(msg) {
+      const banner = document.getElementById('notice-banner');
+      banner.innerHTML = msg;
+      banner.style.display = 'block';
+    }
+
+    async function initCamera() {
+      checkSecurityContext();
+      html5QrCode = new Html5Qrcode('reader');
+
+      try {
+        const devices = await Html5Qrcode.getCameras();
+        if (devices && devices.length > 0) {
+          availableCameras = devices;
+          // Prefer environment / back camera
+          const backCam = devices.find(d => 
+            d.label.toLowerCase().includes('back') || 
+            d.label.toLowerCase().includes('rear') || 
+            d.label.toLowerCase().includes('environment')
+          );
+          currentCameraId = backCam ? backCam.id : devices[0].id;
+          startScannerWithCamera(currentCameraId);
+        } else {
+          // Fallback to facingMode environment
+          startScannerWithCamera({ facingMode: "environment" });
+        }
+      } catch (err) {
+        console.warn('Camera enumeration error, falling back to facingMode:', err);
+        startScannerWithCamera({ facingMode: "environment" });
+      }
+    }
+
+    // Startup Initialization
+    window.addEventListener('DOMContentLoaded', () => {
+      initSession();
+      initCamera();
+    });
+  </script>
+</body>
+</html>

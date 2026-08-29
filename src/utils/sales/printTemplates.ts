@@ -62,6 +62,10 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
   const printerConfig = branding.printerSettings;
   const paperSize = printerConfig?.paperSize || '80mm';
 
+  const rawValidity = quote.validityDays || quote.validity_period || quote.validity || 30;
+  const validityMatch = String(rawValidity).match(/\d+/);
+  const validityDays = validityMatch ? validityMatch[0] : (typeof rawValidity === 'number' ? rawValidity : 30);
+
   if (paperSize === '80mm') {
     const symbolStr = isSi ? 'රු.' : 'Rs.';
     const formatNum = (num: number) => num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -360,7 +364,7 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
             <div class="seal-space"></div>
             
             <div class="footer">
-              <p>${isSi ? 'මෙම මිල ගණන් දින 30ක් සඳහා වලංගු වේ.' : 'This quotation is valid for 30 days.'}</p>
+              <p>${isSi ? `මෙම මිල ගණන් දින ${validityDays}ක් සඳහා වලංගු වේ.` : `This quotation is valid for ${validityDays} days.`}</p>
               <p style="font-weight: bold; margin-top: 5px;">${isSi ? 'ඔබගේ ව්‍යාපාරයට ස්තූතියි!' : 'Thank you for your business!'}</p>
             </div>
           </div>
@@ -385,7 +389,7 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
   const totalDueLabel = isSi ? 'මුළු මුදල:' : 'Total Amount:';
   
   const notesLabel = isSi ? 'සටහන්' : 'NOTES';
-  const noteLine1 = isSi ? 'මෙම මිල ගණන් දින 30ක් සඳහා වලංගු වේ.' : 'This quotation is valid for 30 days.';
+  const noteLine1 = isSi ? `මෙම මිල ගණන් දින ${validityDays}ක් සඳහා වලංගු වේ.` : `This quotation is valid for ${validityDays} days.`;
   const noteLine2 = isSi ? 'ඔබගේ ව්‍යාපාරයට ස්තූතියි!' : 'Thank you for your business!';
   const signeeLabel = isSi ? 'බලයලත් අත්සන' : 'Authorized Signee';
 

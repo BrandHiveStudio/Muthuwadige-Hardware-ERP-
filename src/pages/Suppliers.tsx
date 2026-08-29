@@ -189,25 +189,20 @@ export function Suppliers() {
     setSupplierToDelete(null);
   };
 
-  const handleImportExcel = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      try {
-        const buffer = evt.target?.result as ArrayBuffer;
-        if (!buffer) {
-          setToast({ message: "Failed to read file.", type: 'error' });
-          return;
-        }
-
-        const data = new Uint8Array(buffer);
-        const wb = XLSX.read(data, { type: 'array', raw: false });
-        if (!wb.SheetNames || wb.SheetNames.length === 0) {
-          setToast({ message: "Invalid or corrupt file: No sheets found.", type: 'error' });
-          return;
-        }
+    try {
+      setIsLoading(true);
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: 'array', raw: false });
+      if (!wb.SheetNames || wb.SheetNames.length === 0) {
+        setToast({ message: "Invalid or corrupt file: No sheets found.", type: 'error' });
+        setIsLoading(false);
+        if (e.target) e.target.value = '';
+        return;
+      }
 
         const wsname = wb.SheetNames[0];
         const ws = wb.Sheets[wsname];
@@ -306,8 +301,6 @@ export function Suppliers() {
         setIsLoading(false);
         if (e.target) e.target.value = '';
       }
-    };
-    reader.readAsArrayBuffer(file);
   };
 
   const allFilteredSelected = filtered.length > 0 && filtered.every((s) => selectedSupplierIds.includes(s.id));

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   SearchIcon,
@@ -18,13 +18,24 @@ import {
   TrendingUpIcon,
   CheckSquareIcon,
   ArrowRightIcon,
-  HistoryIcon
+  HistoryIcon,
+  SmartphoneIcon,
+  QrCodeIcon,
+  RadioIcon,
+  CopyIcon,
+  ExternalLinkIcon,
+  CheckIcon,
+  WifiIcon,
+  RefreshCwIcon
 } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
+import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
 import { Modal } from '../components/Modal';
 import { notify } from '../components/Notifications';
 import { supabase } from '../lib/supabaseClient';
 import { useCurrency } from '../context/CurrencyContext';
-import { api, API_URL, fetchWithTimeout } from '../lib/api'; 
+import { useScanner } from '../context/ScannerContext';
+import { api, API_URL, BASE_URL, fetchWithTimeout } from '../lib/api'; 
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { SaleOrder, SaleItem, Customer, Product, Quotation, DeliveryNote, SalesReturn, CreditNote, CreditNoteUsage } from '../types';
@@ -920,6 +931,28 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
   const [heldBills, setHeldBills] = useState<any[]>([]);
   const [holdNameInput, setHoldNameInput] = useState('');
   const [showHoldNameModal, setShowHoldNameModal] = useState(false);
+
+  // Wireless Mobile Barcode Scanner Bridge Context
+  const {
+    isMobileScannerConnected,
+    connectedDevicesCount,
+    localScannerInfo,
+    fetchScannerInfo,
+    fetchConnectedClients,
+    scannerSessionId,
+    recentScans
+  } = useScanner();
+
+  const [showMobileScannerModal, setShowMobileScannerModal] = useState(false);
+  const [selectedScannerIp, setSelectedScannerIp] = useState<string>('');
+  const [copiedScannerUrl, setCopiedScannerUrl] = useState(false);
+  const [simulateBarcodeInput, setSimulateBarcodeInput] = useState('');
+
+  useEffect(() => {
+    if (localScannerInfo?.ip && !selectedScannerIp) {
+      setSelectedScannerIp(localScannerInfo.ip);
+    }
+  }, [localScannerInfo, selectedScannerIp]);
 
   const t = (en: string, si: string) => isSinhala ? si : en;
   const symbol = isSinhala ? 'රු.' : 'Rs.';
@@ -2341,6 +2374,142 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
     }));
   };
 
+  // =========================================================================
+  // CENTRAL BARCODE DISPATCHER (WIRELESS MOBILE SCANNER + HARDWARE USB SCANNER)
+  // =========================================================================
+  const handleBarcodeScanned = (scannedCode: string, source: 'usb' | 'mobile' | 'manual' = 'usb') => {
+    if (!scannedCode || !scannedCode.trim()) return;
+    const code = scannedCode.trim();
+
+    // 1. If active tab is 'new' (POS Checkout)
+    if (tab === 'new') {
+      // Find matching product in catalog by barcode, SKU, or ID
+      const matchedProduct = products.find(p => 
+        (p.barcode && p.barcode.trim().toLowerCase() === code.toLowerCase()) ||
+        (p.sku && p.sku.trim().toLowerCase() === code.toLowerCase()) ||
+        p.id === code
+      );
+
+      if (matchedProduct) {
+        addToCart(matchedProduct);
+        notify(t(`Scanned: ${matchedProduct.name}`, `ස්කෑන් කරන ලදී: ${matchedProduct.name}`), undefined, 'success');
+        return;
+      }
+
+      // Check if it matches a Credit Note code
+      const matchedCreditNote = creditNotesList.find(cn => {
+        const cnCode = (cn.credit_note_no || (cn as any).creditNoteNo || (cn as any).code || cn.id || '').toUpperCase();
+        return cnCode === code.toUpperCase();
+      });
+
+      if (matchedCreditNote) {
+        const cnCode = matchedCreditNote.credit_note_no || (matchedCreditNote as any).creditNoteNo || (matchedCreditNote as any).code || matchedCreditNote.id;
+        setSelectedCreditNoteCode(cnCode);
+        notify(t(`Applied Credit Note: ${cnCode}`, `ණය සටහන භාවිතා කරන ලදී: ${cnCode}`), undefined, 'success');
+        return;
+      }
+
+      notify(t(`Item with barcode "${code}" not found in inventory.`, `"${code}" බාර්කෝඩ් සහිත භාණ්ඩය තොගයේ හමු නොවීය.`), undefined, 'warning');
+      return;
+    }
+
+    // 2. If active tab is 'credit'
+    if (tab === 'credit') {
+      const matchedProduct = products.find(p => 
+        (p.barcode && p.barcode.trim().toLowerCase() === code.toLowerCase()) ||
+        (p.sku && p.sku.trim().toLowerCase() === code.toLowerCase()) ||
+        p.id === code
+      );
+
+      if (matchedProduct) {
+        addCreditCartItemDirect(matchedProduct);
+        notify(t(`Added to credit: ${matchedProduct.name}`, `ණය ලැයිස්තුවට එකතු කරන ලදී: ${matchedProduct.name}`), undefined, 'success');
+        return;
+      }
+
+      notify(t(`Item with barcode "${code}" not found in inventory.`, `"${code}" බාර්කෝඩ් සහිත භාණ්ඩය තොගයේ හමු නොවීය.`), undefined, 'warning');
+      return;
+    }
+
+    // 3. If active tab is 'quotes'
+    if (tab === 'quotes') {
+      const matchedSelectable = allCatalogSelectables.find(item => 
+        (item.barcode && item.barcode.trim().toLowerCase() === code.toLowerCase()) ||
+        (item.sku && item.sku.trim().toLowerCase() === code.toLowerCase()) ||
+        item.productId === code
+      );
+
+      if (matchedSelectable) {
+        const primaryProd = products.find(p => p.id === matchedSelectable.productId);
+        if (primaryProd) {
+          setQuoteCart(prev => {
+            const existing = prev.find(i => i.productId === matchedSelectable.productId);
+            if (existing) {
+              return prev.map(i => i.productId === matchedSelectable.productId ? { ...i, qty: i.qty + 1, total: (i.qty + 1) * i.price } : i);
+            }
+            return [...prev, {
+              productId: matchedSelectable.productId,
+              productName: matchedSelectable.displayName,
+              qty: 1,
+              price: matchedSelectable.price,
+              taxRate: 0,
+              total: matchedSelectable.price,
+              unit: matchedSelectable.unit,
+              conversionRate: matchedSelectable.conversionRate
+            }];
+          });
+          notify(t(`Added to Quotation: ${matchedSelectable.displayName}`, `මිල ගණන් ලැයිස්තුවට එකතු කරන ලදී: ${matchedSelectable.displayName}`), undefined, 'success');
+          return;
+        }
+      }
+
+      notify(t(`Item with barcode "${code}" not found.`, `"${code}" බාර්කෝඩ් සහිත භාණ්ඩය හමු නොවීය.`), undefined, 'warning');
+      return;
+    }
+
+    // 4. If active tab is 'returns'
+    if (tab === 'returns') {
+      setReturnSearchQuery(code);
+      notify(t(`Searching returns for barcode: ${code}`, `ආපසු භාරගැනීම් සොයමින්: ${code}`), undefined, 'info');
+      return;
+    }
+  };
+
+  const handleBarcodeScannedRef = useRef(handleBarcodeScanned);
+  useEffect(() => {
+    handleBarcodeScannedRef.current = handleBarcodeScanned;
+  });
+
+  const handleUsbScan = useCallback((barcode: string) => {
+    handleBarcodeScannedRef.current(barcode, 'usb');
+  }, []);
+
+  // Connect physical hardware USB keyboard scanner (Zero-regression)
+  useBarcodeScanner({
+    onScan: handleUsbScan,
+    minLength: 2,
+    enabled: true
+  });
+
+  // Listen to global virtual barcode scans routed to POS (from ScannerContext)
+  useEffect(() => {
+    const handleGlobalScan = (e: any) => {
+      const scannedBarcode = e?.detail?.barcode;
+      if (scannedBarcode) {
+        handleBarcodeScannedRef.current(scannedBarcode, e?.detail?.source || 'mobile');
+      }
+    };
+    window.addEventListener('global-barcode-scanned', handleGlobalScan);
+    return () => window.removeEventListener('global-barcode-scanned', handleGlobalScan);
+  }, []);
+
+  // Compute live scanner URL pointing to secure HTTPS
+  const mobileScannerUrl = useMemo(() => {
+    const ip = selectedScannerIp || localScannerInfo?.ip || '127.0.0.1';
+    const httpsPort = localScannerInfo?.httpsPort || 5443;
+    return `https://${ip}:${httpsPort}/mobile-scanner?session=${encodeURIComponent(scannerSessionId)}`;
+  }, [selectedScannerIp, localScannerInfo, scannerSessionId]);
+
   const availableCustomerCreditNotes = React.useMemo(() => {
     if (!creditNotesList || creditNotesList.length === 0) return [];
     const custId = selectedCustomer?.id || '';
@@ -2968,19 +3137,41 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
           </button>
         </div>
 
-        <div className="flex gap-1 bg-slate-100/60 p-1.5 rounded-2xl w-fit border border-slate-200/40">
-          <button 
-            onClick={() => setIsSinhala(false)} 
-            className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 ${!isSinhala ? 'bg-slate-900 text-amber-400 shadow-md border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Wireless Mobile Scanner Status Badge & Modal Trigger */}
+          <button
+            type="button"
+            onClick={() => {
+              fetchScannerInfo();
+              fetchConnectedClients();
+              setShowMobileScannerModal(true);
+            }}
+            className={`px-3.5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 border shadow-sm ${
+              isMobileScannerConnected
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+            }`}
+            title={t('Wireless Mobile Scanner Status / Quick QR Pairing', 'රැහැන් රහිත ජංගම ස්කෑනර් තත්ත්වය / QR කේතය')}
           >
-            🇺🇸 English
+            <SmartphoneIcon className={`w-4 h-4 ${isMobileScannerConnected ? 'text-emerald-600' : 'text-slate-600'}`} />
+            <span className="hidden sm:inline">{t('Mobile Scanner', 'ජංගම ස්කෑනරය')}</span>
+            <span className={`w-2 h-2 rounded-full ${isMobileScannerConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`}></span>
           </button>
-          <button 
-            onClick={() => setIsSinhala(true)} 
-            className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 ${isSinhala ? 'bg-slate-900 text-amber-400 shadow-md border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
-          >
-            🇱🇰 සිංහල
-          </button>
+
+          <div className="flex gap-1 bg-slate-100/60 p-1.5 rounded-2xl w-fit border border-slate-200/40">
+            <button 
+              onClick={() => setIsSinhala(false)} 
+              className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 ${!isSinhala ? 'bg-slate-900 text-amber-400 shadow-md border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
+            >
+              🇺🇸 English
+            </button>
+            <button 
+              onClick={() => setIsSinhala(true)} 
+              className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 ${isSinhala ? 'bg-slate-900 text-amber-400 shadow-md border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
+            >
+              🇱🇰 සිංහල
+            </button>
+          </div>
         </div>
       </div>
 
@@ -7292,6 +7483,208 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new' 
                 {t('Close Preview', 'වසා දමන්න')}
               </button>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Wireless Mobile Scanner Pairing Modal */}
+      {showMobileScannerModal && (
+        <Modal 
+          isOpen={showMobileScannerModal} 
+          onClose={() => setShowMobileScannerModal(false)} 
+          title={t('📱 Wireless Mobile Barcode Scanner Pairing', '📱 රැහැන් රහිත ජංගම බාර්කෝඩ් ස්කෑනර් සම්බන්ධතාවය')}
+        >
+          <div className="space-y-5 p-2 text-left max-w-xl mx-auto">
+            {/* Header Banner */}
+            <div className="bg-slate-900 text-white p-4 rounded-2xl border border-slate-800 flex justify-between items-center gap-3">
+              <div>
+                <h4 className="text-xs font-black text-amber-400 uppercase tracking-widest flex items-center gap-2">
+                  <WifiIcon className="w-4 h-4 text-amber-400" />
+                  {t('Local Wi-Fi POS Signaling Server', 'දේශීය Wi-Fi සංඥා සේවාදායකය')}
+                </h4>
+                <p className="text-[11px] text-slate-300 font-medium mt-0.5">
+                  {t('Stream phone camera barcode scans instantly into this POS cart.', 'ස්මාර්ට්ෆෝන් කැමරාවෙන් ස්කෑන් කරන බාර්කෝඩ් සෘජුවම POS කාට් එකට ඇතුළත් කරන්න.')}
+                </p>
+              </div>
+              <div className="flex flex-col items-end">
+                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${isMobileScannerConnected ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'}`}>
+                  <span className={`w-2 h-2 rounded-full ${isMobileScannerConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+                  {isMobileScannerConnected
+                    ? (connectedDevicesCount > 1
+                        ? t(`${connectedDevicesCount} Devices Connected`, `උපාංග ${connectedDevicesCount}ක් සම්බන්ධයි`)
+                        : t('1 Device Connected', 'උපාංග 1ක් සම්බන්ධයි'))
+                    : t('Waiting for connection...', 'සම්බන්ධ වෙමින්...')}
+                </span>
+                <span className="text-[9px] font-mono text-slate-400 mt-1">Session: {scannerSessionId}</span>
+              </div>
+            </div>
+
+            {/* QR Code & Direct Access Section */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 items-center bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+              {/* QR Code Card */}
+              <div className="flex flex-col items-center justify-center p-3 bg-slate-50 border border-slate-200 rounded-2xl">
+                <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-inner">
+                  <QRCodeSVG 
+                    value={mobileScannerUrl} 
+                    size={170} 
+                    level="H" 
+                    includeMargin={false}
+                  />
+                </div>
+                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-2">
+                  {t('Scan with Phone Camera', 'දුරකථන කැමරාවෙන් ස්කෑන් කරන්න')}
+                </span>
+              </div>
+
+              {/* Step-by-Step Instructions & IP Switcher */}
+              <div className="space-y-3 text-xs">
+                {localScannerInfo?.ips && localScannerInfo.ips.length > 1 && (
+                  <div>
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1">
+                      {t('Select Host Network Interface / IP:', 'ජාල අතුරුමුහුණත තෝරන්න:')}
+                    </label>
+                    <select
+                      value={selectedScannerIp}
+                      onChange={(e) => setSelectedScannerIp(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                    >
+                      {localScannerInfo.ips.map((adapter, idx) => (
+                        <option key={idx} value={adapter.address}>
+                          {adapter.isWifi ? '📶 ' : '🌐 '} {adapter.name}: {adapter.address}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div className="space-y-2 text-slate-700">
+                  <div className="flex items-start gap-2">
+                    <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-black text-[10px] shrink-0">1</span>
+                    <p className="font-semibold text-[11px] leading-tight">
+                      {t('Connect your smartphone to the same Wi-Fi / Local Network.', 'ස්මාර්ට්ෆෝනය මෙම පරිගණකය ඇති Wi-Fi ජාලයටම සම්බන්ධ කරන්න.')}
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-black text-[10px] shrink-0">2</span>
+                    <p className="font-semibold text-[11px] leading-tight">
+                      {t('Scan the QR code or open the link below on your phone.', 'QR කේතය ස්කෑන් කරන්න හෝ පහත ලින්ක් එක දුරකථනයෙන් විවෘත කරන්න.')}
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-black text-[10px] shrink-0">3</span>
+                    <p className="font-semibold text-[11px] leading-tight">
+                      {t('Point camera at barcodes — items are added to POS automatically!', 'කැමරාව බාර්කෝඩ් වෙත යොමු කරන්න — භාණ්ඩ ස්වයංක්‍රීයව POS කාට් එකට එකතු වේ!')}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Direct Link Copy Button */}
+                <div className="pt-1">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={mobileScannerUrl}
+                      className="w-full px-2.5 py-1.5 bg-slate-100 border border-slate-200 rounded-lg text-[10px] font-mono text-slate-700 select-all outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(mobileScannerUrl);
+                        setCopiedScannerUrl(true);
+                        setTimeout(() => setCopiedScannerUrl(false), 2000);
+                      }}
+                      className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-amber-400 rounded-lg text-[10px] font-black uppercase tracking-wider flex items-center gap-1 shrink-0 transition-all"
+                    >
+                      {copiedScannerUrl ? <CheckIcon className="w-3.5 h-3.5 text-emerald-400" /> : <CopyIcon className="w-3.5 h-3.5" />}
+                      {copiedScannerUrl ? t('Copied', 'පිටපත් කළා') : t('Copy', 'පිටපත්')}
+                    </button>
+                    <a
+                      href={mobileScannerUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg shrink-0 transition-colors"
+                      title={t('Open in browser tab', 'නව ටැබ් එකක විවෘත කරන්න')}
+                    >
+                      <ExternalLinkIcon className="w-3.5 h-3.5" />
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Test Simulation Tool & Recent Scans Feed */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                  {t('Desktop Barcode Simulator / Manual Test', 'ඩෙස්ක්ටොප් බාර්කෝඩ් පරික්ෂාව')}
+                </span>
+                <span className="text-[9px] text-slate-400 font-mono">
+                  {recentScans.length} {t('live scan(s)', 'සජීවී ස්කෑන්')}
+                </span>
+              </div>
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={simulateBarcodeInput}
+                  onChange={(e) => setSimulateBarcodeInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && simulateBarcodeInput.trim()) {
+                      handleBarcodeScanned(simulateBarcodeInput.trim(), 'manual');
+                      setSimulateBarcodeInput('');
+                    }
+                  }}
+                  placeholder={t('Enter product barcode or SKU to test...', 'පරීක්ෂා කිරීමට බාර්කෝඩ් හෝ SKU ඇතුළත් කරන්න...')}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (simulateBarcodeInput.trim()) {
+                      handleBarcodeScanned(simulateBarcodeInput.trim(), 'manual');
+                      setSimulateBarcodeInput('');
+                    }
+                  }}
+                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-sm shrink-0"
+                >
+                  {t('Simulate Scan', 'පරීක්ෂා කරන්න')}
+                </button>
+              </div>
+
+              {/* Recent Scan History */}
+              {recentScans.length > 0 && (
+                <div className="space-y-1 pt-1">
+                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">
+                    {t('Recent Live Scans Feed:', 'මෑතකදී ස්කෑන් කළ බාර්කෝඩ්:')}
+                  </span>
+                  <div className="max-h-28 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                    {recentScans.slice(0, 5).map((scan, sIdx) => (
+                      <div key={sIdx} className="bg-white border border-slate-200 rounded-lg p-2 flex justify-between items-center text-xs font-bold text-slate-800">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded font-mono font-bold">
+                            {scan.format || 'SCAN'}
+                          </span>
+                          <span className="font-mono text-slate-900">{scan.barcode}</span>
+                        </div>
+                        <span className="text-[9px] text-slate-400 font-normal">
+                          {new Date(scan.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer close button */}
+            <button
+              type="button"
+              onClick={() => setShowMobileScannerModal(false)}
+              className="w-full py-3 bg-slate-100 hover:bg-slate-200 active:scale-[0.99] text-slate-700 font-black text-xs uppercase tracking-widest rounded-xl transition-all"
+            >
+              {t('Done / Keep Listening in Background', 'අවසන් / පසුබිමේ සක්‍රියව තබන්න')}
+            </button>
           </div>
         </Modal>
       )}
