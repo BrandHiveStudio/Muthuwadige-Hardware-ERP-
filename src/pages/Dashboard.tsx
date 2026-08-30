@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabaseClient';
 import { API_URL } from '../lib/api';
 import { formatStock } from '../utils/formatters';
 import { openExternalUrl, formatWhatsAppUrl } from '../utils/openExternalUrl';
-import { calculateNetSalesRevenue, calculateNetCOGS, calculateGrossProfit, calculateSaleAccounting } from '../utils/accounting';
+import { calculateNetSalesRevenue, calculateNetCOGS, calculateGrossProfit, calculateSaleAccounting, getItemUnitCost } from '../utils/accounting';
 import {
   ShoppingCartIcon,
   AlertTriangleIcon,
@@ -42,37 +42,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   // Hardcode symbol to Rs.
   const symbol = 'Rs.';
 
-  const getItemUnitCost = (product: any, itemUnit?: string, itemConvRate?: number, itemCostOverride?: number): number => {
-    const snapshotCost = Number(itemCostOverride !== undefined && itemCostOverride !== null ? itemCostOverride : 0);
-    if (snapshotCost > 0) return snapshotCost;
-    if (!product) return 0;
-    const baseCost = Number(product.cost_price !== undefined ? product.cost_price : product.costPrice !== undefined ? product.costPrice : 0);
-    let conversionRate = Number(itemConvRate) || 1;
 
-    if ((!itemConvRate || conversionRate === 1) && itemUnit && (product.unit && itemUnit.toLowerCase() !== product.unit.toLowerCase())) {
-      const measureDetailsStr = product.measure_details || product.measureDetails;
-      if (measureDetailsStr) {
-        try {
-          const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
-          if (parsed && Array.isArray(parsed.conversions)) {
-            const matchedConv = parsed.conversions.find((c: any) => (c.unit || '').toLowerCase() === itemUnit.toLowerCase());
-            if (matchedConv) {
-              const rawVal = Number(matchedConv.kgVal) || 1;
-              if ((product.unit || '').toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
-                conversionRate = 1 / rawVal;
-              } else {
-                conversionRate = rawVal;
-              }
-            }
-          }
-        } catch (_e) {
-          /* ignore json parse error */
-        }
-      }
-    }
-
-    return conversionRate > 0 ? baseCost / conversionRate : baseCost;
-  };
 
   const getInitialSalesTrend = () => {
     const trend: any[] = [];
@@ -536,7 +506,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       }
 
       // 3. Standardized Net Sales = Gross Sales - Refunds - Discounts + Fees
-      const todayNetReturns = returnedSellingRev - exchangeSellingRev;
+      const todayNetReturns = returnedSellingRev;
       const netSalesToday = calculateNetSalesRevenue(grossSalesToday, totalDiscountsToday, todayNetReturns, totalTransportToday);
       const todayNetCogs = calculateNetCOGS(todayItemCostVal, exchangeCostVal, returnedCostVal);
       const grossProfitToday = calculateGrossProfit(netSalesToday, todayNetCogs);

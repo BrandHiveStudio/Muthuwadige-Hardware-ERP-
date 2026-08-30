@@ -33,9 +33,10 @@ import XLSX from 'xlsx-js-style';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { supabase } from '../lib/supabaseClient';
-import { calculateSaleAccounting, isCreditSaleRecord, calculateNetSalesRevenue, calculateNetCOGS, calculateGrossProfit } from '../utils/accounting';
+import { calculateSaleAccounting, isCreditSaleRecord, calculateNetSalesRevenue, calculateNetCOGS, calculateGrossProfit, getItemUnitCost } from '../utils/accounting';
 import { useCurrency } from '../context/CurrencyContext';
 import { formatStock } from '../utils/formatters';
+
 const isDecimalUnit = (unit: string | undefined): boolean => {
   if (!unit) return false;
   const PREDEFINED_UNITS = ['pcs', 'kg', 'g', 'liters', 'ml', 'meters', 'boxes', 'packets', 'rolls', 'bundles'];
@@ -74,36 +75,6 @@ const safeGetDateString = (dateVal: any): string => {
     }
     return '';
   }
-};
-
-const getItemUnitCost = (product: any, itemUnit?: string, itemConvRate?: number, itemCostOverride?: number): number => {
-  const snapshotCost = Number(itemCostOverride !== undefined && itemCostOverride !== null ? itemCostOverride : 0);
-  if (snapshotCost > 0) return snapshotCost;
-  if (!product) return 0;
-  const baseCost = Number(product.cost_price !== undefined ? product.cost_price : product.costPrice !== undefined ? product.costPrice : 0);
-  let conversionRate = Number(itemConvRate) || 1;
-
-  if ((!itemConvRate || conversionRate === 1) && itemUnit && (product.unit && itemUnit.toLowerCase() !== product.unit.toLowerCase())) {
-    const measureDetailsStr = product.measure_details || product.measureDetails;
-    if (measureDetailsStr) {
-      try {
-        const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
-        if (parsed && Array.isArray(parsed.conversions)) {
-          const matchedConv = parsed.conversions.find((c: any) => (c.unit || '').toLowerCase() === itemUnit.toLowerCase());
-          if (matchedConv) {
-            const rawVal = Number(matchedConv.kgVal) || 1;
-            if ((product.unit || '').toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
-              conversionRate = 1 / rawVal;
-            } else {
-              conversionRate = rawVal;
-            }
-          }
-        }
-      } catch (e) {}
-    }
-  }
-
-  return conversionRate > 0 ? baseCost / conversionRate : baseCost;
 };
 
 type Tab = 'sales' | 'inventory' | 'financial';
@@ -372,7 +343,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     return sum + exAmt;
   }, 0);
 
-  const totalSalesRevenue = Math.max(0, grossSalesSellingRevenue + exchangeSellingRevenue - returnsSellingRevenue);
+  const totalSalesRevenue = Math.max(0, grossSalesSellingRevenue - returnsSellingRevenue);
   const paidOrders = filteredSales.filter(o => {
     if (o.status === 'cancelled' || o.status === 'Cancelled') return false;
     const rem = Math.max(0, Number(o.total_amount !== undefined ? o.total_amount : (o.total || 0)) - Number(o.payment_received || 0));
@@ -411,8 +382,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
         day === 'Fri' ? 'සිකු' : 'සෙන'
       ) : day;
       const retVal = getReturnSellingSubtotal(ret);
-      const exVal = Number(ret.exchange_amount !== undefined ? ret.exchange_amount : (ret.exchangeAmount || 0));
-      map[dayLabel] = (map[dayLabel] || 0) + (exVal - retVal);
+      map[dayLabel] = (map[dayLabel] || 0) - retVal;
     });
 
     const daysOrder = isSinhala 
@@ -636,8 +606,8 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       }
     });
 
-    const netReturns = returnedSellingRev - exchangeSellingRev;
-    const netSellingRev = calculateNetSalesRevenue(grossStickerSales, customerDiscounts, netReturns, transportFees);
+    const salesReturnsVal = returnedSellingRev;
+    const netSellingRev = calculateNetSalesRevenue(grossStickerSales, customerDiscounts, salesReturnsVal, transportFees);
     const netCOGS = calculateNetCOGS(salesCOGS, exchangeCostVal, returnsCOGS);
     const grossProfit = calculateGrossProfit(netSellingRev, netCOGS);
     const grossMarginPct = netSellingRev > 0 ? (grossProfit / netSellingRev) * 100 : 0;
@@ -645,7 +615,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     return {
       grossStickerSales,
       customerDiscounts,
-      salesReturnsRefunds: netReturns,
+      salesReturnsRefunds: salesReturnsVal,
       transportFees,
       grossSalesRevenue: grossStickerSales,
       netSalesRevenue: netSellingRev,
@@ -798,41 +768,92 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     return baselineName;
   };
 
-  const cashierSummary = todaySales.reduce((acc, s) => {
+  const periodSalesReturns = filteredSalesReturns.filter(r => {
+    if (!fromDate && !toDate && rangeType === 'custom') {
+      const todayStr = getLocalDateString();
+      const retDate = safeGetDateString(r.created_at || r.return_date || r.date);
+      return retDate === todayStr && r.status !== 'voided' && r.status !== 'cancelled';
+    }
+    return r.status !== 'voided' && r.status !== 'cancelled';
+  });
+
+  const cashierSummaryMap: Record<string, { amount: number; txIds: Set<string> }> = {};
+
+  const getCashierEntry = (name: string) => {
+    if (!cashierSummaryMap[name]) {
+      cashierSummaryMap[name] = { amount: 0, txIds: new Set<string>() };
+    }
+    return cashierSummaryMap[name];
+  };
+
+  // 1. Process sales payments handled at POS (Cash, Card, Bank, and upfront payments received on credit sales)
+  todaySales.forEach(s => {
     const cashierName = resolveCashierDisplayName(s.cashier || s.user_name || s.user_id, s.user_email, s.user_id);
     const isCredit = isCreditSaleRecord(s);
-    // Realized amount: for non-credit sales count payment/total; for credit sales count cash paid at POS (excludes unpaid credit invoices such as INV004)
+    // Realized payment received at POS (strictly excludes unpaid credit invoice totals)
     const realizedAmt = isCredit
       ? Number(s.payment_received || 0)
       : (s.payment_received !== undefined && s.payment_received !== null && Number(s.payment_received) > 0
           ? Number(s.payment_received)
           : Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0)));
 
-    if (acc[cashierName]) {
-      acc[cashierName].amount += realizedAmt;
-      acc[cashierName].count += 1;
-    } else {
-      acc[cashierName] = { amount: realizedAmt, count: 1 };
-    }
-    return acc;
-  }, {} as Record<string, { amount: number; count: number }>);
-
-  // Add credit debt repayments / settlements collected during shift
-  periodCreditPayments.forEach(cp => {
-    const cashierName = resolveCashierDisplayName(cp.recorded_by || cp.created_by || cp.cashier, cp.user_email, cp.user_id);
-    const payAmt = Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0));
-    if (cashierSummary[cashierName]) {
-      cashierSummary[cashierName].amount += payAmt;
-      cashierSummary[cashierName].count += 1;
-    } else {
-      cashierSummary[cashierName] = { amount: payAmt, count: 1 };
+    if (realizedAmt > 0) {
+      const entry = getCashierEntry(cashierName);
+      entry.amount += realizedAmt;
+      entry.txIds.add(s.id || s.invoice_no || `sale_${s.created_at}`);
     }
   });
 
-  const cashierSummaryArray = Object.keys(cashierSummary).map(name => ({
+  // 2. Debt settlements / Credit repayments collected by this cashier during shift
+  periodCreditPayments.forEach(cp => {
+    const cashierName = resolveCashierDisplayName(cp.recorded_by || cp.created_by || cp.cashier, cp.user_email, cp.user_id);
+    const payAmt = Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0));
+    if (payAmt > 0) {
+      const entry = getCashierEntry(cashierName);
+      entry.amount += payAmt;
+      entry.txIds.add(cp.id || `cp_${cp.invoice_no || cp.sale_id}_${cp.payment_date || cp.created_at}`);
+    }
+  });
+
+  // 3. Exchange payments collected & cash refunds paid out by cashier
+  periodSalesReturns.forEach(r => {
+    const cashierName = resolveCashierDisplayName(r.cashier || r.user_name || r.user_id, r.user_email, r.user_id);
+    const type = (r.return_type || r.returnType || r.returnMethod || r.return_method || r.type || '').toString().toLowerCase().trim();
+    const isCredit = r.isCredit === true || (r as any).is_credit === 1 || (r as any).is_credit === true;
+
+    if (type === 'exchange') {
+      const paidAmt = Number(r.customer_paid !== undefined ? r.customer_paid : (r.customerPaid !== undefined ? r.customerPaid : 0));
+      const changeGiven = Number(r.change_given !== undefined ? r.change_given : (r.changeGiven !== undefined ? r.changeGiven : 0));
+      const netPaid = Math.max(0, paidAmt - changeGiven);
+      if (netPaid > 0) {
+        const entry = getCashierEntry(cashierName);
+        entry.amount += netPaid;
+        entry.txIds.add(r.id || `ex_${r.return_no || r.invoice_no}`);
+      }
+      const exRefund = getExchangeRefundAmount(r);
+      if (exRefund > 0 && !isCredit) {
+        const entry = getCashierEntry(cashierName);
+        entry.amount = Math.max(0, entry.amount - exRefund);
+        entry.txIds.add(r.id || `ref_${r.return_no || r.invoice_no}`);
+      }
+    } else if (!isCredit && (type === 'cash refund' || type === 'cash' || type === 'cash_refund')) {
+      const refundAmt = Number(r.refund_amount !== undefined && r.refund_amount !== null && Number(r.refund_amount) > 0
+        ? r.refund_amount
+        : (r.total_refunded !== undefined && r.total_refunded !== null && Number(r.total_refunded) > 0
+          ? r.total_refunded
+          : (r.return_amount !== undefined ? r.return_amount : (r.returnAmount || 0))));
+      if (refundAmt > 0) {
+        const entry = getCashierEntry(cashierName);
+        entry.amount = Math.max(0, entry.amount - refundAmt);
+        entry.txIds.add(r.id || `ref_${r.return_no || r.invoice_no}`);
+      }
+    }
+  });
+
+  const cashierSummaryArray = Object.keys(cashierSummaryMap).map(name => ({
     name,
-    amount: cashierSummary[name].amount,
-    count: cashierSummary[name].count
+    amount: Math.round(cashierSummaryMap[name].amount * 100) / 100,
+    count: cashierSummaryMap[name].txIds.size
   }));
 
   const categoryMargins = products.reduce((acc: any[], prod) => {

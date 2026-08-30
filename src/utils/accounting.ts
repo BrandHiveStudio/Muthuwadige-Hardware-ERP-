@@ -112,3 +112,56 @@ export function calculateGrossProfit(netSalesRevenue: number, netCOGS: number): 
   const cogs = Number(netCOGS || 0);
   return Math.round((rev - cogs) * 100) / 100;
 }
+
+/**
+ * Calculates Unit Cost for a line item based on Base Product Cost and Unit Conversion Rate
+ * - Base Unit (e.g. 1 Cube): uses baseCost directly (Rs. 2,000.00)
+ * - Sub-Unit (e.g. Bucket where 1 Cube = 506 Buckets): unitCost = baseCost / conversionRate (2000 / 506 = Rs. 3.95)
+ */
+export function getItemUnitCost(
+  product: any,
+  itemUnit?: string,
+  itemConvRate?: number,
+  itemCostSnapshot?: number
+): number {
+  const baseCost = product
+    ? Number(product.cost_price !== undefined ? product.cost_price : (product.costPrice !== undefined ? product.costPrice : 0))
+    : Number(itemCostSnapshot || 0);
+
+  let conversionRate = Number(itemConvRate) || 1;
+
+  if ((!itemConvRate || conversionRate === 1) && itemUnit && product && product.unit && itemUnit.toLowerCase() !== product.unit.toLowerCase()) {
+    const measureDetailsStr = product.measure_details || product.measureDetails;
+    if (measureDetailsStr) {
+      try {
+        const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
+        if (parsed && Array.isArray(parsed.conversions)) {
+          const matchedConv = parsed.conversions.find((c: any) => (c.unit || '').toLowerCase() === itemUnit.toLowerCase());
+          if (matchedConv) {
+            const rawVal = Number(matchedConv.kgVal) || 1;
+            if ((product.unit || '').toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
+              conversionRate = 1 / rawVal;
+            } else {
+              conversionRate = rawVal;
+            }
+          }
+        }
+      } catch (_e) {}
+    }
+  }
+
+  const snapshotCost = Number(itemCostSnapshot !== undefined && itemCostSnapshot !== null ? itemCostSnapshot : 0);
+  if (snapshotCost > 0) {
+    if (conversionRate > 1 && snapshotCost > (baseCost / conversionRate) + 0.01 && baseCost > 0) {
+      return baseCost / conversionRate;
+    }
+    if (conversionRate > 1 && snapshotCost <= (baseCost / conversionRate) + 0.01) {
+      return snapshotCost;
+    }
+    if (conversionRate <= 1) {
+      return snapshotCost;
+    }
+  }
+
+  return conversionRate > 0 ? baseCost / conversionRate : baseCost;
+}

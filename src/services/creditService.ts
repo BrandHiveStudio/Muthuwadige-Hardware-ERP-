@@ -110,33 +110,12 @@ export async function recordCreditSettlement(
     notes: payload.notes || `Credit settlement for invoice ${invNo}`
   };
 
-  // 1. Insert into credit_payments (or credit_settlements)
+  // 1. Insert into credit_payments (which automatically and atomically records the ledger transaction in server.js)
   const cpRes = await supabase.from('credit_payments').insert([settlementRecord]);
 
-  // 2. Also ensure financial transactions log uses authorName
-  const txRecord = {
-    id: 'tx_cs_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
-    type: 'income',
-    category: isPartial
-      ? 'Sales Income (Partial Credit Settlement)'
-      : 'Sales Income (Credit Settlement)',
-    description: isPartial
-      ? `Partial Credit Payment for Invoice ${invNo} (${payload.customer_name || 'Customer'})`
-      : `Credit Settlement for Invoice ${invNo} (${payload.customer_name || 'Customer'})`,
-    amount: amount,
-    date: dateOnly,
-    reference: invNo,
-    user_id: authorName,
-    created_by: authorName,
-    created_at: createdAt
-  };
-
-  const txRes = await supabase.from('transactions').insert([txRecord]);
-
   return {
-    success: !cpRes.error && !txRes.error,
+    success: !cpRes.error,
     settlementRecord,
-    transactionRecord: txRecord,
-    error: cpRes.error || txRes.error
+    error: cpRes.error
   };
 }

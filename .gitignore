@@ -26,6 +26,8 @@ dist-ssr
 # Sensitive / Local files
 .env
 hardware.db
+hardware_erp.db
+*.db
 *.db-wal
 *.db-shm
 scratch/

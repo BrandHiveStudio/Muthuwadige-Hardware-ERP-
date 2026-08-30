@@ -669,13 +669,11 @@ async function initializeDatabase() {
         const existingTx = await db.get("SELECT id FROM transactions WHERE reference = ? AND (category LIKE '%Credit Adjustment%' OR category LIKE 'Sales Return%')", [r.invoice_no]);
         if (!existingTx) {
           const retAmt = Number(r.return_amount || 0);
-          const exAmt = Number(r.exchange_amount || 0);
-          const netReturnVal = Math.max(0, retAmt - exAmt);
-          if (netReturnVal > 0) {
+          if (retAmt > 0) {
             const txId = 't_sr_bf_' + (r.id || Date.now());
             await db.run(
               'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-              [txId, 'contra_revenue', 'Sales Return (Credit Adjustment)', `Credit Return Revenue Adjustment for ${r.invoice_no}`, netReturnVal, new Date(r.created_at || Date.now()).toLocaleDateString('sv-SE'), r.invoice_no, r.user_id || 'system']
+              [txId, 'contra_revenue', 'Sales Return (Credit Adjustment)', `Credit Return Revenue Adjustment for ${r.invoice_no}`, retAmt, new Date(r.created_at || Date.now()).toLocaleDateString('sv-SE'), r.invoice_no, r.user_id || 'system']
             );
           }
         }
@@ -894,6 +892,7 @@ async function initializeDatabase() {
   try { await db.exec('ALTER TABLE sales ADD COLUMN user_name TEXT;'); } catch (_) {}
   try { await db.exec('ALTER TABLE credit_payments ADD COLUMN cashier TEXT;'); } catch (_) {}
   try { await db.exec('ALTER TABLE credit_payments ADD COLUMN user_email TEXT;'); } catch (_) {}
+  try { await db.exec('ALTER TABLE sales_returns ADD COLUMN cashier TEXT;'); } catch (_) {}
 
   // Dynamic migration: Ensure new columns exist on existing DB files
   try {
@@ -1129,6 +1128,86 @@ async function initializeDatabase() {
   try { await db.exec("ALTER TABLE profiles ADD COLUMN custom_permissions TEXT"); } catch(e) {}
 
   await seedInitialData();
+
+  // Recalculate historical sales line item COGS snapshots for sub-unit conversions (e.g. INV003 1 Cube = 2000, INV004 Buckets = 3.95/bucket)
+  try {
+    const allSales = await db.all('SELECT id, invoice_no, items FROM sales');
+    const allProducts = await db.all('SELECT id, name, unit, cost_price, measure_details FROM products');
+    const prodMap = new Map((allProducts || []).map(p => [p.id, p]));
+
+    for (const sale of (allSales || [])) {
+      try {
+        if (!sale || !sale.items) continue;
+        let items = [];
+        if (typeof sale.items === 'string') {
+          try {
+            items = JSON.parse(sale.items);
+          } catch (pe) {
+            continue;
+          }
+        } else if (Array.isArray(sale.items)) {
+          items = sale.items;
+        } else {
+          continue;
+        }
+
+        if (!Array.isArray(items) || items.length === 0) continue;
+
+        let changed = false;
+        const updatedItems = items.map(item => {
+          if (!item) return item;
+          const prod = prodMap.get(item.productId || item.product_id) || Array.from(prodMap.values()).find(p => p && p.name === item.productName);
+          const baseCost = prod ? Number(prod.cost_price !== undefined ? prod.cost_price : (prod.costPrice || 0)) : 0;
+          let convRate = Number(item.conversionRate) || 1;
+          const itemUnit = (item.unit || '').toLowerCase().trim();
+          const prodUnit = prod ? (prod.unit || '').toLowerCase().trim() : '';
+
+          if ((!item.conversionRate || convRate === 1) && itemUnit && prodUnit && itemUnit !== prodUnit && prod) {
+            const detailsStr = prod.measure_details;
+            if (detailsStr) {
+              try {
+                const parsed = typeof detailsStr === 'string' ? JSON.parse(detailsStr) : detailsStr;
+                if (parsed && Array.isArray(parsed.conversions)) {
+                  const matched = parsed.conversions.find(c => (c.unit || '').toLowerCase().trim() === itemUnit);
+                  if (matched) {
+                    const rawVal = Number(matched.kgVal) || 1;
+                    convRate = (prodUnit === 'cube' && rawVal > 0 && rawVal < 1) ? (1 / rawVal) : rawVal;
+                  }
+                }
+              } catch (e) {}
+            }
+          }
+
+          const unitCost = convRate > 0 ? (baseCost / convRate) : baseCost;
+          const lineCogs = unitCost * Number(item.qty || 0);
+
+          if (item.cost_price !== unitCost || item.costPrice !== unitCost || item.conversionRate !== convRate || item.unit_cost !== unitCost) {
+            changed = true;
+          }
+
+          return {
+            ...item,
+            conversionRate: convRate,
+            base_cost_price: baseCost,
+            unit_cost: unitCost,
+            cost_price: unitCost,
+            costPrice: unitCost,
+            cogs_amount: lineCogs
+          };
+        });
+
+        if (changed) {
+          await db.run('UPDATE sales SET items = ? WHERE id = ?', [JSON.stringify(updatedItems), sale.id]);
+        }
+      } catch (rowErr) {
+        console.error(`[Startup] Error recalculating historical sale ${sale?.invoice_no || sale?.id}:`, rowErr.message);
+      }
+    }
+  } catch (err) {
+    console.error('[Startup] Failed to recalculate historical sales COGS:', err.message);
+  }
+
+  console.log('✅ SQLite database has been sanitized, created required tables, and seeded initial settings.');
 }
 
 async function seedInitialData() {
@@ -1197,6 +1276,7 @@ async function seedInitialData() {
       const existingRows = await db.all('SELECT * FROM custom_permissions');
       for (const row of existingRows) {
         try {
+          if (!row.pages || typeof row.pages !== 'string') continue;
           let pages = JSON.parse(row.pages);
           if (Array.isArray(pages)) {
             let updated = false;
@@ -1216,8 +1296,6 @@ async function seedInitialData() {
   } catch (err) {
     console.error('[Startup] Failed to seed custom permissions:', err.message);
   }
-
-  console.log('✅ SQLite database has been sanitized, created required tables, and seeded initial settings.');
 }
 
 // ----------------------------------------------------
@@ -2134,27 +2212,58 @@ app.post('/api/sales', async (req, res) => {
       await db.run('UPDATE system_settings SET next_invoice_number = ? WHERE id = ?', [nextInv, 'global']);
     }
 
-    // Phase 2A Historical Cost Snapshot Protection: batch fetch products with cost_price before sale insertion
+    // Phase 2A Historical Cost Snapshot Protection: batch fetch products with cost_price, unit, measure_details before sale insertion
     const rawItemsArr = Array.isArray(s.items) ? s.items : [];
     const productIds = rawItemsArr.map(item => item.productId || item.product_id).filter(Boolean);
     const placeholders = productIds.map(() => '?').join(',');
     const productsMap = new Map();
     if (productIds.length > 0) {
-      const products = await db.all(`SELECT id, stock, name, cost_price FROM products WHERE id IN (${placeholders})`, productIds);
+      const products = await db.all(`SELECT id, stock, name, cost_price, unit, measure_details FROM products WHERE id IN (${placeholders})`, productIds);
       products.forEach(p => productsMap.set(p.id, p));
     }
 
     const enrichedItems = rawItemsArr.map(item => {
       const prod = productsMap.get(item.productId || item.product_id);
-      const snapshotCostPrice = Number(
-        item.cost_price !== undefined && item.cost_price !== null ? item.cost_price :
-        (item.costPrice !== undefined && item.costPrice !== null ? item.costPrice :
-        (prod ? (prod.cost_price !== undefined ? prod.cost_price : 0) : 0))
-      );
+      const baseCostPrice = prod ? Number(prod.cost_price !== undefined ? prod.cost_price : (prod.costPrice || 0)) : 0;
+      
+      let convRate = Number(item.conversionRate) || 1;
+      const itemUnit = (item.unit || '').toLowerCase().trim();
+      const prodUnit = prod ? (prod.unit || '').toLowerCase().trim() : '';
+
+      if ((!item.conversionRate || convRate === 1) && itemUnit && prodUnit && itemUnit !== prodUnit && prod) {
+        const measureDetailsStr = prod.measure_details || prod.measureDetails;
+        if (measureDetailsStr) {
+          try {
+            const parsed = typeof measureDetailsStr === 'string' ? JSON.parse(measureDetailsStr) : measureDetailsStr;
+            if (parsed && Array.isArray(parsed.conversions)) {
+              const matchedConv = parsed.conversions.find(c => (c.unit || '').toLowerCase().trim() === itemUnit);
+              if (matchedConv) {
+                const rawVal = Number(matchedConv.kgVal) || 1;
+                if (prodUnit === 'cube' && rawVal > 0 && rawVal < 1) {
+                  convRate = 1 / rawVal;
+                } else {
+                  convRate = rawVal;
+                }
+              }
+            }
+          } catch (e) {}
+        }
+      }
+
+      // Unit Cost Calculation:
+      // Base Unit (e.g. 1 Cube): unit_cost = baseCostPrice (Rs. 2,000.00)
+      // Sub-Unit (e.g. Bucket where 1 Cube = 506 Buckets): unit_cost = baseCostPrice / convRate (2000 / 506 = Rs. 3.95)
+      const unitCost = convRate > 0 ? (baseCostPrice / convRate) : baseCostPrice;
+      const lineCogs = unitCost * Number(item.qty || 0);
+
       return {
         ...item,
-        cost_price: snapshotCostPrice,
-        costPrice: snapshotCostPrice
+        conversionRate: convRate,
+        base_cost_price: baseCostPrice,
+        unit_cost: unitCost,
+        cost_price: unitCost,
+        costPrice: unitCost,
+        cogs_amount: lineCogs
       };
     });
 
@@ -2466,6 +2575,7 @@ const handleCreditPaymentInsert = async (req, res) => {
     );
 
     // Phase 2B Unified Accounting: Log transaction for credit repayments to reflect cash inflow in Finance page
+    // Ensure debt settlement transactions are recorded exactly once in the accounting ledger table
     if (amountPaid > 0) {
       const txId = 'tx_cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
       const txDate = (paymentDate || createdAt).substring(0, 10);
@@ -2475,10 +2585,17 @@ const handleCreditPaymentInsert = async (req, res) => {
         ? `Partial Credit Payment for Invoice #${invoiceNo} (${p.customer_name || 'Customer'})`
         : `Credit Settlement for Invoice #${invoiceNo} (${p.customer_name || 'Customer'})`;
 
-      await db.run(
-        'INSERT INTO transactions (id, date, description, amount, type, category, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [txId, txDate, description, amountPaid, 'income', category, invoiceNo, authorName, createdAt]
-      ).catch(e => console.error('Error logging credit repayment transaction:', e));
+      const existingTx = await db.get(
+        'SELECT id FROM transactions WHERE reference = ? AND (category LIKE ? OR category LIKE ?) AND amount = ? AND date = ?',
+        [invoiceNo, '%Credit Settlement%', '%Credit Payment%', amountPaid, txDate]
+      );
+
+      if (!existingTx) {
+        await db.run(
+          'INSERT INTO transactions (id, date, description, amount, type, category, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [txId, txDate, description, amountPaid, 'income', category, invoiceNo, authorName, createdAt]
+        ).catch(e => console.error('Error logging credit repayment transaction:', e));
+      }
     }
 
     res.json({ success: true, id, authorName });
@@ -2489,8 +2606,18 @@ const handleCreditPaymentInsert = async (req, res) => {
 
 app.post('/api/credit_payments', handleCreditPaymentInsert);
 app.post('/api/credit_settlements', handleCreditPaymentInsert);
+app.post('/api/credit-settlements', handleCreditPaymentInsert);
 
 app.get('/api/credit_settlements', async (req, res) => {
+  try {
+    const records = await db.all('SELECT * FROM credit_payments ORDER BY payment_date DESC');
+    res.json(records || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/credit-settlements', async (req, res) => {
   try {
     const records = await db.all('SELECT * FROM credit_payments ORDER BY payment_date DESC');
     res.json(records || []);
@@ -2842,14 +2969,13 @@ app.post('/api/sales/returns', async (req, res) => {
 
     // 6. Log financial transactions & revenue adjustments
     if (isCreditCustomer) {
-      const netReturnVal = calcReturnAmount - calcExchangeAmount;
-      if (netReturnVal > 0) {
-        // Credit sale return/exchange where returned value > exchange value:
-        // Log contra_revenue to decrease Total Revenue by netReturnVal
+      if (calcReturnAmount > 0) {
+        // Credit sale return/exchange:
+        // Log contra_revenue to decrease Total Revenue by calcReturnAmount (returned items value)
         const txId = 't_' + Date.now();
         await db.run(
           'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [txId, 'contra_revenue', 'Sales Return (Credit Adjustment)', `Credit Return Revenue Adjustment for ${invoiceNo}`, netReturnVal, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+          [txId, 'contra_revenue', 'Sales Return (Credit Adjustment)', `Credit Return Revenue Adjustment for ${invoiceNo}`, calcReturnAmount, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
         );
       }
       if (finalCustomerPaid > 0) {
@@ -2861,26 +2987,21 @@ app.post('/api/sales/returns', async (req, res) => {
       }
     } else {
       // Non-credit (Cash / Normal Sale Return)
-      if (finalReturnMethod === 'Cash Refund' && finalTotalRefunded > 0) {
+      if (calcReturnAmount > 0) {
         const txId = 't_' + Date.now();
+        const retCategory = finalReturnMethod === 'Exchange' ? 'Sales Return' : (finalReturnMethod === 'Credit Note' ? 'Sales Return (Credit Note)' : 'Sales Return');
+        const retDesc = finalReturnMethod === 'Exchange' ? `Exchange Return for ${invoiceNo}` : `Sales Return Refund for ${invoiceNo}`;
         await db.run(
           'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [txId, 'contra_revenue', 'Sales Return', `Sales Return Refund for ${invoiceNo}`, finalTotalRefunded, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+          [txId, 'contra_revenue', retCategory, retDesc, calcReturnAmount, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
         );
-      } else if (finalReturnMethod === 'Exchange') {
-        if (finalCustomerPaid > 0) {
-          const txId = 't_' + Date.now();
-          await db.run(
-            'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-            [txId, 'income', 'Exchange Payment', `Exchange Balance Payment for ${invoiceNo}`, finalCustomerPaid - finalChangeGiven, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
-          );
-        } else if (finalTotalRefunded > 0) {
-          const txId = 't_' + Date.now();
-          await db.run(
-            'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-            [txId, 'contra_revenue', 'Exchange Refund', `Exchange Balance Refund for ${invoiceNo}`, finalTotalRefunded, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
-          );
-        }
+      }
+      if (finalReturnMethod === 'Exchange' && finalCustomerPaid > 0) {
+        const txId = 't_' + Date.now() + '_ex';
+        await db.run(
+          'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [txId, 'income', 'Exchange Payment', `Exchange Balance Payment for ${invoiceNo}`, finalCustomerPaid - finalChangeGiven, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+        );
       }
     }
 
@@ -3379,109 +3500,6 @@ app.post('/api/sales/credit-notes/:id/void', async (req, res) => {
     await db.run("UPDATE credit_notes SET status = 'voided' WHERE id = ? OR credit_note_no = ?", [id, id]);
     await logAudit(userEmail || 'system', 'VOID_CREDIT_NOTE', `Voided Credit Note ${id}`);
     res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// CREDIT PAYMENTS & SETTLEMENTS API
-app.get('/api/credit_payments', async (req, res) => {
-  try {
-    const data = await db.all('SELECT * FROM credit_payments ORDER BY created_at DESC');
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/credit-settlements', async (req, res) => {
-  try {
-    const data = await db.all('SELECT * FROM credit_payments ORDER BY created_at DESC');
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/credit_payments/sale/:saleId', async (req, res) => {
-  const { saleId } = req.params;
-  try {
-    const data = await db.all('SELECT * FROM credit_payments WHERE sale_id = ? OR invoice_no = ? ORDER BY created_at DESC', [saleId, saleId]);
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/credit_payments', async (req, res) => {
-  const p = req.body;
-  const id = p.id || 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-  const created_at = p.created_at || new Date().toISOString();
-  const payment_date = p.payment_date || created_at;
-  const author = p.recorded_by || p.created_by || p.cashier || 'Admin';
-
-  try {
-    await db.run(
-      `INSERT INTO credit_payments (
-        id, sale_id, invoice_no, customer_id, customer_name, amount_paid,
-        remaining_balance, payment_method, payment_date, recorded_by, created_by, cashier, user_email, created_at, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        p.sale_id || p.invoice_id || p.invoice_no || 'INV',
-        p.invoice_no || p.invoice_id || 'INV',
-        p.customer_id || null,
-        p.customer_name || null,
-        Number(p.amount_paid !== undefined ? p.amount_paid : (p.amount || 0)),
-        Number(p.remaining_balance || 0),
-        p.payment_method || 'Cash',
-        payment_date,
-        author,
-        author,
-        author,
-        p.user_email || 'admin@hardware.erp',
-        created_at,
-        p.notes || ''
-      ]
-    );
-    res.json({ success: true, id });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/credit-settlements', async (req, res) => {
-  const p = req.body;
-  const id = p.id || 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-  const created_at = p.created_at || new Date().toISOString();
-  const payment_date = p.payment_date || created_at;
-  const author = p.recorded_by || p.created_by || p.cashier || 'Admin';
-
-  try {
-    await db.run(
-      `INSERT INTO credit_payments (
-        id, sale_id, invoice_no, customer_id, customer_name, amount_paid,
-        remaining_balance, payment_method, payment_date, recorded_by, created_by, cashier, user_email, created_at, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        p.sale_id || p.invoice_id || p.invoice_no || 'INV',
-        p.invoice_no || p.invoice_id || 'INV',
-        p.customer_id || null,
-        p.customer_name || null,
-        Number(p.amount_paid !== undefined ? p.amount_paid : (p.amount || 0)),
-        Number(p.remaining_balance || 0),
-        p.payment_method || 'Cash',
-        payment_date,
-        author,
-        author,
-        author,
-        p.user_email || 'admin@hardware.erp',
-        created_at,
-        p.notes || ''
-      ]
-    );
-    res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

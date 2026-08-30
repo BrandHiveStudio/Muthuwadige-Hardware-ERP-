@@ -613,15 +613,13 @@ async function runBackup() {
     const validSales = sales.filter(s => s.status?.toUpperCase() !== 'CANCELLED' && s.status?.toUpperCase() !== 'VOIDED');
 
     const getItemUnitCost = (product, itemUnit, itemConvRate, itemCostSnapshot) => {
-      const snapshotCost = (itemCostSnapshot !== undefined && itemCostSnapshot !== null && !isNaN(Number(itemCostSnapshot)))
-        ? Number(itemCostSnapshot)
-        : null;
-      const baseCost = snapshotCost !== null
-        ? snapshotCost
-        : (product ? Number(product.cost_price !== undefined ? product.cost_price : (product.costPrice !== undefined ? product.costPrice : 0)) : 0);
+      const baseCost = product
+        ? Number(product.cost_price !== undefined ? product.cost_price : (product.costPrice !== undefined ? product.costPrice : 0))
+        : Number(itemCostSnapshot || 0);
+
       let conversionRate = Number(itemConvRate) || 1;
 
-      if ((!itemConvRate || conversionRate === 1) && itemUnit && (product.unit && itemUnit.toLowerCase() !== product.unit.toLowerCase())) {
+      if ((!itemConvRate || conversionRate === 1) && itemUnit && product && product.unit && itemUnit.toLowerCase() !== product.unit.toLowerCase()) {
         const measureDetailsStr = product.measure_details || product.measureDetails;
         if (measureDetailsStr) {
           try {
@@ -638,6 +636,19 @@ async function runBackup() {
               }
             }
           } catch (e) { }
+        }
+      }
+
+      const snapshotCost = Number(itemCostSnapshot !== undefined && itemCostSnapshot !== null ? itemCostSnapshot : 0);
+      if (snapshotCost > 0) {
+        if (conversionRate > 1 && snapshotCost > (baseCost / conversionRate) + 0.01 && baseCost > 0) {
+          return baseCost / conversionRate;
+        }
+        if (conversionRate > 1 && snapshotCost <= (baseCost / conversionRate) + 0.01) {
+          return snapshotCost;
+        }
+        if (conversionRate <= 1) {
+          return snapshotCost;
         }
       }
 
@@ -750,7 +761,7 @@ async function runBackup() {
       }
     });
 
-    const netReturns = returnedSellingRev - exchangeSellingRev;
+    const netReturns = returnedSellingRev;
     const grossSellingRev = grossStickerSales;
     const netSellingRev = Math.max(0, grossStickerSales - customerDiscounts - netReturns + transportFees);
     const netCostVal = Math.max(0, grossCostVal + exchangeCostVal - returnedCostVal);
@@ -874,7 +885,7 @@ async function runBackup() {
       ["Net Sales Revenue", "", "", "", "", "", "", "", ""],
       ["Cost of Goods Sold (COGS)", "", "", "", "", "", "", "", ""],
       ["Gross Profit", "", "", "", "", "", "", "", ""],
-      ["Cash Received", "", "", "", "", "", "", "", ""],
+      ["Total Revenue Collected", "", "", "", "", "", "", "", ""],
       ["Customer Credit Outstanding", "", "", "", "", "", "", "", ""],
       ["Total Purchases", "", "", "", "", "", "", "", ""],
       ["Total Stock Value", "", "", "", "", "", "", "", ""],
