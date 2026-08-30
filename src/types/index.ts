@@ -142,10 +142,12 @@ export type UserRole = 'Admin' | 'Manager' | 'Cashier';
 export interface User {
   id: string;
   name: string;
+  full_name?: string;
   email: string;
   role: UserRole; // Use the type defined above
   avatar: string;
   permissions?: string[] | string;
+  custom_permissions?: string[] | string;
 }
 
 // 3. Ensure PageName includes all your pages and granular permission keys

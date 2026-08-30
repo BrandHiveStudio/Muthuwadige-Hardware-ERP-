@@ -17,7 +17,9 @@ import {
   CAPABILITIES,
   CAPABILITY_CATEGORIES,
   getDefaultRolePermissions,
-  arePermissionsCustomized
+  arePermissionsCustomized,
+  getCustomOverrideCount,
+  hasPermission
 } from '../utils/permissions';
 import { API_URL, fetchWithTimeout } from '../lib/api';
 import type { UserRole } from '../types';
@@ -36,6 +38,9 @@ export function Users() {
   const [showQuotaModal, setShowQuotaModal] = useState(false);
   const [deleteTargetUser, setDeleteTargetUser] = useState<any>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [inspectedUserId, setInspectedUserId] = useState<string>('presets');
+  
+  const inspectedUser = users.find(u => u.id === inspectedUserId);
   
   // Create Form State
   const [formData, setFormData] = useState({
@@ -123,7 +128,8 @@ export function Users() {
         data: {
           full_name: formData.name.trim(),
           role: formData.role,
-          permissions: formData.permissions
+          permissions: formData.permissions,
+          custom_permissions: formData.permissions
         }
       }
     });
@@ -158,12 +164,13 @@ export function Users() {
     const { error } = await supabase.from('profiles').update({
       name: editingUser.name.trim(),
       role: editingUser.role,
-      permissions: editPermissions
+      permissions: editPermissions,
+      custom_permissions: editPermissions
     }).eq('id', editingUser.id);
 
     setIsSaving(false);
     if (!error) {
-      setUsers(users.map(u => u.id === editingUser.id ? { ...editingUser, permissions: editPermissions } : u));
+      setUsers(users.map(u => u.id === editingUser.id ? { ...editingUser, permissions: editPermissions, custom_permissions: editPermissions } : u));
       setShowEditUser(false);
       alert(`User profile & permissions updated successfully for ${editingUser.name}!`);
     } else {
@@ -225,10 +232,17 @@ export function Users() {
 
   const openEditModal = (u: any) => {
     setEditingUser({ ...u });
-    const current = Array.isArray(u.permissions)
-      ? u.permissions
-      : typeof u.permissions === 'string' && u.permissions.trim()
-        ? (() => { try { return JSON.parse(u.permissions); } catch { return getDefaultRolePermissions(u.role); } })()
+    const rawPerms = u.custom_permissions !== undefined ? u.custom_permissions : u.permissions;
+    const current = Array.isArray(rawPerms)
+      ? rawPerms
+      : typeof rawPerms === 'string' && rawPerms.trim()
+        ? (() => {
+            try {
+              return JSON.parse(rawPerms);
+            } catch {
+              return rawPerms.split(',').map((p: string) => p.trim());
+            }
+          })()
         : getDefaultRolePermissions(u.role);
     setEditPermissions(current);
     setShowEditUser(true);
@@ -324,11 +338,20 @@ export function Users() {
                 <tbody className="divide-y divide-slate-100">
                   {users.map(u => {
                     const superAdmin = isSuperAdmin(u);
-                    const isCustomized = !superAdmin && arePermissionsCustomized(u.role, u.permissions);
+                    const userPerms = u.custom_permissions !== undefined ? u.custom_permissions : u.permissions;
+                    const isCustomized = !superAdmin && arePermissionsCustomized(u.role, userPerms);
+                    const overrideCount = getCustomOverrideCount(u.role, userPerms);
                     const roleLabel = u.role ? (u.role.charAt(0).toUpperCase() + u.role.slice(1).toLowerCase()) : 'Cashier';
+                    const isInspected = inspectedUserId === u.id;
 
                     return (
-                      <tr key={u.id} className="hover:bg-slate-50/70 transition-colors group">
+                      <tr 
+                        key={u.id} 
+                        onClick={() => setInspectedUserId(u.id)}
+                        className={`transition-colors group cursor-pointer ${
+                          isInspected ? 'bg-amber-50/60 ring-2 ring-amber-400/80 shadow-sm' : 'hover:bg-slate-50/70'
+                        }`}
+                      >
                         <td className="px-6 py-4 flex items-center gap-3 font-bold text-slate-900">
                           <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm text-white shadow-md ${
                             superAdmin
@@ -345,6 +368,11 @@ export function Users() {
                               {superAdmin && (
                                 <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-purple-100 text-purple-800 border border-purple-200 uppercase">
                                   Root Admin
+                                </span>
+                              )}
+                              {isInspected && (
+                                <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-500 text-slate-900 uppercase">
+                                  Inspecting
                                 </span>
                               )}
                             </div>
@@ -369,8 +397,9 @@ export function Users() {
                               <ShieldIcon className="w-3 h-3 text-purple-600" /> Full Access (Root)
                             </span>
                           ) : isCustomized ? (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-200">
-                              <SlidersHorizontalIcon className="w-3 h-3 text-amber-600" /> Custom Overrides
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-50 text-amber-800 border border-amber-300 shadow-sm" title={`${overrideCount} Granular Capabilities Configured`}>
+                              <SlidersHorizontalIcon className="w-3.5 h-3.5 text-amber-600" />
+                              <span>{overrideCount} Custom Overrides</span>
                             </span>
                           ) : (
                             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-slate-50 text-slate-600 border border-slate-200">
@@ -380,9 +409,31 @@ export function Users() {
                         </td>
                         <td className="px-6 py-4 text-center">
                           <div className="flex items-center justify-center gap-2">
+                            {/* Inspect Live Matrix */}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setInspectedUserId(u.id);
+                                document.getElementById('capability-matrix-section')?.scrollIntoView({ behavior: 'smooth' });
+                              }}
+                              className={`p-2.5 rounded-xl border transition-all shadow-sm cursor-pointer ${
+                                isInspected
+                                  ? 'bg-amber-500 text-slate-900 border-amber-600 shadow-amber-200'
+                                  : 'bg-amber-50 text-amber-700 hover:bg-amber-100 border-amber-200'
+                              }`}
+                              title="Inspect Live Capabilities in Matrix"
+                            >
+                              <SlidersHorizontalIcon className="w-4 h-4" />
+                            </button>
+
                             {/* Edit Details & Permissions */}
                             <button
-                              onClick={() => openEditModal(u)}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openEditModal(u);
+                              }}
                               className="p-2.5 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200 transition-all shadow-sm cursor-pointer"
                               title="Edit User & Permissions"
                             >
@@ -391,7 +442,9 @@ export function Users() {
                             
                             {/* Reset Password */}
                             <button
-                              onClick={() => {
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 setResetPasswordUser(u);
                                 setNewPassword('');
                                 setShowResetPasswordModal(true);
@@ -410,7 +463,10 @@ export function Users() {
                             ) : (
                               <button
                                 type="button"
-                                onClick={() => setDeleteTargetUser(u)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDeleteTargetUser(u);
+                                }}
                                 className="p-2.5 rounded-xl bg-red-50 text-red-600 hover:bg-red-600 hover:text-white border border-red-200 transition-all shadow-sm cursor-pointer"
                                 title="Delete Staff Member"
                               >
@@ -429,39 +485,140 @@ export function Users() {
         </div>
 
         {/* Scannable Role Capabilities & Permissions Matrix */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-md overflow-hidden">
+        <div id="capability-matrix-section" className="bg-white rounded-2xl border border-slate-200/80 shadow-md overflow-hidden scroll-mt-6">
           {/* Header */}
-          <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 px-6 py-5 flex items-center justify-between">
+          <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 px-6 py-5 flex items-center justify-between flex-wrap gap-4">
             <div className="flex items-center gap-3.5">
               <div className="w-11 h-11 bg-white/10 text-[#DAA520] rounded-xl flex items-center justify-center shadow-inner shrink-0">
                 <ShieldIcon className="w-6 h-6" />
               </div>
               <div>
                 <h3 className="text-base font-black text-white">Granular Capability Registry & Role Presets</h3>
-                <p className="text-[11px] text-slate-300 font-medium mt-0.5">Overview of system capabilities and default permission tiers across Admin, Manager, and Cashier.</p>
+                <p className="text-[11px] text-slate-300 font-medium mt-0.5">Live capability matrix dynamically reflecting staff permission states and default role presets.</p>
               </div>
             </div>
           </div>
+
+          {/* Inspector Staff Selection Bar */}
+          <div className="bg-slate-800/90 px-6 py-3 border-b border-slate-700/60 flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-2 text-xs text-slate-300 font-bold uppercase tracking-wider">
+              <SlidersHorizontalIcon className="w-4 h-4 text-amber-400" />
+              <span>Inspect Capability Matrix:</span>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setInspectedUserId('presets')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+                  inspectedUserId === 'presets'
+                    ? 'bg-amber-500 text-slate-900 shadow-md shadow-amber-500/20 font-extrabold'
+                    : 'bg-slate-700/60 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-600/60'
+                }`}
+              >
+                <ShieldIcon className="w-3.5 h-3.5" />
+                <span>Standard Role Presets (Default)</span>
+              </button>
+              {users.map(u => {
+                const uSuper = isSuperAdmin(u);
+                const uPerms = u.custom_permissions !== undefined ? u.custom_permissions : u.permissions;
+                const uCustomized = !uSuper && arePermissionsCustomized(u.role, uPerms);
+                const uCount = getCustomOverrideCount(u.role, uPerms);
+                const isSelected = inspectedUserId === u.id;
+
+                return (
+                  <button
+                    key={u.id}
+                    type="button"
+                    onClick={() => setInspectedUserId(u.id)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer ${
+                      isSelected
+                        ? 'bg-amber-400 text-slate-900 shadow-md shadow-amber-400/30'
+                        : 'bg-slate-700/60 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-600/60'
+                    }`}
+                  >
+                    <div className="w-4 h-4 rounded-full bg-slate-900 text-white flex items-center justify-center text-[9px] font-black">
+                      {u.name?.charAt(0).toUpperCase() || 'U'}
+                    </div>
+                    <span>{u.name}</span>
+                    <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${isSelected ? 'bg-slate-900 text-amber-400' : 'bg-slate-800 text-slate-400'}`}>
+                      {uSuper ? 'Super Admin' : u.role || 'Cashier'}
+                    </span>
+                    {uCustomized && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-extrabold border border-amber-500/40">
+                        {uCount} Overrides
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Active Inspected User Banner */}
+          {inspectedUser && (
+            <div className="bg-gradient-to-r from-amber-50 via-orange-50 to-amber-50 border-b border-amber-200/80 px-6 py-3.5 flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500 text-slate-900 flex items-center justify-center font-black text-sm shadow-md">
+                  {inspectedUser.avatar || inspectedUser.name?.charAt(0).toUpperCase() || 'U'}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-black text-slate-900">{inspectedUser.name}</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-black bg-amber-100 text-amber-900 border border-amber-300 uppercase">
+                      {isSuperAdmin(inspectedUser) ? 'Root Super Admin' : inspectedUser.role || 'Cashier'}
+                    </span>
+                    {arePermissionsCustomized(inspectedUser.role, inspectedUser.custom_permissions || inspectedUser.permissions) && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full font-black bg-emerald-100 text-emerald-800 border border-emerald-300">
+                        ⚡ {getCustomOverrideCount(inspectedUser.role, inspectedUser.custom_permissions || inspectedUser.permissions)} Active Custom Overrides
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-600 font-medium mt-0.5">
+                    Live effective capability status. Green checkmarks (✓) show capabilities actively enabled and granted for this user.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => openEditModal(inspectedUser)}
+                className="px-4 py-2 rounded-xl bg-slate-900 text-amber-400 hover:bg-slate-800 border border-slate-700 text-xs font-bold transition-all shadow-sm flex items-center gap-2 cursor-pointer"
+              >
+                <Edit2Icon className="w-3.5 h-3.5" />
+                <span>Edit Capabilities for {inspectedUser.name}</span>
+              </button>
+            </div>
+          )}
 
           {/* Matrix Overview */}
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left border-collapse">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase text-[10px] font-black tracking-widest sticky top-0 z-10">
                 <tr>
-                  <th className="px-6 py-4 min-w-[320px]">Capability / Action</th>
-                  <th className="px-4 py-4 text-center min-w-[140px] text-purple-700 bg-purple-50/50">
+                  <th className="px-6 py-4 min-w-[300px]">Capability / Action</th>
+                  {inspectedUser && (
+                    <th className="px-4 py-4 text-center min-w-[190px] text-amber-950 bg-amber-100/80 border-x border-amber-300/80 shadow-sm">
+                      <span className="flex items-center justify-center gap-1.5 font-black text-xs">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        Live Status: {inspectedUser.name}
+                      </span>
+                      <span className="text-[10px] text-amber-800 font-bold block mt-0.5">
+                        ({isSuperAdmin(inspectedUser) ? 'Super Admin' : inspectedUser.role || 'Cashier'})
+                      </span>
+                    </th>
+                  )}
+                  <th className="px-4 py-4 text-center min-w-[130px] text-purple-700 bg-purple-50/50">
                     <span className="flex items-center justify-center gap-1.5 font-black">
-                      <ShieldIcon className="w-3.5 h-3.5" /> Admin
+                      <ShieldIcon className="w-3.5 h-3.5" /> Admin Preset
                     </span>
                   </th>
-                  <th className="px-4 py-4 text-center min-w-[140px] text-blue-700 bg-blue-50/50">
+                  <th className="px-4 py-4 text-center min-w-[130px] text-blue-700 bg-blue-50/50">
                     <span className="flex items-center justify-center gap-1.5 font-black">
-                      Manager
+                      Manager Preset
                     </span>
                   </th>
-                  <th className="px-4 py-4 text-center min-w-[140px] text-emerald-700 bg-emerald-50/50">
+                  <th className="px-4 py-4 text-center min-w-[130px] text-emerald-700 bg-emerald-50/50">
                     <span className="flex items-center justify-center gap-1.5 font-black">
-                      Cashier
+                      Cashier Preset
                     </span>
                   </th>
                 </tr>
@@ -474,7 +631,7 @@ export function Users() {
                     <React.Fragment key={category.id}>
                       {/* Category Header Row */}
                       <tr className="bg-slate-100/90 border-y border-slate-200">
-                        <td colSpan={4} className="px-6 py-3 text-left font-black text-slate-800 uppercase tracking-wider text-xs bg-slate-100 flex items-center gap-2">
+                        <td colSpan={inspectedUser ? 5 : 4} className="px-6 py-3 text-left font-black text-slate-800 uppercase tracking-wider text-xs bg-slate-100 flex items-center gap-2">
                           <span>{category.icon}</span>
                           <span>{category.name}</span>
                           <span className="text-[10px] text-slate-500 font-semibold lowercase tracking-normal ml-2">({category.description})</span>
@@ -487,13 +644,37 @@ export function Users() {
                         const managerAllowed = getDefaultRolePermissions('Manager').includes(cap.key);
                         const cashierAllowed = getDefaultRolePermissions('Cashier').includes(cap.key);
 
+                        const userAllowed = inspectedUser ? hasPermission(inspectedUser, cap.key) : false;
+                        const inspectedRawPerms = inspectedUser 
+                          ? (inspectedUser.custom_permissions !== undefined ? inspectedUser.custom_permissions : inspectedUser.permissions)
+                          : null;
+                        const isCustom = Array.isArray(inspectedRawPerms) && inspectedRawPerms.includes(cap.key);
+
                         return (
                           <tr key={cap.key} className="hover:bg-slate-50/60 transition-colors">
                             <td className="px-6 py-3.5 text-left">
                               <div className="font-bold text-slate-900 text-xs">{cap.name}</div>
                               <div className="text-[11px] text-slate-500 mt-0.5">{cap.description}</div>
                             </td>
-                            {/* Super Admin */}
+
+                            {/* Inspected User Live Column */}
+                            {inspectedUser && (
+                              <td className="px-4 py-3.5 text-center bg-amber-50/50 border-x border-amber-200/80">
+                                {userAllowed ? (
+                                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-300 font-black text-xs shadow-sm">
+                                    <CheckIcon className="w-4 h-4 text-emerald-600 stroke-[3]" />
+                                    <span>Granted {isCustom ? '(Custom)' : ''}</span>
+                                  </div>
+                                ) : (
+                                  <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100/70 text-slate-400 border border-slate-200 text-xs font-semibold">
+                                    <span className="text-slate-300 font-bold">—</span>
+                                    <span>Disabled</span>
+                                  </div>
+                                )}
+                              </td>
+                            )}
+
+                            {/* Admin Preset */}
                             <td className="px-4 py-3.5 text-center bg-purple-50/20">
                               {adminAllowed ? (
                                 <div className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 border border-emerald-200 font-black">
@@ -503,7 +684,7 @@ export function Users() {
                                 <span className="text-slate-300 font-bold">—</span>
                               )}
                             </td>
-                            {/* Manager */}
+                            {/* Manager Preset */}
                             <td className="px-4 py-3.5 text-center bg-blue-50/20">
                               {managerAllowed ? (
                                 <div className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 border border-emerald-200 font-black">
@@ -513,7 +694,7 @@ export function Users() {
                                 <span className="text-slate-300 font-bold">—</span>
                               )}
                             </td>
-                            {/* Cashier */}
+                            {/* Cashier Preset */}
                             <td className="px-4 py-3.5 text-center bg-emerald-50/20">
                               {cashierAllowed ? (
                                 <div className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 border border-emerald-200 font-black">

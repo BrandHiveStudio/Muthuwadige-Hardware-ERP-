@@ -206,6 +206,14 @@ export const supabase: any = {
         const { data, error } = await api.auth.login(email, password);
         if (error) throw error;
         localStorage.setItem('erp_user', JSON.stringify(data.user));
+        sessionStorage.setItem('erp_user', JSON.stringify(data.user));
+        sessionStorage.setItem('hardware_erp_user', JSON.stringify(data.user));
+        sessionStorage.setItem('hardware_erp_auth', 'true');
+        const customPerms = data.user?.custom_permissions || data.user?.permissions;
+        if (customPerms) {
+          sessionStorage.setItem('custom_permissions', JSON.stringify(customPerms));
+          localStorage.setItem('custom_permissions', JSON.stringify(customPerms));
+        }
         return { data: { user: data.user }, error: null };
       } catch (err: any) {
         return { data: { user: null }, error: err };
@@ -214,9 +222,9 @@ export const supabase: any = {
 
     signUp: async ({ email, password, options }: any) => {
       try {
-        const name = options?.data?.full_name || 'Staff Member';
+        const name = options?.data?.full_name || options?.data?.name || 'Staff Member';
         const role = options?.data?.role || 'cashier';
-        const permissions = options?.data?.permissions;
+        const permissions = options?.data?.custom_permissions || options?.data?.permissions;
         const { data, error } = await api.auth.register(email, password, name, role, permissions);
         if (error) throw error;
         return { data: { user: data.user }, error: null };
@@ -227,6 +235,12 @@ export const supabase: any = {
 
     signOut: async () => {
       localStorage.removeItem('erp_user');
+      localStorage.removeItem('hardware_erp_user');
+      localStorage.removeItem('hardware_erp_auth');
+      sessionStorage.removeItem('erp_user');
+      sessionStorage.removeItem('hardware_erp_user');
+      sessionStorage.removeItem('hardware_erp_auth');
+      sessionStorage.removeItem('custom_permissions');
       return { error: null };
     }
   },

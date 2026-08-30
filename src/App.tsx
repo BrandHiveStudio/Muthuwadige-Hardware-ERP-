@@ -18,8 +18,7 @@ import { BarcodePrint } from './pages/BarcodePrint';
 import { CurrencyProvider } from './context/CurrencyContext';
 import { ScannerProvider } from './context/ScannerContext';
 import { SettingsProvider } from './context/SettingsContext';
-import { ROLE_PERMISSIONS } from './utils/permissions';
-import { hasUserPermission } from './utils/auth';
+import { ROLE_PERMISSIONS, hasPermission, hasUserPermission } from './utils/permissions';
 import { API_URL, fetchWithTimeout } from './lib/api';
 import type { User, PageName } from './types';
 import { Notifications, notify } from './components/Notifications';
@@ -222,7 +221,7 @@ export function App() {
   // --- SECURITY GUARD: Role-Based Access Control ---
   useEffect(() => {
     if (currentUser) {
-      if (!hasUserPermission(currentUser, currentPage)) {
+      if (!hasPermission(currentUser, currentPage)) {
         console.warn(`Access Denied: ${currentUser.role} cannot access ${currentPage}`);
         
         const roleStr = (currentUser.role || '').toLowerCase();
@@ -275,6 +274,11 @@ export function App() {
     sessionStorage.setItem('hardware_erp_user', JSON.stringify(user));
     sessionStorage.setItem('hardware_erp_auth', 'true');
     sessionStorage.setItem('erp_user', JSON.stringify(user));
+    const customPerms = user.custom_permissions || user.permissions;
+    if (customPerms) {
+      sessionStorage.setItem('custom_permissions', JSON.stringify(customPerms));
+      localStorage.setItem('custom_permissions', JSON.stringify(customPerms));
+    }
     localStorage.removeItem('hardware_erp_user');
     localStorage.removeItem('hardware_erp_auth');
     localStorage.removeItem('erp_user');
@@ -293,6 +297,7 @@ export function App() {
     sessionStorage.removeItem('hardware_erp_user');
     sessionStorage.removeItem('hardware_erp_auth');
     sessionStorage.removeItem('erp_user');
+    sessionStorage.removeItem('custom_permissions');
     localStorage.removeItem('hardware_erp_user');
     localStorage.removeItem('hardware_erp_auth');
     localStorage.removeItem('erp_user');
@@ -386,7 +391,7 @@ export function App() {
   // ==========================================
   const renderPage = () => {
     const roleStr = (currentUser.role || '').toLowerCase();
-    if (!hasUserPermission(currentUser, currentPage)) {
+    if (!hasPermission(currentUser, currentPage)) {
       return (roleStr === 'admin' || roleStr === 'manager' || roleStr === 'super_admin') 
         ? <Dashboard onNavigate={(page, tab) => {
             if (page === 'sales' && tab) {

@@ -1125,6 +1125,8 @@ async function initializeDatabase() {
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN return_method TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN total_refunded REAL DEFAULT 0"); } catch(e) {}
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN user_id TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE profiles ADD COLUMN permissions TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE profiles ADD COLUMN custom_permissions TEXT"); } catch(e) {}
 
   await seedInitialData();
 }
@@ -1530,21 +1532,28 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'Incorrect password.' });
     }
 
+    const rawPerms = profile.custom_permissions || profile.permissions;
     let parsedPermissions = undefined;
-    if (profile.permissions) {
+    if (rawPerms) {
       try {
-        parsedPermissions = typeof profile.permissions === 'string' ? JSON.parse(profile.permissions) : profile.permissions;
-      } catch (_) {}
+        parsedPermissions = typeof rawPerms === 'string' ? JSON.parse(rawPerms) : rawPerms;
+      } catch (_) {
+        if (typeof rawPerms === 'string') {
+          parsedPermissions = rawPerms.split(',').map(p => p.trim());
+        }
+      }
     }
 
-    // Return standard mock payload resembling Supabase structure
+    // Return standard payload resembling Supabase structure with custom_permissions
     res.json({
       user: {
         id: profile.id,
         email: profile.email,
-        role: profile.role,
+        full_name: profile.name,
         name: profile.name,
+        role: profile.role,
         avatar: profile.avatar,
+        custom_permissions: parsedPermissions,
         permissions: parsedPermissions
       }
     });
@@ -1554,7 +1563,7 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 app.post('/api/auth/register', async (req, res) => {
-  const { email, password, name, role, permissions } = req.body;
+  const { email, password, name, full_name, role, permissions, custom_permissions } = req.body;
   try {
     // Filter out super_admin / Admin when evaluating staff quota limit (3 max additional staff)
     const countRow = await db.get("SELECT COUNT(*) as count FROM profiles WHERE LOWER(role) NOT IN ('super_admin', 'super admin', 'superadmin') AND email != 'admin@hardware.com'");
@@ -1563,12 +1572,25 @@ app.post('/api/auth/register', async (req, res) => {
     }
     const id = 'u_' + Date.now();
     const normalizedRole = role ? (role.charAt(0).toUpperCase() + role.slice(1).toLowerCase()) : 'Cashier';
-    const permsStr = permissions ? (typeof permissions === 'string' ? permissions : JSON.stringify(permissions)) : null;
+    const effectivePerms = custom_permissions !== undefined ? custom_permissions : permissions;
+    const permsStr = effectivePerms ? (typeof effectivePerms === 'string' ? effectivePerms : JSON.stringify(effectivePerms)) : null;
+    const effectiveName = name || full_name || 'Staff User';
     await db.run(
-      'INSERT INTO profiles (id, name, email, role, avatar, password, permissions) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [id, name || 'Staff User', email, normalizedRole, email.charAt(0).toUpperCase(), password || '123456', permsStr]
+      'INSERT INTO profiles (id, name, email, role, avatar, password, permissions, custom_permissions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, effectiveName, email, normalizedRole, email.charAt(0).toUpperCase(), password || '123456', permsStr, permsStr]
     );
-    res.json({ success: true, user: { id, email, role: normalizedRole, name: name || 'Staff User', permissions: permissions || undefined } });
+    res.json({
+      success: true,
+      user: {
+        id,
+        email,
+        role: normalizedRole,
+        full_name: effectiveName,
+        name: effectiveName,
+        custom_permissions: effectivePerms || undefined,
+        permissions: effectivePerms || undefined
+      }
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -4269,15 +4291,21 @@ app.get('/api/profiles', async (req, res) => {
   try {
     const profiles = await db.all('SELECT * FROM profiles ORDER BY created_at DESC');
     const mapped = profiles.map(pr => {
+      const rawPerms = pr.custom_permissions || pr.permissions;
       let parsedPerms = undefined;
-      if (pr.permissions) {
+      if (rawPerms) {
         try {
-          parsedPerms = typeof pr.permissions === 'string' ? JSON.parse(pr.permissions) : pr.permissions;
-        } catch (_) {}
+          parsedPerms = typeof rawPerms === 'string' ? JSON.parse(rawPerms) : rawPerms;
+        } catch (_) {
+          if (typeof rawPerms === 'string') {
+            parsedPerms = rawPerms.split(',').map(p => p.trim());
+          }
+        }
       }
       return {
         ...pr,
-        permissions: parsedPerms
+        permissions: parsedPerms,
+        custom_permissions: parsedPerms
       };
     });
     res.json(mapped);
@@ -4290,14 +4318,15 @@ app.put('/api/profiles/:id', async (req, res) => {
   const { id } = req.params;
   const p = req.body;
   try {
+    const effectivePerms = p.custom_permissions !== undefined ? p.custom_permissions : p.permissions;
     let permsVal = null;
-    if (p.permissions !== undefined) {
-      permsVal = p.permissions ? (typeof p.permissions === 'string' ? p.permissions : JSON.stringify(p.permissions)) : null;
+    if (effectivePerms !== undefined) {
+      permsVal = effectivePerms ? (typeof effectivePerms === 'string' ? effectivePerms : JSON.stringify(effectivePerms)) : null;
     }
-    if (p.permissions !== undefined) {
+    if (effectivePerms !== undefined) {
       await db.run(
-        'UPDATE profiles SET name = ?, role = ?, avatar = ?, permissions = ? WHERE id = ?',
-        [p.name, p.role, p.avatar, permsVal, id]
+        'UPDATE profiles SET name = ?, role = ?, avatar = ?, permissions = ?, custom_permissions = ? WHERE id = ?',
+        [p.name, p.role, p.avatar, permsVal, permsVal, id]
       );
     } else {
       await db.run(

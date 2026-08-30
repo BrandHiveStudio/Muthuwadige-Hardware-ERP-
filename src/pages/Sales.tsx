@@ -52,6 +52,7 @@ import {
   generateCreditNotePrintHTML as generateCreditNotePrintHTML_Outer,
   formatInvoiceDateTime
 } from '../utils/sales/printTemplates';
+import { hasPermission } from '../utils/permissions';
 
 const safeParseJson = (data: any, fallback: any = []) => {
   if (data === null || data === undefined) return fallback;
@@ -893,6 +894,14 @@ const getUnitOptions = (product: Product | undefined): UnitOption[] => {
 export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new', currentUser }: SalesProps) {
   const [userRole, setUserRole] = useState(initialUserRole);
   const [tab, setTab] = useState<Tab>(initialTab);
+
+  const canAccessNew = hasPermission(currentUser, 'pos_create_sales');
+  const canAccessHistory = hasPermission(currentUser, 'pos_view_all_history');
+  const canAccessCredit = hasPermission(currentUser, 'credit_issue_invoices') || hasPermission(currentUser, 'credit_record_settlement');
+  const canAccessCreditHistory = hasPermission(currentUser, 'credit_record_settlement') || hasPermission(currentUser, 'credit_issue_invoices') || hasPermission(currentUser, 'credit_view_history');
+  const canAccessQuotes = hasPermission(currentUser, 'pos_create_sales') || hasPermission(currentUser, 'quotes') || hasPermission(currentUser, 'quotations');
+  const canAccessReturns = hasPermission(currentUser, 'pos_process_returns') || hasPermission(currentUser, 'sales_returns');
+
   useEffect(() => {
     const checkUser = async () => {
       try {
@@ -908,10 +917,25 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   }, []);
 
   useEffect(() => {
-    if (userRole === 'cashier' && tab === 'history') {
-      setTab('new');
+    const isTabAllowed = (t: Tab): boolean => {
+      if (t === 'new') return canAccessNew;
+      if (t === 'history') return canAccessHistory;
+      if (t === 'credit') return canAccessCredit;
+      if (t === 'credit_history') return canAccessCreditHistory;
+      if (t === 'quotes') return canAccessQuotes;
+      if (t === 'returns') return canAccessReturns;
+      return false;
+    };
+
+    if (!isTabAllowed(tab)) {
+      if (canAccessNew) setTab('new');
+      else if (canAccessCredit) setTab('credit');
+      else if (canAccessHistory) setTab('history');
+      else if (canAccessReturns) setTab('returns');
+      else if (canAccessQuotes) setTab('quotes');
+      else if (canAccessCreditHistory) setTab('credit_history');
     }
-  }, [tab, userRole]);
+  }, [tab, currentUser, canAccessNew, canAccessHistory, canAccessCredit, canAccessCreditHistory, canAccessQuotes, canAccessReturns]);
 
   const resolveCurrentCashierName = (): string => {
     const active = currentUser || (() => {
@@ -947,7 +971,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
   useEffect(() => {
     if (initialTab) {
-      if (userRole === 'cashier' && initialTab === 'history') {
+      if (initialTab === 'history' && !hasPermission(currentUser, 'pos_view_all_history')) {
+        setTab('new');
+      } else if (initialTab === 'returns' && !hasPermission(currentUser, 'pos_process_returns')) {
         setTab('new');
       } else {
         setTab(initialTab);
@@ -3106,17 +3132,19 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       {/* Header Tabs & Bilingual Switcher */}
       <div className="flex justify-between items-center flex-wrap gap-4 bg-white/95 backdrop-blur-sm p-4 rounded-3xl border border-slate-200/80 shadow-xl shadow-slate-100/30 animate-in fade-in duration-500">
         <div className="flex gap-1.5 bg-slate-100/60 p-1.5 rounded-2xl w-fit border border-slate-200/40 overflow-x-auto max-w-full custom-scrollbar">
-          <button 
-            onClick={() => {
-              resetNewSale();
-              setTab('new');
-            }} 
-            className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'new' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
-          >
-            <ShoppingCartIcon className="w-4 h-4" />
-            {t('New Sale', 'නව විකිණීම')}
-          </button>
-          {userRole !== 'cashier' && (
+          {canAccessNew && (
+            <button 
+              onClick={() => {
+                resetNewSale();
+                setTab('new');
+              }} 
+              className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'new' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
+            >
+              <ShoppingCartIcon className="w-4 h-4" />
+              {t('New Sale', 'නව විකිණීම')}
+            </button>
+          )}
+          {canAccessHistory && (
             <button 
               onClick={() => setTab('history')} 
               className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${
@@ -3129,34 +3157,42 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
               {t('Sales History', 'විකිණුම් ඉතිහාසය')}
             </button>
           )}
-          <button 
-            onClick={() => setTab('credit')} 
-            className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'credit' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
-          >
-            <DollarSignIcon className="w-4 h-4" />
-            {t('Credit', 'ණය')}
-          </button>
-          <button 
-            onClick={() => setTab('credit_history')} 
-            className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'credit_history' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
-          >
-            <HistoryIcon className="w-4 h-4" />
-            {t('Credit History', 'ණය ඉතිහාසය')}
-          </button>
-          <button 
-            onClick={() => setTab('quotes')} 
-            className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'quotes' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
-          >
-            <CheckSquareIcon className="w-4 h-4" />
-            {t('Quotations', 'මිල ගණන්')}
-          </button>
-          <button 
-            onClick={() => { setTab('returns'); fetchSalesReturns(); }} 
-            className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'returns' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
-          >
-            <ArrowRightIcon className="w-4 h-4 rotate-180 text-amber-500" />
-            {t('Sales Returns', 'ආපසු භාරගැනීම්')}
-          </button>
+          {canAccessCredit && (
+            <button 
+              onClick={() => setTab('credit')} 
+              className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'credit' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
+            >
+              <DollarSignIcon className="w-4 h-4" />
+              {t('Credit', 'ණය')}
+            </button>
+          )}
+          {canAccessCreditHistory && (
+            <button 
+              onClick={() => setTab('credit_history')} 
+              className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'credit_history' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
+            >
+              <HistoryIcon className="w-4 h-4" />
+              {t('Credit History', 'ණය ඉතිහාසය')}
+            </button>
+          )}
+          {canAccessQuotes && (
+            <button 
+              onClick={() => setTab('quotes')} 
+              className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'quotes' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
+            >
+              <CheckSquareIcon className="w-4 h-4" />
+              {t('Quotations', 'මිල ගණන්')}
+            </button>
+          )}
+          {canAccessReturns && (
+            <button 
+              onClick={() => { setTab('returns'); fetchSalesReturns(); }} 
+              className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'returns' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
+            >
+              <ArrowRightIcon className="w-4 h-4 rotate-180 text-amber-500" />
+              {t('Sales Returns', 'ආපසු භාරගැනීම්')}
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">

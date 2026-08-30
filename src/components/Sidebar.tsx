@@ -18,7 +18,7 @@ import {
   LogOut 
 } from 'lucide-react';
 import type { PageName, User } from '../types';
-import { hasUserPermission } from '../utils/permissions';
+import { hasPermission, hasUserPermission } from '../utils/permissions';
 import { supabase } from '../lib/supabaseClient';
 
 const MIN_WIDTH = 220;
@@ -39,6 +39,7 @@ interface NavItemDef {
   id: PageName;
   label: string;
   icon: React.ReactNode;
+  capability?: string;
 }
 
 interface NavGroupDef {
@@ -49,43 +50,43 @@ interface NavGroupDef {
 const navGroups: NavGroupDef[] = [
   {
     label: '',
-    items: [{ id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={18} /> }]
+    items: [{ id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={18} />, capability: 'dashboard' }]
   },
   {
     label: 'OPERATIONS',
     items: [
-      { id: 'inventory', label: 'Inventory', icon: <Package size={18} /> },
-      { id: 'sales', label: 'Sales & Billing', icon: <ShoppingCart size={18} /> },
-      { id: 'purchasing', label: 'Purchasing', icon: <Truck size={18} /> },
-      { id: 'barcode-print', label: 'Barcode Printing', icon: <Printer size={18} /> }
+      { id: 'inventory', label: 'Inventory', icon: <Package size={18} />, capability: 'inventory' },
+      { id: 'sales', label: 'Sales & Billing', icon: <ShoppingCart size={18} />, capability: 'pos_create_sales' },
+      { id: 'purchasing', label: 'Purchasing', icon: <Truck size={18} />, capability: 'po_create_and_receive' },
+      { id: 'barcode-print', label: 'Barcode Printing', icon: <Printer size={18} />, capability: 'barcode-print' }
     ]
   },
   {
     label: 'MANAGEMENT',
     items: [
-      { id: 'customers', label: 'Customers', icon: <Users size={18} /> },
-      { id: 'suppliers', label: 'Suppliers', icon: <Building2 size={18} /> }
+      { id: 'customers', label: 'Customers', icon: <Users size={18} />, capability: 'customers' },
+      { id: 'suppliers', label: 'Suppliers', icon: <Building2 size={18} />, capability: 'po_create_and_receive' }
     ]
   },
   {
     label: 'FINANCE',
     items: [
-      { id: 'reports', label: 'Reports', icon: <BarChart3 size={18} /> },
-      { id: 'finance', label: 'Finance & Accounts', icon: <Wallet size={18} /> }
+      { id: 'reports', label: 'Reports', icon: <BarChart3 size={18} />, capability: 'reports_view_financials' },
+      { id: 'finance', label: 'Finance & Accounts', icon: <Wallet size={18} />, capability: 'reports_view_financials' }
     ]
   },
   {
     label: 'ADMINISTRATION',
     items: [
-      { id: 'users', label: 'Users & Roles', icon: <Shield size={18} /> },
-      { id: 'database', label: 'Database', icon: <Database size={18} /> },
-      { id: 'audit_logs', label: 'Audit Logs', icon: <FileText size={18} /> }
+      { id: 'users', label: 'Users & Roles', icon: <Shield size={18} />, capability: 'users' },
+      { id: 'database', label: 'Database', icon: <Database size={18} />, capability: 'system_backup_manage' },
+      { id: 'audit_logs', label: 'Audit Logs', icon: <FileText size={18} />, capability: 'audit_logs' }
     ]
   },
   {
     label: 'SYSTEM',
     items: [
-      { id: 'settings', label: 'Settings', icon: <SettingsIcon size={18} /> }
+      { id: 'settings', label: 'Settings', icon: <SettingsIcon size={18} />, capability: 'system_backup_manage' }
     ]
   }
 ];
@@ -182,7 +183,7 @@ export function Sidebar({
   const filteredNavGroups = navGroups
     .map(group => ({
       ...group,
-      items: group.items.filter(item => hasUserPermission(currentUser, item.id))
+      items: group.items.filter(item => hasPermission(currentUser, item.capability || item.id))
     }))
     .filter(group => group.items.length > 0);
 

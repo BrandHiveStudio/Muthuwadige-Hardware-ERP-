@@ -227,13 +227,39 @@ export function Auth({ onLogin }: AuthProps) {
         const finalRole = profile?.role || data.user.user_metadata?.role || 'Cashier';
         const finalName = profile?.name || data.user.user_metadata?.full_name || 'Hardware Staff';
         
+        const rawPerms = profile?.custom_permissions !== undefined 
+          ? profile.custom_permissions 
+          : (profile?.permissions !== undefined ? profile.permissions : (data.user.custom_permissions || data.user.permissions));
+        
+        let parsedPermissions: string[] | undefined = undefined;
+        if (rawPerms) {
+          if (Array.isArray(rawPerms)) {
+            parsedPermissions = rawPerms;
+          } else if (typeof rawPerms === 'string' && rawPerms.trim().length > 0) {
+            try {
+              parsedPermissions = JSON.parse(rawPerms);
+            } catch {
+              parsedPermissions = rawPerms.split(',').map((p: string) => p.trim());
+            }
+          }
+        }
+
         const loggedInUser: User = {
-          id: data.user.id,
+          id: profile?.id || data.user.id,
           email: data.user.email || '',
           name: finalName,
+          full_name: finalName,
           role: finalRole, 
-          avatar: profile?.avatar || data.user.email?.charAt(0).toUpperCase() || 'U'
+          avatar: profile?.avatar || data.user.email?.charAt(0).toUpperCase() || 'U',
+          custom_permissions: parsedPermissions,
+          permissions: parsedPermissions
         };
+
+        if (parsedPermissions) {
+          sessionStorage.setItem('custom_permissions', JSON.stringify(parsedPermissions));
+          localStorage.setItem('custom_permissions', JSON.stringify(parsedPermissions));
+        }
+
         onLogin(loggedInUser);
       }
     } catch (err: any) {
