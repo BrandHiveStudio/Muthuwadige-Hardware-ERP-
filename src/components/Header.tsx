@@ -100,19 +100,51 @@ export function Header({
         window.dispatchEvent(new CustomEvent('settings-updated'));
       }
 
-      // 6. Trigger non-blocking orange glowing pulse on manual refresh
+      // 6. Trigger subtle non-blocking orange perimeter pulse on manual refresh
       if (typeof document !== 'undefined') {
-        const elements = document.querySelectorAll(
-          '.bg-white, .rounded-2xl, .rounded-xl, .card, input, select, textarea'
+        const root = document.querySelector('main') || document.body;
+        const rawElements = Array.from(
+          root.querySelectorAll<HTMLElement>(
+            '.card, .bg-white, [class*="rounded-2xl"], [class*="rounded-3xl"], [class*="rounded-xl"], table, input:not([type="hidden"]), select, textarea'
+          )
         );
-        elements.forEach((el) => {
+
+        // Separate interactive controls and tables from containers
+        const controls = rawElements.filter(el => {
+          const tag = el.tagName.toLowerCase();
+          return tag === 'input' || tag === 'select' || tag === 'textarea' || tag === 'table';
+        });
+
+        const containers = rawElements.filter(el => {
+          const tag = el.tagName.toLowerCase();
+          if (tag !== 'div' && tag !== 'section') return false;
+          if (el.closest('button') || el.closest('header') || el.closest('aside') || el.closest('nav')) return false;
+          const rect = el.getBoundingClientRect();
+          return rect.width >= 120 && rect.height >= 40;
+        });
+
+        // Filter out nested containers so only top-level cards and panels receive perimeter glow
+        const filteredContainers = containers.filter(el => {
+          let parent = el.parentElement;
+          while (parent && parent !== root) {
+            if (containers.includes(parent as HTMLElement)) {
+              return false;
+            }
+            parent = parent.parentElement;
+          }
+          return true;
+        });
+
+        const targetElements = [...filteredContainers, ...controls];
+
+        targetElements.forEach((el) => {
           el.classList.add('erp-refresh-active');
         });
         setTimeout(() => {
-          elements.forEach((el) => {
+          targetElements.forEach((el) => {
             el.classList.remove('erp-refresh-active');
           });
-        }, 800);
+        }, 750);
       }
     } catch (err) {
       console.error('Page refresh error:', err);
