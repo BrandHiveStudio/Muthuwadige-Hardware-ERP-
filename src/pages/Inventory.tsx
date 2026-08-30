@@ -450,7 +450,6 @@ export function Inventory() {
   const [newConversionKg, setNewConversionKg] = useState<string>('');
   const [newConversionPrice, setNewConversionPrice] = useState<string>('');
   const [isCustomCategory, setIsCustomCategory] = useState<boolean>(false);
-  const [isRefreshingData, setIsRefreshingData] = useState(false);
 
   const fetchSuppliers = async () => {
     try {
@@ -485,10 +484,8 @@ export function Inventory() {
     fetchSuppliers();
 
     const handleRefresh = () => {
-      setIsRefreshingData(true);
-      Promise.all([fetchProducts(), fetchSuppliers()]).finally(() => {
-        setTimeout(() => setIsRefreshingData(false), 600);
-      });
+      fetchProducts();
+      fetchSuppliers();
     };
 
     window.addEventListener('suppliers-updated', handleRefresh);
@@ -911,7 +908,7 @@ export function Inventory() {
   };
 
   return (
-    <div className={`p-4 sm:p-6 space-y-6 animate-in fade-in duration-500 transition-all duration-300 ${isRefreshingData ? 'opacity-60 scale-[0.99] blur-[0.5px]' : 'opacity-100 scale-100'}`}>
+    <div className="p-4 sm:p-6 space-y-6">
       {/* Stats Section */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">

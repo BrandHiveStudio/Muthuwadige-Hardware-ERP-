@@ -108,7 +108,6 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   const [growthPercent, setGrowthPercent] = useState<number>(0);
   const [salesByCategory, setSalesByCategory] = useState<any[]>(categorySalesData);
   const [loading, setLoading] = useState(true);
-  const [isRefreshingData, setIsRefreshingData] = useState(false);
 
   // Responsive Owner/Mobile Dashboard Toggle State
   const [isMobileMode, setIsMobileMode] = useState(false);
@@ -230,10 +229,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     fetchDashboardStats();
 
     const handleRefresh = () => {
-      setIsRefreshingData(true);
-      fetchDashboardStats().finally(() => {
-        setTimeout(() => setIsRefreshingData(false), 600);
-      });
+      fetchDashboardStats();
     };
     window.addEventListener('refresh-dashboard', handleRefresh);
     window.addEventListener('refresh-all-data', handleRefresh);
@@ -614,7 +610,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   };
 
   return (
-    <div className={`p-4 sm:p-6 space-y-6 animate-in fade-in duration-500 transition-all duration-300 ${isRefreshingData ? 'opacity-60 scale-[0.99] blur-[0.5px]' : 'opacity-100 scale-100'}`}>
+    <div className="p-4 sm:p-6 space-y-6">
       
       {/* Dashboard Toggle Switcher & Language Switcher */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white border border-gray-200 p-2.5 rounded-2xl shadow-sm gap-3">
@@ -650,7 +646,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       </div>
 
       {isMobileMode ? (
-        <div className="space-y-6 animate-in fade-in duration-350">
+        <div className="space-y-6">
           {/* Welcome Banner */}
           <div className="bg-gradient-to-r from-[#2c2c2c] to-[#464646] rounded-3xl border border-[#DAA520]/20 shadow-lg p-6 flex flex-col items-center justify-between gap-4 relative overflow-hidden text-center md:text-left md:flex-row">
             <div className="absolute w-[500px] h-[500px] bg-[#DAA520]/5 rounded-full blur-[80px] -top-64 -right-32 pointer-events-none" />

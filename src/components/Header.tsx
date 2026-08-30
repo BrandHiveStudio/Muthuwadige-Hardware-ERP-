@@ -99,6 +99,21 @@ export function Header({
         window.dispatchEvent(new CustomEvent('refresh-all-data'));
         window.dispatchEvent(new CustomEvent('settings-updated'));
       }
+
+      // 6. Trigger non-blocking orange glowing pulse on manual refresh
+      if (typeof document !== 'undefined') {
+        const elements = document.querySelectorAll(
+          '.bg-white, .rounded-2xl, .rounded-xl, .card, input, select, textarea'
+        );
+        elements.forEach((el) => {
+          el.classList.add('erp-refresh-active');
+        });
+        setTimeout(() => {
+          elements.forEach((el) => {
+            el.classList.remove('erp-refresh-active');
+          });
+        }, 800);
+      }
     } catch (err) {
       console.error('Page refresh error:', err);
     } finally {

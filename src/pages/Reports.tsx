@@ -142,10 +142,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   const [shopName, setShopName] = useState('Sanoj Hardware');
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
-  const [isRefreshingData, setIsRefreshingData] = useState(false);
-
   const fetchData = async () => {
-    setIsRefreshingData(true);
     try {
       const { data: sData } = await supabase.from('sales').select('*');
       const { data: pData } = await supabase.from('products').select('*');
@@ -163,8 +160,8 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       if (srData) setSalesReturns(srData);
       if (cpData) setCreditPayments(cpData);
       if (prData) setProfiles(prData);
-    } finally {
-      setTimeout(() => setIsRefreshingData(false), 600);
+    } catch (e) {
+      console.error('Failed to load reports data:', e);
     }
   };
 
@@ -1067,7 +1064,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   };
 
   return (
-    <div className={`p-4 sm:p-6 space-y-6 text-left transition-all duration-300 ${isRefreshingData ? 'opacity-60 scale-[0.99] blur-[0.5px]' : 'opacity-100 scale-100'}`}>
+    <div className="p-4 sm:p-6 space-y-6 text-left">
       
       {/* Tab Navigation & Language Switcher Header wrapper */}
       <div className="flex flex-col lg:flex-row justify-between items-stretch lg:items-center bg-gradient-to-r from-slate-900 via-slate-800 to-slate-950 p-4 rounded-3xl shadow-xl border border-slate-800 gap-4 mb-4">
@@ -1193,7 +1190,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       </div>
 
       {tab === 'sales' && (
-        <div className="space-y-6 animate-in fade-in duration-500">
+        <div className="space-y-6">
           {/* Standardized Financial Summary Rows */}
           <div className="bg-white rounded-3xl border border-slate-100 p-6 shadow-md">
             <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
@@ -1474,7 +1471,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       )}
 
       {tab === 'inventory' && (
-        <div className="space-y-6 animate-in fade-in duration-500">
+        <div className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
             <div className="bg-gradient-to-br from-slate-600 via-slate-700 to-zinc-700 rounded-3xl p-6 shadow-[0_12px_30px_rgba(100,116,139,0.2)] hover:-translate-y-1.5 hover:shadow-[0_20px_45_rgba(100,116,139,0.35)] transition-all duration-300 relative overflow-hidden group border border-slate-600">
               <div className="absolute -top-10 -right-10 w-32 h-32 bg-white/10 rounded-full blur-xl group-hover:scale-125 transition-transform duration-500" />
@@ -1684,7 +1681,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       )}
 
       {tab === 'financial' && (
-        <div className="space-y-6 animate-in fade-in duration-500">
+        <div className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
             <div className="bg-gradient-to-br from-emerald-500 via-emerald-600 to-teal-600 rounded-3xl p-6 shadow-[0_12px_30px_rgba(16,185,129,0.2)] hover:-translate-y-1.5 hover:shadow-[0_20px_45px_rgba(16,185,129,0.35)] transition-all duration-300 relative overflow-hidden group">
               <div className="absolute -top-10 -right-10 w-32 h-32 bg-white/10 rounded-full blur-xl group-hover:scale-125 transition-transform duration-500" />
