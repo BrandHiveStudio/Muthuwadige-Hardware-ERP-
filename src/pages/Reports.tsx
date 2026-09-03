@@ -66,6 +66,19 @@ interface ReportsProps {
   currentUser?: any;
 }
 
+// Module-level cache for stale-while-revalidate zero-flicker tab switching
+let cachedReportsData: {
+  sales?: any[];
+  products?: any[];
+  transactions?: any[];
+  customers?: any[];
+  suppliers?: any[];
+  salesReturns?: any[];
+  creditPayments?: any[];
+  profiles?: any[];
+  shopName?: string;
+} | null = null;
+
 export function Reports({ currentUser }: ReportsProps = {}) {
   const { currency } = useCurrency();
   const [isSinhala, setIsSinhala] = useState(false);
@@ -85,15 +98,15 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   };
 
   const [tab, setTab] = useState<Tab>('sales');
-  const [sales, setSales] = useState<any[]>([]);
-  const [products, setProducts] = useState<any[]>([]);
-  const [transactions, setTransactions] = useState<any[]>([]);
-  const [customers, setCustomers] = useState<any[]>([]);
-  const [suppliers, setSuppliers] = useState<any[]>([]);
-  const [salesReturns, setSalesReturns] = useState<any[]>([]);
-  const [creditPayments, setCreditPayments] = useState<any[]>([]);
-  const [profiles, setProfiles] = useState<any[]>([]);
-  const [shopName, setShopName] = useState('Sanoj Hardware');
+  const [sales, setSales] = useState<any[]>(() => cachedReportsData?.sales || []);
+  const [products, setProducts] = useState<any[]>(() => cachedReportsData?.products || []);
+  const [transactions, setTransactions] = useState<any[]>(() => cachedReportsData?.transactions || []);
+  const [customers, setCustomers] = useState<any[]>(() => cachedReportsData?.customers || []);
+  const [suppliers, setSuppliers] = useState<any[]>(() => cachedReportsData?.suppliers || []);
+  const [salesReturns, setSalesReturns] = useState<any[]>(() => cachedReportsData?.salesReturns || []);
+  const [creditPayments, setCreditPayments] = useState<any[]>(() => cachedReportsData?.creditPayments || []);
+  const [profiles, setProfiles] = useState<any[]>(() => cachedReportsData?.profiles || []);
+  const [shopName, setShopName] = useState(() => cachedReportsData?.shopName || 'Sanoj Hardware');
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
   const fetchData = async () => {
@@ -106,14 +119,17 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       const { data: srData } = await supabase.from('sales_returns').select('*');
       const { data: cpData } = await supabase.from('credit_payments').select('*');
       const { data: prData } = await supabase.from('profiles').select('*');
-      if (sData) setSales(sData);
-      if (pData) setProducts(pData);
-      if (tData) setTransactions(tData);
-      if (cData) setCustomers(cData);
-      if (supData) setSuppliers(supData);
-      if (srData) setSalesReturns(srData);
-      if (cpData) setCreditPayments(cpData);
-      if (prData) setProfiles(prData);
+
+      if (!cachedReportsData) cachedReportsData = {};
+
+      if (sData) { setSales(sData); cachedReportsData.sales = sData; }
+      if (pData) { setProducts(pData); cachedReportsData.products = pData; }
+      if (tData) { setTransactions(tData); cachedReportsData.transactions = tData; }
+      if (cData) { setCustomers(cData); cachedReportsData.customers = cData; }
+      if (supData) { setSuppliers(supData); cachedReportsData.suppliers = supData; }
+      if (srData) { setSalesReturns(srData); cachedReportsData.salesReturns = srData; }
+      if (cpData) { setCreditPayments(cpData); cachedReportsData.creditPayments = cpData; }
+      if (prData) { setProfiles(prData); cachedReportsData.profiles = prData; }
     } catch (e) {
       console.error('Failed to load reports data:', e);
     }
@@ -124,6 +140,8 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       const { data } = await supabase.from('system_settings').select('*').single();
       if (data && data.shop_name) {
         setShopName(data.shop_name);
+        if (!cachedReportsData) cachedReportsData = {};
+        cachedReportsData.shopName = data.shop_name;
       }
     } catch (e) {
       console.error('Failed to load shop settings:', e);

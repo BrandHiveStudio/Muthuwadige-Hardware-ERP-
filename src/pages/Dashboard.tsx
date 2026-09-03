@@ -45,6 +45,21 @@ interface DashboardProps {
   onNavigate?: (page: string, tab?: string) => void;
 }
 
+// Module-level cache for stale-while-revalidate zero-flicker tab switching
+let cachedDashboard: {
+  stats: any;
+  lowStockItems: any[];
+  isAdmin: boolean;
+  suppliers: any[];
+  recentSales: any[];
+  salesTrend: any[];
+  growthPercent: number;
+  salesByCategory: any[];
+  todayProfit: number;
+  cashBalance: number;
+  pendingPOs: number;
+} | null = null;
+
 export function Dashboard({ onNavigate }: DashboardProps) {
   // Hardcode symbol to Rs.
   const symbol = 'Rs.';
@@ -64,8 +79,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     return trend;
   };
 
-  // --- STATE MANAGEMENT ---
-  const [stats, setStats] = useState({
+  // --- STATE MANAGEMENT WITH STALE-WHILE-REVALIDATE ---
+  const [stats, setStats] = useState(() => cachedDashboard?.stats || {
     revenue: 0,
     grossSales: 0,
     netSales: 0,
@@ -75,20 +90,20 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     customers: 0,
     lowStock: 0
   });
-  const [lowStockItems, setLowStockItems] = useState<any[]>([]);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [suppliers, setSuppliers] = useState<any[]>([]);
-  const [recentSales, setRecentSales] = useState<any[]>([]);
-  const [salesTrend, setSalesTrend] = useState<any[]>(getInitialSalesTrend());
-  const [growthPercent, setGrowthPercent] = useState<number>(0);
-  const [salesByCategory, setSalesByCategory] = useState<any[]>(categorySalesData);
-  const [loading, setLoading] = useState(true);
+  const [lowStockItems, setLowStockItems] = useState<any[]>(() => cachedDashboard?.lowStockItems || []);
+  const [isAdmin, setIsAdmin] = useState(() => cachedDashboard?.isAdmin || false);
+  const [suppliers, setSuppliers] = useState<any[]>(() => cachedDashboard?.suppliers || []);
+  const [recentSales, setRecentSales] = useState<any[]>(() => cachedDashboard?.recentSales || []);
+  const [salesTrend, setSalesTrend] = useState<any[]>(() => cachedDashboard?.salesTrend || getInitialSalesTrend());
+  const [growthPercent, setGrowthPercent] = useState<number>(() => cachedDashboard?.growthPercent || 0);
+  const [salesByCategory, setSalesByCategory] = useState<any[]>(() => cachedDashboard?.salesByCategory || categorySalesData);
+  const [loading, setLoading] = useState(() => !cachedDashboard);
 
   // Responsive Owner/Mobile Dashboard Toggle State
   const [isMobileMode, setIsMobileMode] = useState(false);
-  const [todayProfit, setTodayProfit] = useState(0);
-  const [cashBalance, setCashBalance] = useState(0);
-  const [pendingPOs, setPendingPOs] = useState(0);
+  const [todayProfit, setTodayProfit] = useState(() => cachedDashboard?.todayProfit || 0);
+  const [cashBalance, setCashBalance] = useState(() => cachedDashboard?.cashBalance || 0);
+  const [pendingPOs, setPendingPOs] = useState(() => cachedDashboard?.pendingPOs || 0);
   const [isSinhala, setIsSinhala] = useState(false);
   const t = (en: string, si: string) => isSinhala ? si : en;
 
@@ -215,7 +230,9 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   }, []);
 
   const fetchDashboardStats = async () => {
-    setLoading(true);
+    if (!cachedDashboard) {
+      setLoading(true);
+    }
     const today = getTodaySriLankaDate();
 
     try {
@@ -445,7 +462,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       const pendingCount = poData?.filter((po: any) => po.status === 'pending').length || 0;
       setPendingPOs(pendingCount);
 
-      setStats({
+      const calculatedStats = {
         revenue: todayFinancialSummary.grossStickerSales,
         grossSales: todayFinancialSummary.grossStickerSales,
         netSales: todayFinancialSummary.netSalesRevenue,
@@ -454,9 +471,26 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         orders: todayOrders,
         customers: customerCount,
         lowStock: lowStock.length
-      });
+      };
+
+      setStats(calculatedStats);
       setLowStockItems(lowStock);
       setRecentSales(recent);
+
+      // Save to module cache for instantaneous tab switching
+      cachedDashboard = {
+        stats: calculatedStats,
+        lowStockItems: lowStock,
+        isAdmin,
+        suppliers: suppData || [],
+        recentSales: recent,
+        salesTrend: dynamicTrend,
+        growthPercent: computedGrowth,
+        salesByCategory: dynamicCategories.length > 0 ? dynamicCategories : categorySalesData,
+        todayProfit: todayFinancialSummary.grossProfit,
+        cashBalance: dynamicCashInHand,
+        pendingPOs: pendingCount
+      };
     } catch (error) {
       console.error("Error loading dashboard data:", error);
     } finally {

@@ -402,9 +402,9 @@ export async function reconcileLocalCatalogWithCloud(localDb, tursoClient) {
 }
 
 /**
- * Start automated background sync worker (runs every 20 seconds)
+ * Start automated background sync worker (runs every 3 seconds for near-real-time dual engine sync)
  */
-export function startBackgroundSyncWorker(localDb, intervalMs = 20000) {
+export function startBackgroundSyncWorker(localDb, intervalMs = 3000) {
   if (isWebClient) {
     console.log('🌐 [BackgroundSync] Web client environment detected. Background worker disabled (direct cloud queries).');
     return;
@@ -414,14 +414,14 @@ export function startBackgroundSyncWorker(localDb, intervalMs = 20000) {
     clearInterval(syncIntervalId);
   }
 
-  console.log(`⏱️ [BackgroundSync] Starting automated 20s background sync worker...`);
+  console.log(`⏱️ [BackgroundSync] Starting automated 3s near-real-time background sync worker...`);
 
   // Run initial sync cycle after 1 second to let server initialize
   setTimeout(() => {
     runSyncCycle(localDb).catch(() => {});
   }, 1000);
 
-  // Schedule recurring 20s cycle
+  // Schedule recurring 3s cycle
   syncIntervalId = setInterval(() => {
     runSyncCycle(localDb).catch(() => {});
   }, intervalMs);

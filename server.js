@@ -369,6 +369,7 @@ async function logAudit(userEmail, action, details) {
       'INSERT INTO audit_logs (id, user_email, action, details, timestamp) VALUES (?, ?, ?, ?, ?)',
       [id, userEmail || 'system', action, details, timestamp]
     );
+    enqueueSync(db, 'audit_logs', id, 'UPSERT').catch(() => {});
   } catch (err) {
     console.error('Failed to log audit:', err);
   }
@@ -2308,6 +2309,7 @@ app.post('/api/suppliers', async (req, res) => {
       'INSERT INTO suppliers (id, name, email, phone, address, credit_terms, payable_balance, nic) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       [id, s.name, s.email, s.phone, s.address, s.creditTerms || s.credit_terms, s.payableBalance !== undefined ? s.payableBalance : s.payable_balance || 0, s.nic]
     );
+    enqueueSync(db, 'suppliers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
     res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2355,6 +2357,7 @@ app.put('/api/suppliers/:id', async (req, res) => {
     }
 
     await logAudit(s.user_email || 'system', 'SUPPLIER_UPDATED', `Supplier ${name} details were updated.`);
+    enqueueSync(db, 'suppliers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2365,6 +2368,7 @@ app.delete('/api/suppliers/:id', async (req, res) => {
   const { id } = req.params;
   try {
     await db.run('DELETE FROM suppliers WHERE id = ?', [id]);
+    enqueueSync(db, 'suppliers', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => {});
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2411,6 +2415,84 @@ app.get('/api/sales', async (req, res) => {
       creditNoteCode: s.credit_note_code || ''
     }));
     res.json(mapped);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/reports/summary', async (req, res) => {
+  try {
+    const { from_date, to_date, from, to } = req.query;
+    
+    // Consistent timezone (Asia/Colombo UTC+05:30) date bounds in YYYY-MM-DD
+    const nowColombo = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Colombo' }).format(new Date());
+    const startDate = from_date || from || nowColombo;
+    const endDate = to_date || to || nowColombo;
+
+    const sales = await db.all(
+      `SELECT * FROM sales 
+       WHERE status NOT IN ('cancelled', 'Voided', 'voided')`
+    );
+
+    let totalRevenue = 0;
+    let ordersCount = 0;
+    let cogs = 0;
+    let cashSales = 0;
+    let creditSales = 0;
+
+    for (const s of sales) {
+      let saleDateStr = '';
+      if (s.created_at) {
+        try {
+          saleDateStr = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Colombo' }).format(new Date(s.created_at));
+        } catch (_) {
+          saleDateStr = String(s.created_at).substring(0, 10);
+        }
+      } else if (s.date) {
+        saleDateStr = String(s.date).substring(0, 10);
+      }
+
+      if (saleDateStr >= startDate && saleDateStr <= endDate) {
+        const total = Number(s.total_amount || s.total || 0);
+        totalRevenue += total;
+        ordersCount += 1;
+
+        if (String(s.payment_method).toLowerCase() === 'credit') {
+          creditSales += total;
+        } else {
+          cashSales += total;
+        }
+
+        let items = [];
+        try {
+          items = typeof s.items === 'string' ? JSON.parse(s.items) : (s.items || []);
+        } catch (_) {}
+
+        if (Array.isArray(items)) {
+          for (const it of items) {
+            const cost = Number(it.cost_price || it.costPrice || 0);
+            const qty = Number(it.quantity || it.qty || 1);
+            cogs += (cost * qty);
+          }
+        }
+      }
+    }
+
+    const netProfit = totalRevenue - cogs;
+
+    res.json({
+      success: true,
+      from_date: startDate,
+      to_date: endDate,
+      total_revenue: totalRevenue,
+      gross_sales: totalRevenue,
+      net_sales: totalRevenue,
+      cogs,
+      net_profit: netProfit,
+      orders_count: ordersCount,
+      cash_sales: cashSales,
+      credit_sales: creditSales
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -4224,6 +4306,7 @@ app.post('/api/transactions', async (req, res) => {
       'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [transaction.id, transaction.type, transaction.category, transaction.description, transaction.amount, transaction.date, transaction.reference, transaction.user_id, transaction.created_at]
     );
+    enqueueSync(db, 'transactions', transaction.id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
     res.json({ success: true, id: transaction.id });
   } catch (err) {
     res.status(500).json({ error: err.message });

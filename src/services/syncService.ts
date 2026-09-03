@@ -407,14 +407,14 @@ export async function reconcileLocalCatalogWithCloud(localDb: any, tursoClient: 
   }
 }
 
-export function startBackgroundSyncWorker(localDb: any, intervalMs = 20000): any {
+export function startBackgroundSyncWorker(localDb: any, intervalMs = 3000): any {
   if (isWebClient) return null;
 
   if (syncIntervalId) {
     clearInterval(syncIntervalId);
   }
 
-  console.log(`⏱️ [BackgroundSync] Starting automated 20s background sync worker...`);
+  console.log(`⏱️ [BackgroundSync] Starting automated 3s near-real-time background sync worker...`);
 
   setTimeout(() => {
     runSyncCycle(localDb).catch(() => {});
