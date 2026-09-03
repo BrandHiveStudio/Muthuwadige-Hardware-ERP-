@@ -1,32 +1,28 @@
-export const getBaseUrl = (): string => {
-  if (typeof window !== 'undefined' && window.location && window.location.origin) {
-    const isLiveWebDomain = !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
+export function getBaseUrl(): string {
+  if (typeof window === 'undefined') return 'http://localhost:5001/api';
 
-    // 1. If stored in localStorage, use it (skip if it points to localhost while browsing on a live domain)
-    const stored = localStorage.getItem('api_server_url') || localStorage.getItem('server_address') || localStorage.getItem('erp_host_address');
-    if (stored) {
-      const cleanStored = stored.replace(/\/+$/, '');
-      const isStoredLocal = cleanStored.includes('localhost') || cleanStored.includes('127.0.0.1');
-      if (!isLiveWebDomain || !isStoredLocal) {
-        return cleanStored.endsWith('/api') ? cleanStored : `${cleanStored}/api`;
-      }
-    }
-
-    // 2. If running in a web browser (Vercel / Cloud / custom domain), automatically default to origin + /api
-    if (isLiveWebDomain) {
-      return `${window.location.origin}/api`;
-    }
+  // 1. ELECTRON DESKTOP APP CHECK (MUST COME FIRST)
+  const isElectron = Boolean((window as any).electronAPI) || 
+                     window.location.protocol === 'file:' || 
+                     (typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron'));
+  
+  if (isElectron) {
+    const stored = localStorage.getItem('erp_host_address') || localStorage.getItem('api_server_url') || localStorage.getItem('server_address');
+    return (stored ? stored.replace(/\/+$/, '').replace(/\/api$/, '') : 'http://localhost:5001') + '/api';
   }
 
-  // 3. Fallback to build-time environment variable if configured
-  const envUrl = (import.meta.env as any)?.VITE_API_URL;
-  if (envUrl) {
-    return envUrl.replace(/\/+$/, '');
+  // 2. LIVE WEB DEPLOYMENT (Vercel, custom domain)
+  const hostname = window.location.hostname || '';
+  const isLocalWeb = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '';
+  
+  if (!isLocalWeb) {
+    return `${window.location.origin}/api`;
   }
 
-  // 4. Fallback for local desktop Electron POS
-  return 'http://localhost:5001/api';
-};
+  // 3. LOCAL DEV BROWSER (Vite on :5173 connecting to backend on :5001)
+  const stored = localStorage.getItem('erp_host_address') || localStorage.getItem('api_server_url') || localStorage.getItem('server_address');
+  return (stored ? stored.replace(/\/+$/, '').replace(/\/api$/, '') : 'http://localhost:5001') + '/api';
+}
 
 export let API_URL = getBaseUrl();
 export let BASE_URL = API_URL.replace(/\/api$/, '');

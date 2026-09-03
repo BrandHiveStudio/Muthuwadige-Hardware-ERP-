@@ -118,10 +118,21 @@ export function Auth({ onLogin }: AuthProps) {
   const [showConnectionSettings, setShowConnectionSettings] = useState(false);
   const [connectionError, setConnectionError] = useState(false);
   const [hostAddressInput, setHostAddressInput] = useState(() => {
+    const isElectron = typeof window !== 'undefined' && (
+      Boolean((window as any).electronAPI) || 
+      window.location.protocol === 'file:' || 
+      (typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron'))
+    );
+
     const stored = localStorage.getItem('erp_host_address') || localStorage.getItem('api_server_url') || localStorage.getItem('server_address');
     if (stored) return stored;
-    if (typeof window !== 'undefined' && window.location && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')) {
-      return window.location.origin;
+
+    if (!isElectron && typeof window !== 'undefined' && window.location) {
+      const hostname = window.location.hostname || '';
+      const isLocalWeb = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '';
+      if (!isLocalWeb) {
+        return window.location.origin;
+      }
     }
     return 'http://localhost:5001';
   });
@@ -151,9 +162,13 @@ export function Auth({ onLogin }: AuthProps) {
       } catch (err) {
         console.warn('[Connection Check] Database check notice:', err);
         if (isMounted) {
-          const isLiveWebDomain = typeof window !== 'undefined' &&
-            !window.location.hostname.includes('localhost') &&
-            !window.location.hostname.includes('127.0.0.1');
+          const isElectron = typeof window !== 'undefined' && (
+            Boolean((window as any).electronAPI) || 
+            window.location.protocol === 'file:' || 
+            (typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron'))
+          );
+          const hostname = typeof window !== 'undefined' ? (window.location.hostname || '') : '';
+          const isLiveWebDomain = !isElectron && Boolean(hostname && hostname !== 'localhost' && hostname !== '127.0.0.1');
 
           if (isLiveWebDomain) {
             try {
