@@ -632,28 +632,24 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     const emVal = (email || '').trim().toLowerCase();
     const idVal = (userId || '').trim();
 
-    const baselineName = shopName || 'Sanoj Hardware';
+    // 1. If explicit valid cashier name is provided and not a generic business fallback
+    if (
+      rawVal &&
+      rawVal !== 'Sanoj Hardware' &&
+      rawVal !== 'Muthuwadige Hardware' &&
+      rawVal.toLowerCase() !== 'system' &&
+      rawVal !== 'u1' &&
+      rawVal !== 'u2'
+    ) {
+      return rawVal;
+    }
 
+    // 2. Check profiles list for matching ID, email, or name
     if (profiles && profiles.length > 0) {
       const matchedStaff = profiles.find(p => {
-        const pRole = (p.role || '').toLowerCase().trim();
         const pEmail = (p.email || '').toLowerCase().trim();
         const pName = (p.name || p.fullName || '').toLowerCase().trim();
         const pUsername = (p.username || '').toLowerCase().trim();
-
-        if (
-          pRole === 'super_admin' || 
-          pRole === 'super admin' || 
-          pRole === 'superadmin' || 
-          pRole === 'admin' || 
-          pEmail === 'admin@hardware.com' || 
-          pEmail === 'sanojhardware@gmail.com' ||
-          p.id === 'u1' ||
-          p.id === 'u2' ||
-          p.id === 'admin_super'
-        ) {
-          return false;
-        }
 
         if (idVal && (p.id === idVal || p.id === idVal.replace(/^u_/, '') || `u_${p.id}` === idVal)) return true;
         if (emVal && pEmail === emVal) return true;
@@ -667,23 +663,42 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       });
 
       if (matchedStaff) {
-        return matchedStaff.name || matchedStaff.fullName || matchedStaff.username || matchedStaff.email;
-      }
-    }
-
-    if (currentUser) {
-      const curRole = (currentUser.role || '').toLowerCase().trim();
-      const curEmail = (currentUser.email || '').toLowerCase().trim();
-      const isSuper = curRole === 'super_admin' || curRole === 'super admin' || curRole === 'superadmin' || curRole === 'admin' || curEmail === 'admin@hardware.com' || curEmail === 'sanojhardware@gmail.com';
-      if (!isSuper) {
-        const curName = (currentUser.name || currentUser.username || '').trim();
-        if ((emVal && curEmail === emVal) || (idVal && (currentUser.id === idVal || `u_${currentUser.id}` === idVal)) || (rawVal && curName && rawVal.toLowerCase() === curName.toLowerCase())) {
-          return curName || currentUser.email;
+        const staffName = matchedStaff.name || matchedStaff.fullName || matchedStaff.username;
+        if (staffName && staffName.trim()) return staffName.trim();
+        if (matchedStaff.email) {
+          const prefix = matchedStaff.email.split('@')[0];
+          return prefix.charAt(0).toUpperCase() + prefix.slice(1);
         }
       }
     }
 
-    return baselineName;
+    // 3. Check active currentUser session
+    if (currentUser) {
+      const curEmail = (currentUser.email || '').toLowerCase().trim();
+      const curName = (currentUser.name || currentUser.fullName || currentUser.username || '').trim();
+      if ((emVal && curEmail === emVal) || (idVal && (currentUser.id === idVal || `u_${currentUser.id}` === idVal))) {
+        if (curName && curName !== 'Sanoj Hardware' && curName !== 'Muthuwadige Hardware') {
+          return curName;
+        }
+        if (currentUser.email) {
+          const prefix = currentUser.email.split('@')[0];
+          return prefix.charAt(0).toUpperCase() + prefix.slice(1);
+        }
+      }
+      if (curName && curName !== 'Sanoj Hardware' && curName !== 'Muthuwadige Hardware') {
+        return curName;
+      }
+    }
+
+    // 4. If email is provided, format prefix into a display name
+    if (emVal && emVal.includes('@')) {
+      const prefix = emVal.split('@')[0];
+      if (prefix && prefix !== 'admin' && prefix !== 'system') {
+        return prefix.charAt(0).toUpperCase() + prefix.slice(1);
+      }
+    }
+
+    return rawVal && rawVal !== 'Sanoj Hardware' && rawVal !== 'Muthuwadige Hardware' ? rawVal : 'Krish';
   };
 
   const periodSalesReturns = filteredSalesReturns.filter(r => {

@@ -24,20 +24,31 @@ if (process.env.VERCEL === '1' || process.env.APP_ROLE === 'web' || process.env.
 }
 
 /**
- * Check connectivity to Turso Cloud libSQL with a 4-second timeout
+ * Check connectivity to Turso Cloud libSQL with a 3-second timeout
  */
 export async function pingTurso(tursoClient) {
   if (!tursoClient) return false;
   try {
     const pingPromise = tursoClient.execute('SELECT 1 as ping');
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Turso ping timeout')), 4000)
+      setTimeout(() => reject(new Error('Turso ping timeout')), 3000)
     );
     await Promise.race([pingPromise, timeoutPromise]);
     return true;
   } catch (err) {
     return false;
   }
+}
+
+/**
+ * Execute a Turso query with a strict 5-second timeout to prevent UI/server hangs
+ */
+async function executeWithTimeout(tursoClient, sqlOrObj, timeoutMs = 5000) {
+  const queryPromise = tursoClient.execute(sqlOrObj);
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`Query timeout after ${timeoutMs}ms`)), timeoutMs)
+  );
+  return Promise.race([queryPromise, timeoutPromise]);
 }
 
 let schemaEnsured = false;
@@ -242,7 +253,7 @@ export async function pullDownstreamChanges(localDb, tursoClient) {
       );
       if (!tableExists) return;
 
-      const res = await tursoClient.execute(selectSql || `SELECT * FROM "${tableName}"`);
+      const res = await executeWithTimeout(tursoClient, selectSql || `SELECT * FROM "${tableName}"`, 5000);
       const activeCloudIds = [];
       if (res?.rows && res.rows.length > 0) {
         for (const row of res.rows) {

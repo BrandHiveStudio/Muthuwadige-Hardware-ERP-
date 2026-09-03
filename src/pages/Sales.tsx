@@ -969,17 +969,18 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       return null;
     })();
 
-    if (active?.name && active.name.trim()) return active.name.trim();
+    if (active?.name && active.name.trim() && active.name.trim() !== 'Sanoj Hardware' && active.name.trim() !== 'Muthuwadige Hardware') return active.name.trim();
     if (active?.fullName && active.fullName.trim()) return active.fullName.trim();
     if (active?.full_name && active.full_name.trim()) return active.full_name.trim();
-    if (active?.username && active.username.trim()) return active.username.trim();
+    if (active?.username && active.username.trim() && active.username.trim() !== 'admin') return active.username.trim();
     if (active?.email) {
       const emailPrefix = active.email.split('@')[0];
       if (emailPrefix && emailPrefix.toLowerCase() !== 'admin' && emailPrefix.toLowerCase() !== 'system') {
         return emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
       }
+      return emailPrefix || active.email;
     }
-    return 'Sanoj Hardware';
+    return 'Krish';
   };
 
   const [shopSettings, setShopSettings] = useState<any>(null);

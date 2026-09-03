@@ -1530,7 +1530,7 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               ` : ''}
               <tr>
                 <td>${isSi ? 'අයකැමි:' : 'CASHIER:'}</td>
-                <td class="value" style="font-weight: 700;">${order.cashier || (order as any).cashier_name || (order as any).user_name || (order as any).created_by || 'Sanoj Hardware'}</td>
+                <td class="value" style="font-weight: 700;">${order.cashier || (order as any).cashier_name || (order as any).user_name || (order as any).created_by || 'Krish'}</td>
               </tr>
               ${((order.payment_method || (order as any).paymentMethod || '').toLowerCase() === 'credit' || order.status === 'Non Paid') ? `
               <tr>
@@ -1978,7 +1978,7 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
                 ` : ''}
                 <tr>
                   <td class="label">${isSi ? 'අයකැමි:' : 'CASHIER:'}</td>
-                  <td class="value" style="font-weight: 700; color: #1f2937;">${order.cashier || (order as any).cashier_name || (order as any).user_name || (order as any).created_by || 'Sanoj Hardware'}</td>
+                  <td class="value" style="font-weight: 700; color: #1f2937;">${order.cashier || (order as any).cashier_name || (order as any).user_name || (order as any).created_by || 'Krish'}</td>
                 </tr>
                 ${((order.payment_method || (order as any).paymentMethod || '').toLowerCase() === 'credit' || order.status === 'Non Paid') ? `
                 <tr>
@@ -2168,7 +2168,7 @@ const generateReturnPrintHTML = (
             <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'ආපසු අංකය:' : 'Return No:'}</strong> <span class="font-mono" style="font-weight: bold;">${sr.returnNo || sr.return_no || sr.id}</span></div>
             <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'මුල් ඉන්වොයිසිය:' : 'Original Inv:'}</strong> <span class="font-mono">${sr.invoiceNo || sr.invoice_no}</span></div>
             <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'පාරිභෝගිකයා:' : 'Customer:'}</strong> <span>${sr.customerName || sr.customer_name || (isSi ? 'පාරිභෝගිකයා' : 'Guest Customer')}</span></div>
-            <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'අයකැමි:' : 'Cashier:'}</strong> <span>${sr.cashier || (sr as any).cashier_name || (sr as any).user_name || (sr as any).handled_by || 'Sanoj Hardware'}</span></div>
+            <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'අයකැමි:' : 'Cashier:'}</strong> <span>${sr.cashier || (sr as any).cashier_name || (sr as any).user_name || (sr as any).handled_by || 'Krish'}</span></div>
             <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'දිනය:' : 'Date:'}</strong> <span>${new Date(sr.created_at || new Date()).toLocaleString()}</span></div>
             <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'ක්‍රමය:' : 'Method:'}</strong> <span style="font-weight: bold;">${displayMethod}</span></div>
           </div>

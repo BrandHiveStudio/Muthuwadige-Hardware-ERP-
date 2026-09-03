@@ -48,13 +48,21 @@ export async function pingTurso(tursoClient: Client | null): Promise<boolean> {
   try {
     const pingPromise = tursoClient.execute('SELECT 1 as ping');
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Turso ping timeout')), 4000)
+      setTimeout(() => reject(new Error('Turso ping timeout')), 3000)
     );
     await Promise.race([pingPromise, timeoutPromise]);
     return true;
   } catch {
     return false;
   }
+}
+
+async function executeWithTimeout(tursoClient: Client, sqlOrObj: any, timeoutMs = 5000): Promise<any> {
+  const queryPromise = tursoClient.execute(sqlOrObj);
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`Query timeout after ${timeoutMs}ms`)), timeoutMs)
+  );
+  return Promise.race([queryPromise, timeoutPromise]);
 }
 
 let schemaEnsured = false;
@@ -249,7 +257,7 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
       );
       if (!tableExists) return;
 
-      const res = await tursoClient.execute(selectSql || `SELECT * FROM "${tableName}"`);
+      const res = await executeWithTimeout(tursoClient, selectSql || `SELECT * FROM "${tableName}"`, 5000);
       const activeCloudIds: string[] = [];
       if (res?.rows && res.rows.length > 0) {
         for (const row of res.rows) {

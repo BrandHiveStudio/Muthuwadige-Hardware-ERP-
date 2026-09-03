@@ -59,6 +59,7 @@ export function Header({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [isManualSyncing, setIsManualSyncing] = useState(false);
+  const [syncToastMessage, setSyncToastMessage] = useState<string | null>(null);
   const pageInfo = pageTitles[currentPage] || { title: 'Hardware Store ERP', breadcrumb: 'System' };
 
   const isElectronApp = typeof window !== 'undefined' && Boolean((window as any).electronAPI);
@@ -103,7 +104,11 @@ export function Header({
       const res = await api.sync.triggerSync();
       setSyncStatus(res);
       window.dispatchEvent(new Event('sync-completed'));
-    } catch (_) {
+      setSyncToastMessage('Database synchronized successfully.');
+      setTimeout(() => setSyncToastMessage(null), 3000);
+    } catch (err: any) {
+      setSyncToastMessage(err?.message || 'Sync encountered a temporary network issue.');
+      setTimeout(() => setSyncToastMessage(null), 3500);
     } finally {
       setIsManualSyncing(false);
       fetchSyncStatus();
@@ -307,6 +312,19 @@ export function Header({
         );
       })()}
 
+      {/* Sync Now Button */}
+      <button
+        type="button"
+        onClick={handleManualSync}
+        disabled={isManualSyncing || syncStatus?.isSyncing}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:border-blue-400 hover:text-blue-800 transition-colors text-xs font-semibold disabled:opacity-50 shadow-sm"
+        title="Synchronize local and cloud databases immediately"
+        aria-label="Sync Now"
+      >
+        <RefreshCw className={`w-4 h-4 ${isManualSyncing || syncStatus?.isSyncing ? 'animate-spin text-blue-600' : ''}`} />
+        <span>{isManualSyncing || syncStatus?.isSyncing ? 'Syncing...' : 'Sync Now'}</span>
+      </button>
+
       {/* Refresh Page Button */}
       <button
         type="button"
@@ -319,8 +337,6 @@ export function Header({
         <RotateCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-amber-600' : ''}`} />
         <span>{isRefreshing ? 'Reloading...' : 'Reload'}</span>
       </button>
-
-
 
       {/* Notifications */}
       <button
@@ -357,6 +373,14 @@ export function Header({
           {currentUser.avatar || currentUser.name.charAt(0)}
         </div>
       </div>
+
+      {/* Floating Sync Toast Notification */}
+      {syncToastMessage && (
+        <div className="fixed top-16 right-6 z-50 flex items-center gap-2 px-4 py-2.5 rounded-lg bg-slate-900 text-white text-xs font-semibold shadow-2xl border border-slate-700 animate-in fade-in slide-in-from-top-2 duration-200">
+          <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span>{syncToastMessage}</span>
+        </div>
+      )}
     </header>
   );
 }
