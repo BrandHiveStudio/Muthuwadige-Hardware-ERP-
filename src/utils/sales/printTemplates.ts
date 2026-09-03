@@ -1522,9 +1522,15 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
                 <td>${isSi ? 'ගෙවීම් ක්‍රමය:' : 'PAYMENT METHOD:'}</td>
                 <td class="value"><span style="display: inline-block; padding: 2px 8px; background-color: #f59e0b; color: #000000; font-weight: 800; text-transform: uppercase; font-size: 11px; border: 1px solid #d97706; border-radius: 4px;">${(order.payment_method || (order as any).paymentMethod || (order.status === 'Non Paid' ? 'CREDIT' : 'CASH')).toUpperCase()}</span></td>
               </tr>
+              ${((order.payment_method || (order as any).paymentMethod || '').toLowerCase() === 'cheque' || (order as any).cheque_number || (order as any).chequeNumber) ? `
+              <tr>
+                <td>${isSi ? 'චෙක් විස්තර:' : 'CHEQUE NO:'}</td>
+                <td class="value" style="font-weight: 800; color: #1f2937;">#${(order as any).cheque_number || (order as any).chequeNumber || 'CHQ'} ${((order as any).cheque_bank || (order as any).chequeBank) ? `(${(order as any).cheque_bank || (order as any).chequeBank})` : ''}</td>
+              </tr>
+              ` : ''}
               <tr>
                 <td>${isSi ? 'අයකැමි:' : 'CASHIER:'}</td>
-                <td class="value" style="font-weight: 700;">${order.cashier || (order as any).cashier_name || (order as any).user_name || shopSettings?.shop_name || 'Sanoj Hardware'}</td>
+                <td class="value" style="font-weight: 700;">${order.cashier || (order as any).cashier_name || (order as any).user_name || (order as any).created_by || 'Sanoj Hardware'}</td>
               </tr>
               ${((order.payment_method || (order as any).paymentMethod || '').toLowerCase() === 'credit' || order.status === 'Non Paid') ? `
               <tr>
@@ -1964,9 +1970,15 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
                   <td class="label">${isSi ? 'ගෙවීම් ක්‍රමය:' : 'PAYMENT METHOD:'}</td>
                   <td class="value"><span style="display: inline-block; padding: 2px 8px; background-color: #f59e0b; color: #000000; font-weight: 800; text-transform: uppercase; font-size: 10px; border: 1px solid #d97706; border-radius: 4px;">${(order.payment_method || (order as any).paymentMethod || (order.status === 'Non Paid' ? 'CREDIT' : 'CASH')).toUpperCase()}</span></td>
                 </tr>
+                ${((order.payment_method || (order as any).paymentMethod || '').toLowerCase() === 'cheque' || (order as any).cheque_number || (order as any).chequeNumber) ? `
+                <tr>
+                  <td class="label">${isSi ? 'චෙක්පත් විස්තර:' : 'CHEQUE DETAILS:'}</td>
+                  <td class="value" style="font-weight: 800; color: #1f2937;">#${(order as any).cheque_number || (order as any).chequeNumber || 'CHQ'} ${((order as any).cheque_bank || (order as any).chequeBank) ? `(${(order as any).cheque_bank || (order as any).chequeBank})` : ''}</td>
+                </tr>
+                ` : ''}
                 <tr>
                   <td class="label">${isSi ? 'අයකැමි:' : 'CASHIER:'}</td>
-                  <td class="value" style="font-weight: 700; color: #1f2937;">${order.cashier || (order as any).cashier_name || (order as any).user_name || shopSettings?.shop_name || 'Sanoj Hardware'}</td>
+                  <td class="value" style="font-weight: 700; color: #1f2937;">${order.cashier || (order as any).cashier_name || (order as any).user_name || (order as any).created_by || 'Sanoj Hardware'}</td>
                 </tr>
                 ${((order.payment_method || (order as any).paymentMethod || '').toLowerCase() === 'credit' || order.status === 'Non Paid') ? `
                 <tr>
@@ -2156,7 +2168,7 @@ const generateReturnPrintHTML = (
             <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'ආපසු අංකය:' : 'Return No:'}</strong> <span class="font-mono" style="font-weight: bold;">${sr.returnNo || sr.return_no || sr.id}</span></div>
             <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'මුල් ඉන්වොයිසිය:' : 'Original Inv:'}</strong> <span class="font-mono">${sr.invoiceNo || sr.invoice_no}</span></div>
             <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'පාරිභෝගිකයා:' : 'Customer:'}</strong> <span>${sr.customerName || sr.customer_name || (isSi ? 'පාරිභෝගිකයා' : 'Guest Customer')}</span></div>
-            <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'අයකැමි:' : 'Cashier:'}</strong> <span>${sr.cashier || (sr as any).cashier_name || (sr as any).user_name || shopSettings?.shop_name || 'Sanoj Hardware'}</span></div>
+            <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'අයකැමි:' : 'Cashier:'}</strong> <span>${sr.cashier || (sr as any).cashier_name || (sr as any).user_name || (sr as any).handled_by || 'Sanoj Hardware'}</span></div>
             <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'දිනය:' : 'Date:'}</strong> <span>${new Date(sr.created_at || new Date()).toLocaleString()}</span></div>
             <div style="display: flex; justify-content: space-between;"><strong>${isSi ? 'ක්‍රමය:' : 'Method:'}</strong> <span style="font-weight: bold;">${displayMethod}</span></div>
           </div>
@@ -2189,7 +2201,6 @@ const generateReturnPrintHTML = (
             </table>
           ` : ''}
 
-          {/* Calculation & Balance Breakdown */}
           <div class="font-mono" style="margin-top: 10px; border-top: 2px dashed #374151; padding-top: 6px; font-size: 11px; line-height: 1.5;">
             <div style="display: flex; justify-content: space-between;">
               <span>${isSi ? 'ආපසු වටිනාකම (ශුද්ධ):' : 'Return Credit (Net):'}</span>

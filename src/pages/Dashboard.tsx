@@ -3,7 +3,14 @@ import { supabase } from '../lib/supabaseClient';
 import { API_URL } from '../lib/api';
 import { formatStock } from '../utils/formatters';
 import { openExternalUrl, formatWhatsAppUrl } from '../utils/openExternalUrl';
-import { calculateNetSalesRevenue, calculateNetCOGS, calculateGrossProfit, calculateSaleAccounting, getItemUnitCost } from '../utils/accounting';
+import {
+  toSriLankaDateStr,
+  getTodaySriLankaDate,
+  computeFinancialSummary,
+  computePaymentBreakdown,
+  calculateSaleAccounting,
+  getItemUnitCost
+} from '../utils/accounting';
 import {
   ShoppingCartIcon,
   AlertTriangleIcon,
@@ -41,8 +48,6 @@ interface DashboardProps {
 export function Dashboard({ onNavigate }: DashboardProps) {
   // Hardcode symbol to Rs.
   const symbol = 'Rs.';
-
-
 
   const getInitialSalesTrend = () => {
     const trend: any[] = [];
@@ -211,7 +216,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
 
   const fetchDashboardStats = async () => {
     setLoading(true);
-    const today = new Date().toLocaleDateString('sv-SE');
+    const today = getTodaySriLankaDate();
 
     try {
       // Fetch user role
@@ -229,42 +234,16 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       // 1. Fetch all sales for dynamic charts and metrics
       const { data: allSales } = await supabase.from('sales').select('*');
       const { data: allReturns } = await supabase.from('sales_returns').select('*');
+      const { data: allCreditPayments } = await supabase.from('credit_payments').select('*');
+      const { data: allTransactions } = await supabase.from('transactions').select('*');
 
-      // Today's Sales (calculated locally from allSales)
+      // Today's Sales (calculated with Sri Lanka timezone)
       const salesToday = allSales ? allSales.filter((s: any) => {
-        if (!s.created_at) return false;
-        const saleDateStr = new Date(s.created_at).toLocaleDateString('sv-SE');
+        if (!s) return false;
+        const saleDateStr = toSriLankaDateStr(s.created_at || s.date);
         return saleDateStr === today && s.status !== 'cancelled' && s.status !== 'Voided' && s.status !== 'voided';
       }) : [];
 
-      // Calculate return adjustments for today's revenue (factor in both returned product value and exchange value)
-      let todayReturnsAdjustment = 0;
-      if (allReturns && allReturns.length > 0) {
-        allReturns.forEach((ret: any) => {
-          if (ret.status === 'voided' || ret.status === 'Voided' || ret.status === 'cancelled') return;
-          if (!ret.created_at) return;
-          const retDateStr = new Date(ret.created_at).toLocaleDateString('sv-SE');
-          if (retDateStr === today) {
-            const retVal = Number(ret.return_amount !== undefined && ret.return_amount !== null
-              ? ret.return_amount
-              : (ret.returnAmount !== undefined && ret.returnAmount !== null
-                ? ret.returnAmount
-                : (ret.total_refunded !== undefined && ret.total_refunded !== null && Number(ret.total_refunded) > 0
-                  ? ret.total_refunded
-                  : (ret.totalRefunded !== undefined && ret.totalRefunded !== null && Number(ret.totalRefunded) > 0
-                    ? ret.totalRefunded
-                    : (ret.amount || 0)))));
-            const exVal = Number(ret.exchange_amount !== undefined && ret.exchange_amount !== null
-              ? ret.exchange_amount
-              : (ret.exchangeAmount !== undefined && ret.exchangeAmount !== null
-                ? ret.exchangeAmount
-                : (ret.exchange_total || ret.exchangeTotal || 0)));
-            todayReturnsAdjustment += (exVal - retVal);
-          }
-        });
-      }
-
-      const todayRevenue = salesToday.reduce((acc, curr) => acc + (curr.total_amount || curr.total || 0), 0) + todayReturnsAdjustment;
       const todayOrders = salesToday.length;
 
       // 2. Fetch Customers & Suppliers
@@ -414,146 +393,52 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         setSalesByCategory(dynamicCategories);
       }
 
-      // 1. Calculate Gross Sales Today (Sticker price before returns or discounts)
-      let grossSalesToday = 0;
-      let totalDiscountsToday = 0;
-      let totalTransportToday = 0;
-      let todayItemCostVal = 0;
-
-      salesToday.forEach((s: any) => {
-        let items: any[] = [];
-        try {
-          items = typeof s.items === 'string' ? JSON.parse(s.items) : s.items || [];
-        } catch (_e) {}
-
-        if (Array.isArray(items) && items.length > 0) {
-          items.forEach((it: any) => {
-            const qty = Number(it.qty || it.quantity || 0);
-            const price = Number(it.price || it.unitPrice || it.unit_price || 0);
-            const product = products?.find(p => p.id === (it.productId || it.product_id));
-            const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.costPrice || it.cost_price);
-            
-            grossSalesToday += (qty * price);
-            todayItemCostVal += (qty * cost);
-          });
-        } else {
-          const saleSubtotal = Number(s.subtotal !== undefined ? s.subtotal : (s.total_amount || s.total || 0));
-          grossSalesToday += saleSubtotal;
-        }
-        totalDiscountsToday += Number(s.discount_amount || s.discount || 0);
-        totalTransportToday += Number(s.transportation_fee || s.transportationFee || s.delivery_fee || 0);
+      // 1. Authoritative Financial Performance Summary for Today
+      const todayFinancialSummary = computeFinancialSummary({
+        sales: allSales || [],
+        salesReturns: allReturns || [],
+        products: products || [],
+        fromDate: today,
+        toDate: today
       });
 
-      // 2. Calculate Total Returns / Refunds & Net Returns Today
-      let returnedSellingRev = 0;
-      let returnedCostVal = 0;
-      let exchangeSellingRev = 0;
-      let exchangeCostVal = 0;
+      // 2. Authoritative Payment Method & Cash Collections Breakdown for Today
+      const todayPaymentBreakdown = computePaymentBreakdown({
+        sales: allSales || [],
+        creditPayments: allCreditPayments || [],
+        salesReturns: allReturns || [],
+        fromDate: today,
+        toDate: today
+      });
 
-      if (allReturns && allReturns.length > 0) {
-        allReturns.forEach((ret: any) => {
-          if (ret.status === 'voided' || ret.status === 'Voided' || ret.status === 'cancelled') return;
-          if (!ret.created_at) return;
-          const retDateStr = new Date(ret.created_at).toLocaleDateString('sv-SE');
-          if (retDateStr === today) {
-            const refAmt = Number(
-              ret.refund_amount !== undefined && ret.refund_amount !== null
-                ? ret.refund_amount
-                : (ret.total_amount !== undefined && ret.total_amount !== null
-                  ? ret.total_amount
-                  : (ret.return_amount !== undefined && ret.return_amount !== null
-                    ? ret.return_amount
-                    : (ret.returnAmount !== undefined && ret.returnAmount !== null
-                      ? ret.returnAmount
-                      : (ret.total_refunded !== undefined && ret.total_refunded !== null
-                        ? ret.total_refunded
-                        : (ret.amount || 0)))))
-            );
-            const exVal = Number(
-              ret.exchange_amount !== undefined && ret.exchange_amount !== null
-                ? ret.exchange_amount
-                : (ret.exchangeAmount !== undefined && ret.exchangeAmount !== null
-                  ? ret.exchangeAmount
-                  : (ret.exchange_total || ret.exchangeTotal || 0))
-            );
+      // Unified Liquid Cash Calculation (incorporates Direct POS Cash, Credit Settlements & Encashed Cheques)
+      let dynamicCashInHand = todayPaymentBreakdown.totalCashCollected;
+      if (allTransactions && allTransactions.length > 0) {
+        const cashIncome = allTransactions
+          .filter((t: any) => {
+            const tDate = toSriLankaDateStr(t.date || t.created_at);
+            const method = (t.payment_method || t.paymentMethod || 'CASH').toString().toUpperCase().trim();
+            const type = (t.flow_type || t.type || '').toString().toUpperCase().trim();
+            return tDate === today && type === 'INCOME' && (method === 'CASH' || method === 'CASH_BEARER');
+          })
+          .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
 
-            returnedSellingRev += refAmt;
-            exchangeSellingRev += exVal;
+        const cashExpense = allTransactions
+          .filter((t: any) => {
+            const tDate = toSriLankaDateStr(t.date || t.created_at);
+            const method = (t.payment_method || t.paymentMethod || 'CASH').toString().toUpperCase().trim();
+            const type = (t.flow_type || t.type || '').toString().toUpperCase().trim();
+            return tDate === today && type === 'EXPENSE' && (method === 'CASH' || method === 'CASH_BEARER');
+          })
+          .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
 
-            let rawRetItems = ret.items || ret.returnedItems || ret.returned_items || [];
-            let retItems: any[] = [];
-            try { retItems = typeof rawRetItems === 'string' ? JSON.parse(rawRetItems) : rawRetItems; } catch (e) {}
-            if (Array.isArray(retItems)) {
-              retItems.forEach((it: any) => {
-                const product = products?.find(p => p.id === (it.productId || it.product_id));
-                const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.costPrice || it.cost_price);
-                returnedCostVal += Number(it.qty || it.quantity || 0) * cost;
-              });
-            }
-
-            let rawExItems = ret.exchangeItems || ret.exchange_items || [];
-            let exItems: any[] = [];
-            try { exItems = typeof rawExItems === 'string' ? JSON.parse(rawExItems) : rawExItems; } catch (e) {}
-            if (Array.isArray(exItems)) {
-              exItems.forEach((it: any) => {
-                const product = products?.find(p => p.id === (it.productId || it.product_id));
-                const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.costPrice || it.cost_price);
-                exchangeCostVal += Number(it.qty || it.quantity || 0) * cost;
-              });
-            }
-          }
-        });
+        if (cashIncome > 0 || cashExpense > 0) {
+          dynamicCashInHand = Math.max(0, cashIncome - cashExpense);
+        }
       }
 
-      // 3. Standardized Net Sales = Gross Sales - Refunds - Discounts + Fees
-      const todayNetReturns = returnedSellingRev;
-      const netSalesToday = calculateNetSalesRevenue(grossSalesToday, totalDiscountsToday, todayNetReturns, totalTransportToday);
-      const todayNetCogs = calculateNetCOGS(todayItemCostVal, exchangeCostVal, returnedCostVal);
-      const grossProfitToday = calculateGrossProfit(netSalesToday, todayNetCogs);
-      setTodayProfit(grossProfitToday);
-
-      // Calculate Actual Cash Collected Balance: (Sales Cash + Credit Payments) - Cash Refunds
-      let totalCashCollectedVal = 0;
-      if (allSales && allSales.length > 0) {
-        allSales.forEach((sale: any) => {
-          const statusLower = (sale.status || '').toString().toLowerCase().trim();
-          if (statusLower !== 'cancelled' && statusLower !== 'voided') {
-            const method = (sale.payment_method || sale.paymentMethod || '').toString().toLowerCase().trim();
-            const isCredit = method === 'credit' || method === 'credit sale' || sale.is_credit === true;
-            if (isCredit) {
-              totalCashCollectedVal += Number(sale.payment_received || 0);
-            } else {
-              if (statusLower === 'fully returned' || statusLower === 'returned' || statusLower === 'partially returned') {
-                totalCashCollectedVal += Number(sale.payment_received || 0);
-              } else {
-                const paid = sale.payment_received !== undefined && sale.payment_received !== null && Number(sale.payment_received) > 0
-                  ? Number(sale.payment_received)
-                  : Number(sale.total_amount !== undefined ? sale.total_amount : (sale.total || 0));
-                totalCashCollectedVal += paid;
-              }
-            }
-          }
-        });
-      }
-
-      let totalRefundsVal = 0;
-      let totalExchangeCashInflows = 0;
-      if (allReturns && allReturns.length > 0) {
-        allReturns.forEach((ret: any) => {
-          if (ret.status === 'voided' || ret.status === 'Voided' || ret.status === 'cancelled') return;
-          const method = (ret.returnMethod || ret.return_method || ret.returnType || ret.return_type || '').toString().toLowerCase().trim();
-          if (method === 'cash refund' || method === 'cash' || method === 'cash_refund') {
-            totalRefundsVal += Number(ret.totalRefunded !== undefined ? ret.totalRefunded : (ret.total_refunded !== undefined ? ret.total_refunded : (ret.refund_amount !== undefined ? ret.refund_amount : (ret.return_amount !== undefined ? ret.return_amount : (ret.amount || 0)))));
-          }
-          const paidAmt = Number(ret.customer_paid !== undefined ? ret.customer_paid : (ret.customerPaid || 0));
-          const changeGiven = Number(ret.change_given !== undefined ? ret.change_given : (ret.changeGiven || 0));
-          if (paidAmt > 0) {
-            totalExchangeCashInflows += Math.max(0, paidAmt - changeGiven);
-          }
-        });
-      }
-
-      setCashBalance(Math.max(0, totalCashCollectedVal + totalExchangeCashInflows - totalRefundsVal));
+      setTodayProfit(todayFinancialSummary.grossProfit);
+      setCashBalance(dynamicCashInHand);
 
       // Fetch pending Purchase Orders for supplier alerts
       const { data: poData } = await supabase.from('purchase_orders').select('*');
@@ -561,11 +446,11 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       setPendingPOs(pendingCount);
 
       setStats({
-        revenue: grossSalesToday,
-        grossSales: grossSalesToday,
-        netSales: netSalesToday,
-        cogs: todayNetCogs,
-        profit: grossProfitToday,
+        revenue: todayFinancialSummary.grossStickerSales,
+        grossSales: todayFinancialSummary.grossStickerSales,
+        netSales: todayFinancialSummary.netSalesRevenue,
+        cogs: todayFinancialSummary.netCOGS,
+        profit: todayFinancialSummary.grossProfit,
         orders: todayOrders,
         customers: customerCount,
         lowStock: lowStock.length

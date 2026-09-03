@@ -296,6 +296,18 @@ ipcMain.handle('clear-renderer-cache', async () => {
   }
 });
 
+ipcMain.handle('reload-window', async () => {
+  try {
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.reload();
+    }
+    return { success: true };
+  } catch (err) {
+    console.error('Error reloading window:', err);
+    return { success: false, error: err.message };
+  }
+});
+
 app.on('before-quit', () => {
   stopBackendServer();
 });

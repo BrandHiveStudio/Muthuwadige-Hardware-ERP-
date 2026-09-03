@@ -5,8 +5,10 @@ export interface Product {
   category: string;
   price: number;
   costPrice: number;
+  cost_price?: number;
   stock: number;
   minStock: number;
+  min_stock?: number;
   supplier: string;
   unit: string;
   barcode: string;
@@ -16,6 +18,12 @@ export interface Product {
   expiryDate?: string;
   supplierPhone?: string;
   measureDetails?: string;
+  parent_product_id?: string;
+  parentProductId?: string;
+  is_batch?: boolean;
+  isBatch?: boolean;
+  batch_number?: number;
+  batchNumber?: number;
 }
 
 export interface Customer {
@@ -28,17 +36,25 @@ export interface Customer {
   loyaltyPoints: number;
   totalPurchases: number;
   joinDate: string;
+  credit_balance?: number;
+  current_credit?: number;
+  creditBalance?: number;
 }
 
 export interface Supplier {
   id: string;
   name: string;
-  contact: string;
-  email: string;
-  phone: string;
-  address: string;
-  totalOrders: number;
-  balance: number;
+  contact?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  totalOrders?: number;
+  balance?: number;
+  payableBalance?: number;
+  payable_balance?: number;
+  creditTerms?: string;
+  credit_terms?: string;
+  nic?: string;
 }
 
 export interface SaleItem {
@@ -91,6 +107,14 @@ export interface SaleOrder {
   creditNoteApplied?: number;
   credit_note_code?: string;
   creditNoteCode?: string;
+  cheque_number?: string;
+  chequeNumber?: string;
+  cheque_bank?: string;
+  chequeBank?: string;
+  cheque_date?: string;
+  chequeDate?: string;
+  cheque_type?: string;
+  chequeType?: string;
 }
 
 export interface PurchaseItem {
@@ -99,6 +123,9 @@ export interface PurchaseItem {
   qty: number;
   costPrice: number;
   total: number;
+  receivedProductId?: string;
+  receivedSku?: string;
+  isNewBatch?: boolean;
 }
 
 export interface PurchaseOrder {
@@ -108,6 +135,12 @@ export interface PurchaseOrder {
   supplierName: string;
   items: PurchaseItem[];
   total: number;
+  original_total?: number;
+  originalTotal?: number;
+  debit_note_code?: string;
+  debitNoteCode?: string;
+  debit_note_applied?: number;
+  debitNoteApplied?: number;
   status: 'received' | 'pending' | 'cancelled';
   date: string;
   dueDate: string;
@@ -143,6 +176,8 @@ export interface User {
   id: string;
   name: string;
   full_name?: string;
+  fullName?: string;
+  username?: string;
   email: string;
   role: UserRole; // Use the type defined above
   avatar: string;
@@ -293,3 +328,97 @@ export interface CreditNoteUsage {
   user_email?: string;
   created_at: string;
 }
+
+export type ChequeDirection = 'INWARD' | 'OUTWARD';
+export type ChequeType = 'CROSSED_ACCOUNT_PAYEE' | 'CASH_BEARER';
+export type ChequeStatus = 'PENDING' | 'IN_HAND' | 'DEPOSITED' | 'CLEARED' | 'BOUNCED' | 'CANCELLED';
+export type ChequeReferenceType = 'SALE_INVOICE' | 'CREDIT_SETTLEMENT' | 'PURCHASE_ORDER' | 'GRN' | 'MANUAL_DEPOSIT' | 'EXPENSE';
+
+export interface Cheque {
+  id: string;
+  direction: ChequeDirection;
+  cheque_type: ChequeType;
+  cheque_number: string;
+  bank_name: string;
+  branch?: string;
+  cheque_date: string;
+  amount: number;
+  party_id?: string;
+  party_name?: string;
+  reference_type?: ChequeReferenceType;
+  reference_id?: string;
+  status: ChequeStatus;
+  notes?: string;
+  cleared_at?: string;
+  created_by?: string;
+  createdBy?: string;
+  processed_by?: string;
+  processedBy?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type PurchaseReturnSettlementMode = 'SUPPLIER_DEBIT_NOTE' | 'CASH_REFUND' | 'BANK_REFUND';
+
+export interface PurchaseReturnItem {
+  id?: number;
+  return_id?: string;
+  returnId?: string;
+  product_id?: string;
+  productId?: string;
+  product_name?: string;
+  productName?: string;
+  quantity?: number;
+  qty?: number;
+  unit_cost_price?: number;
+  unitCostPrice?: number;
+  costPrice?: number;
+  subtotal?: number;
+  total?: number;
+}
+
+export interface PurchaseReturn {
+  id: string;
+  return_number?: string;
+  returnNumber?: string;
+  supplier_id?: string;
+  supplierId?: string;
+  supplier_name?: string;
+  supplierName?: string;
+  purchase_order_id?: string;
+  purchaseOrderId?: string;
+  total_returned_cost?: number;
+  totalReturnedCost?: number;
+  total?: number;
+  settlement_mode?: PurchaseReturnSettlementMode;
+  settlementMode?: PurchaseReturnSettlementMode;
+  status?: 'ACTIVE' | 'VOIDED' | 'REDEEMED' | 'PARTIALLY_REDEEMED' | string;
+  balance_remaining?: number;
+  balanceRemaining?: number;
+  redeemed_amount?: number;
+  redeemedAmount?: number;
+  redeemed_in_po_number?: string;
+  void_reason?: string;
+  voidReason?: string;
+  reason?: string;
+  notes?: string;
+  handled_by?: string;
+  handledBy?: string;
+  created_by?: string;
+  created_by_name?: string;
+  createdByName?: string;
+  created_at?: string;
+  createdAt?: string;
+  updated_at?: string;
+  date?: string;
+  items?: PurchaseReturnItem[];
+}
+
+export interface SyncStatus {
+  isOnline: boolean;
+  isWebClient: boolean;
+  lastSyncedAt: string | null;
+  pendingCount: number;
+  isSyncing: boolean;
+}
+

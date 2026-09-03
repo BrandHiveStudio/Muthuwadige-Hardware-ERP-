@@ -1,0 +1,307 @@
+import { getTursoClient } from '../db/connection.ts';
+import type { Database } from 'sqlite';
+import type { Client } from '@libsql/client';
+
+export interface SyncStatus {
+  isOnline: boolean;
+  isWebClient: boolean;
+  lastSyncedAt: string | null;
+  pendingCount: number;
+  isSyncing: boolean;
+}
+
+export interface SyncQueueItem {
+  id: string;
+  table_name: string;
+  record_id: string;
+  action: 'INSERT' | 'UPDATE' | 'DELETE';
+  payload: string;
+  status: 'PENDING' | 'SYNCED' | 'FAILED';
+  created_at: string;
+}
+
+let isOnline = true;
+let isSyncing = false;
+let lastSyncedAt: string | null = null;
+let syncIntervalId: any = null;
+let isWebClient = false;
+
+if (
+  (typeof process !== 'undefined' && process.env?.VERCEL === '1') ||
+  (typeof process !== 'undefined' && process.env?.APP_ROLE === 'web') ||
+  (typeof process !== 'undefined' && process.env?.IS_WEB_CLIENT === '1')
+) {
+  isWebClient = true;
+}
+
+export async function pingTurso(tursoClient: Client | null): Promise<boolean> {
+  if (!tursoClient) return false;
+  try {
+    const pingPromise = tursoClient.execute('SELECT 1 as ping');
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Turso ping timeout')), 4000)
+    );
+    await Promise.race([pingPromise, timeoutPromise]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let schemaEnsured = false;
+export async function ensureSyncSchema(db: any): Promise<void> {
+  if (!db || schemaEnsured) return;
+  try {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS sync_queue (
+        id TEXT PRIMARY KEY,
+        table_name TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        payload JSON NOT NULL,
+        status TEXT DEFAULT 'PENDING',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status, created_at);"); } catch {}
+    try { await db.exec("ALTER TABLE system_settings ADD COLUMN last_counter_sync_timestamp TEXT;"); } catch {}
+    try { await db.exec("ALTER TABLE system_settings ADD COLUMN counter_sync_status TEXT DEFAULT 'IDLE';"); } catch {}
+    schemaEnsured = true;
+  } catch {}
+}
+
+export async function enqueueSync(
+  db: any,
+  tableName: string,
+  recordId: string,
+  action: 'INSERT' | 'UPDATE' | 'DELETE' = 'INSERT',
+  payload: any = null
+): Promise<void> {
+  if (!db || isWebClient) return;
+  await ensureSyncSchema(db);
+  try {
+    const id = `sq_${tableName}_${recordId}`;
+    let jsonStr = '{}';
+    if (payload) {
+      jsonStr = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    } else {
+      try {
+        const row = await db.get(`SELECT * FROM "${tableName}" WHERE id = ?`, [recordId]);
+        if (row) jsonStr = JSON.stringify(row);
+      } catch {}
+    }
+
+    await db.run(
+      `INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
+       VALUES (?, ?, ?, ?, ?, 'PENDING', CURRENT_TIMESTAMP)`,
+      [id, tableName, String(recordId), action, jsonStr]
+    );
+  } catch (err: any) {
+    console.error(`[SyncQueue] Failed to enqueue ${tableName} (${recordId}):`, err?.message);
+  }
+}
+
+export async function runSyncCycle(localDb: any): Promise<void> {
+  if (isSyncing || !localDb) return;
+  await ensureSyncSchema(localDb);
+  const tursoClient = getTursoClient();
+
+  if (!tursoClient) {
+    isOnline = false;
+    return;
+  }
+
+  const reachable = await pingTurso(tursoClient);
+  if (!reachable) {
+    isOnline = false;
+    isSyncing = false;
+    return;
+  }
+
+  isOnline = true;
+  isSyncing = true;
+
+  try {
+    const pendingItems: SyncQueueItem[] = await localDb.all(
+      "SELECT * FROM sync_queue WHERE status = 'PENDING' ORDER BY created_at ASC LIMIT 100"
+    );
+
+    if (pendingItems && pendingItems.length > 0) {
+      const statements: Array<{ sql: string; args: any[] }> = [];
+      const successfulIds: string[] = [];
+
+      for (const item of pendingItems) {
+        let row: any = null;
+        try {
+          row = typeof item.payload === 'string' ? JSON.parse(item.payload) : item.payload;
+        } catch {}
+
+        if (!row || Object.keys(row).length === 0) {
+          try {
+            row = await localDb.get(`SELECT * FROM "${item.table_name}" WHERE id = ?`, [item.record_id]);
+          } catch {}
+        }
+
+        if (item.action === 'DELETE') {
+          statements.push({
+            sql: `DELETE FROM "${item.table_name}" WHERE id = ?`,
+            args: [item.record_id]
+          });
+          successfulIds.push(item.id);
+        } else if (row && typeof row === 'object') {
+          const columns = Object.keys(row);
+          const colNames = columns.map(c => `"${c}"`).join(', ');
+          const placeholders = columns.map(() => '?').join(', ');
+          const args = columns.map(c => row[c] !== undefined ? row[c] : null);
+
+          statements.push({
+            sql: `INSERT OR REPLACE INTO "${item.table_name}" (${colNames}) VALUES (${placeholders})`,
+            args
+          });
+          successfulIds.push(item.id);
+        } else {
+          successfulIds.push(item.id);
+        }
+      }
+
+      if (statements.length > 0) {
+        await tursoClient.batch(statements, 'write');
+      }
+
+      if (successfulIds.length > 0) {
+        const placeholders = successfulIds.map(() => '?').join(', ');
+        await localDb.run(`DELETE FROM sync_queue WHERE id IN (${placeholders})`, successfulIds);
+      }
+    }
+
+    const prevSyncTime = lastSyncedAt;
+    const nowIso = new Date().toISOString();
+
+    if (prevSyncTime) {
+      try {
+        const remoteProducts = await tursoClient.execute({
+          sql: "SELECT * FROM products WHERE created_at > ?",
+          args: [prevSyncTime]
+        });
+
+        if (remoteProducts?.rows?.length > 0) {
+          for (const prod of remoteProducts.rows) {
+            const cols = Object.keys(prod);
+            const colNames = cols.map(c => `"${c}"`).join(', ');
+            const placeholders = cols.map(() => '?').join(', ');
+            const args = cols.map(c => prod[c] !== undefined ? prod[c] : null);
+            await localDb.run(
+              `INSERT OR REPLACE INTO products (${colNames}) VALUES (${placeholders})`,
+              args
+            );
+          }
+        }
+      } catch {}
+    }
+
+    lastSyncedAt = nowIso;
+
+    try {
+      await localDb.run(
+        "UPDATE system_settings SET last_counter_sync_timestamp = ?, counter_sync_status = 'IDLE' WHERE id = 'global'",
+        [nowIso]
+      );
+    } catch {}
+
+    try {
+      await tursoClient.execute({
+        sql: "UPDATE system_settings SET last_counter_sync_timestamp = ?, counter_sync_status = 'IDLE' WHERE id = 'global'",
+        args: [nowIso]
+      });
+    } catch {}
+
+  } catch (syncErr: any) {
+    console.error('[BackgroundSync] Error during sync cycle:', syncErr?.message);
+  } finally {
+    isSyncing = false;
+  }
+}
+
+export function startBackgroundSyncWorker(localDb: any, intervalMs = 30000): any {
+  if (isWebClient) return null;
+
+  if (syncIntervalId) {
+    clearInterval(syncIntervalId);
+  }
+
+  setTimeout(() => {
+    runSyncCycle(localDb).catch(() => {});
+  }, 3000);
+
+  syncIntervalId = setInterval(() => {
+    runSyncCycle(localDb).catch(() => {});
+  }, intervalMs);
+
+  return syncIntervalId;
+}
+
+export function stopBackgroundSyncWorker(): void {
+  if (syncIntervalId) {
+    clearInterval(syncIntervalId);
+    syncIntervalId = null;
+  }
+}
+
+export async function getSyncStatus(localDb: any): Promise<SyncStatus> {
+  let pendingCount = 0;
+  if (localDb) await ensureSyncSchema(localDb);
+
+  if (isWebClient) {
+    const tursoClient = getTursoClient();
+    let webLastSync: string | null = null;
+    if (tursoClient) {
+      try {
+        const res = await tursoClient.execute("SELECT last_counter_sync_timestamp FROM system_settings WHERE id = 'global'");
+        if (res?.rows?.[0]?.last_counter_sync_timestamp) {
+          webLastSync = String(res.rows[0].last_counter_sync_timestamp);
+        }
+      } catch {}
+    }
+
+    return {
+      isOnline: true,
+      isWebClient: true,
+      lastSyncedAt: webLastSync,
+      pendingCount: 0,
+      isSyncing: false
+    };
+  }
+
+  if (localDb) {
+    try {
+      const qRes = await localDb.get("SELECT COUNT(*) as count FROM sync_queue WHERE status = 'PENDING'");
+      pendingCount = Number(qRes?.count ?? 0);
+    } catch {}
+
+    if (!lastSyncedAt) {
+      try {
+        const sRes = await localDb.get("SELECT last_counter_sync_timestamp FROM system_settings WHERE id = 'global'");
+        if (sRes?.last_counter_sync_timestamp) {
+          lastSyncedAt = String(sRes.last_counter_sync_timestamp);
+        }
+      } catch {}
+    }
+  }
+
+  return {
+    isOnline,
+    isWebClient: false,
+    lastSyncedAt,
+    pendingCount,
+    isSyncing
+  };
+}
+
+export default {
+  pingTurso,
+  enqueueSync,
+  runSyncCycle,
+  startBackgroundSyncWorker,
+  stopBackgroundSyncWorker,
+  getSyncStatus
+};

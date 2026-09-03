@@ -40,6 +40,10 @@ const fetchTable = async (table: string, type?: string, filter?: { col: string; 
       data = await api.creditNotes.getAll();
     } else if (table === 'credit_payments' || table === 'credit_settlements') {
       data = await api.creditPayments.getAll();
+    } else if (table === 'cheques' || table === 'cheque_registry') {
+      data = await api.cheques.getAll();
+    } else if (table === 'purchase_returns' || table === 'purchase-returns') {
+      data = await api.purchaseReturns.getAll();
     } else {
       const res = await fetchWithTimeout(`${API_URL}/${table}`);
       if (res.ok) data = await res.json();
@@ -84,6 +88,10 @@ const insertTable = async (table: string, payload: any) => {
       result = await api.sales.returns.process(payload);
     } else if (table === 'credit_payments' || table === 'credit_settlements') {
       result = await api.creditPayments.save(Array.isArray(payload) ? payload[0] : payload);
+    } else if (table === 'cheques' || table === 'cheque_registry') {
+      result = await api.cheques.create(payload);
+    } else if (table === 'purchase_returns' || table === 'purchase-returns') {
+      result = await api.purchaseReturns.create(payload);
     } else {
       const res = await fetchWithTimeout(`${API_URL}/${table}`, {
         method: 'POST',
@@ -317,9 +325,28 @@ export const supabase: any = {
     };
   },
 
-  // Mock RPC support
+  // Live RPC support mapped to local SQLite / Express RPC router
   rpc: async (name: string, args?: any) => {
-    console.log(`[Mock DB] RPC Triggered: ${name} with args`, args);
-    return { data: null, error: { message: 'RPC not available on local SQLite' } };
+    try {
+      const res = await fetchWithTimeout(`${API_URL}/rpc/${name}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(args || {})
+      });
+      const data = await res.json();
+      if (!res.ok || (data && data.success === false)) {
+        return {
+          data: data || null,
+          error: { message: data?.message || data?.error || 'RPC execution failed' }
+        };
+      }
+      return { data, error: null };
+    } catch (err: any) {
+      console.error(`[RPC Adapter] Error executing ${name}:`, err);
+      return {
+        data: null,
+        error: { message: err?.message || 'Network error while executing RPC' }
+      };
+    }
   }
 };

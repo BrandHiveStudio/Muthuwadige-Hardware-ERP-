@@ -14,7 +14,7 @@ import JsBarcode from 'jsbarcode';
 import { supabase } from '../lib/supabaseClient';
 import type { Product } from '../types';
 
-export type PresetType = '38x25' | '50x25' | '100x25_3up';
+export type PresetType = '38x25' | '50x25' | '100x25_3up' | '30x15_3up';
 
 export interface QueueItem {
   product: Product;
@@ -118,6 +118,28 @@ export const StickerPreviewCard: React.FC<{ product: Product; preset: PresetType
   const barcodeValue = getSafeBarcode(product);
   const isCompact = preset === '38x25';
   const is3Up = preset === '100x25_3up';
+  const is30x15 = preset === '30x15_3up';
+
+  if (is30x15) {
+    return (
+      <div className="flex gap-1.5 bg-white p-2 border-2 border-black rounded shadow-md w-[360px]">
+        {[0, 1, 2].map((idx) => (
+          <div key={idx} className="flex-1 bg-white border border-gray-400 p-1 flex flex-col justify-between text-center font-sans overflow-hidden h-[95px]">
+            <div className="font-bold text-[8px] text-black leading-tight truncate">
+              {product.name}
+            </div>
+            <div className="my-0.5 flex justify-center px-0.5">
+              <BarcodeSvg value={barcodeValue} width={0.8} height={16} displayValue={false} />
+            </div>
+            <div className="font-mono text-[6.5px] font-bold text-black leading-none truncate">{barcodeValue}</div>
+            <div className="font-black text-[9px] text-black border-t border-black pt-0.5 mt-0.5 leading-tight">
+              Rs. {Number(product.price || 0).toLocaleString(undefined, { minimumFractionDigits: 0 })}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   if (is3Up) {
     return (
@@ -189,11 +211,37 @@ const printThermalLabelsIsolated = (queue: QueueItem[], preset: PresetType) => {
     ? 'size: 38mm 25mm;'
     : preset === '50x25'
       ? 'size: 50mm 25mm;'
-      : 'size: 100mm 25mm;';
+      : preset === '30x15_3up'
+        ? 'size: 95mm 15mm;'
+        : 'size: 100mm 25mm;';
 
   let labelsHtml = '';
 
-  if (preset === '100x25_3up') {
+  if (preset === '30x15_3up') {
+    const rows: Product[][] = [];
+    for (let i = 0; i < allLabels.length; i += 3) {
+      rows.push(allLabels.slice(i, i + 3));
+    }
+
+    labelsHtml = rows.map(row => `
+      <div class="page-row-30x15">
+        ${row.map(prod => {
+          const code = getSafeBarcode(prod);
+          const barcodeImg = generateCrispBarcodeDataUrl(code, true);
+          return `
+            <div class="cell-30x15">
+              <div class="item-title-30x15">${prod.name || 'Product'}</div>
+              <div class="barcode-container-30x15">
+                <img src="${barcodeImg}" alt="barcode" class="barcode-img-30x15" />
+              </div>
+              <div class="code-text-30x15">${code}</div>
+              <div class="price-tag-30x15">Rs. ${Number(prod.price || 0).toLocaleString(undefined, { minimumFractionDigits: 0 })}</div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `).join('');
+  } else if (preset === '100x25_3up') {
     const rows: Product[][] = [];
     for (let i = 0; i < allLabels.length; i += 3) {
       rows.push(allLabels.slice(i, i + 3));
@@ -282,6 +330,74 @@ const printThermalLabelsIsolated = (queue: QueueItem[], preset: PresetType) => {
             overflow: hidden;
             border: 1px solid #000000;
             padding: 1mm 1.5mm;
+          }
+          .page-row-30x15 {
+            width: 95mm;
+            height: 15mm;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 1mm;
+            page-break-after: always;
+            break-after: page;
+            overflow: hidden;
+            box-sizing: border-box;
+          }
+          .cell-30x15 {
+            width: 30mm;
+            height: 14.5mm;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: center;
+            text-align: center;
+            overflow: hidden;
+            border: 0.5px solid #000000;
+            padding: 0.4mm 0.8mm;
+            box-sizing: border-box;
+          }
+          .item-title-30x15 {
+            font-size: 5.5px;
+            font-weight: 700;
+            width: 100%;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            line-height: 1;
+          }
+          .barcode-container-30x15 {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            height: 5.5mm;
+            overflow: hidden;
+          }
+          .barcode-img-30x15 {
+            display: block;
+            image-rendering: pixelated;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: crisp-edges;
+            max-width: 100%;
+            height: 5.5mm;
+          }
+          .code-text-30x15 {
+            font-family: monospace;
+            font-size: 5px;
+            font-weight: 800;
+            line-height: 1;
+            letter-spacing: 0.2px;
+            white-space: nowrap;
+            overflow: hidden;
+          }
+          .price-tag-30x15 {
+            font-size: 6.5px;
+            font-weight: 900;
+            line-height: 1;
+            border-top: 0.5px solid #000000;
+            width: 100%;
+            padding-top: 0.2mm;
+            white-space: nowrap;
           }
           .page-single {
             display: flex;
@@ -582,7 +698,7 @@ export function BarcodePrint() {
           <span>{t('Sticker Size Preset:', 'ස්ටිකර් ප්‍රමාණ තේරීම:')}</span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full md:w-auto flex-1 max-w-3xl">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 w-full md:w-auto flex-1 max-w-4xl">
           <button
             onClick={() => setPreset('38x25')}
             className={`p-3 rounded-xl border text-left transition-all ${preset === '38x25'
@@ -614,6 +730,17 @@ export function BarcodePrint() {
           >
             <div className="font-black text-xs text-slate-800">4-Inch Multi-Sticker</div>
             <div className="text-[10px] text-gray-500 font-bold mt-0.5">3-Up on 100mm Roll</div>
+          </button>
+
+          <button
+            onClick={() => setPreset('30x15_3up')}
+            className={`p-3 rounded-xl border text-left transition-all ${preset === '30x15_3up'
+              ? 'border-[#DAA520] bg-amber-50/50 ring-2 ring-[#DAA520]/20'
+              : 'border-gray-200 hover:bg-gray-50'
+              }`}
+          >
+            <div className="font-black text-xs text-slate-800">30mm × 15mm (3-Up)</div>
+            <div className="text-[10px] text-gray-500 font-bold mt-0.5">3-Up Micro across ~95mm</div>
           </button>
         </div>
       </div>

@@ -31,7 +31,7 @@ export const ReceiptTemplate: React.FC<ReceiptTemplateProps> = ({ invoice, isSin
   const transportFee = Number(invoice.transportation_fee || invoice.transportationFee || 0);
   const customerName = invoice.customerName || invoice.customer_name || 'Guest Customer';
   const invoiceNo = invoice.invoiceNo || invoice.invoice_no || `INV-${Date.now()}`;
-  const cashier = invoice.cashier || invoice.cashier_name || invoice.user_name || settings.shop_name || 'Sanoj Hardware';
+  const cashier = invoice.cashier || invoice.cashier_name || invoice.user_name || invoice.created_by || 'Sanoj Hardware';
   const paymentMethod = invoice.payment_method || invoice.paymentMethod || 'Cash';
   const invoiceDate = invoice.created_at || invoice.date || new Date().toISOString();
 
@@ -39,7 +39,6 @@ export const ReceiptTemplate: React.FC<ReceiptTemplateProps> = ({ invoice, isSin
 
   return (
     <div className="thermal-receipt font-mono text-slate-900 bg-white p-4 max-w-sm mx-auto text-xs leading-relaxed border border-slate-200 rounded-lg shadow-sm">
-      {/* Header Branding */}
       <div className="header text-center space-y-0.5">
         {(settings.logoUrl || settings.logo_path) && (
           <img 
@@ -65,7 +64,6 @@ export const ReceiptTemplate: React.FC<ReceiptTemplateProps> = ({ invoice, isSin
 
       <div className="divider my-2.5 border-dashed border-b border-slate-300" />
 
-      {/* Invoice Meta */}
       <div className="text-[11px] space-y-0.5 text-slate-700">
         <div className="flex justify-between">
           <span className="font-bold">Invoice #:</span>
@@ -91,7 +89,6 @@ export const ReceiptTemplate: React.FC<ReceiptTemplateProps> = ({ invoice, isSin
 
       <div className="divider my-2 border-dashed border-b border-slate-300" />
 
-      {/* Items Table */}
       <table className="w-full text-left text-[11px] mb-2">
         <thead>
           <tr className="border-b border-slate-300 text-slate-500 font-bold uppercase text-[9px]">
@@ -124,7 +121,6 @@ export const ReceiptTemplate: React.FC<ReceiptTemplateProps> = ({ invoice, isSin
 
       <div className="divider my-2 border-dashed border-b border-slate-300" />
 
-      {/* Summary Totals */}
       <div className="text-[11px] space-y-1 text-slate-700">
         <div className="flex justify-between">
           <span>Subtotal:</span>
@@ -151,7 +147,6 @@ export const ReceiptTemplate: React.FC<ReceiptTemplateProps> = ({ invoice, isSin
 
         <div className="divider my-1.5 border-dashed border-b border-slate-400" />
 
-        {/* Dynamic currency prefix formatted total */}
         <div className="currency-prefix text-right font-mono flex justify-between items-center text-sm font-black text-slate-950 pt-0.5">
           <span>Total:</span>
           <span>{currencySymbol} {totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
@@ -160,7 +155,6 @@ export const ReceiptTemplate: React.FC<ReceiptTemplateProps> = ({ invoice, isSin
 
       <div className="divider my-2.5 border-dashed border-b border-slate-300" />
 
-      {/* Footer Branding */}
       <div className="footer text-center text-[10px] text-slate-500 font-medium space-y-0.5">
         <p>{settings.invoice_footer || settings.receiptFooter || settings.footer_text || 'Thank you for your business! Come again.'}</p>
         <p className="text-[9px] text-slate-400">Software by Muthuwadige Hardware ERP</p>
@@ -243,7 +237,6 @@ export const ReturnReceiptTemplate: React.FC<ReturnReceiptTemplateProps> = ({ re
 
   return (
     <div className="receipt-container thermal-receipt font-mono text-slate-900 bg-white p-4 max-w-sm mx-auto text-xs leading-relaxed border border-slate-200 rounded-lg shadow-sm">
-      {/* Header Branding */}
       <div className="header text-center space-y-0.5">
         {(settings.logoUrl || settings.logo_path) && (
           <img 
@@ -266,7 +259,6 @@ export const ReturnReceiptTemplate: React.FC<ReturnReceiptTemplateProps> = ({ re
 
       <div className="divider my-2.5 border-dashed border-b border-slate-300" />
 
-      {/* Return Slip Meta */}
       <div className="text-center font-black text-sm uppercase my-1 text-slate-900 border border-slate-300 py-1 bg-slate-50 rounded">
         {title}
       </div>
@@ -289,7 +281,7 @@ export const ReturnReceiptTemplate: React.FC<ReturnReceiptTemplateProps> = ({ re
         </div>
         <div className="flex justify-between">
           <span>{isSinhala ? 'අයකැමි:' : 'Cashier:'}</span>
-          <span className="font-bold">{returnData.cashier || returnData.cashier_name || returnData.user_name || settings.shop_name || 'Sanoj Hardware'}</span>
+          <span className="font-bold">{returnData.cashier || returnData.cashier_name || returnData.user_name || returnData.handled_by || 'Sanoj Hardware'}</span>
         </div>
         <div className="flex justify-between">
           <span>Method:</span>
@@ -299,7 +291,6 @@ export const ReturnReceiptTemplate: React.FC<ReturnReceiptTemplateProps> = ({ re
 
       <div className="divider my-2 border-dashed border-b border-slate-300" />
 
-      {/* Returned Items Section */}
       <div className="section-title font-bold text-rose-700 mb-1">
         {isSinhala ? 'ආපසු භාරගත් භාණ්ඩ:' : 'Returned Item(s)'}
       </div>
@@ -321,7 +312,6 @@ export const ReturnReceiptTemplate: React.FC<ReturnReceiptTemplateProps> = ({ re
 
       <div className="divider border-dashed border-b my-2 border-slate-300" />
 
-      {/* Exchange Items Section */}
       {exchangeItems.length > 0 && (
         <>
           <div className="section-title font-bold text-green-700 mb-1">
@@ -346,7 +336,6 @@ export const ReturnReceiptTemplate: React.FC<ReturnReceiptTemplateProps> = ({ re
         </>
       )}
 
-      {/* Calculation & Balance Breakdown */}
       <div className="text-xs space-y-1 pt-1 font-mono">
         <div className="flex justify-between">
           <span>{isSinhala ? 'ආපසු වටිනාකම (ශුද්ධ):' : 'Return Credit (Net):'}</span>
@@ -379,7 +368,6 @@ export const ReturnReceiptTemplate: React.FC<ReturnReceiptTemplateProps> = ({ re
               </div>
             )}
 
-            {/* Payment Method Used for the Difference */}
             <div className="flex justify-between text-[11px] text-slate-600 italic pt-0.5">
               <span>{isSinhala ? 'පියවීමේ ක්‍රමය:' : 'Settlement Mode:'}</span>
               <span className="font-bold text-slate-800">{settlementMode}</span>
@@ -424,7 +412,6 @@ export const ReturnReceiptTemplate: React.FC<ReturnReceiptTemplateProps> = ({ re
 
       <div className="divider my-2.5 border-dashed border-b border-slate-300" />
 
-      {/* Footer Branding */}
       <div className="footer text-center text-[10px] text-slate-500 font-medium space-y-0.5">
         <p>{settings.invoice_footer || settings.receiptFooter || settings.footer_text || 'Thank you for your business! Come again.'}</p>
         <p className="text-[9px] text-slate-400">Software by Muthuwadige Hardware ERP</p>

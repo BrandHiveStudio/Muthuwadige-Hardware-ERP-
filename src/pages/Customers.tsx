@@ -16,11 +16,13 @@ import {
 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabaseClient';
+import { api } from '../lib/api';
 import { useCurrency } from '../context/CurrencyContext'; // Global currency sync
-import type { Customer, SaleOrder } from '../types';
+import type { Customer, SaleOrder, ChequeType } from '../types';
 import { calculateSaleAccounting, isCreditSaleRecord } from '../utils/accounting';
 import { openExternalUrl, formatWhatsAppUrl } from '../utils/openExternalUrl';
 import { recordCreditSettlement, resolveAuthorName, type CurrentUserSession } from '../services/creditService';
+import { SRI_LANKAN_BANKS } from './Sales';
 
 const emptyCustomer: Omit<Customer, 'id'> = {
   name: '',
@@ -64,50 +66,50 @@ export function Customers({ currentUser }: CustomersProps = {}) {
 
       const { data: { user } } = await supabase.auth.getUser();
 
-        let imported = 0;
-        let errors = 0;
+      let imported = 0;
+      let errors = 0;
 
-        const cleanKey = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const cleanKey = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-        const getValueByKeys = (rowObj: any, possibleKeys: string[]) => {
-          if (!rowObj || typeof rowObj !== 'object') return '';
-          const keys = Object.keys(rowObj);
-          for (const pKey of possibleKeys) {
-            const targetClean = cleanKey(pKey);
-            const matchedKey = keys.find(k => cleanKey(k) === targetClean);
-            if (matchedKey && rowObj[matchedKey] !== undefined && rowObj[matchedKey] !== null) {
-              const val = String(rowObj[matchedKey]).trim();
-              if (val !== '' && val !== 'null' && val !== 'undefined' && val !== '—' && val !== '-') {
-                return val;
-              }
+      const getValueByKeys = (rowObj: any, possibleKeys: string[]) => {
+        if (!rowObj || typeof rowObj !== 'object') return '';
+        const keys = Object.keys(rowObj);
+        for (const pKey of possibleKeys) {
+          const targetClean = cleanKey(pKey);
+          const matchedKey = keys.find(k => cleanKey(k) === targetClean);
+          if (matchedKey && rowObj[matchedKey] !== undefined && rowObj[matchedKey] !== null) {
+            const val = String(rowObj[matchedKey]).trim();
+            if (val !== '' && val !== 'null' && val !== 'undefined' && val !== '—' && val !== '-') {
+              return val;
             }
           }
-          return '';
-        };
+        }
+        return '';
+      };
 
-        for (let idx = 0; idx < rawRows.length; idx++) {
-          const row = rawRows[idx];
-          
-          let name = getValueByKeys(row, [
-            'name', 'customer name', 'customer_name', 'customer', 'client', 'company',
-            'contactname', 'contact_name', 'fullname', 'username'
-          ]);
-          if (!name) {
-            name = `Customer #${idx + 1}`;
-          }
+      for (let idx = 0; idx < rawRows.length; idx++) {
+        const row = rawRows[idx];
+        
+        let name = getValueByKeys(row, [
+          'name', 'customer name', 'customer_name', 'customer', 'client', 'company',
+          'contactname', 'contact_name', 'fullname', 'username'
+        ]);
+        if (!name) {
+          name = `Customer #${idx + 1}`;
+        }
 
-          let phone = getValueByKeys(row, [
-            'phone', 'phone number', 'phone_number', 'mobile', 'mobile_no', 'contact',
-            'contact no', 'contact_no', 'telephone', 'tel', 'phonenumber', 'contactnumber', 'mobilenumber'
-          ]);
-          if (/^\d{9}$/.test(phone)) {
-            phone = '0' + phone;
-          }
+        let phone = getValueByKeys(row, [
+          'phone', 'phone number', 'phone_number', 'mobile', 'mobile_no', 'contact',
+          'contact_no', 'tel', 'telephone', 'cell'
+        ]);
+        if (!phone) {
+          phone = '0770000000';
+        }
 
-          const nic = getValueByKeys(row, [
-            'nic', 'nic number', 'nic_number', 'national id', 'national_id', 'id', 'nic_no',
-            'nicno', 'idnumber', 'identitycard'
-          ]);
+        const nic = getValueByKeys(row, [
+          'nic', 'nic number', 'nic_number', 'national id', 'national_id', 'id', 'nic_no',
+          'nicno', 'idnumber', 'identitycard'
+        ]);
 
           const address = getValueByKeys(row, [
             'address', 'customer_address', 'customeraddress', 'street', 'location', 'city',
@@ -204,7 +206,13 @@ export function Customers({ currentUser }: CustomersProps = {}) {
   const [settleCustomer, setSettleCustomer] = useState<any | null>(null);
   const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<string[]>([]);
   const [settleAmount, setSettleAmount] = useState('');
-  const [settlementPaymentMethod, setSettlementPaymentMethod] = useState<'Cash' | 'Card' | 'Bank'>('Cash');
+  const [settlementPaymentMethod, setSettlementPaymentMethod] = useState<'Cash' | 'Card' | 'Bank' | 'Cheque'>('Cash');
+  const [settlementChequeNumber, setSettlementChequeNumber] = useState<string>('');
+  const [settlementChequeBank, setSettlementChequeBank] = useState<string>('Bank of Ceylon');
+  const [settlementCustomBank, setSettlementCustomBank] = useState<string>('');
+  const [settlementChequeBranch, setSettlementChequeBranch] = useState<string>('');
+  const [settlementChequeDate, setSettlementChequeDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [settlementChequeType, setSettlementChequeType] = useState<ChequeType>('CROSSED_ACCOUNT_PAYEE');
   const [isSettling, setIsSettling] = useState(false);
   const [paymentReceipt, setPaymentReceipt] = useState<{
     customerName: string;
@@ -335,6 +343,21 @@ export function Customers({ currentUser }: CustomersProps = {}) {
       return;
     }
 
+    if (settlementPaymentMethod === 'Cheque') {
+      if (!settlementChequeNumber.trim()) {
+        setToast({ message: t("Please enter the Cheque Number", "කරුණාකර චෙක්පත් අංකය ඇතුළත් කරන්න"), type: 'error' });
+        return;
+      }
+      if (settlementChequeBank === 'Other' && !settlementCustomBank.trim()) {
+        setToast({ message: t("Please specify the Bank Name", "කරුණාකර බැංකුවේ නම ඇතුළත් කරන්න"), type: 'error' });
+        return;
+      }
+      if (!settlementChequeDate) {
+        setToast({ message: t("Please select the Cheque Date", "කරුණාකර චෙක්පත් දිනය තෝරන්න"), type: 'error' });
+        return;
+      }
+    }
+
     setIsSettling(true);
     try {
       const sortedUnpaid = [...settleCustomer.unpaidSales].sort((a, b) => {
@@ -441,6 +464,30 @@ export function Customers({ currentUser }: CustomersProps = {}) {
         }
       }
 
+      // Automatically register inward cheque into cheque registry if payment method is Cheque
+      if (settlementPaymentMethod === 'Cheque') {
+        const bankNameToUse = settlementChequeBank === 'Other' ? (settlementCustomBank.trim() || 'Other') : settlementChequeBank;
+        try {
+          await api.cheques.create({
+            direction: 'INWARD',
+            cheque_type: settlementChequeType,
+            cheque_number: settlementChequeNumber.trim(),
+            bank_name: bankNameToUse,
+            branch: settlementChequeBranch.trim() || undefined,
+            cheque_date: settlementChequeDate || new Date().toISOString().split('T')[0],
+            amount: enteredAmt,
+            party_id: settleCustomer.id,
+            party_name: settleCustomer.name,
+            reference_type: 'CREDIT_SETTLEMENT',
+            reference_id: `SETTLE-${settleCustomer.id}-${Date.now()}`,
+            status: settlementChequeType === 'CASH_BEARER' ? 'IN_HAND' : 'PENDING',
+            notes: `Customer Credit Settlement for ${settleCustomer.name}`
+          });
+        } catch (chqErr: any) {
+          console.warn("Cheque registry registration notice:", chqErr);
+        }
+      }
+
       const totalOwed = settleCustomer.totalOutstanding;
       const amt = enteredAmt;
       const newOutstandingBalance = Math.max(0, totalOwed - amt);
@@ -458,6 +505,9 @@ export function Customers({ currentUser }: CustomersProps = {}) {
       });
 
       setSettleAmount('');
+      setSettlementChequeNumber('');
+      setSettlementCustomBank('');
+      setSettlementChequeBranch('');
       setSettleCustomer(null);
       fetchData();
     } catch (err: any) {
@@ -780,6 +830,21 @@ export function Customers({ currentUser }: CustomersProps = {}) {
       return;
     }
 
+    if (settlementPaymentMethod === 'Cheque') {
+      if (!settlementChequeNumber.trim()) {
+        setToast({ message: t("Please enter the Cheque Number", "කරුණාකර චෙක්පත් අංකය ඇතුළත් කරන්න"), type: 'error' });
+        return;
+      }
+      if (settlementChequeBank === 'Other' && !settlementCustomBank.trim()) {
+        setToast({ message: t("Please specify the Bank Name", "කරුණාකර බැංකුවේ නම ඇතුළත් කරන්න"), type: 'error' });
+        return;
+      }
+      if (!settlementChequeDate) {
+        setToast({ message: t("Please select the Cheque Date", "කරුණාකර චෙක්පත් දිනය තෝරන්න"), type: 'error' });
+        return;
+      }
+    }
+
     setIsSettling(true);
     try {
       const selectedSales = settleCustomer.unpaidSales.filter((s: any) => selectedInvoiceIds.includes(s.id));
@@ -827,6 +892,30 @@ export function Customers({ currentUser }: CustomersProps = {}) {
         }, currentUser);
       }
 
+      // Automatically register inward cheque into cheque registry if payment method is Cheque
+      if (settlementPaymentMethod === 'Cheque') {
+        const bankNameToUse = settlementChequeBank === 'Other' ? (settlementCustomBank.trim() || 'Other') : settlementChequeBank;
+        try {
+          await api.cheques.create({
+            direction: 'INWARD',
+            cheque_type: settlementChequeType,
+            cheque_number: settlementChequeNumber.trim(),
+            bank_name: bankNameToUse,
+            branch: settlementChequeBranch.trim() || undefined,
+            cheque_date: settlementChequeDate || new Date().toISOString().split('T')[0],
+            amount: totalPaid,
+            party_id: settleCustomer.id,
+            party_name: settleCustomer.name,
+            reference_type: 'CREDIT_SETTLEMENT',
+            reference_id: `SETTLE-${settleCustomer.id}-${Date.now()}`,
+            status: settlementChequeType === 'CASH_BEARER' ? 'IN_HAND' : 'PENDING',
+            notes: `Customer Selected Invoices Settlement for ${settleCustomer.name}`
+          });
+        } catch (chqErr: any) {
+          console.warn("Cheque registry registration notice:", chqErr);
+        }
+      }
+
       const allUnpaidTotal = settleCustomer.unpaidSales.reduce((sum: number, s: any) => {
         const acct = calculateSaleAccounting(s, allReturns);
         return sum + acct.netOutstanding;
@@ -846,6 +935,9 @@ export function Customers({ currentUser }: CustomersProps = {}) {
       });
 
       setSelectedInvoiceIds([]);
+      setSettlementChequeNumber('');
+      setSettlementCustomBank('');
+      setSettlementChequeBranch('');
       setSettleCustomer(null);
       fetchData();
     } catch (err: any) {
@@ -1820,22 +1912,142 @@ export function Customers({ currentUser }: CustomersProps = {}) {
                 {t("Settlement Payment Method", "පියවීමේ ගෙවීම් ක්‍රමය")}
               </label>
               <div className="flex gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl mb-4">
-                {(['Cash', 'Card', 'Bank'] as const).map((method) => (
+                {(['Cash', 'Card', 'Bank', 'Cheque'] as const).map((method) => (
                   <button
                     key={method}
                     type="button"
                     onClick={() => setSettlementPaymentMethod(method)}
                     className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all ${
                       settlementPaymentMethod === method
-                        ? 'bg-amber-500 text-white shadow-sm'
+                        ? 'bg-amber-500 text-white shadow-sm font-bold'
                         : 'text-slate-600 hover:text-slate-900 dark:text-slate-300'
                     }`}
                   >
-                    {method}
+                    {method === 'Cheque' ? (isSinhala ? 'චෙක්පත්' : 'Cheque') : method}
                   </button>
                 ))}
               </div>
             </div>
+
+            {/* Cheque Settlement Sub-Form */}
+            {settlementPaymentMethod === 'Cheque' && (
+              <div className="bg-amber-50/70 border-2 border-amber-300/80 rounded-2xl p-4 space-y-3.5 mb-4 animate-in slide-in-from-top-2 duration-300">
+                <div className="flex items-center justify-between border-b border-amber-200/80 pb-2">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
+                    <span>📝</span> {t('Settlement Cheque Details', 'ණය පියවීමේ චෙක්පත් විස්තර')}
+                  </span>
+                  <span className="text-[9px] font-black uppercase text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full border border-amber-300">
+                    Inward Cheque
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1 block">
+                      {t('Cheque Number', 'චෙක්පත් අංකය')} <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. CHQ-998877"
+                      value={settlementChequeNumber}
+                      onChange={(e) => setSettlementChequeNumber(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500 shadow-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1 block">
+                      {t('Cheque Date', 'චෙක්පත් දිනය')} <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="date"
+                      value={settlementChequeDate}
+                      onChange={(e) => setSettlementChequeDate(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500 shadow-sm cursor-pointer"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1 block">
+                      {t('Bank Name', 'බැංකුව')} <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={settlementChequeBank}
+                      onChange={(e) => setSettlementChequeBank(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500 shadow-sm cursor-pointer"
+                    >
+                      {SRI_LANKAN_BANKS.map((b, idx) => (
+                        <option key={idx} value={b}>{b}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1 block">
+                      {t('Branch (Optional)', 'ශාඛාව (විකල්ප)')}
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Negombo Branch"
+                      value={settlementChequeBranch}
+                      onChange={(e) => setSettlementChequeBranch(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500 shadow-sm"
+                    />
+                  </div>
+                </div>
+
+                {settlementChequeBank === 'Other' && (
+                  <div>
+                    <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1 block">
+                      {t('Specify Custom Bank Name', 'වෙනත් බැංකුවේ නම')} <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Enter custom bank name..."
+                      value={settlementCustomBank}
+                      onChange={(e) => setSettlementCustomBank(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500 shadow-sm"
+                    />
+                  </div>
+                )}
+
+                {/* Cheque Type Toggle */}
+                <div>
+                  <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1.5 block">
+                    {t('Cheque Type', 'චෙක්පත් වර්ගය')}
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSettlementChequeType('CROSSED_ACCOUNT_PAYEE')}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border text-left ${
+                        settlementChequeType === 'CROSSED_ACCOUNT_PAYEE'
+                          ? 'bg-slate-900 text-amber-400 border-slate-900 shadow-sm'
+                          : 'bg-white text-slate-700 border-amber-200 hover:bg-amber-100/50'
+                      }`}
+                    >
+                      <span className="block text-[11px] font-black">Crossed / A/C Payee</span>
+                      <span className="text-[9px] opacity-80">ගිණුමට පමණි (Pending Realization)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSettlementChequeType('CASH_BEARER')}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border text-left ${
+                        settlementChequeType === 'CASH_BEARER'
+                          ? 'bg-slate-900 text-amber-400 border-slate-900 shadow-sm'
+                          : 'bg-white text-slate-700 border-amber-200 hover:bg-amber-100/50'
+                      }`}
+                    >
+                      <span className="block text-[11px] font-black">Cash / Bearer Cheque</span>
+                      <span className="text-[9px] opacity-80">මුදල් චෙක්පත (In Hand)</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Split methods: Lump Sum vs Select Invoices */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

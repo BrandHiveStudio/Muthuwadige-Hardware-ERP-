@@ -14,6 +14,8 @@ import { exec, execSync, spawn } from 'child_process';
 import os from 'os';
 import https from 'https';
 import selfsigned from 'selfsigned';
+import dbAdapter, { initDb, isTurso, getTursoClient } from './src/db/connection.js';
+import { startBackgroundSyncWorker, getSyncStatus, runSyncCycle, enqueueSync } from './src/services/syncService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -298,6 +300,8 @@ const DEFAULT_RUNTIME_SETTINGS = {
   next_invoice_number: 'INV001',
   return_passkey: '1234',
   void_passkey: '1234',
+  last_counter_sync_timestamp: null,
+  counter_sync_status: 'IDLE',
   updated_at: new Date().toISOString()
 };
 
@@ -363,6 +367,8 @@ function normalizeRuntimeSettings(payload = {}) {
     next_invoice_number: payload.next_invoice_number || payload.nextInvoiceNumber || DEFAULT_RUNTIME_SETTINGS.next_invoice_number,
     return_passkey: passkeyVal,
     void_passkey: passkeyVal,
+    last_counter_sync_timestamp: payload.last_counter_sync_timestamp ?? payload.lastCounterSyncTimestamp ?? DEFAULT_RUNTIME_SETTINGS.last_counter_sync_timestamp,
+    counter_sync_status: payload.counter_sync_status || payload.counterSyncStatus || DEFAULT_RUNTIME_SETTINGS.counter_sync_status,
     updated_at: payload.updated_at || new Date().toISOString()
   };
 
@@ -374,8 +380,8 @@ async function getRuntimeSettingsSnapshot() {
   if (!settings) {
     const initial = { ...DEFAULT_RUNTIME_SETTINGS, id: 'global' };
     await db.run(
-      'INSERT INTO system_settings (id, shop_name, address, phone, email, currency, tax_rate, backup_email, backup_enabled, backup_interval_hours, logo_path, printer_settings, branch_settings, next_invoice_number, return_passkey, void_passkey, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [initial.id, initial.shop_name, initial.address, initial.phone, initial.email, initial.currency, initial.tax_rate, initial.backup_email, initial.backup_enabled, initial.backup_interval_hours, '', '', '', initial.next_invoice_number, initial.return_passkey, initial.void_passkey, initial.updated_at]
+      'INSERT INTO system_settings (id, shop_name, address, phone, email, currency, tax_rate, backup_email, backup_enabled, backup_interval_hours, logo_path, printer_settings, branch_settings, next_invoice_number, return_passkey, void_passkey, updated_at, last_counter_sync_timestamp, counter_sync_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [initial.id, initial.shop_name, initial.address, initial.phone, initial.email, initial.currency, initial.tax_rate, initial.backup_email, initial.backup_enabled, initial.backup_interval_hours, '', '', '', initial.next_invoice_number, initial.return_passkey, initial.void_passkey, initial.updated_at, null, 'IDLE']
     );
     settings = initial;
   }
@@ -403,8 +409,10 @@ async function setRuntimeSettings(payload = {}) {
       next_invoice_number,
       return_passkey,
       void_passkey,
+      last_counter_sync_timestamp,
+      counter_sync_status,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       'global',
       updated.shop_name,
@@ -422,6 +430,8 @@ async function setRuntimeSettings(payload = {}) {
       updated.next_invoice_number,
       updated.return_passkey,
       updated.void_passkey,
+      updated.last_counter_sync_timestamp || null,
+      updated.counter_sync_status || 'IDLE',
       updated.updated_at
     ]
   );
@@ -492,16 +502,15 @@ async function getRuntimeEmployeesSnapshot() {
 
 // Standard helper to initialize and migrate SQLite tables
 async function initializeDatabase() {
-  db = await open({
-    filename: DB_FILE,
-    driver: sqlite3.Database
-  });
+  db = await initDb(DB_FILE);
 
-  await db.exec("PRAGMA busy_timeout = 15000;");
-  await db.exec("PRAGMA journal_mode = WAL;");
-  await db.exec("PRAGMA synchronous = NORMAL;");
-
-  console.log('✅ Connected to SQLite Database with WAL mode enabled:', DB_FILE);
+  if (!isTurso()) {
+    try {
+      await db.exec("PRAGMA busy_timeout = 15000;");
+      await db.exec("PRAGMA journal_mode = WAL;");
+      await db.exec("PRAGMA synchronous = NORMAL;");
+    } catch (_) {}
+  }
 
   // 1. Create Profiles/Users Table
   await db.exec(`
@@ -620,9 +629,25 @@ async function initializeDatabase() {
       next_invoice_number TEXT DEFAULT 'INV001',
       return_passkey TEXT DEFAULT '1234',
       void_passkey TEXT DEFAULT '1234',
+      last_counter_sync_timestamp TEXT DEFAULT NULL,
+      counter_sync_status TEXT DEFAULT 'IDLE',
       updated_at TEXT
     )
   `);
+
+  // 6.5 Create Sync Queue Table for Offline-First Replication
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS sync_queue (
+      id TEXT PRIMARY KEY,
+      table_name TEXT NOT NULL,
+      record_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      payload JSON NOT NULL,
+      status TEXT DEFAULT 'PENDING',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status, created_at);"); } catch(_) {}
 
   // 7. Create Persistent Employees Table
   await db.exec(`
@@ -911,6 +936,15 @@ async function initializeDatabase() {
     await db.exec("ALTER TABLE customers ADD COLUMN nic TEXT");
   } catch(e) {}
   try {
+    await db.exec("ALTER TABLE customers ADD COLUMN credit_balance REAL DEFAULT 0");
+  } catch(e) {}
+  try {
+    await db.exec("ALTER TABLE customers ADD COLUMN current_credit REAL DEFAULT 0");
+  } catch(e) {}
+  try {
+    await db.exec("ALTER TABLE transactions ADD COLUMN payment_method TEXT DEFAULT 'CASH'");
+  } catch(e) {}
+  try {
     await db.exec("ALTER TABLE suppliers ADD COLUMN nic TEXT");
   } catch(e) {}
   try {
@@ -960,6 +994,12 @@ async function initializeDatabase() {
   } catch(e) {}
   try {
     await db.exec("ALTER TABLE system_settings ADD COLUMN label_printer_settings TEXT");
+  } catch(e) {}
+  try {
+    await db.exec("ALTER TABLE system_settings ADD COLUMN last_counter_sync_timestamp TEXT");
+  } catch(e) {}
+  try {
+    await db.exec("ALTER TABLE system_settings ADD COLUMN counter_sync_status TEXT DEFAULT 'IDLE'");
   } catch(e) {}
   try {
     await db.exec("ALTER TABLE sales ADD COLUMN transportation_fee REAL DEFAULT 0");
@@ -1048,6 +1088,59 @@ async function initializeDatabase() {
   `);
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN difference_payment_method TEXT DEFAULT 'Cash'"); } catch (e) {}
 
+  // 18. Create Cheque Registry Table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS cheque_registry (
+      id TEXT PRIMARY KEY,
+      direction TEXT NOT NULL CHECK (direction IN ('INWARD', 'OUTWARD')),
+      cheque_type TEXT NOT NULL DEFAULT 'CROSSED_ACCOUNT_PAYEE' CHECK (cheque_type IN ('CROSSED_ACCOUNT_PAYEE', 'CASH_BEARER')),
+      cheque_number TEXT NOT NULL,
+      bank_name TEXT NOT NULL,
+      branch TEXT,
+      cheque_date DATE NOT NULL,
+      amount REAL NOT NULL,
+      party_id TEXT,
+      party_name TEXT,
+      reference_type TEXT CHECK (reference_type IN ('SALE_INVOICE', 'CREDIT_SETTLEMENT', 'PURCHASE_ORDER', 'GRN', 'MANUAL_DEPOSIT', 'EXPENSE')),
+      reference_id TEXT,
+      status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'IN_HAND', 'DEPOSITED', 'CLEARED', 'BOUNCED', 'CANCELLED')),
+      notes TEXT,
+      cleared_at DATETIME,
+      created_by TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // 19. Create Purchase Returns Table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS purchase_returns (
+      id TEXT PRIMARY KEY,
+      return_number TEXT UNIQUE,
+      supplier_id TEXT NOT NULL,
+      supplier_name TEXT NOT NULL,
+      purchase_order_id TEXT,
+      total_returned_cost REAL NOT NULL DEFAULT 0,
+      settlement_mode TEXT NOT NULL DEFAULT 'SUPPLIER_DEBIT_NOTE' CHECK (settlement_mode IN ('SUPPLIER_DEBIT_NOTE', 'CASH_REFUND', 'BANK_REFUND')),
+      reason TEXT,
+      notes TEXT,
+      handled_by TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // 20. Create Purchase Return Items Table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS purchase_return_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      return_id TEXT NOT NULL REFERENCES purchase_returns(id) ON DELETE CASCADE,
+      product_id TEXT NOT NULL,
+      product_name TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      unit_cost_price REAL NOT NULL,
+      subtotal REAL NOT NULL
+    )
+  `);
+
   // Performance Indexes for fast barcode, invoice, and customer lookups
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)"); } catch(e) {}
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku)"); } catch(e) {}
@@ -1056,6 +1149,18 @@ async function initializeDatabase() {
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales(created_at)"); } catch(e) {}
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_credit_notes_no ON credit_notes(credit_note_no)"); } catch(e) {}
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_returns_inv ON sales_returns(invoice_no)"); } catch(e) {}
+
+  // Cheque Registry & Purchase Return Indexes
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_cheque_registry_number ON cheque_registry(cheque_number)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_cheque_registry_status ON cheque_registry(status)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_cheque_registry_direction ON cheque_registry(direction)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_cheque_registry_party_id ON cheque_registry(party_id)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_cheque_registry_date ON cheque_registry(cheque_date)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_purchase_returns_return_no ON purchase_returns(return_number)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_purchase_returns_supplier_id ON purchase_returns(supplier_id)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_purchase_returns_po_id ON purchase_returns(purchase_order_id)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_purchase_return_items_return_id ON purchase_return_items(return_id)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_purchase_return_items_product_id ON purchase_return_items(product_id)"); } catch(e) {}
 
   // Phase 2A: Performance optimization indexes
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(email)"); } catch(e) {}
@@ -1077,6 +1182,79 @@ async function initializeDatabase() {
       END;
     `);
   } catch(e) {}
+
+  // Change Tracking Triggers for Offline-First Replication
+  try {
+    await db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_sync_sales_insert AFTER INSERT ON sales
+      BEGIN
+        INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
+        VALUES (
+          'sq_sales_' || NEW.id,
+          'sales',
+          NEW.id,
+          'INSERT',
+          json_object('id', NEW.id, 'invoice_no', NEW.invoice_no, 'customer_id', NEW.customer_id, 'customer_name', NEW.customer_name, 'items', NEW.items, 'subtotal', NEW.subtotal, 'discount', NEW.discount, 'tax', NEW.tax, 'total_amount', NEW.total_amount, 'status', NEW.status, 'user_id', NEW.user_id, 'payment_method', NEW.payment_method, 'created_at', NEW.created_at, 'client_tx_id', NEW.client_tx_id),
+          'PENDING',
+          strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        );
+      END;
+    `);
+  } catch (_) {}
+
+  try {
+    await db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_sync_sales_returns_insert AFTER INSERT ON sales_returns
+      BEGIN
+        INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
+        VALUES (
+          'sq_sales_returns_' || NEW.id,
+          'sales_returns',
+          NEW.id,
+          'INSERT',
+          json_object('id', NEW.id, 'return_no', NEW.return_no, 'invoice_no', NEW.invoice_no, 'customer_name', NEW.customer_name, 'return_amount', NEW.return_amount, 'total_refunded', NEW.total_refunded, 'status', NEW.status, 'created_at', NEW.created_at),
+          'PENDING',
+          strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        );
+      END;
+    `);
+  } catch (_) {}
+
+  try {
+    await db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_sync_credit_payments_insert AFTER INSERT ON credit_payments
+      BEGIN
+        INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
+        VALUES (
+          'sq_credit_payments_' || NEW.id,
+          'credit_payments',
+          NEW.id,
+          'INSERT',
+          json_object('id', NEW.id, 'sale_id', NEW.sale_id, 'invoice_no', NEW.invoice_no, 'customer_id', NEW.customer_id, 'amount_paid', NEW.amount_paid, 'remaining_balance', NEW.remaining_balance, 'payment_method', NEW.payment_method, 'created_at', NEW.created_at),
+          'PENDING',
+          strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        );
+      END;
+    `);
+  } catch (_) {}
+
+  try {
+    await db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_sync_stock_adj_insert AFTER INSERT ON stock_adjustments
+      BEGIN
+        INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
+        VALUES (
+          'sq_stock_adj_' || NEW.id,
+          'stock_adjustments',
+          NEW.id,
+          'INSERT',
+          json_object('id', NEW.id, 'product_id', NEW.product_id, 'product_name', NEW.product_name, 'old_qty', NEW.old_qty, 'new_qty', NEW.new_qty, 'reason', NEW.reason, 'type', NEW.type, 'created_at', NEW.created_at),
+          'PENDING',
+          strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        );
+      END;
+    `);
+  } catch (_) {}
 
   try { await db.exec("ALTER TABLE credit_notes ADD COLUMN credit_note_no TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE credit_notes ADD COLUMN code TEXT"); } catch(e) {}
@@ -1121,6 +1299,24 @@ async function initializeDatabase() {
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN due_date TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN user_id TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN po_no TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN received_at TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN updated_at TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN created_by TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN status TEXT DEFAULT 'ACTIVE'"); } catch(e) {}
+  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN void_reason TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN updated_at DATETIME"); } catch(e) {}
+  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN balance_remaining REAL"); } catch(e) {}
+  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN redeemed_amount REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN redeemed_in_po_number TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN original_total REAL"); } catch(e) {}
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_code TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_applied REAL DEFAULT 0"); } catch(e) {}
+  try { await db.exec("UPDATE purchase_returns SET balance_remaining = total_returned_cost WHERE balance_remaining IS NULL AND (status IS NULL OR status = 'ACTIVE')"); } catch(e) {}
+  try { await db.exec("ALTER TABLE products ADD COLUMN parent_product_id TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE products ADD COLUMN is_batch INTEGER DEFAULT 0"); } catch(e) {}
+  try { await db.exec("ALTER TABLE products ADD COLUMN batch_number INTEGER"); } catch(e) {}
+  try { await db.exec("ALTER TABLE cheque_registry ADD COLUMN updated_at DATETIME"); } catch(e) {}
+  try { await db.exec("ALTER TABLE cheque_registry ADD COLUMN processed_by TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN return_method TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN total_refunded REAL DEFAULT 0"); } catch(e) {}
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN user_id TEXT"); } catch(e) {}
@@ -2268,7 +2464,7 @@ app.post('/api/sales', async (req, res) => {
     });
 
     // 2. Insert Sale Order
-    const cashierName = s.cashier || s.user_name || s.user_id || 'Admin';
+    const cashierName = s.cashier || s.cashier_name || s.user_name || 'Sanoj Hardware';
     const userEmail = s.user_email || 'admin@hardware.erp';
     await db.run(
       'INSERT INTO sales (id, invoice_no, customer_id, customer_name, customer_phone, customer_address, items, subtotal, discount, tax, tax_rate, total_amount, status, user_id, user_email, cashier, payment_method, created_at, due_date, credit_period_days, payment_received, transportation_fee, credit_note_applied, credit_note_code, client_tx_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -3516,6 +3712,12 @@ app.get('/api/purchase-orders', async (req, res) => {
       supplierName: po.supplier_name,
       items: JSON.parse(po.items),
       total: po.total,
+      originalTotal: Number(po.original_total !== null && po.original_total !== undefined ? po.original_total : po.total),
+      original_total: Number(po.original_total !== null && po.original_total !== undefined ? po.original_total : po.total),
+      debitNoteCode: po.debit_note_code || '',
+      debit_note_code: po.debit_note_code || '',
+      debitNoteApplied: Number(po.debit_note_applied || 0),
+      debit_note_applied: Number(po.debit_note_applied || 0),
       status: po.status,
       dueDate: po.due_date,
       date: new Date(po.created_at).toLocaleDateString(),
@@ -3527,17 +3729,194 @@ app.get('/api/purchase-orders', async (req, res) => {
   }
 });
 
+/**
+ * Resolves or creates an independent batch SKU for divergent PO costs
+ * - If costs match (abs diff < 0.01) or invalid: increments existing product stock, leaves cost intact.
+ * - If costs differ:
+ *   * Checks if an existing batch product in the same SKU family has this exact cost. If yes, increments it.
+ *   * If no, forks a new batch product:
+ *     - SKU: ${baseSKU}-B${batchNumber}
+ *     - Name: ${productName} (Batch ${batchNumber})
+ *     - Cost: itemCost
+ *     - Stock: qty
+ *     - Price: round(itemCost * markupRatio, 2)
+ *     - Supplier: Current PO supplier
+ *     - Barcode: ${baseBarcode}-B${batchNumber} (or unique fallback)
+ *   * The original product retains its original cost and historical stock.
+ */
+async function resolveOrCreateBatchProduct(db, product, itemCost, qty, poSupplierName) {
+  if (!product) return null;
+  const currentCost = Number(product.cost_price !== undefined && product.cost_price !== null ? product.cost_price : (product.costPrice || 0));
+  const newCost = Number(itemCost || 0);
+
+  // If cost matches existing catalog cost or invalid cost, use the product directly
+  if (newCost <= 0 || Math.abs(newCost - currentCost) < 0.01) {
+    const oldStock = Number(product.stock || 0);
+    const newStock = oldStock + qty;
+    await db.run('UPDATE products SET stock = ? WHERE id = ?', [newStock, product.id]);
+    return {
+      productId: product.id,
+      sku: product.sku,
+      isNewBatch: false,
+      batchNumber: product.batch_number || 1,
+      name: product.name,
+      costPrice: currentCost,
+      stock: newStock,
+      isExistingIncremented: true
+    };
+  }
+
+  // Cost differs: preserve original product stock and cost!
+  // Determine base SKU and base Name
+  const baseSku = (product.sku || 'SKU').replace(/-B\d+$/i, '').trim();
+  const baseName = (product.name || 'Product').replace(/\s*\(Batch\s*\d+\)$/i, '').trim();
+  const rootParentId = product.parent_product_id || product.id;
+
+  // Check if a batch SKU already exists for this exact cost in the same product family
+  const existingFamily = await db.all(
+    'SELECT * FROM products WHERE sku = ? OR sku LIKE ? OR parent_product_id = ? OR id = ?',
+    [baseSku, `${baseSku}-B%`, rootParentId, rootParentId]
+  );
+
+  const matchedBatch = existingFamily.find(p => {
+    const pCost = Number(p.cost_price !== undefined && p.cost_price !== null ? p.cost_price : (p.costPrice || 0));
+    return Math.abs(pCost - newCost) < 0.01;
+  });
+
+  if (matchedBatch) {
+    const oldStock = Number(matchedBatch.stock || 0);
+    const newStock = oldStock + qty;
+    await db.run('UPDATE products SET stock = ? WHERE id = ?', [newStock, matchedBatch.id]);
+    return {
+      productId: matchedBatch.id,
+      sku: matchedBatch.sku,
+      isNewBatch: false,
+      batchNumber: matchedBatch.batch_number || 1,
+      name: matchedBatch.name,
+      costPrice: newCost,
+      stock: newStock,
+      isExistingIncremented: true
+    };
+  }
+
+  // Generate new batch item
+  // Calculate next batch number from existing family
+  let maxBatchNum = 1;
+  for (const p of existingFamily) {
+    if (p.batch_number && Number(p.batch_number) > maxBatchNum) {
+      maxBatchNum = Number(p.batch_number);
+    }
+    const match = (p.sku || '').match(/-B(\d+)$/i);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (num > maxBatchNum) maxBatchNum = num;
+    }
+  }
+  const nextBatchNum = maxBatchNum + 1;
+
+  const newSku = `${baseSku}-B${nextBatchNum}`;
+  const newName = `${baseName} (Batch ${nextBatchNum})`;
+
+  // Calculate selling price inheriting existing markup ratio
+  const catalogPrice = Number(product.price || 0);
+  const markupRatio = currentCost > 0 ? (catalogPrice / currentCost) : 1.25;
+  const newSellingPrice = Math.round(newCost * Math.max(1.0, markupRatio) * 100) / 100;
+
+  // Generate unique barcode
+  const baseBarcode = (product.barcode || 'HW' + Date.now().toString().slice(-6)).trim();
+  let newBarcode = `${baseBarcode}-B${nextBatchNum}`;
+  const existingBarcode = await db.get('SELECT id FROM products WHERE barcode = ?', [newBarcode]);
+  if (existingBarcode) {
+    newBarcode = `${baseBarcode}B${nextBatchNum}${Date.now().toString().slice(-3)}`;
+  }
+
+  const newId = 'p_batch_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  const supplierToUse = poSupplierName || product.supplier || '';
+
+  await db.run(
+    `INSERT INTO products (
+      id, name, sku, category, price, cost_price, stock, min_stock,
+      supplier, unit, barcode, brand, serial_no, batch_code, expiry_date,
+      supplier_phone, measure_details, parent_product_id, is_batch, batch_number
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      newId,
+      newName,
+      newSku,
+      product.category || 'General',
+      newSellingPrice,
+      newCost,
+      qty,
+      product.min_stock !== undefined ? product.min_stock : 5,
+      supplierToUse,
+      product.unit || 'PCS',
+      newBarcode,
+      product.brand || '',
+      product.serial_no || '',
+      `BATCH-${nextBatchNum}`,
+      product.expiry_date || '',
+      product.supplier_phone || '',
+      product.measure_details || '',
+      rootParentId,
+      1,
+      nextBatchNum
+    ]
+  );
+
+  return {
+    productId: newId,
+    sku: newSku,
+    isNewBatch: true,
+    batchNumber: nextBatchNum,
+    name: newName,
+    costPrice: newCost,
+    stock: qty,
+    price: newSellingPrice,
+    isExistingIncremented: false
+  };
+}
+
 app.post('/api/purchase-orders', async (req, res) => {
   const po = req.body;
   const id = 'po_' + Date.now();
   const created_at = new Date().toISOString();
+  const debitNoteCode = (po.debit_note_code || po.debitNoteCode || '').toString().trim();
+  const debitNoteApplied = Math.max(0, Number(po.debit_note_applied || po.debitNoteApplied || 0));
+  const originalTotal = Number(po.original_total !== undefined ? po.original_total : (po.originalTotal !== undefined ? po.originalTotal : po.total));
+  const netTotal = Math.max(0, Number(po.total !== undefined ? po.total : (originalTotal - debitNoteApplied)));
+
+  let txn = null;
   try {
+    txn = await beginTxn(db, `Create PO ${po.po_number || id}`);
+
+    // If debit note applied, deduct from purchase_returns
+    if (debitNoteApplied > 0 && debitNoteCode) {
+      const pr = await db.get(
+        'SELECT * FROM purchase_returns WHERE (return_number = ? OR id = ?) AND status NOT IN (\'VOIDED\', \'REDEEMED\')',
+        [debitNoteCode, debitNoteCode]
+      );
+      if (pr) {
+        const prevBal = Number(pr.balance_remaining !== null && pr.balance_remaining !== undefined ? pr.balance_remaining : pr.total_returned_cost);
+        const newBal = Math.max(0, Math.round((prevBal - debitNoteApplied) * 100) / 100);
+        const prevRedeemed = Number(pr.redeemed_amount || 0);
+        const newRedeemed = Math.round((prevRedeemed + debitNoteApplied) * 100) / 100;
+        const newStatus = newBal <= 0.001 ? 'REDEEMED' : 'PARTIALLY_REDEEMED';
+        await db.run(
+          'UPDATE purchase_returns SET balance_remaining = ?, redeemed_amount = ?, status = ?, redeemed_in_po_number = ?, updated_at = ? WHERE id = ?',
+          [newBal, newRedeemed, newStatus, po.po_number || id, created_at, pr.id]
+        );
+      }
+    }
+
     await db.run(
-      'INSERT INTO purchase_orders (id, po_number, supplier_name, items, total, status, due_date, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, po.po_number, po.supplier_name, JSON.stringify(po.items), po.total, po.status, po.due_date, po.user_id, created_at]
+      'INSERT INTO purchase_orders (id, po_number, supplier_name, items, total, original_total, debit_note_code, debit_note_applied, status, due_date, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, po.po_number, po.supplier_name, JSON.stringify(po.items), netTotal, originalTotal, debitNoteCode || null, debitNoteApplied, po.status || 'pending', po.due_date, po.user_id, created_at]
     );
-    res.json({ success: true, id });
+
+    await commitTxn(db, txn);
+    res.json({ success: true, id, netTotal, originalTotal, debitNoteApplied });
   } catch (err) {
+    if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
     res.status(500).json({ error: err.message });
   }
 });
@@ -3557,14 +3936,38 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
 
     await db.run('UPDATE purchase_orders SET status = ? WHERE id = ?', [status, id]);
 
-    // If marked received, increment product stock levels, update cost price, increment supplier payable balance, and log expense
+    // If marked received, allocate stock using Batch Versioning (preserve original cost, fork batch SKU if costs diverge)
     if (status === 'received') {
-      const items = JSON.parse(po.items);
+      let items = [];
+      try {
+        items = typeof po.items === 'string' ? JSON.parse(po.items) : (po.items || []);
+      } catch (_e) {
+        items = [];
+      }
+
+      let updatedItems = [];
       for (const item of items) {
-        await db.run(
-          'UPDATE products SET stock = stock + ?, cost_price = ? WHERE id = ?',
-          [item.qty, item.costPrice || item.cost_price || 0, item.productId]
-        );
+        const prodId = item.productId || item.product_id || item.id;
+        const qty = Math.max(0, Number(item.qty || item.quantity || 0));
+        const itemCost = Number(item.costPrice || item.cost_price || item.unitCostPrice || 0);
+
+        if (prodId && qty > 0) {
+          const product = await db.get('SELECT * FROM products WHERE id = ?', [prodId]);
+          if (product) {
+            const batchResult = await resolveOrCreateBatchProduct(db, product, itemCost, qty, po.supplier_name);
+            updatedItems.push({
+              ...item,
+              receivedProductId: batchResult.productId,
+              receivedSku: batchResult.sku,
+              isNewBatch: batchResult.isNewBatch,
+              batchNumber: batchResult.batchNumber
+            });
+          } else {
+            updatedItems.push(item);
+          }
+        } else {
+          updatedItems.push(item);
+        }
       }
 
       if (po.supplier_name) {
@@ -3693,6 +4096,1518 @@ app.delete('/api/transactions/:id', async (req, res) => {
   return res.status(403).json({ error: 'Deleting finance/accounting transaction records is disabled for financial audit compliance.' });
 });
 
+// CHEQUE REGISTRY API
+app.get('/api/cheques', async (req, res) => {
+  try {
+    const { direction, status, party_id, start_date, end_date } = req.query;
+    
+    let query = 'SELECT * FROM cheque_registry WHERE 1=1';
+    const params = [];
+
+    if (direction) {
+      query += ' AND direction = ?';
+      params.push(String(direction).toUpperCase());
+    }
+
+    if (status) {
+      query += ' AND status = ?';
+      params.push(String(status).toUpperCase());
+    }
+
+    if (party_id) {
+      query += ' AND party_id = ?';
+      params.push(String(party_id));
+    }
+
+    if (start_date) {
+      query += ' AND cheque_date >= ?';
+      params.push(String(start_date));
+    }
+
+    if (end_date) {
+      query += ' AND cheque_date <= ?';
+      params.push(String(end_date));
+    }
+
+    query += ' ORDER BY cheque_date DESC, created_at DESC';
+
+    const cheques = await db.all(query, params);
+    res.json(cheques);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/cheques', async (req, res) => {
+  const {
+    direction,
+    cheque_type = 'CROSSED_ACCOUNT_PAYEE',
+    cheque_number,
+    bank_name,
+    branch = '',
+    cheque_date,
+    amount,
+    party_id = null,
+    party_name = '',
+    reference_type = null,
+    reference_id = null,
+    status = 'PENDING',
+    notes = '',
+    created_by = null,
+    user_email = null
+  } = req.body || {};
+
+  if (!direction || !['INWARD', 'OUTWARD'].includes(direction.toUpperCase())) {
+    return res.status(400).json({ error: 'Valid direction (INWARD or OUTWARD) is required.' });
+  }
+
+  if (!cheque_number || !cheque_number.toString().trim()) {
+    return res.status(400).json({ error: 'Cheque number is required.' });
+  }
+
+  if (!bank_name || !bank_name.toString().trim()) {
+    return res.status(400).json({ error: 'Bank name is required.' });
+  }
+
+  if (!cheque_date) {
+    return res.status(400).json({ error: 'Cheque date is required.' });
+  }
+
+  const numAmount = Number(amount);
+  if (isNaN(numAmount) || numAmount <= 0) {
+    return res.status(400).json({ error: 'Amount must be greater than 0.' });
+  }
+
+  const validChequeType = ['CROSSED_ACCOUNT_PAYEE', 'CASH_BEARER'].includes((cheque_type || '').toUpperCase())
+    ? cheque_type.toUpperCase()
+    : 'CROSSED_ACCOUNT_PAYEE';
+
+  const validStatus = ['PENDING', 'IN_HAND', 'DEPOSITED', 'CLEARED', 'BOUNCED', 'CANCELLED'].includes((status || '').toUpperCase())
+    ? status.toUpperCase()
+    : 'PENDING';
+
+  const id = 'CHQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
+  const createdByVal = created_by || user_email || req.headers['x-user-email'] || 'system';
+
+  try {
+    await db.run(
+      `INSERT INTO cheque_registry (
+        id, direction, cheque_type, cheque_number, bank_name, branch,
+        cheque_date, amount, party_id, party_name, reference_type,
+        reference_id, status, notes, created_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        direction.toUpperCase(),
+        validChequeType,
+        cheque_number.toString().trim(),
+        bank_name.toString().trim(),
+        (branch || '').toString().trim(),
+        cheque_date,
+        numAmount,
+        party_id || null,
+        (party_name || '').toString().trim(),
+        reference_type || null,
+        reference_id || null,
+        validStatus,
+        (notes || '').toString().trim(),
+        createdByVal,
+        new Date().toISOString()
+      ]
+    );
+
+    await logAudit(
+      createdByVal,
+      'CHEQUE_REGISTERED',
+      `Registered ${direction.toUpperCase()} Cheque #${cheque_number} (${bank_name}, Rs. ${numAmount.toLocaleString()}) for ${party_name || 'Party'}`
+    );
+
+    res.json({
+      success: true,
+      id,
+      direction: direction.toUpperCase(),
+      cheque_type: validChequeType,
+      cheque_number,
+      bank_name,
+      branch,
+      cheque_date,
+      amount: numAmount,
+      party_id,
+      party_name,
+      reference_type,
+      reference_id,
+      status: validStatus,
+      notes,
+      created_by: createdByVal
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.patch('/api/cheques/:id/status', async (req, res) => {
+  const { id } = req.params;
+  const { status, notes, user_email, user_id } = req.body || {};
+
+  if (!status) {
+    return res.status(400).json({ error: 'Status is required.' });
+  }
+
+  const targetStatus = status.toString().toUpperCase();
+  const validStatuses = ['PENDING', 'IN_HAND', 'DEPOSITED', 'CLEARED', 'BOUNCED', 'CANCELLED'];
+  if (!validStatuses.includes(targetStatus)) {
+    return res.status(400).json({ error: `Invalid status: ${targetStatus}. Allowed: ${validStatuses.join(', ')}` });
+  }
+
+  const staffUser = user_email || user_id || req.headers['x-user-email'] || 'system';
+  let txn = null;
+
+  try {
+    txn = await beginTxn(db, `Update Cheque Status ${id} -> ${targetStatus}`);
+
+    const cheque = await db.get('SELECT * FROM cheque_registry WHERE id = ?', [id]);
+    if (!cheque) {
+      await rollbackTxn(db, txn);
+      return res.status(404).json({ error: 'Cheque record not found.' });
+    }
+
+    const prevStatus = (cheque.status || '').toUpperCase();
+    if (prevStatus === targetStatus) {
+      await commitTxn(db, txn);
+      return res.json({ success: true, message: `Cheque is already in ${targetStatus} status.`, cheque });
+    }
+
+    let cleared_at = cheque.cleared_at;
+
+    // 1. Handling CLEARED status transition
+    if (targetStatus === 'CLEARED') {
+      cleared_at = new Date().toISOString();
+      const todayStr = new Date().toLocaleDateString('sv-SE');
+      const chqType = (cheque.cheque_type || '').toUpperCase();
+      const direction = (cheque.direction || '').toUpperCase();
+
+      if (direction === 'INWARD') {
+        const isCashBearer = chqType === 'CASH_BEARER' || prevStatus === 'IN_HAND';
+        const notesStr = (cheque.notes || '').toString();
+        const refType = (cheque.reference_type || '').toUpperCase();
+
+        let txCategory = '';
+        let txDesc = '';
+        let isCreditSettlement = false;
+
+        if (notesStr.includes('[Customer Advance]') || refType === 'CUSTOMER_ADVANCE') {
+          txCategory = isCashBearer ? 'Customer Advance (Cheque Encashed)' : 'Customer Advance (Cheque Cleared Bank)';
+          txDesc = isCashBearer
+            ? `Encashed Customer Advance Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Customer'}`
+            : `Cleared Customer Advance Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Customer'} (Bank Deposit)`;
+        } else if (notesStr.includes('[Supplier Refund]') || refType === 'EXPENSE') {
+          txCategory = isCashBearer ? 'Supplier Refund (Cheque Encashed)' : 'Supplier Refund (Cheque Cleared Bank)';
+          txDesc = isCashBearer
+            ? `Encashed Supplier Refund Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Supplier'}`
+            : `Cleared Supplier Refund Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Supplier'} (Bank Deposit)`;
+        } else if (notesStr.includes('[Other Income]')) {
+          txCategory = isCashBearer ? 'Other Income (Cheque Encashed)' : 'Other Income (Cheque Cleared Bank)';
+          txDesc = isCashBearer
+            ? `Encashed General Income Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Payer'}`
+            : `Cleared General Income Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Payer'} (Bank Deposit)`;
+        } else {
+          isCreditSettlement = true;
+          txCategory = isCashBearer ? 'Customer Debt Repayment (Cheque Encashed)' : 'Customer Debt Repayment (Cheque Cleared Bank)';
+          txDesc = isCashBearer
+            ? `Encashed Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Customer'}`
+            : `Cleared Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Customer'} (Bank Deposit)`;
+        }
+
+        // 1. Insert Cash Book Transaction
+        const txId = 't_chq_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        const paymentMethod = isCashBearer ? 'CASH' : 'BANK';
+        await db.run(
+          'INSERT INTO transactions (id, type, category, description, amount, date, reference, payment_method, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [
+            txId,
+            'income',
+            txCategory,
+            txDesc,
+            cheque.amount,
+            todayStr,
+            cheque.cheque_number,
+            paymentMethod,
+            staffUser,
+            new Date().toISOString()
+          ]
+        );
+
+        if (isCreditSettlement) {
+          // 2. Deduct from customer credit balance
+          if (cheque.party_id) {
+            await db.run(
+              'UPDATE customers SET credit_balance = MAX(0, COALESCE(credit_balance, 0) - ?), current_credit = MAX(0, COALESCE(current_credit, 0) - ?) WHERE id = ?',
+              [cheque.amount, cheque.party_id]
+            );
+          } else if (cheque.party_name) {
+            await db.run(
+              'UPDATE customers SET credit_balance = MAX(0, COALESCE(credit_balance, 0) - ?), current_credit = MAX(0, COALESCE(current_credit, 0) - ?) WHERE name = ?',
+              [cheque.amount, cheque.party_name]
+            );
+          }
+
+        // 3. Settle linked sale invoice or distribute across customer's pending credit sales
+        let remainingToSettle = Number(cheque.amount || 0);
+
+        if (cheque.reference_id) {
+          const linkedSale = await db.get(
+            'SELECT * FROM sales WHERE invoice_no = ? OR id = ?',
+            [cheque.reference_id, cheque.reference_id]
+          );
+
+          if (linkedSale) {
+            const currentReceived = Number(linkedSale.payment_received || 0);
+            const totalAmt = Number(linkedSale.total_amount || 0);
+            const unpaid = Math.max(0, totalAmt - currentReceived);
+            const settleAmt = Math.min(unpaid, remainingToSettle);
+            const newReceived = currentReceived + settleAmt;
+            const newStatus = newReceived >= totalAmt ? 'paid' : 'pending';
+
+            await db.run(
+              'UPDATE sales SET payment_received = ?, status = ? WHERE id = ?',
+              [newReceived, newStatus, linkedSale.id]
+            );
+
+            const cpId = 'cp_chq_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+            await db.run(
+              `INSERT INTO credit_payments (
+                id, sale_id, invoice_no, customer_id, customer_name,
+                amount_paid, remaining_balance, payment_method, payment_date,
+                recorded_by, created_by, notes, created_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                cpId,
+                linkedSale.id,
+                linkedSale.invoice_no,
+                linkedSale.customer_id || cheque.party_id || null,
+                linkedSale.customer_name || cheque.party_name || 'Customer',
+                settleAmt,
+                Math.max(0, totalAmt - newReceived),
+                isCashBearer ? 'Cheque (Encashed)' : 'Cheque (Cleared Bank)',
+                todayStr,
+                staffUser,
+                staffUser,
+                `Cheque #${cheque.cheque_number} Cleared`,
+                new Date().toISOString()
+              ]
+            );
+
+            remainingToSettle -= settleAmt;
+          }
+        }
+
+        // If there's still remaining amount to settle and customer is known, apply to other unpaid sales
+        if (remainingToSettle > 0 && (cheque.party_id || cheque.party_name)) {
+          const pendingSales = await db.all(
+            `SELECT * FROM sales 
+             WHERE (customer_id = ? OR customer_name = ?) 
+               AND (status != 'paid' OR payment_received < total_amount) 
+             ORDER BY created_at ASC`,
+            [cheque.party_id || '', cheque.party_name || '']
+          );
+
+          for (const s of pendingSales) {
+            if (remainingToSettle <= 0) break;
+            const currentReceived = Number(s.payment_received || 0);
+            const totalAmt = Number(s.total_amount || 0);
+            const unpaid = Math.max(0, totalAmt - currentReceived);
+            if (unpaid > 0) {
+              const settleAmt = Math.min(unpaid, remainingToSettle);
+              const newReceived = currentReceived + settleAmt;
+              const newStatus = newReceived >= totalAmt ? 'paid' : 'pending';
+
+              await db.run(
+                'UPDATE sales SET payment_received = ?, status = ? WHERE id = ?',
+                [newReceived, newStatus, s.id]
+              );
+
+              const cpId = 'cp_chq_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+              await db.run(
+                `INSERT INTO credit_payments (
+                  id, sale_id, invoice_no, customer_id, customer_name,
+                  amount_paid, remaining_balance, payment_method, payment_date,
+                  recorded_by, created_by, notes, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  cpId,
+                  s.id,
+                  s.invoice_no,
+                  s.customer_id || cheque.party_id || null,
+                  s.customer_name || cheque.party_name || 'Customer',
+                  settleAmt,
+                  Math.max(0, totalAmt - newReceived),
+                  isCashBearer ? 'Cheque (Encashed)' : 'Cheque (Cleared Bank)',
+                  todayStr,
+                  staffUser,
+                  staffUser,
+                  `Cheque #${cheque.cheque_number} Cleared`,
+                  new Date().toISOString()
+                ]
+              );
+
+              remainingToSettle -= settleAmt;
+            }
+          }
+        }
+      }
+    } else if (direction === 'OUTWARD') {
+        // Outward cheque payment realization / bank deduction
+        const txId = 't_chq_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        await db.run(
+          'INSERT INTO transactions (id, type, category, description, amount, date, reference, payment_method, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [
+            txId,
+            'expense',
+            'Supplier Payment (Cheque Cleared)',
+            `Outward Cheque Cleared - ${cheque.bank_name} #${cheque.cheque_number} to ${cheque.party_name || 'Payee'}`,
+            cheque.amount,
+            todayStr,
+            cheque.cheque_number,
+            'BANK',
+            staffUser,
+            new Date().toISOString()
+          ]
+        );
+      }
+    }
+
+    // 2. Handling BOUNCED status transition
+    if (targetStatus === 'BOUNCED') {
+      const direction = (cheque.direction || '').toUpperCase();
+      const refType = (cheque.reference_type || '').toUpperCase();
+
+      if (direction === 'INWARD') {
+        // Re-add cheque amount to customer's outstanding credit if it was settling invoice or credit
+        if (refType === 'CREDIT_SETTLEMENT' || refType === 'SALE_INVOICE' || cheque.party_id) {
+          if (cheque.party_id) {
+            await db.run(
+              'UPDATE customers SET current_credit = COALESCE(current_credit, 0) + ? WHERE id = ?',
+              [cheque.amount, cheque.party_id]
+            );
+          } else if (cheque.party_name) {
+            await db.run(
+              'UPDATE customers SET current_credit = COALESCE(current_credit, 0) + ? WHERE name = ?',
+              [cheque.amount, cheque.party_name]
+            );
+          }
+
+          // If linked directly to an invoice, revert payment_received on that sale
+          if (cheque.reference_id) {
+            const linkedSale = await db.get('SELECT * FROM sales WHERE invoice_no = ? OR id = ?', [cheque.reference_id, cheque.reference_id]);
+            if (linkedSale) {
+              const newReceived = Math.max(0, Number(linkedSale.payment_received || 0) - Number(cheque.amount));
+              const newSaleStatus = newReceived <= 0 ? 'pending' : (newReceived < linkedSale.total_amount ? 'pending' : 'paid');
+              await db.run(
+                'UPDATE sales SET payment_received = ?, status = ? WHERE id = ?',
+                [newReceived, newSaleStatus, linkedSale.id]
+              );
+            }
+          }
+        }
+
+        await logAudit(
+          staffUser,
+          'CHEQUE_BOUNCED',
+          `⚠️ Inward Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Customer'} (Rs. ${cheque.amount.toLocaleString()}) marked BOUNCED. Customer outstanding credit balance restored.`
+        );
+      } else if (direction === 'OUTWARD') {
+        // Outward cheque bounced - Re-add to supplier's payable balance
+        if (refType === 'PURCHASE_ORDER' || refType === 'GRN' || cheque.party_id || cheque.party_name) {
+          if (cheque.party_id) {
+            await db.run(
+              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE id = ?',
+              [cheque.amount, cheque.party_id]
+            );
+          } else if (cheque.party_name) {
+            await db.run(
+              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE name = ?',
+              [cheque.amount, cheque.party_name]
+            );
+          }
+        }
+
+        await logAudit(
+          staffUser,
+          'CHEQUE_BOUNCED',
+          `⚠️ Outward Cheque #${cheque.cheque_number} to ${cheque.party_name || 'Supplier'} (Rs. ${cheque.amount.toLocaleString()}) marked BOUNCED. Supplier payable balance restored.`
+        );
+      }
+    }
+
+    // 3. Update cheque status in database
+    const updatedNotes = notes !== undefined ? notes : cheque.notes;
+    await db.run(
+      'UPDATE cheque_registry SET status = ?, notes = ?, cleared_at = ? WHERE id = ?',
+      [targetStatus, updatedNotes, cleared_at, id]
+    );
+
+    await logAudit(
+      staffUser,
+      'CHEQUE_STATUS_UPDATED',
+      `Cheque #${cheque.cheque_number} status changed: ${prevStatus} -> ${targetStatus}`
+    );
+
+    await commitTxn(db, txn);
+
+    const updatedCheque = await db.get('SELECT * FROM cheque_registry WHERE id = ?', [id]);
+    res.json({
+      success: true,
+      id,
+      status: targetStatus,
+      cleared_at,
+      cheque: updatedCheque
+    });
+  } catch (err) {
+    if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PURCHASE RETURNS API
+app.get('/api/purchase-returns', async (req, res) => {
+  try {
+    const returns = await db.all('SELECT * FROM purchase_returns ORDER BY created_at DESC');
+    const items = await db.all('SELECT * FROM purchase_return_items ORDER BY id ASC');
+
+    // Group items by return_id
+    const itemsMap = new Map();
+    items.forEach(it => {
+      if (!itemsMap.has(it.return_id)) {
+        itemsMap.set(it.return_id, []);
+      }
+      itemsMap.get(it.return_id).push({
+        id: it.id,
+        returnId: it.return_id,
+        return_id: it.return_id,
+        productId: it.product_id,
+        product_id: it.product_id,
+        productName: it.product_name,
+        product_name: it.product_name,
+        quantity: it.quantity,
+        qty: it.quantity,
+        unitCostPrice: it.unit_cost_price,
+        unit_cost_price: it.unit_cost_price,
+        costPrice: it.unit_cost_price,
+        subtotal: it.subtotal,
+        total: it.subtotal
+      });
+    });
+
+    const mapped = returns.map(r => ({
+      id: r.id,
+      returnNumber: r.return_number || r.id,
+      return_number: r.return_number || r.id,
+      supplierId: r.supplier_id,
+      supplier_id: r.supplier_id,
+      supplierName: r.supplier_name,
+      supplier_name: r.supplier_name,
+      purchaseOrderId: r.purchase_order_id,
+      purchase_order_id: r.purchase_order_id,
+      totalReturnedCost: Number(r.total_returned_cost || 0),
+      total_returned_cost: Number(r.total_returned_cost || 0),
+      total: Number(r.total_returned_cost || 0),
+      settlementMode: r.settlement_mode || 'SUPPLIER_DEBIT_NOTE',
+      settlement_mode: r.settlement_mode || 'SUPPLIER_DEBIT_NOTE',
+      reason: r.reason || '',
+      notes: r.notes || '',
+      handledBy: r.handled_by || 'Sanoj Hardware',
+      handled_by: r.handled_by || 'Sanoj Hardware',
+      status: r.status || 'ACTIVE',
+      balanceRemaining: Number(r.balance_remaining !== null && r.balance_remaining !== undefined ? r.balance_remaining : (r.status === 'REDEEMED' ? 0 : Number(r.total_returned_cost || 0))),
+      balance_remaining: Number(r.balance_remaining !== null && r.balance_remaining !== undefined ? r.balance_remaining : (r.status === 'REDEEMED' ? 0 : Number(r.total_returned_cost || 0))),
+      redeemedAmount: Number(r.redeemed_amount || 0),
+      redeemed_amount: Number(r.redeemed_amount || 0),
+      redeemedInPoNumber: r.redeemed_in_po_number || null,
+      redeemed_in_po_number: r.redeemed_in_po_number || null,
+      voidReason: r.void_reason || null,
+      void_reason: r.void_reason || null,
+      updatedAt: r.updated_at || null,
+      updated_at: r.updated_at || null,
+      createdAt: r.created_at,
+      created_at: r.created_at,
+      date: new Date(r.created_at).toLocaleDateString(),
+      items: itemsMap.get(r.id) || []
+    }));
+
+    res.json(mapped);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/purchase-returns', async (req, res) => {
+  const {
+    supplier_id,
+    supplierId,
+    supplier_name,
+    supplierName,
+    purchase_order_id,
+    purchaseOrderId,
+    settlement_mode = 'SUPPLIER_DEBIT_NOTE',
+    settlementMode,
+    reason = '',
+    notes = '',
+    handled_by,
+    handledBy,
+    user_email,
+    items = []
+  } = req.body || {};
+
+  const finalSupplierId = supplier_id || supplierId || '';
+  const finalSupplierName = supplier_name || supplierName || '';
+  const finalPoId = purchase_order_id || purchaseOrderId || null;
+  const finalSettlementMode = (settlement_mode || settlementMode || 'SUPPLIER_DEBIT_NOTE').toUpperCase();
+  const finalStaff = handled_by || handledBy || 'Sanoj Hardware';
+
+  if (!finalSupplierName) {
+    return res.status(400).json({ error: 'Supplier name is required.' });
+  }
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'At least one return line item is required.' });
+  }
+
+  const validSettlementModes = ['SUPPLIER_DEBIT_NOTE', 'CASH_REFUND', 'BANK_REFUND'];
+  if (!validSettlementModes.includes(finalSettlementMode)) {
+    return res.status(400).json({ error: `Invalid settlement mode: ${finalSettlementMode}. Allowed: ${validSettlementModes.join(', ')}` });
+  }
+
+  let txn = null;
+
+  try {
+    const timestamp = Date.now();
+    const returnId = 'pr_' + timestamp + '_' + Math.random().toString(36).substring(2, 6);
+    const returnNumber = 'PR-' + String(timestamp).slice(-6);
+    const createdAt = new Date().toISOString();
+    const todayStr = new Date().toLocaleDateString('sv-SE');
+
+    txn = await beginTxn(db, `Create Purchase Return ${returnNumber}`);
+
+    let totalReturnedCost = 0;
+
+    // 1. Process items and validate stock
+    const processedItems = [];
+    for (const rawItem of items) {
+      const prodId = rawItem.product_id || rawItem.productId;
+      const prodName = rawItem.product_name || rawItem.productName || '';
+      const qty = Number(rawItem.quantity || rawItem.qty || 0);
+      const unitCost = Number(rawItem.unit_cost_price !== undefined ? rawItem.unit_cost_price : (rawItem.unitCostPrice !== undefined ? rawItem.unitCostPrice : (rawItem.costPrice || 0)));
+      const lineSubtotal = Number(rawItem.subtotal !== undefined ? rawItem.subtotal : (qty * unitCost));
+
+      if (!prodId) {
+        throw new Error('Product ID is required for each returned line item.');
+      }
+      if (qty <= 0) {
+        throw new Error(`Invalid return quantity (${qty}) for item ${prodName || prodId}.`);
+      }
+
+      // Check current product stock
+      const prod = await db.get('SELECT * FROM products WHERE id = ? OR sku = ?', [prodId, prodId]);
+      if (!prod) {
+        throw new Error(`Product ${prodName || prodId} not found in inventory.`);
+      }
+
+      const currentStock = Number(prod.stock || 0);
+      if (currentStock < qty) {
+        throw new Error(`Insufficient stock for "${prod.name}" (SKU: ${prod.sku}). Available stock: ${currentStock}, Return requested: ${qty}`);
+      }
+
+      totalReturnedCost += lineSubtotal;
+      processedItems.push({
+        productId: prod.id,
+        productName: prod.name,
+        quantity: qty,
+        unitCostPrice: unitCost,
+        subtotal: lineSubtotal,
+        currentStock
+      });
+    }
+
+    // 2. Insert into purchase_returns
+    await db.run(
+      `INSERT INTO purchase_returns (
+        id, return_number, supplier_id, supplier_name, purchase_order_id,
+        total_returned_cost, balance_remaining, redeemed_amount, settlement_mode, reason, notes, handled_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        returnId,
+        returnNumber,
+        finalSupplierId || (processedItems[0]?.productId ? 's_' + timestamp : 's_gen'),
+        finalSupplierName,
+        finalPoId,
+        totalReturnedCost,
+        totalReturnedCost,
+        0,
+        finalSettlementMode,
+        reason || '',
+        notes || '',
+        finalStaff,
+        createdAt
+      ]
+    );
+
+    // 3. Insert items and decrement stock
+    for (const item of processedItems) {
+      await db.run(
+        `INSERT INTO purchase_return_items (
+          return_id, product_id, product_name, quantity, unit_cost_price, subtotal
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          returnId,
+          item.productId,
+          item.productName,
+          item.quantity,
+          item.unitCostPrice,
+          item.subtotal
+        ]
+      );
+
+      // Decrement product stock safely
+      await db.run(
+        'UPDATE products SET stock = stock - ? WHERE id = ?',
+        [item.quantity, item.productId]
+      );
+
+      // Log stock adjustment
+      const saId = 'sa_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      await db.run(
+        `INSERT INTO stock_adjustments (
+          id, product_id, product_name, old_qty, new_qty, reason, type, user_email, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          saId,
+          item.productId,
+          item.productName,
+          item.currentStock,
+          item.currentStock - item.quantity,
+          `Purchase Return (${returnNumber}): ${reason || 'Returned to supplier'}`,
+          'Purchase Return',
+          finalStaff,
+          createdAt
+        ]
+      );
+    }
+
+    // 4. Handle Settlement Mode
+    if (finalSettlementMode === 'SUPPLIER_DEBIT_NOTE') {
+      // Deduct from supplier payable balance
+      if (finalSupplierId) {
+        await db.run(
+          'UPDATE suppliers SET payable_balance = MAX(0, COALESCE(payable_balance, 0) - ?) WHERE id = ?',
+          [totalReturnedCost, finalSupplierId]
+        );
+      } else {
+        await db.run(
+          'UPDATE suppliers SET payable_balance = MAX(0, COALESCE(payable_balance, 0) - ?) WHERE name = ?',
+          [totalReturnedCost, finalSupplierName]
+        );
+      }
+    } else if (finalSettlementMode === 'CASH_REFUND') {
+      // Record cash income transaction
+      const txId = 't_pr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      await db.run(
+        'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          txId,
+          'income',
+          'Supplier Cash Refund',
+          `Supplier Cash Refund - ${returnNumber} (${finalSupplierName})`,
+          totalReturnedCost,
+          todayStr,
+          returnNumber,
+          finalStaff,
+          createdAt
+        ]
+      );
+    } else if (finalSettlementMode === 'BANK_REFUND') {
+      // Record bank income transaction
+      const txId = 't_pr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      await db.run(
+        'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          txId,
+          'income',
+          'Supplier Bank Refund',
+          `Supplier Bank Refund - ${returnNumber} (${finalSupplierName})`,
+          totalReturnedCost,
+          todayStr,
+          returnNumber,
+          finalStaff,
+          createdAt
+        ]
+      );
+    }
+
+    // 5. Insert audit log
+    await logAudit(
+      finalStaff,
+      'PURCHASE_RETURN_CREATED',
+      `Created Purchase Return ${returnNumber} for supplier "${finalSupplierName}" (Total: Rs. ${totalReturnedCost.toLocaleString()}, Settlement: ${finalSettlementMode}, Items: ${processedItems.length})`
+    );
+
+    await commitTxn(db, txn);
+
+    res.json({
+      success: true,
+      id: returnId,
+      returnNumber,
+      return_number: returnNumber,
+      supplierId: finalSupplierId,
+      supplier_id: finalSupplierId,
+      supplierName: finalSupplierName,
+      supplier_name: finalSupplierName,
+      totalReturnedCost,
+      total_returned_cost: totalReturnedCost,
+      settlementMode: finalSettlementMode,
+      settlement_mode: finalSettlementMode,
+      items: processedItems,
+      createdAt,
+      created_at: createdAt
+    });
+  } catch (err) {
+    if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ATOMIC PO RECEIVE & SETTLEMENT API
+app.post('/api/purchasing/receive-po', async (req, res) => {
+  const {
+    po_id,
+    po_number,
+    settlement_mode = 'CREDIT',
+    payment_date,
+    reference,
+    notes = '',
+    cheque_number,
+    bank_name,
+    cheque_date,
+    user_email
+  } = req.body || {};
+
+  if (!po_id && !po_number) {
+    return res.status(400).json({ error: 'Purchase Order ID or PO Number is required.' });
+  }
+
+  const validMode = ['CREDIT', 'CASH', 'BANK', 'CHEQUE'].includes((settlement_mode || '').toUpperCase())
+    ? settlement_mode.toUpperCase()
+    : 'CREDIT';
+
+  const staffUser = user_email || req.headers['x-user-email'] || 'system';
+  const todayStr = payment_date || new Date().toLocaleDateString('sv-SE');
+  const nowIso = new Date().toISOString();
+  let txn = null;
+
+  try {
+    txn = await beginTxn(db, `Receive & Settle PO: ${po_number || po_id} (${validMode})`);
+
+    // 1. Retrieve PO
+    const po = await db.get(
+      'SELECT * FROM purchase_orders WHERE id = ? OR po_number = ? OR po_no = ?',
+      [po_id || '', po_number || '', po_number || '']
+    );
+
+    if (!po) {
+      await rollbackTxn(db, txn);
+      return res.status(404).json({ error: 'Purchase order not found.' });
+    }
+
+    const currentStatus = (po.status || '').toLowerCase().trim();
+    if (currentStatus === 'received' || currentStatus === 'completed') {
+      await rollbackTxn(db, txn);
+      return res.status(400).json({ error: `Purchase Order #${po.po_number || po.po_no} is already received.` });
+    }
+
+    const poGrandTotal = Number(po.total || 0);
+    const supplierName = po.supplier_name || 'Vendor';
+
+    // 2. Parse Items and Increment Product Stocks
+    let poItems = [];
+    if (po.items) {
+      try {
+        poItems = typeof po.items === 'string' ? JSON.parse(po.items) : po.items;
+      } catch (_e) {
+        poItems = [];
+      }
+    }
+
+    let updatedPoItems = [];
+    if (Array.isArray(poItems)) {
+      for (const item of poItems) {
+        const prodId = item.productId || item.product_id || item.id;
+        const qty = Math.max(0, Number(item.qty || item.quantity || 0));
+        const itemCost = Number(item.costPrice || item.cost_price || item.unitCostPrice || 0);
+
+        if (prodId && qty > 0) {
+          const product = await db.get('SELECT * FROM products WHERE id = ?', [prodId]);
+          if (product) {
+            const batchResult = await resolveOrCreateBatchProduct(db, product, itemCost, qty, supplierName);
+
+            updatedPoItems.push({
+              ...item,
+              receivedProductId: batchResult.productId,
+              receivedSku: batchResult.sku,
+              isNewBatch: batchResult.isNewBatch,
+              batchNumber: batchResult.batchNumber
+            });
+
+            // Log stock adjustment
+            const saId = 'sa_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+            await db.run(
+              `INSERT INTO stock_adjustments (
+                id, product_id, product_name, old_qty, new_qty, reason, type, user_email, created_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                saId,
+                batchResult.productId,
+                batchResult.name || product.name || item.productName || 'Product',
+                batchResult.isNewBatch ? 0 : (batchResult.stock - qty),
+                batchResult.stock,
+                `PO Received #${po.po_number || po.po_no} (${supplierName}) - ${batchResult.isNewBatch ? 'New Batch ' + batchResult.sku : 'Stock Added'}`,
+                'PO_RECEIPT',
+                staffUser,
+                nowIso
+              ]
+            );
+          } else {
+            updatedPoItems.push(item);
+          }
+        } else {
+          updatedPoItems.push(item);
+        }
+      }
+    }
+
+    // 3. Update Purchase Order Status and items with batch metadata
+    await db.run(
+      `UPDATE purchase_orders SET status = 'received', items = ? WHERE id = ?`,
+      [JSON.stringify(updatedPoItems), po.id]
+    );
+
+    // 4. Execute Settlement Mode
+    if (validMode === 'CREDIT') {
+      // Increase Supplier's Payable Balance
+      const supp = await db.get(
+        'SELECT * FROM suppliers WHERE name = ? OR id = ?',
+        [supplierName, supplierName]
+      );
+
+      if (supp) {
+        await db.run(
+          'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE id = ?',
+          [poGrandTotal, supp.id]
+        );
+      } else {
+        await db.run(
+          'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE name = ?',
+          [poGrandTotal, supplierName]
+        );
+      }
+    } else if (validMode === 'CASH' || validMode === 'BANK') {
+      // Insert Cash Book Outflow
+      const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      const payDesc = `Supplier Payment - ${supplierName} (PO #${po.po_number || po.po_no}) [${validMode === 'CASH' ? 'Cash Drawer' : 'Bank Transfer'}]`;
+      const txRef = reference || `PO-SETTLE-${po.po_number || po.po_no}`;
+
+      await db.run(
+        `INSERT INTO transactions (
+          id, type, category, description, amount, date, reference, user_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          txId,
+          'expense',
+          'Supplier Payment',
+          payDesc,
+          poGrandTotal,
+          todayStr,
+          txRef,
+          staffUser,
+          nowIso
+        ]
+      );
+    } else if (validMode === 'CHEQUE') {
+      if (!cheque_number || !cheque_number.toString().trim()) {
+        await rollbackTxn(db, txn);
+        return res.status(400).json({ error: 'Cheque number is required for Cheque settlement.' });
+      }
+
+      const chqId = 'CHQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
+      const chqBank = (bank_name || 'Commercial Bank of Ceylon').toString().trim();
+      const chqDate = cheque_date || todayStr;
+
+      await db.run(
+        `INSERT INTO cheque_registry (
+          id, direction, cheque_type, cheque_number, bank_name, branch,
+          cheque_date, amount, party_id, party_name, reference_type,
+          reference_id, status, notes, created_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          chqId,
+          'OUTWARD',
+          'CROSSED_ACCOUNT_PAYEE',
+          cheque_number.toString().trim(),
+          chqBank,
+          '',
+          chqDate,
+          poGrandTotal,
+          po.supplier_id || null,
+          supplierName,
+          'PURCHASE_ORDER',
+          po.id || po.po_number,
+          'PENDING',
+          notes || `Issued for Purchase Order #${po.po_number || po.po_no}`,
+          staffUser,
+          nowIso
+        ]
+      );
+    }
+
+    // 5. Audit Log
+    await logAudit(
+      staffUser,
+      'PO_RECEIVED_AND_SETTLED',
+      `Received PO #${po.po_number || po.po_no} for "${supplierName}" (Total: Rs. ${poGrandTotal.toLocaleString()}, Settlement Mode: ${validMode})`
+    );
+
+    await commitTxn(db, txn);
+
+    res.json({
+      success: true,
+      poNumber: po.po_number || po.po_no,
+      supplierName,
+      settlementMode: validMode,
+      total: poGrandTotal,
+      status: 'received'
+    });
+  } catch (err) {
+    if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// REVERSAL & VOID ENGINE (TRANSACTIONAL ROLLBACK CORE)
+// ============================================================
+
+/**
+ * 1. VOID / REVERT PURCHASE RETURN (Debit Notes)
+ */
+async function executeVoidPurchaseReturn({ return_no, void_reason, user_email }) {
+  const finalReason = void_reason || 'Accidental / User Mistake';
+  const staffUser = user_email || 'system';
+  let txn = null;
+
+  try {
+    txn = await beginTxn(db, `Void Purchase Return ${return_no}`);
+
+    // 1. Fetch return details
+    const pr = await db.get(
+      'SELECT * FROM purchase_returns WHERE id = ? OR return_number = ?',
+      [return_no, return_no]
+    );
+
+    if (!pr) {
+      await rollbackTxn(db, txn);
+      return { success: false, message: 'Purchase return record not found.' };
+    }
+
+    if (pr.status === 'VOIDED') {
+      await rollbackTxn(db, txn);
+      return { success: false, message: 'This return voucher is already voided.' };
+    }
+
+    // 2. Restore stock for all items in the return batch
+    const items = await db.all(
+      'SELECT * FROM purchase_return_items WHERE return_id = ?',
+      [pr.id]
+    );
+
+    for (const item of items) {
+      const prodId = item.product_id;
+      const qty = Number(item.quantity || 0);
+      if (prodId && qty > 0) {
+        await db.run(
+          'UPDATE products SET stock = stock + ? WHERE id = ?',
+          [qty, prodId]
+        );
+
+        // Log restoration stock adjustment
+        const saId = 'sa_void_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        await db.run(
+          `INSERT INTO stock_adjustments (
+            id, product_id, product_name, old_qty, new_qty, reason, type, user_email, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            saId,
+            prodId,
+            item.product_name || 'Restored Item',
+            0,
+            qty,
+            `Void Purchase Return (${pr.return_number || pr.id}): ${finalReason}`,
+            'Void Return Restock',
+            staffUser,
+            new Date().toISOString()
+          ]
+        );
+      }
+    }
+
+    // 3. Reverse financial settlement
+    const sm = (pr.settlement_mode || '').toUpperCase();
+    const retCost = Number(pr.total_returned_cost || 0);
+
+    if (sm === 'CASH_REFUND' || sm === 'BANK_REFUND') {
+      // Remove the cash/bank income transaction
+      await db.run(
+        'DELETE FROM transactions WHERE (reference = ? OR reference = ? OR description LIKE ?)',
+        [pr.return_number, pr.id, `%${pr.return_number}%`]
+      );
+    } else if (sm === 'SUPPLIER_DEBIT_NOTE' || sm === 'SUPPLIER_CREDIT') {
+      // Add the payable liability back to supplier balance
+      if (pr.supplier_id) {
+        await db.run(
+          'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE id = ?',
+          [retCost, pr.supplier_id]
+        );
+      } else if (pr.supplier_name) {
+        await db.run(
+          'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE name = ?',
+          [retCost, pr.supplier_name]
+        );
+      }
+    }
+
+    // 4. Mark status as VOIDED
+    const nowIso = new Date().toISOString();
+    await db.run(
+      'UPDATE purchase_returns SET status = ?, void_reason = ?, updated_at = ? WHERE id = ?',
+      ['VOIDED', finalReason, nowIso, pr.id]
+    );
+
+    await logAudit(
+      staffUser,
+      'PURCHASE_RETURN_VOIDED',
+      `Voided Purchase Return #${pr.return_number || pr.id} (Supplier: ${pr.supplier_name}, Amount: Rs. ${retCost.toLocaleString()}). Reason: ${finalReason}. Stock restored & balances adjusted.`
+    );
+
+    await commitTxn(db, txn);
+    return { success: true, message: 'Purchase return successfully voided and balances restored.' };
+  } catch (err) {
+    if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
+    return { success: false, message: err.message };
+  }
+}
+
+/**
+ * 2. UNDO ACCIDENTAL CHEQUE CLEARANCE / BOUNCE
+ */
+async function executeUndoChequeStatus({ cheque_id, revert_to, user_email }) {
+  const targetStatus = (revert_to || 'IN_HAND').toUpperCase();
+  const staffUser = user_email || 'system';
+  let txn = null;
+
+  try {
+    txn = await beginTxn(db, `Undo Cheque Status ${cheque_id} -> ${targetStatus}`);
+
+    const cheque = await db.get(
+      'SELECT * FROM cheque_registry WHERE id = ? OR cheque_number = ?',
+      [cheque_id, cheque_id]
+    );
+
+    if (!cheque) {
+      await rollbackTxn(db, txn);
+      return { success: false, message: 'Cheque not found.' };
+    }
+
+    const prevStatus = (cheque.status || '').toUpperCase();
+    const direction = (cheque.direction || '').toUpperCase();
+    const chqNo = cheque.cheque_number;
+    const chqAmt = Number(cheque.amount || 0);
+
+    // If it was CLEARED, rollback financial transactions and settlements
+    if (prevStatus === 'CLEARED') {
+      // Delete cash/bank ledger transactions created on clearance
+      await db.run(
+        'DELETE FROM transactions WHERE (reference = ? OR description LIKE ?)',
+        [chqNo, `%${chqNo}%`]
+      );
+
+      if (direction === 'INWARD') {
+        // Re-add customer debt / credit balance
+        if (cheque.party_id) {
+          await db.run(
+            'UPDATE customers SET credit_balance = COALESCE(credit_balance, 0) + ?, current_credit = COALESCE(current_credit, 0) + ? WHERE id = ?',
+            [chqAmt, chqAmt, cheque.party_id]
+          );
+        } else if (cheque.party_name) {
+          await db.run(
+            'UPDATE customers SET credit_balance = COALESCE(credit_balance, 0) + ?, current_credit = COALESCE(current_credit, 0) + ? WHERE name = ?',
+            [chqAmt, chqAmt, cheque.party_name]
+          );
+        }
+
+        // If linked to sale invoice, deduct payment_received and reset status to pending
+        if (cheque.reference_id) {
+          const linkedSale = await db.get(
+            'SELECT * FROM sales WHERE invoice_no = ? OR id = ?',
+            [cheque.reference_id, cheque.reference_id]
+          );
+          if (linkedSale) {
+            const currentReceived = Number(linkedSale.payment_received || 0);
+            const newReceived = Math.max(0, currentReceived - chqAmt);
+            const newStatus = newReceived <= 0 ? 'pending' : (newReceived < linkedSale.total_amount ? 'pending' : 'paid');
+            await db.run(
+              'UPDATE sales SET payment_received = ?, status = ? WHERE id = ?',
+              [newReceived, newStatus, linkedSale.id]
+            );
+          }
+        }
+
+        // Delete any credit_payments record logged for this clearance
+        await db.run(
+          'DELETE FROM credit_payments WHERE notes LIKE ?',
+          [`%${chqNo}%`]
+        );
+      } else if (direction === 'OUTWARD') {
+        // If outward cheque cleared settled supplier balance, re-add payable balance
+        if (cheque.party_id) {
+          await db.run(
+            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE id = ?',
+            [chqAmt, cheque.party_id]
+          );
+        } else if (cheque.party_name) {
+          await db.run(
+            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE name = ?',
+            [chqAmt, cheque.party_name]
+          );
+        }
+      }
+    }
+
+    // If it was BOUNCED, reverse any penalty or customer balance restorations that were applied on bounce
+    if (prevStatus === 'BOUNCED') {
+      // Delete penalty transactions if any
+      await db.run(
+        'DELETE FROM transactions WHERE (reference = ? OR description LIKE ?) AND category LIKE ?',
+        [chqNo, `%${chqNo}%`, '%Penalty%']
+      );
+
+      if (direction === 'INWARD') {
+        // Revert the credit balance increment made during bounce
+        if (cheque.party_id) {
+          await db.run(
+            'UPDATE customers SET current_credit = MAX(0, COALESCE(current_credit, 0) - ?) WHERE id = ?',
+            [chqAmt, cheque.party_id]
+          );
+        } else if (cheque.party_name) {
+          await db.run(
+            'UPDATE customers SET current_credit = MAX(0, COALESCE(current_credit, 0) - ?) WHERE name = ?',
+            [chqAmt, cheque.party_name]
+          );
+        }
+      } else if (direction === 'OUTWARD') {
+        // Revert supplier balance increment made during bounce
+        if (cheque.party_id) {
+          await db.run(
+            'UPDATE suppliers SET payable_balance = MAX(0, COALESCE(payable_balance, 0) - ?) WHERE id = ?',
+            [chqAmt, cheque.party_id]
+          );
+        } else if (cheque.party_name) {
+          await db.run(
+            'UPDATE suppliers SET payable_balance = MAX(0, COALESCE(payable_balance, 0) - ?) WHERE name = ?',
+            [chqAmt, cheque.party_name]
+          );
+        }
+      }
+    }
+
+    // Update status back to target state
+    const nowIso = new Date().toISOString();
+    await db.run(
+      'UPDATE cheque_registry SET status = ?, cleared_at = NULL, updated_at = ? WHERE id = ?',
+      [targetStatus, nowIso, cheque.id]
+    );
+
+    await logAudit(
+      staffUser,
+      'CHEQUE_STATUS_REVERTED',
+      `Cheque #${chqNo} (${cheque.party_name || 'Party'}, Rs. ${chqAmt.toLocaleString()}) reverted from ${prevStatus} to ${targetStatus}. Ledger entries & balances rolled back.`
+    );
+
+    await commitTxn(db, txn);
+    return { success: true, message: 'Cheque status reverted successfully.' };
+  } catch (err) {
+    if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
+    return { success: false, message: err.message };
+  }
+}
+
+/**
+ * 3. VOID / REVERT RECEIVED PURCHASE ORDER
+ */
+async function executeRevertPurchaseOrderReceipt({ po_ref, user_email }) {
+  const staffUser = user_email || 'system';
+  let txn = null;
+
+  try {
+    txn = await beginTxn(db, `Revert PO Receipt ${po_ref}`);
+
+    const po = await db.get(
+      'SELECT * FROM purchase_orders WHERE id = ? OR po_number = ? OR po_no = ?',
+      [po_ref, po_ref, po_ref]
+    );
+
+    if (!po) {
+      await rollbackTxn(db, txn);
+      return { success: false, message: 'Purchase order not found.' };
+    }
+
+    const currentStatus = (po.status || '').toLowerCase().trim();
+    if (currentStatus !== 'received') {
+      await rollbackTxn(db, txn);
+      return { success: false, message: 'Only received purchase orders can be reverted.' };
+    }
+
+    // 1. Deduct stock that was received
+    let poItems = [];
+    if (po.items) {
+      try {
+        poItems = typeof po.items === 'string' ? JSON.parse(po.items) : po.items;
+      } catch (_e) {
+        poItems = [];
+      }
+    }
+
+    if (Array.isArray(poItems)) {
+      for (const item of poItems) {
+        const prodId = item.receivedProductId || item.productId || item.product_id || item.id;
+        const qty = Math.max(0, Number(item.qty || item.quantity || 0));
+
+        if (prodId && qty > 0) {
+          const prod = await db.get('SELECT * FROM products WHERE id = ?', [prodId]);
+          if (prod) {
+            const prevStock = Number(prod.stock || 0);
+            const newStock = Math.max(0, prevStock - qty);
+            await db.run(
+              'UPDATE products SET stock = ? WHERE id = ?',
+              [newStock, prodId]
+            );
+
+            // If batch item reaches 0 stock with no sales history, safely clean/archive it
+            const isBatchItem = Boolean(item.isNewBatch || prod.is_batch || (prod.sku && /-B\d+$/i.test(prod.sku)));
+            if (isBatchItem && newStock <= 0.0001) {
+              const salesHistory = await db.get(
+                'SELECT COUNT(*) as cnt FROM sales WHERE items LIKE ?',
+                [`%"productId":"${prodId}"%`]
+              );
+              const salesCount = Number(salesHistory?.cnt || 0);
+              if (salesCount === 0) {
+                await db.run('DELETE FROM products WHERE id = ?', [prodId]);
+              }
+            }
+
+            // Log stock deduction adjustment
+            const saId = 'sa_revert_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+            await db.run(
+              `INSERT INTO stock_adjustments (
+                id, product_id, product_name, old_qty, new_qty, reason, type, user_email, created_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                saId,
+                prodId,
+                prod.name || item.name || item.productName || 'PO Item',
+                prevStock,
+                newStock,
+                `Revert PO Receipt (#${po.po_number || po.po_no})`,
+                'PO Reversal Deduction',
+                staffUser,
+                new Date().toISOString()
+              ]
+            );
+          }
+        }
+      }
+    }
+
+    // 2. Deduct the supplier payable liability
+    const poTotal = Number(po.total || 0);
+    if (po.supplier_name) {
+      await db.run(
+        'UPDATE suppliers SET payable_balance = MAX(0, COALESCE(payable_balance, 0) - ?) WHERE name = ? OR id = ?',
+        [poTotal, po.supplier_name, po.supplier_id || '']
+      );
+    }
+
+    // 3. Remove linked transactions
+    const poNum = po.po_number || po.po_no || po.id;
+    await db.run(
+      'DELETE FROM transactions WHERE (reference = ? OR description LIKE ?)',
+      [poNum, `%${poNum}%`]
+    );
+
+    // 4. Reset PO status to pending
+    const nowIso = new Date().toISOString();
+    await db.run(
+      'UPDATE purchase_orders SET status = ?, received_at = NULL, updated_at = ? WHERE id = ?',
+      ['pending', nowIso, po.id]
+    );
+
+    await logAudit(
+      staffUser,
+      'PO_RECEIPT_REVERTED',
+      `Purchase Order #${poNum} receipt reverted to PENDING (Total: Rs. ${poTotal.toLocaleString()}). Received stock deducted and supplier payable rolled back.`
+    );
+
+    await commitTxn(db, txn);
+    return { success: true, message: 'PO receipt reverted to PENDING and stock/payables restored.' };
+  } catch (err) {
+    if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
+    return { success: false, message: err.message };
+  }
+}
+
+// ============================================================
+// REVERSAL REST ENDPOINTS
+// ============================================================
+
+// Void Purchase Return
+app.post('/api/purchase-returns/:id/void', async (req, res) => {
+  const { id } = req.params;
+  const { void_reason, reason, user_email } = req.body || {};
+  const staffUser = user_email || req.headers['x-user-email'] || 'system';
+  const result = await executeVoidPurchaseReturn({
+    return_no: id,
+    void_reason: void_reason || reason,
+    user_email: staffUser
+  });
+  if (!result.success) {
+    return res.status(400).json({ error: result.message });
+  }
+  res.json(result);
+});
+
+app.post('/api/purchase-returns/void', async (req, res) => {
+  const { return_no, returnNo, void_reason, reason, user_email } = req.body || {};
+  const staffUser = user_email || req.headers['x-user-email'] || 'system';
+  const result = await executeVoidPurchaseReturn({
+    return_no: return_no || returnNo,
+    void_reason: void_reason || reason,
+    user_email: staffUser
+  });
+  if (!result.success) {
+    return res.status(400).json({ error: result.message });
+  }
+  res.json(result);
+});
+
+// Undo Cheque Status
+app.post('/api/cheques/:id/undo', async (req, res) => {
+  const { id } = req.params;
+  const { revert_to, revertTo, user_email } = req.body || {};
+  const staffUser = user_email || req.headers['x-user-email'] || 'system';
+  const result = await executeUndoChequeStatus({
+    cheque_id: id,
+    revert_to: revert_to || revertTo,
+    user_email: staffUser
+  });
+  if (!result.success) {
+    return res.status(400).json({ error: result.message });
+  }
+  res.json(result);
+});
+
+app.post('/api/cheques/undo-status', async (req, res) => {
+  const { cheque_id, chequeId, revert_to, revertTo, user_email } = req.body || {};
+  const staffUser = user_email || req.headers['x-user-email'] || 'system';
+  const result = await executeUndoChequeStatus({
+    cheque_id: cheque_id || chequeId,
+    revert_to: revert_to || revertTo,
+    user_email: staffUser
+  });
+  if (!result.success) {
+    return res.status(400).json({ error: result.message });
+  }
+  res.json(result);
+});
+
+// Revert Purchase Order Receipt
+app.post('/api/purchase-orders/:id/revert-receipt', async (req, res) => {
+  const { id } = req.params;
+  const { user_email } = req.body || {};
+  const staffUser = user_email || req.headers['x-user-email'] || 'system';
+  const result = await executeRevertPurchaseOrderReceipt({
+    po_ref: id,
+    user_email: staffUser
+  });
+  if (!result.success) {
+    return res.status(400).json({ error: result.message });
+  }
+  res.json(result);
+});
+
+app.post('/api/purchase-orders/revert-receipt', async (req, res) => {
+  const { po_ref, poRef, po_id, po_number, user_email } = req.body || {};
+  const staffUser = user_email || req.headers['x-user-email'] || 'system';
+  const result = await executeRevertPurchaseOrderReceipt({
+    po_ref: po_ref || poRef || po_id || po_number,
+    user_email: staffUser
+  });
+  if (!result.success) {
+    return res.status(400).json({ error: result.message });
+  }
+  res.json(result);
+});
+
+// ============================================================
+// SUPABASE RPC COMPATIBILITY DISPATCHER
+// ============================================================
+app.post('/api/rpc/:functionName', async (req, res) => {
+  const { functionName } = req.params;
+  const args = req.body || {};
+  const user_email = req.headers['x-user-email'] || args.user_email || 'system';
+
+  try {
+    if (functionName === 'void_purchase_return') {
+      const return_no = args.p_return_no || args.return_no || args.returnNo;
+      const void_reason = args.p_void_reason || args.void_reason || args.reason;
+      if (!return_no) {
+        return res.status(400).json({ success: false, message: 'p_return_no parameter is required.' });
+      }
+      const result = await executeVoidPurchaseReturn({ return_no, void_reason, user_email });
+      return res.json(result);
+    }
+
+    if (functionName === 'undo_cheque_status') {
+      const cheque_id = args.p_cheque_id || args.cheque_id || args.chequeId;
+      const revert_to = args.p_revert_to || args.revert_to || args.revertTo;
+      if (!cheque_id) {
+        return res.status(400).json({ success: false, message: 'p_cheque_id parameter is required.' });
+      }
+      const result = await executeUndoChequeStatus({ cheque_id, revert_to, user_email });
+      return res.json(result);
+    }
+
+    if (functionName === 'revert_purchase_order_receipt') {
+      const po_ref = args.p_po_ref || args.po_ref || args.poRef || args.po_id || args.po_number;
+      if (!po_ref) {
+        return res.status(400).json({ success: false, message: 'p_po_ref parameter is required.' });
+      }
+      const result = await executeRevertPurchaseOrderReceipt({ po_ref, user_email });
+      return res.json(result);
+    }
+
+    return res.status(404).json({ success: false, message: `Unknown RPC function: ${functionName}` });
+  } catch (err) {
+    console.error(`Error executing RPC ${functionName}:`, err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // SYSTEM SETTINGS
 app.get('/api/settings', async (req, res) => {
   try {
@@ -3729,6 +5644,26 @@ app.get('/api/settings/scheduler-status', async (req, res) => {
       backup_email: settings.backup_email,
       backup_interval_hours: settings.backup_interval_hours || 6
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// SYNC STATUS API (Offline-First Cloud Sync)
+app.get('/api/sync/status', async (req, res) => {
+  try {
+    const status = await getSyncStatus(db);
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/sync/trigger', async (req, res) => {
+  try {
+    await runSyncCycle(db);
+    const status = await getSyncStatus(db);
+    res.json({ success: true, ...status });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -4430,6 +6365,9 @@ app.post('/api/system/reset-data', async (req, res) => {
       await db.run('DELETE FROM credit_payments');
       await db.run('DELETE FROM credit_notes');
       await db.run('DELETE FROM credit_note_usage');
+      await db.run('DELETE FROM cheque_registry');
+      await db.run('DELETE FROM purchase_returns');
+      await db.run('DELETE FROM purchase_return_items');
       await db.run('DELETE FROM transactions');
       await db.run('DELETE FROM audit_logs');
       await db.run('DELETE FROM bill_holds');
@@ -5192,6 +7130,7 @@ if (fs.existsSync(distPath)) {
     console.log('[Startup] Initializing SQLite Database & Schema...');
     await initializeDatabase();
     await scheduleAutomaticBackups();
+    startBackgroundSyncWorker(db);
 
     // 1. HTTP Server for desktop app and fast local REST API
     app.listen(PORT, '0.0.0.0', () => {

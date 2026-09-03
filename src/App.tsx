@@ -422,7 +422,7 @@ export function App() {
       case 'users': return <Users />;
       case 'database': return <Database />;
       case 'settings': return <Settings />;
-      case 'finance': return <Finance />;
+      case 'finance': return <Finance currentUser={currentUser} />;
       case 'audit_logs': return <AuditLogs />;
       case 'barcode-print':
       case 'barcode_print':

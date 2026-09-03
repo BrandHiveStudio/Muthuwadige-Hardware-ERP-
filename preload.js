@@ -19,6 +19,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   clearRendererCache: async () => {
     return await ipcRenderer.invoke('clear-renderer-cache');
+  },
+  reload: async () => {
+    try {
+      return await ipcRenderer.invoke('reload-window');
+    } catch (_) {
+      window.location.reload();
+    }
   }
 });
 

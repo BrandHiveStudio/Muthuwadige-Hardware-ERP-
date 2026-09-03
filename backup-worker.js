@@ -357,17 +357,17 @@ const styleOverviewSheet = (ws) => {
   const range = XLSX.utils.decode_range(ref);
 
   ws['!rows'] = [
-    { hpt: 48 }, { hpt: 48 },
-    { hpt: 24 }, { hpt: 28 },
-    { hpt: 18 },
-    { hpt: 38 },
-    { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 },
-    { hpt: 18 },
-    { hpt: 38 },
-    { hpt: 28 }, { hpt: 28 }, { hpt: 28 }, { hpt: 28 }, { hpt: 32 },
-    { hpt: 18 },
-    { hpt: 38 },
-    { hpt: 26 }, { hpt: 26 }, { hpt: 26 }, { hpt: 26 }
+    { hpt: 48 }, { hpt: 48 }, // 0, 1: Title
+    { hpt: 24 }, { hpt: 28 }, // 2, 3: Date
+    { hpt: 18 },              // 4: Gap
+    { hpt: 38 },              // 5: Header Key Business Metrics
+    { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, { hpt: 30 }, // 6-13: 8 metrics
+    { hpt: 18 },              // 14: Gap
+    { hpt: 38 },              // 15: Header Payment Method Breakdown
+    { hpt: 28 }, { hpt: 28 }, { hpt: 28 }, { hpt: 28 }, { hpt: 28 }, { hpt: 28 }, { hpt: 28 }, { hpt: 32 }, // 16-23: 8 payment breakdown rows
+    { hpt: 18 },              // 24: Gap
+    { hpt: 38 },              // 25: Header Remarks & Notes
+    { hpt: 26 }, { hpt: 26 }, { hpt: 26 }, { hpt: 26 }, { hpt: 26 }, { hpt: 26 } // 26-31: Notes
   ];
 
   for (let row = range.s.r; row <= range.e.r; row++) {
@@ -402,7 +402,7 @@ const styleOverviewSheet = (ws) => {
             right: { style: "thin", color: { rgb: "CBD5E1" } }
           }
         };
-      } else if ((row === 5 || row === 15 || row === 22) && col >= 0 && col <= 8) {
+      } else if ((row === 5 || row === 15 || row === 25) && col >= 0 && col <= 8) {
         cell.s = {
           font: { bold: true, color: { rgb: "FFFFFF" }, name: "Segoe UI", sz: 13.5 },
           fill: { fgColor: { rgb: "1E293B" } },
@@ -449,8 +449,8 @@ const styleOverviewSheet = (ws) => {
             }
           };
         }
-      } else if (row >= 16 && row <= 20 && (col === 0 || col === 1)) {
-        const isTotal = (row === 20);
+      } else if (row >= 16 && row <= 23 && (col === 0 || col === 1)) {
+        const isTotal = (row === 23);
         const bg = isTotal ? "D1FAE5" : ((row % 2 === 0) ? "F8FAFC" : "FFFFFF");
         const fontCol = isTotal ? "047857" : "334155";
         const align = (col === 0) ? "left" : "right";
@@ -466,7 +466,7 @@ const styleOverviewSheet = (ws) => {
             right: { style: "thin", color: { rgb: "CBD5E1" } }
           }
         };
-      } else if (row >= 23 && row <= 26 && col === 0) {
+      } else if (row >= 26 && row <= 31 && col === 0) {
         cell.s = {
           font: { name: "Segoe UI", sz: 11, italic: true, color: { rgb: "475569" } },
           alignment: { vertical: "center", horizontal: "left" }
@@ -516,6 +516,9 @@ async function runBackup() {
     const branches = await db.all('SELECT * FROM branches').catch(() => []);
     const salesReturns = await db.all('SELECT * FROM sales_returns').catch(() => []);
     let creditPayments = await db.all('SELECT * FROM credit_payments').catch(() => []);
+    let cheques = await db.all('SELECT * FROM cheque_registry ORDER BY cheque_date DESC, created_at DESC').catch(() => []);
+    let purchaseReturns = await db.all('SELECT * FROM purchase_returns ORDER BY return_date DESC, created_at DESC').catch(() => []);
+    const purchaseReturnItems = await db.all('SELECT * FROM purchase_return_items').catch(() => []);
 
     let rawSettings = rawSettingsList.find(s => s.id === 'global') || rawSettingsList[0];
     if (!targetEmail && rawSettings) {
@@ -545,7 +548,15 @@ async function runBackup() {
     }));
 
     const getSriLankaDateStr = (dateInput) => {
-      if (!dateInput || dateInput === '---') return '';
+      if (!dateInput && dateInput !== 0) return '';
+      if (typeof dateInput === 'string') {
+        const trimmed = dateInput.trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+        if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(trimmed)) {
+          const d = new Date(trimmed.replace(' ', 'T') + 'Z');
+          return isNaN(d.getTime()) ? trimmed.substring(0, 10) : d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Colombo' });
+        }
+      }
       try {
         const d = new Date(dateInput);
         if (isNaN(d.getTime())) return String(dateInput).substring(0, 10);
@@ -571,6 +582,8 @@ async function runBackup() {
       stockAdjustments = stockAdjustments.filter(sa => isWithinDateRange(sa.created_at));
       quotations = quotations.filter(q => isWithinDateRange(q.created_at));
       creditPayments = creditPayments.filter(cp => isWithinDateRange(cp.payment_date || cp.created_at));
+      cheques = cheques.filter(c => isWithinDateRange(c.cheque_date || c.created_at));
+      purchaseReturns = purchaseReturns.filter(pr => isWithinDateRange(pr.return_date || pr.created_at));
     }
 
     let minDate = null;
@@ -578,15 +591,8 @@ async function runBackup() {
 
     const checkDate = (d) => {
       if (!d) return;
-      let checkStr = '';
-      if (typeof d === 'string') {
-        checkStr = d.substring(0, 10);
-      } else if (d instanceof Date) {
-        checkStr = d.toISOString().substring(0, 10);
-      } else {
-        checkStr = String(d).substring(0, 10);
-      }
-      if (checkStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+      const checkStr = getSriLankaDateStr(d);
+      if (checkStr && checkStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
         if (!minDate || checkStr < minDate) minDate = checkStr;
         if (!maxDate || checkStr > maxDate) maxDate = checkStr;
       }
@@ -595,6 +601,8 @@ async function runBackup() {
     sales.forEach(s => checkDate(s.created_at || s.date));
     transactions.forEach(t => checkDate(t.date || t.created_at));
     purchaseOrders.forEach(po => checkDate(po.created_at));
+    cheques.forEach(c => checkDate(c.cheque_date || c.created_at));
+    purchaseReturns.forEach(pr => checkDate(pr.return_date || pr.created_at));
 
     const currentMonthStart = new Date();
     currentMonthStart.setDate(1);
@@ -858,20 +866,29 @@ async function runBackup() {
       return sum + netOutstanding;
     }, 0);
 
+    const clearedInwardCheques = (cheques || []).filter(c => c.direction === 'INWARD' && c.status === 'CLEARED');
+    const clearedChequeAmount = clearedInwardCheques.reduce((sum, c) => sum + Number(c.amount || 0), 0);
+
+    const cashChequesInHand = (cheques || []).filter(c => c.direction === 'INWARD' && c.status === 'IN_HAND');
+    const cashChequesInHandAmount = cashChequesInHand.reduce((sum, c) => sum + Number(c.amount || 0), 0);
+
+    const pendingInwardCheques = (cheques || []).filter(c => c.direction === 'INWARD' && (c.status === 'PENDING' || c.status === 'DEPOSITED'));
+    const pendingChequesAmount = pendingInwardCheques.reduce((sum, c) => sum + Number(c.amount || 0), 0);
+
     const cashAmount = Math.max(0, directCash + settledCash + exchangeCashInflowsTotal - cashRefundsTotal);
     const cardAmount = directCard + settledCard;
     const bankTransferAmount = directBank + settledBank;
     const creditAmount = totalCreditOutstanding;
 
     const valB8 = totalCreditOutstanding;
-    const valB7 = cashAmount + cardAmount + bankTransferAmount;
+    const valB7 = cashAmount + cardAmount + bankTransferAmount + clearedChequeAmount;
     const valB9 = purchaseOrders.filter(po => po.status?.toUpperCase() !== 'CANCELLED').reduce((sum, po) => sum + (po.total || 0), 0);
     const valB10 = transactions.filter(t => t.type?.toUpperCase() === 'EXPENSE' && t.category !== 'Purchases').reduce((sum, t) => sum + (t.amount || 0), 0);
     const valB12 = products.reduce((sum, p) => sum + ((p.stock || 0) * (p.cost_price || 0)), 0);
 
     const totalSalesRevenue = valB6;
     const totalSalesProfit = valB11;
-    const paymentTotal = cashAmount + cardAmount + creditAmount + bankTransferAmount;
+    const paymentTotal = cashAmount + cardAmount + creditAmount + bankTransferAmount + clearedChequeAmount;
 
     // Overview Dashboard Sheet
     const overviewRows = [
@@ -895,10 +912,15 @@ async function runBackup() {
       ["Card Amount", "", "", "", "", "", "", "", ""],
       ["Credit Amount", "", "", "", "", "", "", "", ""],
       ["Bank Transfer Amount", "", "", "", "", "", "", "", ""],
+      ["Cleared Cheque Amount", "", "", "", "", "", "", "", ""],
+      ["Cash Cheques (In Hand / Drawer)", "", "", "", "", "", "", "", ""],
+      ["Pending Cheques (Uncleared / PDC)", "", "", "", "", "", "", "", ""],
       ["Total Payment Methods", "", "", "", "", "", "", "", ""],
       ["", "", "", "", "", "", "", "", ""],
       ["REMARKS & USEFUL NOTES", "", "", "", "", "", "", "", ""],
       ["• Sales sheet contains daily invoices, customer payments, and payment methods.", "", "", "", "", "", "", "", ""],
+      ["• Cheque Registry sheet contains complete status, bank details, and clearance tracking.", "", "", "", "", "", "", "", ""],
+      ["• Purchase Returns sheet details vendor debit notes and returned stock items.", "", "", "", "", "", "", "", ""],
       ["• Inventory Stock sheet provides real-time stock quantities and market valuations.", "", "", "", "", "", "", "", ""],
       ["• Accounting Ledger contains all business expense and income transaction records.", "", "", "", "", "", "", "", ""],
       ["• Report figures are generated directly from Muthuwadige Hardware ERP.", "", "", "", "", "", "", "", ""]
@@ -906,7 +928,7 @@ async function runBackup() {
 
     const wsOverview = XLSX.utils.aoa_to_sheet(overviewRows);
     wsOverview['!cols'] = [
-      { wch: 34 }, { wch: 24 }, { wch: 5 },
+      { wch: 38 }, { wch: 24 }, { wch: 5 },
       { wch: 15 }, { wch: 15 }, { wch: 15 },
       { wch: 15 }, { wch: 15 }, { wch: 15 }
     ];
@@ -915,11 +937,13 @@ async function runBackup() {
       { s: { r: 0, c: 0 }, e: { r: 1, c: 8 } },
       { s: { r: 5, c: 0 }, e: { r: 5, c: 8 } },
       { s: { r: 15, c: 0 }, e: { r: 15, c: 8 } },
-      { s: { r: 22, c: 0 }, e: { r: 22, c: 8 } },
-      { s: { r: 23, c: 0 }, e: { r: 23, c: 8 } },
-      { s: { r: 24, c: 0 }, e: { r: 24, c: 8 } },
       { s: { r: 25, c: 0 }, e: { r: 25, c: 8 } },
-      { s: { r: 26, c: 0 }, e: { r: 26, c: 8 } }
+      { s: { r: 26, c: 0 }, e: { r: 26, c: 8 } },
+      { s: { r: 27, c: 0 }, e: { r: 27, c: 8 } },
+      { s: { r: 28, c: 0 }, e: { r: 28, c: 8 } },
+      { s: { r: 29, c: 0 }, e: { r: 29, c: 8 } },
+      { s: { r: 30, c: 0 }, e: { r: 30, c: 8 } },
+      { s: { r: 31, c: 0 }, e: { r: 31, c: 8 } }
     ];
 
     wsOverview['A4'] = { t: 'n', v: getExcelDecimalDate(finalStart), z: 'yyyy-mm-dd' };
@@ -938,7 +962,10 @@ async function runBackup() {
     wsOverview['B18'] = { t: 'n', v: cardAmount, z: '#,##0.00' };
     wsOverview['B19'] = { t: 'n', v: creditAmount, z: '#,##0.00' };
     wsOverview['B20'] = { t: 'n', v: bankTransferAmount, z: '#,##0.00' };
-    wsOverview['B21'] = { t: 'n', v: paymentTotal, z: '#,##0.00' };
+    wsOverview['B21'] = { t: 'n', v: clearedChequeAmount, z: '#,##0.00' };
+    wsOverview['B22'] = { t: 'n', v: cashChequesInHandAmount, z: '#,##0.00' };
+    wsOverview['B23'] = { t: 'n', v: pendingChequesAmount, z: '#,##0.00' };
+    wsOverview['B24'] = { t: 'n', v: paymentTotal, z: '#,##0.00' };
 
     // 1. Inventory Stock Sheet
     const structuredInventory = products.map(p => ({
@@ -1295,6 +1322,62 @@ async function runBackup() {
     setColWidths(wsSalesReturns, structuredSalesReturns, wsSRHeaders);
     applyTableStyles(wsSalesReturns, "991B1B");
 
+    // 15. Cheque Registry Sheet
+    const structuredCheques = (cheques || []).map(c => ({
+      "Date": c.cheque_date || '---',
+      "Cheque No": c.cheque_number || '---',
+      "Direction": c.direction || 'INWARD',
+      "Type": c.cheque_type === 'CROSSED_ACCOUNT_PAYEE' ? 'Account Payee' : 'Cash / Bearer',
+      "Bank Name": c.bank_name || '---',
+      "Branch": c.branch || '---',
+      "Amount (Rs.)": Number(c.amount || 0),
+      "Party Name": c.party_name || '---',
+      "Status": c.status || 'PENDING',
+      "Reference Type": c.reference_type || '---',
+      "Reference ID": c.reference_id || '---',
+      "Cleared At": c.cleared_at || '---',
+      "Notes": c.notes || '---'
+    }));
+    const wsChequesHeaders = [
+      "Date", "Cheque No", "Direction", "Type", "Bank Name", "Branch",
+      "Amount (Rs.)", "Party Name", "Status", "Reference Type", "Reference ID",
+      "Cleared At", "Notes"
+    ];
+    const wsCheques = createWorksheet(structuredCheques, wsChequesHeaders);
+    setColWidths(wsCheques, structuredCheques, wsChequesHeaders);
+    applyTableStyles(wsCheques, "B45309");
+
+    // 16. Purchase Returns Sheet
+    const structuredPurchaseReturns = (purchaseReturns || []).map(pr => {
+      const prItems = (purchaseReturnItems || []).filter(item => item.purchase_return_id === pr.id);
+      const itemsCount = prItems.length > 0 ? prItems.length : (Number(pr.items_count) || 0);
+
+      return {
+        "Date": pr.return_date || (pr.created_at ? pr.created_at.slice(0, 10) : '---'),
+        "Return No": pr.return_no || pr.id || '---',
+        "Supplier Name": pr.supplier_name || '---',
+        "Total Returned Cost (Rs.)": Number(pr.total_amount || 0),
+        "Settlement Mode": pr.settlement_mode === 'DEDUCT_PAYABLE'
+          ? 'Deduct Payable'
+          : pr.settlement_mode === 'CASH_REFUND'
+          ? 'Cash Refund'
+          : pr.settlement_mode === 'BANK_REFUND'
+          ? 'Bank Refund'
+          : 'Supplier Credit Note',
+        "Reason": pr.reason || '---',
+        "Items Count": itemsCount,
+        "Handled By": pr.created_by || 'Admin',
+        "Notes": pr.notes || '---'
+      };
+    });
+    const wsPRHeaders = [
+      "Date", "Return No", "Supplier Name", "Total Returned Cost (Rs.)",
+      "Settlement Mode", "Reason", "Items Count", "Handled By", "Notes"
+    ];
+    const wsPurchaseReturns = createWorksheet(structuredPurchaseReturns, wsPRHeaders);
+    setColWidths(wsPurchaseReturns, structuredPurchaseReturns, wsPRHeaders);
+    applyTableStyles(wsPurchaseReturns, "831843");
+
     styleOverviewSheet(wsOverview);
 
     if (!fs.existsSync(backupsDir)) {
@@ -1316,6 +1399,8 @@ async function runBackup() {
     XLSX.utils.book_append_sheet(wb, wsSales, "Sales & Invoices");
     XLSX.utils.book_append_sheet(wb, wsCreditCustomers, "Credit Customers");
     XLSX.utils.book_append_sheet(wb, wsSalesReturns, "Sales Returns");
+    XLSX.utils.book_append_sheet(wb, wsCheques, "Cheque Registry");
+    XLSX.utils.book_append_sheet(wb, wsPurchaseReturns, "Purchase Returns");
     XLSX.utils.book_append_sheet(wb, wsTransactions, "Accounting Ledger");
     XLSX.utils.book_append_sheet(wb, wsCustomers, "Customers");
     XLSX.utils.book_append_sheet(wb, wsSuppliers, "Suppliers Directory");
@@ -1333,6 +1418,25 @@ async function runBackup() {
     let emailSent = false;
     if (targetEmail) {
       try {
+        const nowSriLanka = new Date();
+        const todayDateStr = nowSriLanka.toISOString().split('T')[0];
+        const in48h = new Date(nowSriLanka.getTime() + 48 * 3600 * 1000);
+        const in48hStr = in48h.toISOString().split('T')[0];
+
+        const maturingCheques = (cheques || []).filter(c => 
+          c.direction === 'INWARD' &&
+          (c.status === 'PENDING' || c.status === 'IN_HAND') &&
+          c.cheque_date >= todayDateStr &&
+          c.cheque_date <= in48hStr
+        );
+        const maturingChequesTotal = maturingCheques.reduce((sum, c) => sum + Number(c.amount || 0), 0);
+
+        const todayPRs = (purchaseReturns || []).filter(pr => (
+          pr.return_date === todayDateStr || 
+          (pr.created_at && String(pr.created_at).startsWith(todayDateStr))
+        ));
+        const todayPRTotal = todayPRs.reduce((sum, pr) => sum + Number(pr.total_amount || 0), 0);
+
         const htmlBody = `
         <!DOCTYPE html>
         <html lang="en">
@@ -1342,7 +1446,7 @@ async function runBackup() {
           <title>Muthuwadige Hardware Backup</title>
         </head>
         <body style="margin:0; padding:24px 12px; background-color:#ffffff; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-          <div style="max-width:480px; margin:0 auto; background-color:#ffffff; border-radius:20px; overflow:hidden; border:1px solid #e2e8f0; box-shadow:0 10px 30px -5px rgba(0, 0, 0, 0.08);">
+          <div style="max-width:520px; margin:0 auto; background-color:#ffffff; border-radius:20px; overflow:hidden; border:1px solid #e2e8f0; box-shadow:0 10px 30px -5px rgba(0, 0, 0, 0.08);">
             <div style="background-color:#161c2e; padding:32px 28px; text-align:left;">
               <div style="display:inline-block; background-color:rgba(218, 165, 32, 0.12); border:1px solid rgba(218, 165, 32, 0.35); border-radius:30px; padding:6px 14px; margin-bottom:18px;">
                 <span style="color:#DAA520; font-size:10px; font-weight:800; letter-spacing:1.5px; text-transform:uppercase;">🔐 AUTOMATED SYSTEM BACKUP</span>
@@ -1393,16 +1497,64 @@ async function runBackup() {
                         <td style="padding:7px 0; color:#0f172a; font-weight:800; text-align:right;">LKR ${bankTransferAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       </tr>
                       <tr>
+                        <td style="padding:7px 0; color:#475569; font-weight:600;">🏛️ Cleared Cheques (Realized):</td>
+                        <td style="padding:7px 0; color:#047857; font-weight:800; text-align:right;">LKR ${clearedChequeAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:7px 0; color:#475569; font-weight:600;">🪙 Cash Cheques (In Hand):</td>
+                        <td style="padding:7px 0; color:#6b21a8; font-weight:800; text-align:right;">LKR ${cashChequesInHandAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      </tr>
+                      <tr>
                         <td colspan="2" style="padding:10px 0 6px 0;"><div style="border-top:1px dashed #cbd5e1; width:100%;"></div></td>
                       </tr>
                       <tr>
-                        <td style="padding:4px 0 0 0; color:#0f172a; font-weight:900; font-size:14px;">Total:</td>
+                        <td style="padding:4px 0 0 0; color:#0f172a; font-weight:900; font-size:14px;">Total Collected & Settled:</td>
                         <td style="padding:4px 0 0 0; color:#0f172a; font-weight:900; font-size:15px; text-align:right;">LKR ${paymentTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       </tr>
                     </tbody>
                   </table>
                 </div>
               </div>
+
+              ${maturingCheques.length > 0 ? `
+              <div style="background-color:#fffbeb; border:1px solid #fef3c7; border-radius:14px; padding:18px; margin-top:24px;">
+                <div style="margin-bottom:10px;">
+                  <p style="margin:0 0 2px 0; color:#92400e; font-size:11px; font-weight:800; letter-spacing:0.5px; text-transform:uppercase;">⏳ PENDING / MATURING CHEQUES (NEXT 48H)</p>
+                  <p style="margin:0; color:#b45309; font-size:11px; font-weight:600;">${maturingCheques.length} Cheque(s) Due • Total: <strong>LKR ${maturingChequesTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong></p>
+                </div>
+                <table style="width:100%; border-collapse:collapse; font-size:11px; color:#78350f;">
+                  <thead>
+                    <tr style="border-bottom:1px solid #fde68a; text-align:left;">
+                      <th style="padding:4px 0;">Date</th>
+                      <th style="padding:4px 0;">Cheque #</th>
+                      <th style="padding:4px 0;">Bank</th>
+                      <th style="padding:4px 0;">Party</th>
+                      <th style="padding:4px 0; text-align:right;">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${maturingCheques.map(c => `
+                      <tr style="border-bottom:1px dashed #fef3c7;">
+                        <td style="padding:5px 0; font-weight:700;">${c.cheque_date}</td>
+                        <td style="padding:5px 0; font-family:monospace;">#${c.cheque_number}</td>
+                        <td style="padding:5px 0;">${c.bank_name}</td>
+                        <td style="padding:5px 0;">${c.party_name || 'N/A'}</td>
+                        <td style="padding:5px 0; text-align:right; font-weight:800;">LKR ${Number(c.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+              ` : ''}
+
+              ${todayPRs.length > 0 ? `
+              <div style="background-color:#eff6ff; border:1px solid #bfdbfe; border-radius:14px; padding:16px; margin-top:20px;">
+                <p style="margin:0 0 4px 0; color:#1e40af; font-size:11px; font-weight:800; letter-spacing:0.5px; text-transform:uppercase;">🔄 PURCHASE RETURNS / DEBIT NOTES TODAY</p>
+                <p style="margin:0; color:#1e3a8a; font-size:13px; font-weight:700;">
+                  ${todayPRs.length} Debit Note(s) Issued • Total Returned Value: <strong>LKR ${todayPRTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+                </p>
+              </div>
+              ` : ''}
             </div>
             <div style="background-color:#161c2e; padding:20px 24px; text-align:center;">
               <p style="margin:0 0 4px 0; color:#DAA520; font-size:11px; font-weight:800; letter-spacing:1.5px; text-transform:uppercase;">MUTHUWADIGE HARDWARE</p>

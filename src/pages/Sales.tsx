@@ -40,7 +40,7 @@ import { useSettings } from '../context/SettingsContext';
 import { api, API_URL, BASE_URL, fetchWithTimeout } from '../lib/api'; 
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import type { SaleOrder, SaleItem, Customer, Product, Quotation, DeliveryNote, SalesReturn, CreditNote, CreditNoteUsage } from '../types';
+import type { SaleOrder, SaleItem, Customer, Product, Quotation, DeliveryNote, SalesReturn, CreditNote, CreditNoteUsage, ChequeType } from '../types';
 import { calculateSaleAccounting, calculateEffectiveUnitPricePaid } from '../utils/sales/accounting';
 import { formatStock } from '../utils/formatters';
 import { sinhalaFontBase64 } from '../utils/sinhalaFontBase64';
@@ -53,6 +53,24 @@ import {
   formatInvoiceDateTime
 } from '../utils/sales/printTemplates';
 import { hasPermission } from '../utils/permissions';
+
+export const SRI_LANKAN_BANKS = [
+  'Bank of Ceylon',
+  'Commercial Bank',
+  'Sampath Bank',
+  'Hatton National Bank',
+  "People's Bank",
+  'Nations Trust Bank',
+  'Seylan Bank',
+  'National Development Bank (NDB)',
+  'DFCC Bank',
+  'Pan Asia Bank',
+  'Union Bank',
+  'Amana Bank',
+  'Standard Chartered Bank',
+  'HSBC',
+  'Other'
+];
 
 const safeParseJson = (data: any, fallback: any = []) => {
   if (data === null || data === undefined) return fallback;
@@ -156,7 +174,10 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
           <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'ඉන්වොයිස් අංකය:' : 'INVOICE NO:'}</span> <strong className="text-slate-800 font-black">{order.invoiceNo || order.invoice_no}</strong></p>
           <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'නිකුත් කළ දිනය:' : 'ISSUE DATE:'}</span> {formatInvoiceDateTime(order.created_at, order.date)}</p>
           <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'ගෙවීම් ක්‍රමය:' : 'PAYMENT METHOD:'}</span> <strong className="uppercase text-slate-900 font-black bg-amber-100 text-amber-900 px-2 py-0.5 rounded text-[10px] border border-amber-300">{(order.payment_method || (order as any).paymentMethod || (order.status === 'Non Paid' ? 'CREDIT' : 'CASH')).toUpperCase()}</strong></p>
-          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'අයකැමි:' : 'CASHIER:'}</span> <strong className="text-slate-800 font-black">{order.cashier || (order as any).cashier_name || (order as any).user_name || (settings?.shop_name || 'Sanoj Hardware')}</strong></p>
+          {((order.payment_method || (order as any).paymentMethod || '').toLowerCase() === 'cheque' || (order as any).cheque_number || (order as any).chequeNumber) && (
+            <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'චෙක් විස්තර:' : 'CHEQUE:'}</span> <strong className="text-slate-800 font-bold text-[10px]">#{(order as any).cheque_number || (order as any).chequeNumber || 'CHQ'} {((order as any).cheque_bank || (order as any).chequeBank) ? `(${(order as any).cheque_bank || (order as any).chequeBank})` : ''}</strong></p>
+          )}
+          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'අයකැමි:' : 'CASHIER:'}</span> <strong className="text-slate-800 font-black">{order.cashier || (order as any).cashier_name || (order as any).user_name || (order as any).created_by || 'Sanoj Hardware'}</strong></p>
           {((order.payment_method || (order as any).paymentMethod || '').toLowerCase() === 'credit' || order.status === 'Non Paid') && (
             <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'තත්ත්වය:' : 'STATUS:'}</span> <span className="inline-block bg-rose-50 border border-rose-200 text-rose-700 text-[10px] font-black px-2.5 py-0.5 rounded uppercase">{isSinhala ? `නොගෙවූ / හිඟ (ණය කාලය: ${(order as any).credit_period || (order as any).payment_terms || order.credit_period_days || 30} දින)` : `UNPAID / OUTSTANDING (Credit Period: ${(order as any).credit_period || (order as any).payment_terms || order.credit_period_days || 30} Days)`}</span></p>
           )}
@@ -941,30 +962,24 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     const active = currentUser || (() => {
       try {
         if (typeof window !== 'undefined') {
-          const stored = localStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user');
+          const stored = sessionStorage.getItem('hardware_erp_user') || sessionStorage.getItem('erp_user') || localStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user');
           if (stored) return JSON.parse(stored);
         }
       } catch (_) {}
       return null;
     })();
 
-    const isSuperAdmin = !active || 
-      active.email === 'admin@hardware.com' || 
-      active.email === 'sanojhardware@gmail.com' ||
-      (active.role || '').toLowerCase() === 'super_admin' || 
-      (active.role || '').toLowerCase() === 'super admin' ||
-      active.id === 'u1' || 
-      active.id === 'u2' || 
-      active.id === 'admin_super';
-
-    if (isSuperAdmin) {
-      return shopSettings?.shop_name || 'Sanoj Hardware';
-    }
-
     if (active?.name && active.name.trim()) return active.name.trim();
     if (active?.fullName && active.fullName.trim()) return active.fullName.trim();
+    if (active?.full_name && active.full_name.trim()) return active.full_name.trim();
     if (active?.username && active.username.trim()) return active.username.trim();
-    return shopSettings?.shop_name || 'Sanoj Hardware';
+    if (active?.email) {
+      const emailPrefix = active.email.split('@')[0];
+      if (emailPrefix && emailPrefix.toLowerCase() !== 'admin' && emailPrefix.toLowerCase() !== 'system') {
+        return emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);
+      }
+    }
+    return 'Sanoj Hardware';
   };
 
   const [shopSettings, setShopSettings] = useState<any>(null);
@@ -1042,7 +1057,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   const [isLoading, setIsLoading] = useState(false);
   
   // Held and Payment Methods States
-  const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'Card' | 'Bank Transfer' | 'Credit'>('Cash');
+  const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'Card' | 'Bank Transfer' | 'Credit' | 'Cheque'>('Cash');
+  const [chequeNumber, setChequeNumber] = useState<string>('');
+  const [chequeBank, setChequeBank] = useState<string>('Bank of Ceylon');
+  const [customBankName, setCustomBankName] = useState<string>('');
+  const [chequeBranch, setChequeBranch] = useState<string>('');
+  const [chequeDate, setChequeDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [chequeType, setChequeType] = useState<ChequeType>('CROSSED_ACCOUNT_PAYEE');
   const [showHeldBillsModal, setShowHeldBillsModal] = useState(false);
   const [holdNameInput, setHoldNameInput] = useState('');
   const [showHoldNameModal, setShowHoldNameModal] = useState(false);
@@ -1154,6 +1175,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     setTransportationFee(0);
     setDiscount(0);
     setPaymentMethod('Cash');
+    setChequeNumber('');
+    setChequeBank('Bank of Ceylon');
+    setCustomBankName('');
+    setChequeBranch('');
+    setChequeDate(new Date().toISOString().split('T')[0]);
+    setChequeType('CROSSED_ACCOUNT_PAYEE');
     setCreditNoteApplied('');
     setSelectedCreditNoteCode('');
     setProductSearch('');
@@ -1194,7 +1221,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   const [returnProductSearch, setReturnProductSearch] = useState('');
   const [targetReturnInvoice, setTargetReturnInvoice] = useState<SaleOrder | null>(null);
   const [includeReturnDiscount, setIncludeReturnDiscount] = useState<boolean>(true);
-  const [includeReturnTransport, setIncludeReturnTransport] = useState<boolean>(true);
+  const [includeReturnTransport, setIncludeReturnTransport] = useState<boolean>(false);
   const [returnQtys, setReturnQtys] = useState<Record<string, number>>({});
   const [returnMethod, setReturnMethod] = useState<'Cash Refund' | 'Exchange' | 'Credit Note'>('Cash Refund');
   const [returnReason, setReturnReason] = useState('');
@@ -2663,6 +2690,18 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       }
     }
 
+    if (paymentMethod === 'Cheque') {
+      if (!chequeNumber.trim()) {
+        return alert(t("Please enter the Cheque Number.", "කරුණාකර චෙක්පත් අංකය ඇතුළත් කරන්න."));
+      }
+      if (chequeBank === 'Other' && !customBankName.trim()) {
+        return alert(t("Please specify the Bank Name.", "කරුණාකර බැංකුවේ නම ඇතුළත් කරන්න."));
+      }
+      if (!chequeDate) {
+        return alert(t("Please select the Cheque Date.", "කරුණාකර චෙක්පත් දිනය තෝරන්න."));
+      }
+    }
+
     setIsLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -2678,6 +2717,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       const activeCashierName = resolveCurrentCashierName();
       const activeUserEmail = currentUser?.email || user?.email || 'admin@hardware.erp';
       const activeUserId = currentUser?.id || user?.id || 'u1';
+      const bankNameToUse = chequeBank === 'Other' ? (customBankName.trim() || 'Other') : chequeBank;
 
       const newOrderData = {
         invoice_no: `INV-${Date.now()}`,
@@ -2700,12 +2740,41 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
         credit_period_days: paymentMethod === 'Credit' ? creditPeriodDays : 0,
         transportation_fee: Number(transportationFee) || 0,
         credit_note_applied: numCreditNoteApplied,
-        credit_note_code: activeCNCode
+        credit_note_code: activeCNCode,
+        cheque_number: paymentMethod === 'Cheque' ? chequeNumber.trim() : undefined,
+        cheque_bank: paymentMethod === 'Cheque' ? bankNameToUse : undefined,
+        cheque_date: paymentMethod === 'Cheque' ? chequeDate : undefined,
+        cheque_type: paymentMethod === 'Cheque' ? chequeType : undefined
       };
 
       const { data: saleRecord, error: saleError } = await supabase.from('sales').insert([newOrderData]).select().single();
       if (saleError && !saleRecord) {
         console.warn("Supabase sale insert notice:", saleError);
+      }
+
+      // Automatically register inward cheque into cheque registry
+      if (paymentMethod === 'Cheque') {
+        try {
+          await api.cheques.create({
+            direction: 'INWARD',
+            cheque_type: chequeType,
+            cheque_number: chequeNumber.trim(),
+            bank_name: bankNameToUse,
+            branch: chequeBranch.trim() || undefined,
+            cheque_date: chequeDate || new Date().toISOString().split('T')[0],
+            amount: totalAmountValue,
+            party_id: isGuest ? 'WALK_IN' : (selectedCustomer?.id || 'WALK_IN'),
+            party_name: finalCustomerName,
+            reference_type: 'SALE_INVOICE',
+            reference_id: saleRecord?.invoice_no || newOrderData.invoice_no,
+            status: chequeType === 'CASH_BEARER' ? 'IN_HAND' : 'PENDING',
+            notes: `POS Cheque Payment for Invoice ${saleRecord?.invoice_no || newOrderData.invoice_no}`,
+            created_by: activeCashierName,
+            processed_by: activeCashierName
+          });
+        } catch (chqErr: any) {
+          console.warn("Cheque registry registration notice:", chqErr);
+        }
       }
 
       // Note: SQLite backend handles product stock levels automatically, 
@@ -2750,7 +2819,15 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
         credit_note_applied: numCreditNoteApplied,
         creditNoteApplied: numCreditNoteApplied,
         credit_note_code: activeCNCode,
-        creditNoteCode: activeCNCode
+        creditNoteCode: activeCNCode,
+        cheque_number: paymentMethod === 'Cheque' ? chequeNumber.trim() : undefined,
+        chequeNumber: paymentMethod === 'Cheque' ? chequeNumber.trim() : undefined,
+        cheque_bank: paymentMethod === 'Cheque' ? bankNameToUse : undefined,
+        chequeBank: paymentMethod === 'Cheque' ? bankNameToUse : undefined,
+        cheque_date: paymentMethod === 'Cheque' ? chequeDate : undefined,
+        chequeDate: paymentMethod === 'Cheque' ? chequeDate : undefined,
+        cheque_type: paymentMethod === 'Cheque' ? chequeType : undefined,
+        chequeType: paymentMethod === 'Cheque' ? chequeType : undefined
       };
       setLastOrder(completedOrder);
       setShowReceipt(true);
@@ -3670,6 +3747,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       <option value="Cash">Cash / මුදල්</option>
                       <option value="Card">Card / කාඩ්පත්</option>
                       <option value="Bank Transfer">Bank Transfer / බැංකු හුවමාරු</option>
+                      <option value="Cheque">Cheque / චෙක්පත්</option>
                     </select>
                     <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400">
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -3678,6 +3756,126 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     </div>
                   </div>
                 </div>
+
+                {/* Cheque Payment Sub-Form */}
+                {paymentMethod === 'Cheque' && (
+                  <div className="bg-amber-50/70 border-2 border-amber-300/80 rounded-2xl p-4 space-y-3.5 animate-in slide-in-from-top-2 duration-300">
+                    <div className="flex items-center justify-between border-b border-amber-200/80 pb-2">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
+                        <span>📝</span> {t('Cheque Payment Details', 'චෙක්පත් ගෙවීම් විස්තර')}
+                      </span>
+                      <span className="text-[9px] font-black uppercase text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full border border-amber-300">
+                        Inward Cheque
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1 block">
+                          {t('Cheque Number', 'චෙක්පත් අංකය')} <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. CHQ-889900"
+                          value={chequeNumber}
+                          onChange={(e) => setChequeNumber(e.target.value)}
+                          className="w-full px-3 py-2 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500 shadow-sm"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1 block">
+                          {t('Cheque Date', 'චෙක්පත් දිනය')} <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={chequeDate}
+                          onChange={(e) => setChequeDate(e.target.value)}
+                          className="w-full px-3 py-2 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500 shadow-sm cursor-pointer"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1 block">
+                          {t('Bank Name', 'බැංකුව')} <span className="text-red-500">*</span>
+                        </label>
+                        <select
+                          value={chequeBank}
+                          onChange={(e) => setChequeBank(e.target.value)}
+                          className="w-full px-3 py-2 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500 shadow-sm cursor-pointer"
+                        >
+                          {SRI_LANKAN_BANKS.map((b, idx) => (
+                            <option key={idx} value={b}>{b}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1 block">
+                          {t('Branch (Optional)', 'ශාඛාව (විකල්ප)')}
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Negombo Branch"
+                          value={chequeBranch}
+                          onChange={(e) => setChequeBranch(e.target.value)}
+                          className="w-full px-3 py-2 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500 shadow-sm"
+                        />
+                      </div>
+                    </div>
+
+                    {chequeBank === 'Other' && (
+                      <div>
+                        <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1 block">
+                          {t('Specify Custom Bank Name', 'වෙනත් බැංකුවේ නම')} <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Enter custom bank name..."
+                          value={customBankName}
+                          onChange={(e) => setCustomBankName(e.target.value)}
+                          className="w-full px-3 py-2 bg-white border border-amber-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500 shadow-sm"
+                        />
+                      </div>
+                    )}
+
+                    {/* Cheque Type Toggle */}
+                    <div>
+                      <label className="text-[9px] font-black text-slate-600 uppercase tracking-widest mb-1.5 block">
+                        {t('Cheque Type', 'චෙක්පත් වර්ගය')}
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setChequeType('CROSSED_ACCOUNT_PAYEE')}
+                          className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border text-left ${
+                            chequeType === 'CROSSED_ACCOUNT_PAYEE'
+                              ? 'bg-slate-900 text-amber-400 border-slate-900 shadow-sm'
+                              : 'bg-white text-slate-700 border-amber-200 hover:bg-amber-100/50'
+                          }`}
+                        >
+                          <span className="block text-[11px] font-black">Crossed / A/C Payee</span>
+                          <span className="text-[9px] opacity-80">ගිණුමට පමණි (Pending Realization)</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setChequeType('CASH_BEARER')}
+                          className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border text-left ${
+                            chequeType === 'CASH_BEARER'
+                              ? 'bg-slate-900 text-amber-400 border-slate-900 shadow-sm'
+                              : 'bg-white text-slate-700 border-amber-200 hover:bg-amber-100/50'
+                          }`}
+                        >
+                          <span className="block text-[11px] font-black">Cash / Bearer Cheque</span>
+                          <span className="text-[9px] opacity-80">මුදල් චෙක්පත (In Hand)</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Credit Note Code & Application Field */}
                 <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3.5 space-y-2.5">
@@ -5703,6 +5901,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       if (matches.length === 1) {
                         const selected = matches[0];
                         setTargetReturnInvoice(selected);
+                        setIncludeReturnTransport(false);
                         const initialQtys: Record<string, number> = {};
                         const items = Array.isArray(selected.items) ? selected.items : safeParseJson(selected.items, []);
                         items.forEach((item: any) => { 
@@ -5763,6 +5962,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     if (matches.length === 1) {
                       const selected = matches[0];
                       setTargetReturnInvoice(selected);
+                      setIncludeReturnTransport(false);
                       const initialQtys: Record<string, number> = {};
                       const items = Array.isArray(selected.items) ? selected.items : safeParseJson(selected.items, []);
                       items.forEach((item: any) => { 
@@ -5857,6 +6057,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                             key={inv.id}
                             onClick={() => {
                               setTargetReturnInvoice(inv);
+                              setIncludeReturnTransport(false);
                               const initialQtys: Record<string, number> = {};
                               items.forEach((item: any) => { 
                                 const isMatch = (item.barcode && item.barcode.trim().toLowerCase().includes(q)) ||
@@ -6063,6 +6264,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     creditNoteNo: result.creditNoteNo,
                     status: 'active',
                     reason: returnReason,
+                    cashier: activeCashierName,
                     created_at: new Date().toISOString(),
                     isCredit: isCreditCustomer,
                     is_credit: isCreditCustomer
@@ -6072,6 +6274,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   setShowReturnPreviewModal(true);
 
                   setTargetReturnInvoice(null);
+                  setIncludeReturnTransport(false);
                   setReturnQtys({});
                   setExchangeCartItems([]);
                   setReturnReason('');
@@ -6106,6 +6309,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       type="button"
                       onClick={() => {
                         setTargetReturnInvoice(null);
+                        setIncludeReturnTransport(false);
                         setReturnQtys({});
                         setExchangeCartItems([]);
                         setShowBillSearchResults(true);

@@ -33,7 +33,18 @@ import XLSX from 'xlsx-js-style';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { supabase } from '../lib/supabaseClient';
-import { calculateSaleAccounting, isCreditSaleRecord, calculateNetSalesRevenue, calculateNetCOGS, calculateGrossProfit, getItemUnitCost } from '../utils/accounting';
+import {
+  toSriLankaDateStr,
+  getTodaySriLankaDate,
+  getCurrentSriLankaMonth,
+  isWithinDateRange,
+  computeFinancialSummary,
+  computePaymentBreakdown,
+  calculateSaleAccounting,
+  isCreditSaleRecord,
+  getItemUnitCost,
+  getReturnSellingSubtotal
+} from '../utils/accounting';
 import { useCurrency } from '../context/CurrencyContext';
 import { formatStock } from '../utils/formatters';
 
@@ -45,37 +56,9 @@ const isDecimalUnit = (unit: string | undefined): boolean => {
   return decimals.includes(name) || !PREDEFINED_UNITS.includes(name);
 };
 
-const getLocalDateString = (d: Date = new Date()) => {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
+const getLocalDateString = (d: Date = new Date()) => toSriLankaDateStr(d) || getTodaySriLankaDate();
 
-const safeGetDateString = (dateVal: any): string => {
-  if (!dateVal) return '';
-  try {
-    const d = new Date(dateVal);
-    if (isNaN(d.getTime())) {
-      if (typeof dateVal === 'string') {
-        const cleaned = dateVal.trim();
-        if (cleaned.match(/^\d{4}-\d{2}-\d{2}/)) {
-          return cleaned.substring(0, 10);
-        }
-      }
-      return '';
-    }
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  } catch (e) {
-    if (typeof dateVal === 'string') {
-      return dateVal.substring(0, 10);
-    }
-    return '';
-  }
-};
+const safeGetDateString = (dateVal: any): string => toSriLankaDateStr(dateVal);
 
 type Tab = 'sales' | 'inventory' | 'financial';
 
@@ -190,7 +173,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   });
 
   const filteredTransactions = transactions.filter(t => {
-    const tDate = safeGetDateString(t.date);
+    const tDate = safeGetDateString(t.date || t.created_at);
     if (effectiveFromDate && tDate < effectiveFromDate) return false;
     if (effectiveToDate && tDate > effectiveToDate) return false;
     return true;
@@ -251,7 +234,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     const isCredit = method === 'credit' || method === 'credit sale' || (s as any).is_credit === true;
 
     if (isCredit) {
-      // Credit sales: count ONLY actual cash received via settlements/payments (NEVER count unsettled credit amounts)
       return sum + Number(s.payment_received || 0);
     } else {
       const paid = s.payment_received !== undefined && s.payment_received !== null && Number(s.payment_received) > 0
@@ -261,7 +243,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     }
   }, 0);
 
-  // Robust helper to extract refund cash outflow from exchange returns
   const getExchangeRefundAmount = (r: any) => {
     const totRef = Number(r.total_refunded !== undefined && r.total_refunded !== null ? r.total_refunded : (r.totalRefunded || 0));
     if (totRef > 0) return totRef;
@@ -281,7 +262,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     return 0;
   };
 
-  // Cash Refund outflows (including Cash Refund returns & Exchange refunds paid to customer)
   const cashRefundsTotal = filteredSalesReturns.reduce((sum, r) => {
     const statusLower = (r.status || '').toString().toLowerCase().trim();
     if (statusLower === 'voided' || statusLower === 'cancelled') return sum;
@@ -307,7 +287,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     return sum;
   }, 0);
 
-  // Cash Inflows from Exchange returns (where customer pays additional balance)
   const exchangeCashInflowsTotal = filteredSalesReturns.reduce((sum, r) => {
     const statusLower = (r.status || '').toString().toLowerCase().trim();
     if (statusLower === 'voided' || statusLower === 'cancelled') return sum;
@@ -324,14 +303,12 @@ export function Reports({ currentUser }: ReportsProps = {}) {
 
   const totalCashCollected = Math.max(0, rawCashCollected + exchangeCashInflowsTotal - cashRefundsTotal);
 
-  // 2. Total Revenue: Selling Price / Subtotal only (Excludes Tax & Transport)
   const grossSalesSellingRevenue = filteredSales.reduce((sum, s) => {
     const statusLower = (s.status || '').toString().toLowerCase().trim();
     if (statusLower === 'cancelled' || statusLower === 'voided') return sum;
     return sum + getSaleSellingSubtotal(s);
   }, 0);
 
-  // Sales Return Subtotal & Exchange Subtotal adjustments across ALL return methods
   const returnsSellingRevenue = filteredSalesReturns.reduce((sum, r) => {
     if (r.status === 'voided' || r.status === 'Voided' || r.status === 'cancelled') return sum;
     return sum + getReturnSellingSubtotal(r);
@@ -351,7 +328,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     return statusLower === 'paid' || statusLower === 'fully settled' || rem <= 0.01;
   }).length;
 
-  // Daily Sales logic to ensure data maps to chart (reconciled with sales returns)
   const dailySalesData = (() => {
     const map: Record<string, number> = {};
     filteredSales.forEach(sale => {
@@ -415,7 +391,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     return acc;
   }, []).sort((a, b) => b.sold - a.sold).slice(0, 5);
 
-  // Velocity calculations for all inventory items
   const inventoryVelocity = products.map(prod => {
     let unitsSold = 0;
     filteredSales.forEach(sale => {
@@ -509,119 +484,44 @@ export function Reports({ currentUser }: ReportsProps = {}) {
 
   const financialChartData = getLast6MonthsReports();
   filteredTransactions.forEach((trans) => {
-    const tDate = new Date(trans.date);
+    const tDate = new Date(trans.date || trans.created_at);
     const tYear = tDate.getFullYear();
     const tMonth = tDate.getMonth();
     const match = financialChartData.find(m => m.year === tYear && m.monthIndex === tMonth);
     if (match) {
       const amount = Number(trans.amount || 0);
-      if (trans.type === 'income') {
+      if (trans.type === 'income' || trans.flow_type === 'INCOME') {
         match.revenue += amount;
       } else if (isSalesReturnTrans(trans)) {
         match.revenue -= amount;
-      } else if (trans.type === 'expense') {
+      } else if (trans.type === 'expense' || trans.flow_type === 'EXPENSE') {
         match.expenses += amount;
       }
     }
   });
 
-  const totalIncome = filteredTransactions.filter(t => t.type?.toLowerCase() === 'income').reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  const totalIncome = filteredTransactions.filter(t => (t.type?.toLowerCase() === 'income' || t.flow_type?.toLowerCase() === 'income')).reduce((sum, t) => sum + Number(t.amount || 0), 0);
   const totalSalesReturns = filteredTransactions.filter(t => isSalesReturnTrans(t)).reduce((sum, t) => sum + Number(t.amount || 0), 0);
   const netRevenue = Math.max(0, totalIncome - totalSalesReturns);
-  const totalExpenses = filteredTransactions.filter(t => t.type?.toLowerCase() === 'expense' && !isSalesReturnTrans(t)).reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  const totalExpenses = filteredTransactions.filter(t => (t.type?.toLowerCase() === 'expense' || t.flow_type?.toLowerCase() === 'expense') && !isSalesReturnTrans(t)).reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
-  // 3. Financial Summary Metrics: Exact Income Waterfall & COGS Reconciliation
   const financialSummaryMetrics = (() => {
-    let grossStickerSales = 0;
-    let customerDiscounts = 0;
-    let transportFees = 0;
-    let salesCOGS = 0;
-
-    filteredSales.forEach(o => {
-      const statusLower = (o.status || '').toString().toLowerCase().trim();
-      if (statusLower !== 'cancelled' && statusLower !== 'voided') {
-        let items: any[] = [];
-        try {
-          items = typeof o.items === 'string' ? JSON.parse(o.items) : o.items || [];
-        } catch(e) {}
-
-        let lineDiscounts = 0;
-        if (Array.isArray(items)) {
-          items.forEach(it => {
-            const product = products.find(p => p.id === (it.productId || it.product_id));
-            const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.costPrice || it.cost_price);
-            const qty = Number(it.quantity || it.qty || 1);
-            const price = Number(it.unit_price || it.unitPrice || it.price || 0);
-            const itemDisc = Number(it.discount || 0);
-            const itemDiscType = it.discountType || 'amount';
-            const discAmt = (itemDiscType === 'percent' || itemDiscType === 'percentage') ? (qty * price * itemDisc / 100) : (itemDisc * qty);
-            
-            grossStickerSales += (qty * price);
-            salesCOGS += (qty * cost);
-            lineDiscounts += discAmt;
-          });
-        }
-        const invoiceDiscount = Number(o.discount || 0);
-        customerDiscounts += Math.max(lineDiscounts, invoiceDiscount);
-        transportFees += Number(o.transportation_fee || o.transportationFee || 0);
-      }
+    const summary = computeFinancialSummary({
+      sales: filteredSales,
+      salesReturns: filteredSalesReturns,
+      products
     });
-
-    let returnedSellingRev = 0;
-    let returnsCOGS = 0;
-    let exchangeSellingRev = 0;
-    let exchangeCostVal = 0;
-
-    filteredSalesReturns.forEach(r => {
-      if (r.status === 'voided' || r.status === 'Voided' || r.status === 'cancelled') return;
-      
-      returnedSellingRev += getReturnSellingSubtotal(r);
-      let rawItems = r.items || r.returnedItems || r.returned_items || [];
-      let items: any[] = [];
-      try { items = typeof rawItems === 'string' ? JSON.parse(rawItems) : rawItems; } catch(e) {}
-
-      if (Array.isArray(items)) {
-        items.forEach(it => {
-          const product = products.find(p => p.id === (it.productId || it.product_id));
-          const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.costPrice || it.cost_price);
-          const qty = Number(it.quantity || it.qty || 1);
-          returnsCOGS += (qty * cost);
-        });
-      }
-
-      const exAmt = Number(r.exchange_amount !== undefined ? r.exchange_amount : (r.exchangeAmount || 0));
-      exchangeSellingRev += exAmt;
-
-      let rawExItems = r.exchangeItems || r.exchange_items || [];
-      let exItems: any[] = [];
-      try { exItems = typeof rawExItems === 'string' ? JSON.parse(rawExItems) : rawExItems; } catch(e) {}
-
-      if (Array.isArray(exItems)) {
-        exItems.forEach(it => {
-          const product = products.find(p => p.id === (it.productId || it.product_id));
-          const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.costPrice || it.cost_price);
-          const qty = Number(it.quantity || it.qty || 1);
-          exchangeCostVal += (qty * cost);
-        });
-      }
-    });
-
-    const salesReturnsVal = returnedSellingRev;
-    const netSellingRev = calculateNetSalesRevenue(grossStickerSales, customerDiscounts, salesReturnsVal, transportFees);
-    const netCOGS = calculateNetCOGS(salesCOGS, exchangeCostVal, returnsCOGS);
-    const grossProfit = calculateGrossProfit(netSellingRev, netCOGS);
-    const grossMarginPct = netSellingRev > 0 ? (grossProfit / netSellingRev) * 100 : 0;
 
     return {
-      grossStickerSales,
-      customerDiscounts,
-      salesReturnsRefunds: salesReturnsVal,
-      transportFees,
-      grossSalesRevenue: grossStickerSales,
-      netSalesRevenue: netSellingRev,
-      cogs: netCOGS,
-      grossProfit,
-      grossMarginPct
+      grossStickerSales: summary.grossStickerSales,
+      customerDiscounts: summary.customerDiscounts,
+      salesReturnsRefunds: summary.returnsSellingRevenue,
+      transportFees: summary.transportFees,
+      grossSalesRevenue: summary.grossStickerSales,
+      netSalesRevenue: summary.netSalesRevenue,
+      cogs: summary.netCOGS,
+      grossProfit: summary.grossProfit,
+      grossMarginPct: summary.grossMarginPct
     };
   })();
 
@@ -661,7 +561,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   let calcCredit = 0;
   let calcBank = 0;
 
-  // 1. Process sales originated in the reporting period
   todaySales.forEach(s => {
     const method = (s.payment_method || s.paymentMethod || 'Cash').toString().toLowerCase().trim();
     const totalAmt = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
@@ -669,11 +568,9 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     const isCreditSale = isCreditSaleRecord(s);
 
     if (isCreditSale) {
-      // Remaining unsettled credit originated in period after returns
       const acct = calculateSaleAccounting(s, salesReturns);
       calcCredit += acct.netOutstanding;
     } else {
-      // Direct non-credit sales
       if (method === 'card' || method === 'credit card') {
         calcCard += totalAmt;
       } else if (method === 'bank' || method === 'bank transfer' || method === 'online') {
@@ -684,7 +581,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     }
   });
 
-  // 2. Process credit settlements/payments collected in the reporting period (by actual payment date)
   periodCreditPayments.forEach(cp => {
     const payAmt = Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0));
     const payMethod = (cp.payment_method || cp.paymentMethod || 'Cash').toString().toLowerCase().trim();
@@ -698,7 +594,17 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     }
   });
 
-  const todayCash = calcCash;
+  // Calculate Cash Expenses paid out of the drawer for the period (Purchases, Supplier settlements, etc.)
+  const periodCashExpenses = filteredTransactions
+    .filter(t => {
+      const type = (t.flow_type || t.type || '').toString().toUpperCase().trim();
+      const method = (t.payment_method || t.paymentMethod || 'CASH').toString().toUpperCase().trim();
+      return type === 'EXPENSE' && (method === 'CASH' || method === 'CASH_BEARER');
+    })
+    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
+  // Net Cash in Drawer for Today's Payment Breakdown (Inflows - Expenses)
+  const todayCash = Math.max(0, calcCash - periodCashExpenses);
   const todayCard = calcCard;
   const todayCredit = calcCredit;
   const todayBank = calcBank;
@@ -708,10 +614,8 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     const emVal = (email || '').trim().toLowerCase();
     const idVal = (userId || '').trim();
 
-    // Baseline shop identity
     const baselineName = shopName || 'Sanoj Hardware';
 
-    // 1. Check against registered dedicated staff accounts (profiles)
     if (profiles && profiles.length > 0) {
       const matchedStaff = profiles.find(p => {
         const pRole = (p.role || '').toLowerCase().trim();
@@ -719,7 +623,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
         const pName = (p.name || p.fullName || '').toLowerCase().trim();
         const pUsername = (p.username || '').toLowerCase().trim();
 
-        // Exclude Super Admin / Root Admin from dedicated staff accounts
         if (
           pRole === 'super_admin' || 
           pRole === 'super admin' || 
@@ -734,7 +637,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
           return false;
         }
 
-        // Match dedicated staff by ID, email, name, or username
         if (idVal && (p.id === idVal || p.id === idVal.replace(/^u_/, '') || `u_${p.id}` === idVal)) return true;
         if (emVal && pEmail === emVal) return true;
         if (rawVal) {
@@ -751,7 +653,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       }
     }
 
-    // 2. Check if active logged-in user is a dedicated secondary staff account
     if (currentUser) {
       const curRole = (currentUser.role || '').toLowerCase().trim();
       const curEmail = (currentUser.email || '').toLowerCase().trim();
@@ -764,7 +665,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       }
     }
 
-    // 3. Any transaction without an explicitly registered separate staff account automatically maps to Sanoj Hardware
     return baselineName;
   };
 
@@ -786,25 +686,25 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     return cashierSummaryMap[name];
   };
 
-  // 1. Process sales payments handled at POS (Cash, Card, Bank, and upfront payments received on credit sales)
+  // 1. Process direct non-credit sales handled at POS counter (Cash, Card, Bank)
   todaySales.forEach(s => {
     const cashierName = resolveCashierDisplayName(s.cashier || s.user_name || s.user_id, s.user_email, s.user_id);
     const isCredit = isCreditSaleRecord(s);
-    // Realized payment received at POS (strictly excludes unpaid credit invoice totals)
-    const realizedAmt = isCredit
-      ? Number(s.payment_received || 0)
-      : (s.payment_received !== undefined && s.payment_received !== null && Number(s.payment_received) > 0
-          ? Number(s.payment_received)
-          : Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0)));
+    
+    if (!isCredit) {
+      const realizedAmt = Number(s.payment_received !== undefined && s.payment_received !== null && Number(s.payment_received) > 0
+        ? s.payment_received
+        : (s.total_amount !== undefined ? s.total_amount : (s.total || 0)));
 
-    if (realizedAmt > 0) {
-      const entry = getCashierEntry(cashierName);
-      entry.amount += realizedAmt;
-      entry.txIds.add(s.id || s.invoice_no || `sale_${s.created_at}`);
+      if (realizedAmt > 0) {
+        const entry = getCashierEntry(cashierName);
+        entry.amount += realizedAmt;
+        entry.txIds.add(s.id || s.invoice_no || `sale_${s.created_at}`);
+      }
     }
   });
 
-  // 2. Debt settlements / Credit repayments collected by this cashier during shift
+  // 2. Debt settlements / Credit repayments collected during shift (Cash, Card, Bank, Cheque Encashed)
   periodCreditPayments.forEach(cp => {
     const cashierName = resolveCashierDisplayName(cp.recorded_by || cp.created_by || cp.cashier, cp.user_email, cp.user_id);
     const payAmt = Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0));
@@ -815,7 +715,21 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     }
   });
 
-  // 3. Exchange payments collected & cash refunds paid out by cashier
+  // 3. Deduct cash expenses (PO cash payments, supplier cash settlements) handled by the cashier shift
+  filteredTransactions.forEach(t => {
+    const type = (t.flow_type || t.type || '').toString().toUpperCase().trim();
+    const method = (t.payment_method || t.paymentMethod || 'CASH').toString().toUpperCase().trim();
+    if (type === 'EXPENSE' && (method === 'CASH' || method === 'CASH_BEARER')) {
+      const cashierName = resolveCashierDisplayName(t.created_by || t.user_name || t.cashier, t.user_email, t.user_id);
+      const expAmt = Number(t.amount || 0);
+      if (expAmt > 0) {
+        const entry = getCashierEntry(cashierName);
+        entry.amount = Math.max(0, entry.amount - expAmt);
+      }
+    }
+  });
+
+  // 4. Exchange payments collected & cash refunds paid out by cashier
   periodSalesReturns.forEach(r => {
     const cashierName = resolveCashierDisplayName(r.cashier || r.user_name || r.user_id, r.user_email, r.user_id);
     const type = (r.return_type || r.returnType || r.returnMethod || r.return_method || r.type || '').toString().toLowerCase().trim();
@@ -915,8 +829,8 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       }));
     } else {
       mappedData = rawData.map(tData => ({
-        [t("Date", "දිනය")]: tData.date,
-        [t("Type", "වර්ගය")]: tData.type === 'income' ? t('Income', 'ආදායම') : t('Expense', 'වියදම'),
+        [t("Date", "දිනය")]: tData.date || tData.created_at,
+        [t("Type", "වර්ගය")]: (tData.type === 'income' || tData.flow_type === 'INCOME') ? t('Income', 'ආදායම') : t('Expense', 'වියදම'),
         [t("Category", "ප්‍රභේදය")]: getCategoryTranslation(tData.category),
         [t("Description", "විස්තරය")]: tData.description,
         [t("Amount", "මුදල")]: tData.amount
@@ -925,7 +839,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
 
     const ws = XLSX.utils.json_to_sheet(mappedData);
     
-    // Auto-fit column widths
     if (mappedData.length > 0) {
       const keys = Object.keys(mappedData[0]);
       ws['!cols'] = keys.map(key => {
@@ -940,13 +853,11 @@ export function Reports({ currentUser }: ReportsProps = {}) {
         return { wch: Math.min(Math.max(maxLen + 4, 12), 40) };
       });
 
-      // Apply gorgeous table formatting (Theme Color Gold: DAA520)
       const ref = ws['!ref'];
       if (ref) {
         const range = XLSX.utils.decode_range(ref);
         const themeColor = "DAA520";
         
-        // 1. Style Header Row (Row 0)
         for (let col = range.s.c; col <= range.e.c; col++) {
           const cellRef = XLSX.utils.encode_cell({ r: range.s.r, c: col });
           const cell = ws[cellRef];
@@ -965,7 +876,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
           }
         }
 
-        // 2. Style Data Rows
         for (let row = range.s.r + 1; row <= range.e.r; row++) {
           const isEven = (row % 2 === 0);
           for (let col = range.s.c; col <= range.e.c; col++) {
@@ -1059,8 +969,8 @@ export function Reports({ currentUser }: ReportsProps = {}) {
           formatCurrency(Number(p.price))
         ])
       : filteredTransactions.map(tData => [
-          tData.date || '',
-          tData.type === 'income' ? t('Income', 'ආදායම') : t('Expense', 'වියදම'),
+          tData.date || tData.created_at || '',
+          (tData.type === 'income' || tData.flow_type === 'INCOME') ? t('Income', 'ආදායම') : t('Expense', 'වියදම'),
           getCategoryTranslation(tData.category),
           tData.description || '',
           formatCurrency(Number(tData.amount || 0))
@@ -1072,13 +982,37 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       ? [[t('Product', 'භාණ්ඩය'), t('Category', 'ප්‍රභේදය'), t('Stock', 'තොගය'), t('Price', 'මිල')]]
       : [[t('Date', 'දිනය'), t('Type', 'වර්ගය'), t('Category', 'ප්‍රභේදය'), t('Description', 'විස්තරය'), t('Amount', 'මුදල')]];
 
+    const columnStyles: Record<string | number, any> = tab === 'sales' 
+      ? {
+          0: { cellWidth: 35 },
+          1: { cellWidth: 28 },
+          2: { cellWidth: 55, overflow: 'linebreak' as const },
+          3: { cellWidth: 32, halign: 'right' as const },
+          4: { cellWidth: 30, halign: 'right' as const }
+        }
+      : tab === 'inventory'
+      ? {
+          0: { cellWidth: 65, overflow: 'linebreak' as const },
+          1: { cellWidth: 45, overflow: 'linebreak' as const },
+          2: { cellWidth: 35, halign: 'center' as const },
+          3: { cellWidth: 35, halign: 'right' as const }
+        }
+      : {
+          0: { cellWidth: 26 },
+          1: { cellWidth: 22 },
+          2: { cellWidth: 50, overflow: 'linebreak' as const },
+          3: { cellWidth: 50, overflow: 'linebreak' as const },
+          4: { cellWidth: 32, halign: 'right' as const }
+        };
+
     autoTable(doc, {
       startY: 32,
       head: head,
       body: body,
       theme: 'grid',
       headStyles: { fillColor: [218, 165, 32] },
-      styles: { fontSize: 8 }
+      styles: { fontSize: 8, overflow: 'linebreak', cellPadding: 2 },
+      columnStyles
     });
 
     doc.save(`${shopName.replace(/\s+/g, '_')}_Report_${tab}_${getLocalDateString()}.pdf`);
@@ -1118,7 +1052,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
         </div>
         
         <div className="flex flex-wrap items-center gap-3">
-          {/* Bilingual Language Switcher */}
           <button 
             onClick={() => setIsSinhala(!isSinhala)} 
             className="flex items-center justify-center gap-2 bg-slate-850 hover:bg-slate-700 text-slate-200 hover:text-white px-5 py-3 rounded-xl text-xs font-black transition-all uppercase tracking-widest border border-slate-700 shadow-md shrink-0"
@@ -1195,7 +1128,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
           )}
         </div>
 
-        {/* Clear Filter button if range active */}
         {(fromDate || toDate || rangeType !== 'custom') && (
           <button
             onClick={() => {
@@ -1212,7 +1144,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
 
       {tab === 'sales' && (
         <div className="space-y-6">
-          {/* Standardized Financial Summary Rows */}
           <div className="bg-white rounded-3xl border border-slate-100 p-6 shadow-md">
             <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
               <BarChart3Icon className="w-4 h-4 text-[#DAA520]" />
@@ -1254,7 +1185,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-5">
-            {/* Card 1: Revenue */}
             <div className="bg-gradient-to-br from-emerald-500 via-emerald-600 to-teal-600 rounded-3xl p-6 shadow-[0_12px_30px_rgba(16,185,129,0.2)] hover:-translate-y-1.5 hover:shadow-[0_20px_45px_rgba(16,185,129,0.35)] transition-all duration-300 relative overflow-hidden group">
               <div className="absolute -top-10 -right-10 w-32 h-32 bg-white/10 rounded-full blur-xl group-hover:scale-125 transition-transform duration-500" />
               <div className="flex items-center justify-between mb-4">
@@ -1266,7 +1196,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
               <p className="text-3xl font-black text-white tracking-tight">{formatCurrency(totalCashCollected)}</p>
             </div>
 
-            {/* Card 2: Net Profit */}
             <div className="bg-gradient-to-br from-amber-500 via-amber-600 to-orange-600 rounded-3xl p-6 shadow-[0_12px_30px_rgba(218,165,32,0.2)] hover:-translate-y-1.5 hover:shadow-[0_20px_45px_rgba(218,165,32,0.35)] transition-all duration-300 relative overflow-hidden group">
               <div className="absolute -top-10 -right-10 w-32 h-32 bg-white/10 rounded-full blur-xl group-hover:scale-125 transition-transform duration-500" />
               <div className="flex items-center justify-between mb-4">
@@ -1282,7 +1211,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
               </p>
             </div>
 
-            {/* Card 3: Total Orders */}
             <div className="bg-gradient-to-br from-violet-500 via-violet-600 to-purple-600 rounded-3xl p-6 shadow-[0_12px_30px_rgba(139,92,246,0.2)] hover:-translate-y-1.5 hover:shadow-[0_20px_45px_rgba(139,92,246,0.35)] transition-all duration-300 relative overflow-hidden group">
               <div className="absolute -top-10 -right-10 w-32 h-32 bg-white/10 rounded-full blur-xl group-hover:scale-125 transition-transform duration-500" />
               <div className="flex items-center justify-between mb-4">
@@ -1298,7 +1226,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
               </p>
             </div>
 
-            {/* Card 4: Paid Orders */}
             <div className="bg-gradient-to-br from-teal-500 via-teal-600 to-cyan-600 rounded-3xl p-6 shadow-[0_12px_30px_rgba(20,184,166,0.2)] hover:-translate-y-1.5 hover:shadow-[0_20px_45px_rgba(20,184,166,0.35)] transition-all duration-300 relative overflow-hidden group">
               <div className="absolute -top-10 -right-10 w-32 h-32 bg-white/10 rounded-full blur-xl group-hover:scale-125 transition-transform duration-500" />
               <div className="flex items-center justify-between mb-4">
@@ -1314,7 +1241,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
               </p>
             </div>
 
-            {/* Card 5: Outstanding Credit */}
             <div className="bg-gradient-to-br from-rose-500 via-rose-600 to-red-700 rounded-3xl p-6 shadow-md shadow-rose-500/10 hover:-translate-y-1.5 hover:shadow-lg hover:shadow-rose-500/20 transition-all duration-300 relative overflow-hidden group isolate">
               <div className="absolute -top-10 -right-10 w-32 h-32 bg-white/5 rounded-full blur-lg group-hover:scale-125 transition-transform duration-500 pointer-events-none" />
               <div className="flex items-center justify-between mb-4">
@@ -1606,9 +1532,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
             </div>
           </div>
 
-          {/* Fast-moving & Slow-moving side-by-side velocity tables */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Fast-Moving Items */}
             <div className="bg-white rounded-2xl border border-slate-100 shadow-md overflow-hidden text-left flex flex-col">
               <div className="bg-gradient-to-r from-emerald-800 to-emerald-950 px-5 py-4 flex items-center justify-between border-b border-emerald-900">
                 <div className="flex items-center gap-2">
@@ -1653,7 +1577,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
               </div>
             </div>
 
-            {/* Slow-Moving Items */}
             <div className="bg-white rounded-2xl border border-slate-100 shadow-md overflow-hidden text-left flex flex-col">
               <div className="bg-gradient-to-r from-rose-800 to-rose-950 px-5 py-4 flex items-center justify-between border-b border-rose-900">
                 <div className="flex items-center gap-2">
@@ -1800,7 +1723,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Profit Margin by Category */}
             <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm text-left flex flex-col justify-between">
               <div>
                 <div className="flex items-center gap-2 mb-6">
@@ -1828,7 +1750,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
               </div>
             </div>
 
-            {/* Receivables vs Payables */}
             <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm text-left space-y-6">
               <div className="flex items-center gap-2">
                 <WalletIcon className="w-4 h-4 text-[#DAA520]" />
@@ -1837,7 +1758,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
                 </h2>
               </div>
               <div className="space-y-4">
-                {/* Receivables row */}
                 <div className="flex justify-between items-center p-4 bg-emerald-50/40 rounded-xl border border-emerald-100">
                   <div>
                     <p className="text-xs font-black text-emerald-800 uppercase tracking-wider">{t("Total Receivables (From Customers)", "එකතු විය යුතු මුදල් (පාරිභෝගිකයින්ගෙන්)")}</p>
@@ -1846,7 +1766,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
                   <p className="text-xl font-black text-emerald-700">{formatCurrency(totalReceivables)}</p>
                 </div>
 
-                {/* Payables row */}
                 <div className="flex justify-between items-center p-4 bg-rose-50/25 rounded-xl border border-rose-100">
                   <div>
                     <p className="text-xs font-black text-rose-800 uppercase tracking-wider">{t("Total Payables (To Suppliers)", "ගෙවිය යුතු මුදල් (සැපයුම්කරුවන්ට)")}</p>
@@ -1855,7 +1774,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
                   <p className="text-xl font-black text-rose-700">{formatCurrency(totalPayables)}</p>
                 </div>
 
-                {/* Net balance position */}
                 <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 flex justify-between items-center">
                   <div>
                     <p className="text-xs font-black text-slate-700 uppercase tracking-wider">{t("Net Ledger Balance Position", "ශුද්ධ ලෙජර ශේෂය")}</p>

@@ -14,6 +14,7 @@ const dbs = [
 
 const tablesToClear = [
   'sales', 'sales_returns', 'credit_payments', 'credit_notes', 'credit_note_usage',
+  'cheque_registry', 'purchase_returns', 'purchase_return_items',
   'transactions', 'audit_logs', 'bill_holds', 'quotations', 'delivery_notes',
   'purchase_orders', 'products', 'customers', 'suppliers', 'employees',
   'backup_logs', 'stock_adjustments'

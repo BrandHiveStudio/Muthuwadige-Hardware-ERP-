@@ -393,6 +393,19 @@ export const api = {
       const res = await fetchWithTimeout(`${API_URL}/purchase-orders/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to delete purchase order from database');
       return res.json();
+    },
+    revertReceipt: async (poRef: string) => {
+      const res = await fetchWithTimeout(`${API_URL}/purchase-orders/${poRef}/revert-receipt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ po_ref: poRef })
+      });
+      if (!res.ok) {
+        let msg = 'Failed to revert purchase order receipt';
+        try { const j = await res.json(); if (j.error || j.message) msg = j.error || j.message; } catch (_) {}
+        throw new Error(msg);
+      }
+      return res.json();
     }
   },
 
@@ -656,5 +669,154 @@ export const api = {
       if (!res.ok) throw new Error('Failed to save credit settlement');
       return res.json();
     }
+  },
+
+  cheques: {
+    getAll: async (params?: { direction?: string; status?: string; party_id?: string; start_date?: string; end_date?: string }) => {
+      const query = params ? new URLSearchParams(params as any).toString() : '';
+      const url = query ? `${API_URL}/cheques?${query}` : `${API_URL}/cheques`;
+      const res = await fetchWithTimeout(url);
+      if (!res.ok) throw new Error('Failed to fetch cheques');
+      return res.json();
+    },
+    create: async (data: any) => {
+      const res = await fetchWithTimeout(`${API_URL}/cheques`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (!res.ok) {
+        let msg = 'Failed to create cheque';
+        try { const j = await res.json(); if (j.error) msg = j.error; } catch (_) {}
+        throw new Error(msg);
+      }
+      return res.json();
+    },
+    updateStatus: async (id: string, payload: { status: string; notes?: string; user_email?: string }) => {
+      const res = await fetchWithTimeout(`${API_URL}/cheques/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        let msg = 'Failed to update cheque status';
+        try { const j = await res.json(); if (j.error) msg = j.error; } catch (_) {}
+        throw new Error(msg);
+      }
+      return res.json();
+    },
+    undoStatus: async (chequeId: string, revertTo: 'IN_HAND' | 'PENDING' = 'IN_HAND') => {
+      const res = await fetchWithTimeout(`${API_URL}/cheques/${chequeId}/undo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ revert_to: revertTo })
+      });
+      if (!res.ok) {
+        let msg = 'Failed to revert cheque status';
+        try { const j = await res.json(); if (j.error || j.message) msg = j.error || j.message; } catch (_) {}
+        throw new Error(msg);
+      }
+      return res.json();
+    }
+  },
+
+  purchaseReturns: {
+    getAll: async () => {
+      const res = await fetchWithTimeout(`${API_URL}/purchase-returns`);
+      if (!res.ok) throw new Error('Failed to fetch purchase returns');
+      return res.json();
+    },
+    create: async (data: any) => {
+      const res = await fetchWithTimeout(`${API_URL}/purchase-returns`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (!res.ok) {
+        let msg = 'Failed to create purchase return';
+        try { const j = await res.json(); if (j.error) msg = j.error; } catch (_) {}
+        throw new Error(msg);
+      }
+      return res.json();
+    },
+    void: async (returnNo: string, voidReason?: string) => {
+      const res = await fetchWithTimeout(`${API_URL}/purchase-returns/${returnNo}/void`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ void_reason: voidReason || 'Accidental / User Mistake' })
+      });
+      if (!res.ok) {
+        let msg = 'Failed to void purchase return';
+        try { const j = await res.json(); if (j.error || j.message) msg = j.error || j.message; } catch (_) {}
+        throw new Error(msg);
+      }
+      return res.json();
+    }
+  },
+
+  purchasing: {
+    receivePo: async (data: {
+      po_id: string;
+      po_number?: string;
+      settlement_mode: 'CREDIT' | 'CASH' | 'BANK' | 'CHEQUE';
+      payment_date?: string;
+      reference?: string;
+      notes?: string;
+      cheque_number?: string;
+      bank_name?: string;
+      cheque_date?: string;
+      user_email?: string;
+    }) => {
+      const res = await fetchWithTimeout(`${API_URL}/purchasing/receive-po`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (!res.ok) {
+        let msg = 'Failed to receive and settle purchase order';
+        try { const j = await res.json(); if (j.error) msg = j.error; } catch (_) {}
+        throw new Error(msg);
+      }
+      return res.json();
+    },
+    revertPo: async (poRef: string) => {
+      const res = await fetchWithTimeout(`${API_URL}/purchase-orders/${poRef}/revert-receipt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ po_ref: poRef })
+      });
+      if (!res.ok) {
+        let msg = 'Failed to revert purchase order receipt';
+        try { const j = await res.json(); if (j.error || j.message) msg = j.error || j.message; } catch (_) {}
+        throw new Error(msg);
+      }
+      return res.json();
+    }
+  },
+
+  sync: {
+    getStatus: async () => {
+      const res = await fetchWithTimeout(`${API_URL}/sync/status`);
+      if (!res.ok) throw new Error('Failed to fetch sync status');
+      return res.json();
+    },
+    triggerSync: async () => {
+      const res = await fetchWithTimeout(`${API_URL}/sync/trigger`, { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to trigger sync');
+      return res.json();
+    }
+  },
+
+  rpc: async (name: string, args?: any) => {
+    const res = await fetchWithTimeout(`${API_URL}/rpc/${name}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(args || {})
+    });
+    const data = await res.json();
+    if (!res.ok || (data && data.success === false)) {
+      throw new Error(data?.message || data?.error || `Failed to execute RPC: ${name}`);
+    }
+    return data;
   }
 };

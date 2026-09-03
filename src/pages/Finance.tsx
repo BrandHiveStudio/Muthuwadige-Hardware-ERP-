@@ -8,14 +8,19 @@ import {
   FileTextIcon,
   PrinterIcon,
   Loader2Icon,
-  CheckCircleIcon
+  CheckCircleIcon,
+  CreditCardIcon
 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabaseClient';
+import { api } from '../lib/api';
 import { useCurrency } from '../context/CurrencyContext';
 import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import XLSX from 'xlsx-js-style';
-import { calculateNetSalesRevenue } from '../utils/accounting';
+import { calculateNetSalesRevenue, getTodaySriLankaDate, getCurrentSriLankaMonth, toSriLankaDateStr } from '../utils/accounting';
+import { ChequeRegistry } from '../components/accounting/ChequeRegistry';
+import type { User } from '../types';
 
 interface Transaction {
   id: string;
@@ -33,15 +38,22 @@ const emptyTransaction: Omit<Transaction, 'id'> = {
   category: 'Utilities',
   description: '',
   amount: 0,
-  date: new Date().toLocaleDateString('sv-SE'),
+  date: getTodaySriLankaDate(),
   reference: ''
 };
 
-export function Finance() {
+interface FinanceProps {
+  currentUser?: User | null;
+}
+
+export function Finance({ currentUser }: FinanceProps = {}) {
   const { currency, exchangeRate = 300 } = useCurrency();
   const symbol = 'Rs.';
 
+  const [activeTab, setActiveTab] = useState<'cash_book' | 'cheques'>('cash_book');
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [pendingChequesCount, setPendingChequesCount] = useState(0);
+  const [shopSettings, setShopSettings] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'income' | 'expense' | 'contra_revenue' | 'sales_return'>('all');
@@ -52,8 +64,8 @@ export function Finance() {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   const [filterPeriodType, setFilterPeriodType] = useState<'all' | 'day' | 'month'>('all');
-  const [filterDate, setFilterDate] = useState(new Date().toLocaleDateString('sv-SE'));
-  const [filterMonth, setFilterMonth] = useState(new Date().toLocaleDateString('sv-SE').slice(0, 7));
+  const [filterDate, setFilterDate] = useState(getTodaySriLankaDate());
+  const [filterMonth, setFilterMonth] = useState(getCurrentSriLankaMonth());
 
   useEffect(() => {
     if (toast) {
@@ -72,6 +84,23 @@ export function Finance() {
       if (data) {
         setTransactions(data);
       }
+
+      // Fetch pending cheques count for tab badge
+      try {
+        const chqs = await api.cheques.getAll();
+        if (chqs && Array.isArray(chqs)) {
+          const pending = chqs.filter((c: any) => c.direction === 'INWARD' && (c.status === 'PENDING' || c.status === 'IN_HAND'));
+          setPendingChequesCount(pending.length);
+        }
+      } catch (chqErr) {
+        console.warn("Cheques count fetch notice:", chqErr);
+      }
+
+      // Fetch system settings
+      try {
+        const { data: st } = await supabase.from('system_settings').select('*').single();
+        if (st) setShopSettings(st);
+      } catch (_) {}
     } catch (error) {
       console.error("Error loading transactions:", error);
     } finally {
@@ -112,10 +141,11 @@ export function Finance() {
                             (categoryFilter === 'Purchase' && t.category === 'Purchases');
     
     let matchesPeriod = true;
+    const transDateStr = toSriLankaDateStr(t.date || t.createdAt);
     if (filterPeriodType === 'day') {
-      matchesPeriod = t.date === filterDate;
+      matchesPeriod = transDateStr === filterDate;
     } else if (filterPeriodType === 'month') {
-      matchesPeriod = t.date.startsWith(filterMonth);
+      matchesPeriod = transDateStr.startsWith(filterMonth);
     }
     
     return matchesSearch && matchesType && matchesCategory && matchesPeriod;
@@ -234,7 +264,8 @@ export function Finance() {
     doc.setTextColor(120, 120, 120);
     doc.setFontSize(7.5);
     doc.line(15, 120, 60, 120);
-    doc.text("Prepared By", 30, 124, { align: 'center' });
+    const preparedByStaff = currentUser?.name || currentUser?.full_name || currentUser?.username || 'Sanoj Hardware';
+    doc.text(`Prepared By: ${preparedByStaff}`, 30, 124, { align: 'center' });
 
     doc.line(pageWidth - 60, 120, pageWidth - 15, 120);
     doc.text("Received / Approved By", pageWidth - 37.5, 124, { align: 'center' });
@@ -301,65 +332,52 @@ export function Finance() {
     }
     doc.text(`${symbol} ${convert(cashBalance).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, 70, 98);
 
-    // Table Headers
-    let y = 115;
-    doc.setFillColor(70, 70, 70);
-    doc.rect(15, y, pageWidth - 30, 8, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(8.5);
-    doc.setFont('helvetica', 'bold');
-    doc.text("Date", 18, y + 5.5);
-    doc.text("Type", 42, y + 5.5);
-    doc.text("Category", 65, y + 5.5);
-    doc.text("Reference", 95, y + 5.5);
-    doc.text("Amount", pageWidth - 18, y + 5.5, { align: 'right' });
+    // Table using autoTable with proportional column widths and auto-wrapping
+    const tableRows = filtered.map(t => [
+      t.date,
+      t.type.toUpperCase(),
+      t.category || '',
+      t.reference || '—',
+      `${t.type === 'income' ? '+' : '-'}${symbol} ${convert(t.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}`
+    ]);
 
-    y += 8;
-
-    // Table rows
-    doc.setTextColor(80, 80, 80);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-
-    filtered.forEach((t, index) => {
-      if (y > pageHeight - 20) {
-        doc.addPage();
-        y = 20;
-        // repeat header on next page
-        doc.setFillColor(70, 70, 70);
-        doc.rect(15, y, pageWidth - 30, 8, 'F');
-        doc.setTextColor(255, 255, 255);
-        doc.setFont('helvetica', 'bold');
-        doc.text("Date", 18, y + 5.5);
-        doc.text("Type", 42, y + 5.5);
-        doc.text("Category", 65, y + 5.5);
-        doc.text("Reference", 95, y + 5.5);
-        doc.text("Amount", pageWidth - 18, y + 5.5, { align: 'right' });
-        y += 8;
-        doc.setTextColor(80, 80, 80);
-        doc.setFont('helvetica', 'normal');
-      }
-
-      // Zebra striping
-      if (index % 2 === 0) {
-        doc.setFillColor(250, 250, 250);
-        doc.rect(15, y, pageWidth - 30, 7, 'F');
-      }
-
-      doc.text(t.date, 18, y + 5);
-      doc.text(t.type.toUpperCase(), 42, y + 5);
-      doc.text(t.category, 65, y + 5);
-      doc.text(t.reference || '—', 95, y + 5);
-
-      if (t.type === 'income') {
-        doc.setTextColor(16, 185, 129);
-        doc.text(`+${symbol} ${convert(t.amount).toLocaleString()}`, pageWidth - 18, y + 5, { align: 'right' });
-      } else {
-        doc.setTextColor(239, 68, 68);
-        doc.text(`-${symbol} ${convert(t.amount).toLocaleString()}`, pageWidth - 18, y + 5, { align: 'right' });
-      }
-      doc.setTextColor(80, 80, 80);
-      y += 7;
+    autoTable(doc, {
+      startY: 112,
+      head: [["Date", "Type", "Category", "Reference", "Amount"]],
+      body: tableRows,
+      theme: 'striped',
+      headStyles: {
+        fillColor: [70, 70, 70],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        fontSize: 8.5
+      },
+      styles: {
+        fontSize: 8,
+        textColor: [80, 80, 80],
+        cellPadding: 2.5,
+        overflow: 'linebreak',
+        lineColor: [240, 240, 240],
+        lineWidth: 0.1
+      },
+      columnStyles: {
+        0: { cellWidth: 26, halign: 'left' },
+        1: { cellWidth: 22, halign: 'left' },
+        2: { cellWidth: 55, overflow: 'linebreak' },
+        3: { cellWidth: 45, overflow: 'linebreak' },
+        4: { cellWidth: 32, halign: 'right', fontStyle: 'bold' }
+      },
+      didParseCell: (data) => {
+        if (data.section === 'body' && data.column.index === 4) {
+          const rawText = data.cell.text?.[0] || '';
+          if (rawText.startsWith('+')) {
+            data.cell.styles.textColor = [16, 185, 129];
+          } else if (rawText.startsWith('-')) {
+            data.cell.styles.textColor = [239, 68, 68];
+          }
+        }
+      },
+      margin: { left: 15, right: 15, bottom: 20 }
     });
 
     doc.save(`Finance_Report_${periodText.replace(/[\s:]/g, '_')}.pdf`);
@@ -463,198 +481,255 @@ export function Finance() {
 
   return (
     <div className="p-4 sm:p-6 space-y-6 text-left">
-      {/* Financial Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-        {/* Net Cash Balance */}
-        <div className="bg-[#464646] rounded-2xl shadow-xl p-5 border border-slate-700/10 hover:translate-y-[-2px] transition-all duration-300 relative overflow-hidden group">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16 blur-xl group-hover:scale-110 transition-transform duration-500"></div>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Cash Book Balance</p>
-              <p className="text-3xl font-black text-white mt-1.5">{symbol} {convert(cashBalance).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-            </div>
-            <div className="w-12 h-12 bg-white/10 text-white rounded-xl flex items-center justify-center shadow-lg">
-              <DollarSignIcon className="w-6 h-6" />
-            </div>
-          </div>
-          <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-slate-300">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#DAA520] animate-ping"></span>
-            <span>Net cash currently in register</span>
-          </div>
+      {/* Main Top Navigation Tabs */}
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-4">
+        <div className="flex gap-2 p-1.5 bg-slate-200/70 rounded-2xl w-fit">
+          <button
+            type="button"
+            onClick={() => setActiveTab('cash_book')}
+            className={`px-5 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider transition-all flex items-center gap-2 ${
+              activeTab === 'cash_book'
+                ? 'bg-slate-900 text-amber-400 shadow-md shadow-slate-900/10'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+            }`}
+          >
+            <DollarSignIcon className="w-4 h-4" />
+            <span>Cash Book & Ledger / මුදල් ලෙජරය</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('cheques')}
+            className={`px-5 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider transition-all flex items-center gap-2 ${
+              activeTab === 'cheques'
+                ? 'bg-slate-900 text-amber-400 shadow-md shadow-slate-900/10'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
+            }`}
+          >
+            <CreditCardIcon className="w-4 h-4" />
+            <span>Cheque Registry / චෙක්පත්</span>
+            {pendingChequesCount > 0 && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-400 text-slate-950 font-mono shadow-sm">
+                {pendingChequesCount}
+              </span>
+            )}
+          </button>
         </div>
 
-        {/* Total Cash In */}
-        <div className="bg-emerald-600 rounded-2xl shadow-xl p-5 hover:translate-y-[-2px] transition-all duration-300 relative overflow-hidden group">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-xl group-hover:scale-110 transition-transform duration-500"></div>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-black text-white/80 uppercase tracking-widest">Net Cash In (Income)</p>
-              <p className="text-3xl font-black text-white mt-1.5">{symbol} {convert(netSalesIncome).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-            </div>
-            <div className="w-12 h-12 bg-white/20 text-white rounded-xl flex items-center justify-center shadow-lg">
-              <ArrowUpRightIcon className="w-6 h-6" />
-            </div>
-          </div>
-          <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-white/95">
-            <span>Gross Inflow: {symbol} {convert(totalIncome).toLocaleString(undefined, { minimumFractionDigits: 2 })} | Refunds: -{symbol} {convert(totalSalesReturns).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-          </div>
-        </div>
-
-        {/* Total Cash Out */}
-        <div className="bg-red-500 rounded-2xl shadow-xl p-5 hover:translate-y-[-2px] transition-all duration-300 relative overflow-hidden group">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-xl group-hover:scale-110 transition-transform duration-500"></div>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-black text-white/80 uppercase tracking-widest">Total Cash Out (Expenses)</p>
-              <p className="text-3xl font-black text-white mt-1.5">{symbol} {convert(totalExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-            </div>
-            <div className="w-12 h-12 bg-white/20 text-white rounded-xl flex items-center justify-center shadow-lg">
-              <ArrowDownRightIcon className="w-6 h-6" />
-            </div>
-          </div>
-          <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-white/95">
-            <span>Purchases</span>
-          </div>
-        </div>
+        {activeTab === 'cash_book' && (
+          <button
+            type="button"
+            onClick={openAdd}
+            className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-amber-400 font-black text-xs uppercase tracking-wider rounded-xl flex items-center gap-2 transition-all shadow-md"
+          >
+            <PlusIcon className="w-4 h-4 text-amber-400" />
+            <span>Log Transaction</span>
+          </button>
+        )}
       </div>
 
-      {/* Filtering Control Bar */}
-      <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4 space-y-3">
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 flex-1 group focus-within:ring-2 focus-within:ring-[#DAA520]/20 transition-all">
-            <SearchIcon className="w-4 h-4 text-slate-400 group-focus-within:text-[#DAA520]" />
-            <input type="text" placeholder="Find transactions by description or reference..." value={search} onChange={(e) => setSearch(e.target.value)} className="bg-transparent text-sm text-slate-700 outline-none w-full" />
-          </div>
-          
-          <select value={typeFilter} onChange={(e: any) => setTypeFilter(e.target.value)} className="px-4 py-2.5 border border-slate-200 bg-white rounded-xl text-sm font-bold text-[#464646] outline-none cursor-pointer">
-            <option value="all">All Flow Types</option>
-            <option value="income">Income (+)</option>
-            <option value="expense">Expense (-)</option>
-            <option value="contra_revenue">Contra-Revenue / Return (-)</option>
-          </select>
-
-          <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className="px-4 py-2.5 border border-slate-200 bg-white rounded-xl text-sm font-bold text-[#464646] outline-none cursor-pointer">
-            <option value="all">All Categories</option>
-            {categories.map((c, idx) => <option key={idx} value={c}>{c}</option>)}
-          </select>
-        </div>
-
-        <div className="flex flex-col sm:flex-row gap-3 items-center justify-between pt-2 border-t border-slate-100">
-          <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
-            <span className="text-xs font-black uppercase tracking-wider text-slate-400">Filter Period:</span>
-            <select value={filterPeriodType} onChange={(e: any) => setFilterPeriodType(e.target.value)} className="px-4 py-2 border border-slate-200 bg-white rounded-xl text-xs font-bold text-[#464646] outline-none cursor-pointer">
-              <option value="all">All Time</option>
-              <option value="day">Specific Day</option>
-              <option value="month">Specific Month</option>
-            </select>
-
-            {filterPeriodType === 'day' && (
-              <input
-                type="date"
-                value={filterDate}
-                onChange={(e) => setFilterDate(e.target.value)}
-                className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-bold text-[#464646] outline-none focus:ring-2 focus:ring-[#DAA520]"
-              />
-            )}
-
-            {filterPeriodType === 'month' && (
-              <input
-                type="month"
-                value={filterMonth}
-                onChange={(e) => setFilterMonth(e.target.value)}
-                className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-bold text-[#464646] outline-none focus:ring-2 focus:ring-[#DAA520]"
-              />
-            )}
-          </div>
-
-          <div className="flex gap-2 w-full sm:w-auto shrink-0 justify-end">
-            <button onClick={downloadReportPDF} className="flex items-center justify-center gap-2 bg-[#464646] hover:bg-[#333333] text-white px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all shadow-md">
-              <FileTextIcon className="w-4 h-4" /> PDF
-            </button>
-            <button onClick={handleExportExcel} className="flex items-center justify-center gap-2 bg-emerald-50 text-emerald-700 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-emerald-100 transition-all">
-              <FileTextIcon className="w-4 h-4" /> Excel
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Ledger Table */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-lg overflow-hidden text-left">
-        {/* Table Header with gradient */}
-        <div className="bg-gradient-to-r from-slate-800 to-slate-900 px-6 py-4 flex items-center justify-between">
-          <div>
-            <h3 className="text-sm font-black text-white">Cash Book Ledger</h3>
-            <p className="text-[10px] text-slate-400 font-semibold mt-0.5">General financial transaction statements</p>
-          </div>
-          <span className="px-3 py-1.5 bg-emerald-500/20 text-emerald-400 text-xs font-black rounded-full border border-emerald-500/30">
-            {filtered.length} Records
-          </span>
-        </div>
-        <div className="overflow-x-auto">
-          {isLoading ? (
-            <div className="p-20 text-center text-slate-500">
-              <Loader2Icon className="animate-spin w-8 h-8 text-[#DAA520] mx-auto mb-4" />
-              <p className="font-bold">Syncing Cash Ledger...</p>
+      {/* Tab 1: Cash Book & Ledger */}
+      {activeTab === 'cash_book' && (
+        <div className="space-y-6">
+          {/* Financial Summary Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+            {/* Net Cash Balance */}
+            <div className="bg-[#464646] rounded-2xl shadow-xl p-5 border border-slate-700/10 hover:translate-y-[-2px] transition-all duration-300 relative overflow-hidden group">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16 blur-xl group-hover:scale-110 transition-transform duration-500"></div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Cash Book Balance</p>
+                  <p className="text-3xl font-black text-white mt-1.5">{symbol} {convert(cashBalance).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                </div>
+                <div className="w-12 h-12 bg-white/10 text-white rounded-xl flex items-center justify-center shadow-lg">
+                  <DollarSignIcon className="w-6 h-6" />
+                </div>
+              </div>
+              <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-slate-300">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#DAA520] animate-ping"></span>
+                <span>Net cash currently in register</span>
+              </div>
             </div>
-          ) : (
-            <table className="w-full text-sm text-left">
-              <thead className="bg-slate-50 border-b border-slate-100 text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                <tr>
-                  <th className="px-6 py-4">Date</th>
-                  <th className="px-6 py-4">Flow Type</th>
-                  <th className="px-6 py-4">Category</th>
-                  <th className="px-6 py-4">Description</th>
-                  <th className="px-6 py-4">Reference</th>
-                  <th className="px-6 py-4 text-right">Amount</th>
-                  <th className="px-6 py-4 text-center">Voucher</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {filtered.map((t) => (
-                  <tr key={t.id} className="hover:bg-emerald-50/20 transition-colors group">
-                    <td className="px-6 py-4 text-slate-600 font-bold">{t.date}</td>
-                    <td className="px-6 py-4">
-                      <span className={`px-2.5 py-1 text-[9px] font-black rounded-lg uppercase tracking-wider ${
-                        t.type === 'income' 
-                          ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' 
-                          : isSalesReturnTrans(t)
-                          ? 'bg-amber-50 text-amber-600 border border-amber-100'
-                          : 'bg-red-50 text-red-500 border border-red-100'
-                      }`}>
-                        {isSalesReturnTrans(t) ? 'Contra-Revenue' : t.type}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="px-2.5 py-1 text-[9px] font-black bg-blue-50 text-blue-600 rounded-lg uppercase tracking-wider">
-                        {t.category}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 font-black text-slate-800">{t.description}</td>
-                    <td className="px-6 py-4 font-mono font-bold text-slate-500">{t.reference}</td>
-                    <td className="px-6 py-4 text-right font-black">
-                      <span className={t.type === 'income' ? 'text-emerald-600' : isSalesReturnTrans(t) ? 'text-amber-600' : 'text-red-500'}>
-                        {t.type === 'income' ? '+' : '-'} {symbol} {convert(t.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-center">
-                      <button onClick={() => setViewVoucher(t)} className="p-2.5 rounded-xl bg-slate-50 text-slate-600 hover:bg-slate-200 border border-slate-100 transition-all shadow-sm" title="View / Print Voucher">
-                        <FileTextIcon className="w-4 h-4" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {filtered.length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="text-center py-12 text-slate-400 font-bold">
-                      No matching records found in Cash Book ledger.
-                    </td>
-                  </tr>
+
+            {/* Total Cash In */}
+            <div className="bg-emerald-600 rounded-2xl shadow-xl p-5 hover:translate-y-[-2px] transition-all duration-300 relative overflow-hidden group">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-xl group-hover:scale-110 transition-transform duration-500"></div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] font-black text-white/80 uppercase tracking-widest">Net Cash In (Income)</p>
+                  <p className="text-3xl font-black text-white mt-1.5">{symbol} {convert(netSalesIncome).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                </div>
+                <div className="w-12 h-12 bg-white/20 text-white rounded-xl flex items-center justify-center shadow-lg">
+                  <ArrowUpRightIcon className="w-6 h-6" />
+                </div>
+              </div>
+              <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-white/95">
+                <span>Gross Inflow: {symbol} {convert(totalIncome).toLocaleString(undefined, { minimumFractionDigits: 2 })} | Refunds: -{symbol} {convert(totalSalesReturns).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+              </div>
+            </div>
+
+            {/* Total Cash Out */}
+            <div className="bg-red-500 rounded-2xl shadow-xl p-5 hover:translate-y-[-2px] transition-all duration-300 relative overflow-hidden group">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-xl group-hover:scale-110 transition-transform duration-500"></div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] font-black text-white/80 uppercase tracking-widest">Total Cash Out (Expenses)</p>
+                  <p className="text-3xl font-black text-white mt-1.5">{symbol} {convert(totalExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                </div>
+                <div className="w-12 h-12 bg-white/20 text-white rounded-xl flex items-center justify-center shadow-lg">
+                  <ArrowDownRightIcon className="w-6 h-6" />
+                </div>
+              </div>
+              <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-white/95">
+                <span>Purchases</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Filtering Control Bar */}
+          <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4 space-y-3">
+            <div className="flex flex-col sm:flex-row gap-3">
+              <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 flex-1 group focus-within:ring-2 focus-within:ring-[#DAA520]/20 transition-all">
+                <SearchIcon className="w-4 h-4 text-slate-400 group-focus-within:text-[#DAA520]" />
+                <input type="text" placeholder="Find transactions by description or reference..." value={search} onChange={(e) => setSearch(e.target.value)} className="bg-transparent text-sm text-slate-700 outline-none w-full" />
+              </div>
+              
+              <select value={typeFilter} onChange={(e: any) => setTypeFilter(e.target.value)} className="px-4 py-2.5 border border-slate-200 bg-white rounded-xl text-sm font-bold text-[#464646] outline-none cursor-pointer">
+                <option value="all">All Flow Types</option>
+                <option value="income">Income (+)</option>
+                <option value="expense">Expense (-)</option>
+                <option value="contra_revenue">Contra-Revenue / Return (-)</option>
+              </select>
+
+              <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className="px-4 py-2.5 border border-slate-200 bg-white rounded-xl text-sm font-bold text-[#464646] outline-none cursor-pointer">
+                <option value="all">All Categories</option>
+                {categories.map((c, idx) => <option key={idx} value={c}>{c}</option>)}
+              </select>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3 items-center justify-between pt-2 border-t border-slate-100">
+              <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+                <span className="text-xs font-black uppercase tracking-wider text-slate-400">Filter Period:</span>
+                <select value={filterPeriodType} onChange={(e: any) => setFilterPeriodType(e.target.value)} className="px-4 py-2 border border-slate-200 bg-white rounded-xl text-xs font-bold text-[#464646] outline-none cursor-pointer">
+                  <option value="all">All Time</option>
+                  <option value="day">Specific Day</option>
+                  <option value="month">Specific Month</option>
+                </select>
+
+                {filterPeriodType === 'day' && (
+                  <input
+                    type="date"
+                    value={filterDate}
+                    onChange={(e) => setFilterDate(e.target.value)}
+                    className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-bold text-[#464646] outline-none focus:ring-2 focus:ring-[#DAA520]"
+                  />
                 )}
-              </tbody>
-            </table>
-          )}
+
+                {filterPeriodType === 'month' && (
+                  <input
+                    type="month"
+                    value={filterMonth}
+                    onChange={(e) => setFilterMonth(e.target.value)}
+                    className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-bold text-[#464646] outline-none focus:ring-2 focus:ring-[#DAA520]"
+                  />
+                )}
+              </div>
+
+              <div className="flex gap-2 w-full sm:w-auto shrink-0 justify-end">
+                <button onClick={downloadReportPDF} className="flex items-center justify-center gap-2 bg-[#464646] hover:bg-[#333333] text-white px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all shadow-md">
+                  <FileTextIcon className="w-4 h-4" /> PDF
+                </button>
+                <button onClick={handleExportExcel} className="flex items-center justify-center gap-2 bg-emerald-50 text-emerald-700 px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-emerald-100 transition-all">
+                  <FileTextIcon className="w-4 h-4" /> Excel
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Ledger Table */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-lg overflow-hidden text-left">
+            {/* Table Header with gradient */}
+            <div className="bg-gradient-to-r from-slate-800 to-slate-900 px-6 py-4 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-black text-white">Cash Book Ledger</h3>
+                <p className="text-[10px] text-slate-400 font-semibold mt-0.5">General financial transaction statements</p>
+              </div>
+              <span className="px-3 py-1.5 bg-emerald-500/20 text-emerald-400 text-xs font-black rounded-full border border-emerald-500/30">
+                {filtered.length} Records
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              {isLoading ? (
+                <div className="p-20 text-center text-slate-500">
+                  <Loader2Icon className="animate-spin w-8 h-8 text-[#DAA520] mx-auto mb-4" />
+                  <p className="font-bold">Syncing Cash Ledger...</p>
+                </div>
+              ) : (
+                <table className="w-full text-sm text-left">
+                  <thead className="bg-slate-50 border-b border-slate-100 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                    <tr>
+                      <th className="px-6 py-4">Date</th>
+                      <th className="px-6 py-4">Flow Type</th>
+                      <th className="px-6 py-4">Category</th>
+                      <th className="px-6 py-4">Description</th>
+                      <th className="px-6 py-4">Reference</th>
+                      <th className="px-6 py-4 text-right">Amount</th>
+                      <th className="px-6 py-4 text-center">Voucher</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {filtered.map((t) => (
+                      <tr key={t.id} className="hover:bg-emerald-50/20 transition-colors group">
+                        <td className="px-6 py-4 text-slate-600 font-bold">{t.date}</td>
+                        <td className="px-6 py-4">
+                          <span className={`px-2.5 py-1 text-[9px] font-black rounded-lg uppercase tracking-wider ${
+                            t.type === 'income' 
+                              ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' 
+                              : isSalesReturnTrans(t)
+                              ? 'bg-amber-50 text-amber-600 border border-amber-100'
+                              : 'bg-red-50 text-red-500 border border-red-100'
+                          }`}>
+                            {isSalesReturnTrans(t) ? 'Contra-Revenue' : t.type}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="px-2.5 py-1 text-[9px] font-black bg-blue-50 text-blue-600 rounded-lg uppercase tracking-wider">
+                            {t.category}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 font-black text-slate-800">{t.description}</td>
+                        <td className="px-6 py-4 font-mono font-bold text-slate-500">{t.reference}</td>
+                        <td className="px-6 py-4 text-right font-black">
+                          <span className={t.type === 'income' ? 'text-emerald-600' : isSalesReturnTrans(t) ? 'text-amber-600' : 'text-red-500'}>
+                            {t.type === 'income' ? '+' : '-'} {symbol} {convert(t.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <button onClick={() => setViewVoucher(t)} className="p-2.5 rounded-xl bg-slate-50 text-slate-600 hover:bg-slate-200 border border-slate-100 transition-all shadow-sm" title="View / Print Voucher">
+                            <FileTextIcon className="w-4 h-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {filtered.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="text-center py-12 text-slate-400 font-bold">
+                          No matching records found in Cash Book ledger.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* Tab 2: Cheque Registry & Status Transition Hub */}
+      {activeTab === 'cheques' && (
+        <ChequeRegistry currentUser={currentUser} shopSettings={shopSettings} />
+      )}
 
       {/* Log Transaction Modal */}
       <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="Log Income or Expense" size="md">
