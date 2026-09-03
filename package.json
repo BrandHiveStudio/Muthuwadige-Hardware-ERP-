@@ -78,6 +78,7 @@
       "backup-worker.js",
       "src/utils/**/*",
       "src/db/**/*",
+      "src/services/**/*",
       "Backup Template.xlsx",
       "Backup Excel Format.xlsx",
       "public/**/*",

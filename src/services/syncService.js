@@ -57,6 +57,7 @@ export async function ensureSyncSchema(db) {
     `);
     try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status, created_at);"); } catch(_) {}
     try { await db.exec("ALTER TABLE system_settings ADD COLUMN last_counter_sync_timestamp TEXT;"); } catch(_) {}
+    try { await db.exec("ALTER TABLE system_settings ADD COLUMN last_sync_timestamp TEXT;"); } catch(_) {}
     try { await db.exec("ALTER TABLE system_settings ADD COLUMN counter_sync_status TEXT DEFAULT 'IDLE';"); } catch(_) {}
     try { await db.exec("ALTER TABLE system_settings ADD COLUMN counter_pending_count INTEGER DEFAULT 0;"); } catch(_) {}
     schemaEnsured = true;
@@ -315,10 +316,11 @@ export async function getSyncStatus(localDb) {
     let counterQueued = 0;
     if (tursoClient) {
       try {
-        const res = await tursoClient.execute("SELECT last_counter_sync_timestamp, counter_pending_count FROM system_settings WHERE id = 'global'");
+        const res = await tursoClient.execute("SELECT last_counter_sync_timestamp, last_sync_timestamp, counter_pending_count FROM system_settings WHERE id = 'global'");
         if (res?.rows?.[0]) {
-          if (res.rows[0].last_counter_sync_timestamp) {
-            webLastSync = String(res.rows[0].last_counter_sync_timestamp);
+          const ts = res.rows[0].last_counter_sync_timestamp || res.rows[0].last_sync_timestamp;
+          if (ts) {
+            webLastSync = String(ts);
           }
           if (res.rows[0].counter_pending_count !== undefined && res.rows[0].counter_pending_count !== null) {
             counterQueued = Number(res.rows[0].counter_pending_count) || 0;
@@ -350,9 +352,10 @@ export async function getSyncStatus(localDb) {
 
     if (!lastCounterSync) {
       try {
-        const sRes = await localDb.get("SELECT last_counter_sync_timestamp FROM system_settings WHERE id = 'global'");
-        if (sRes?.last_counter_sync_timestamp) {
-          lastCounterSync = String(sRes.last_counter_sync_timestamp);
+        const sRes = await localDb.get("SELECT last_counter_sync_timestamp, last_sync_timestamp FROM system_settings WHERE id = 'global'");
+        const ts = sRes?.last_counter_sync_timestamp || sRes?.last_sync_timestamp;
+        if (ts) {
+          lastCounterSync = String(ts);
           lastSyncedAt = lastCounterSync;
         }
       } catch (_) {}

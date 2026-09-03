@@ -204,53 +204,42 @@ export function Header({
           </div>
         ) : (() => {
           const counterTime = syncStatus?.lastCounterSync || syncStatus?.lastSyncedAt;
-          const queuedCount = syncStatus?.queuedCount ?? syncStatus?.pendingCount ?? 0;
+          const queuedCount = Number(syncStatus?.queuedCount ?? syncStatus?.pendingCount ?? 0);
 
           if (!counterTime) {
             return (
               <div
                 className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm select-none"
-                title="Connected to cloud database. Reading live counter updates."
+                title="Connected to cloud database. Awaiting initial counter sync."
               >
-                <span>🟢 Cloud Connected</span>
+                <span>🟢 Cloud Connected • Synced: Never • {queuedCount} Queued</span>
               </div>
             );
           }
 
           const diffMs = Date.now() - new Date(counterTime).getTime();
-          const isCounterActive = !isNaN(diffMs) && diffMs < 30 * 60 * 1000;
+          const isStale = !isNaN(diffMs) && diffMs >= 30 * 60 * 1000;
           const counterTimeText = formatTimeAgo(counterTime);
 
-          if (isCounterActive) {
-            if (queuedCount > 0) {
-              return (
-                <div
-                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm select-none"
-                  title={`Connected to cloud database. Store counter heartbeat active.\nLast counter sync: ${formatTooltipTime(counterTime)}\nPending queued syncs reported by counter: ${queuedCount}`}
-                >
-                  <span>🟢 Cloud Connected • Counter Synced: {counterTimeText} • {queuedCount} Queued Syncs</span>
-                </div>
-              );
-            } else {
-              return (
-                <div
-                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm select-none"
-                  title={`Connected to cloud database. Store counter heartbeat active.\nLast counter sync: ${formatTooltipTime(counterTime)}`}
-                >
-                  <span>🟢 Cloud Connected • Counter Synced: {counterTimeText}</span>
-                </div>
-              );
-            }
-          } else {
+          if (isStale) {
             return (
               <div
                 className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 shadow-sm select-none"
-                title={`Connected to cloud database. Store counter has not synced in over 30 minutes.\nLast counter sync: ${formatTooltipTime(counterTime)}`}
+                title={`Connected to cloud database. In-store counter has been inactive for over 30 minutes.\nLast sync: ${formatTooltipTime(counterTime)}`}
               >
-                <span>🟠 Cloud Connected • Counter Inactive ({counterTimeText})</span>
+                <span>🟠 Cloud Connected • Synced: {counterTimeText} (Inactive) • {queuedCount} Queued</span>
               </div>
             );
           }
+
+          return (
+            <div
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm select-none"
+              title={`Connected to cloud database. In-store counter sync active.\nLast sync: ${formatTooltipTime(counterTime)}`}
+            >
+              <span>🟢 Cloud Connected • Synced: {counterTimeText} • {queuedCount} Queued</span>
+            </div>
+          );
         })()
       ) : (() => {
         // Offline / Desktop Electron App (In-Store POS)
