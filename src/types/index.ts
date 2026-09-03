@@ -415,10 +415,16 @@ export interface PurchaseReturn {
 }
 
 export interface SyncStatus {
-  isOnline: boolean;
   isWebClient: boolean;
-  lastSyncedAt: string | null;
-  pendingCount: number;
-  isSyncing: boolean;
+  lastUpstreamSync: string | null;
+  lastDownstreamSync: string | null;
+  lastCounterSync: string | null;
+  queuedCount: number;
+  status: 'online' | 'offline' | 'syncing';
+  // Legacy / convenience aliases
+  isOnline?: boolean;
+  lastSyncedAt?: string | null;
+  pendingCount?: number;
+  isSyncing?: boolean;
 }
 

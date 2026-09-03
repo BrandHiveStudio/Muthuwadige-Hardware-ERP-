@@ -13,7 +13,7 @@ import os from 'os';
 import https from 'https';
 import selfsigned from 'selfsigned';
 import dbAdapter, { initDb, isTurso, getTursoClient } from './src/db/connection.js';
-import { startBackgroundSyncWorker, getSyncStatus, runSyncCycle, enqueueSync } from './src/services/syncService.js';
+import { startBackgroundSyncWorker, getSyncStatus, runSyncCycle, enqueueSync, pullDownstreamChanges } from './src/services/syncService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1841,8 +1841,52 @@ app.get('/api/trigger-backup', async (req, res) => {
 // AUTHENTICATION
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
+  const cleanEmail = email ? email.trim() : '';
+
   try {
-    const profile = await db.get('SELECT * FROM profiles WHERE email = ?', [email]);
+    let profile = await db.get('SELECT * FROM profiles WHERE LOWER(email) = LOWER(?)', [cleanEmail]);
+
+    // Fallback: If user is not found locally AND Turso Cloud is reachable, query Turso
+    if (!profile) {
+      try {
+        const tursoClient = getTursoClient();
+        if (tursoClient) {
+          const cloudResult = await tursoClient.execute({
+            sql: 'SELECT * FROM profiles WHERE LOWER(email) = LOWER(?)',
+            args: [cleanEmail]
+          });
+
+          if (cloudResult?.rows?.[0]) {
+            const cloudProfile = cloudResult.rows[0];
+
+            // Verify password
+            if (cloudProfile.password && cloudProfile.password !== password) {
+              return res.status(400).json({ error: 'Incorrect password.' });
+            }
+
+            // Password is valid! Immediately insert/cache profile into local SQLite database for offline access
+            try {
+              const cols = Object.keys(cloudProfile);
+              const colNames = cols.map(c => `"${c}"`).join(', ');
+              const placeholders = cols.map(() => '?').join(', ');
+              const args = cols.map(c => cloudProfile[c] !== undefined ? cloudProfile[c] : null);
+              await db.run(
+                `INSERT OR REPLACE INTO profiles (${colNames}) VALUES (${placeholders})`,
+                args
+              );
+              console.log(`[Auth] Cached remote user profile into local SQLite for offline access: ${cleanEmail}`);
+            } catch (cacheErr) {
+              console.warn('[Auth] Notice caching cloud profile into SQLite:', cacheErr.message);
+            }
+
+            profile = cloudProfile;
+          }
+        }
+      } catch (cloudErr) {
+        console.warn('[Auth] Cloud login check notice:', cloudErr.message);
+      }
+    }
+
     if (!profile) {
       return res.status(400).json({ error: 'User profile not found. Try: sanojhardware@gmail.com' });
     }
@@ -5708,6 +5752,19 @@ app.get('/api/sync/status', async (req, res) => {
 app.post('/api/sync/trigger', async (req, res) => {
   try {
     await runSyncCycle(db);
+    const status = await getSyncStatus(db);
+    res.json({ success: true, ...status });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.all(['/api/sync/pull', '/api/sync/downstream'], async (req, res) => {
+  try {
+    const tursoClient = getTursoClient();
+    if (tursoClient) {
+      await pullDownstreamChanges(db, tursoClient);
+    }
     const status = await getSyncStatus(db);
     res.json({ success: true, ...status });
   } catch (err) {

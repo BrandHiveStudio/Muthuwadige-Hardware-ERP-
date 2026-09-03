@@ -808,6 +808,11 @@ export const api = {
       const res = await fetchWithTimeout(`${API_URL}/sync/trigger`, { method: 'POST' });
       if (!res.ok) throw new Error('Failed to trigger sync');
       return res.json();
+    },
+    pullDownstream: async () => {
+      const res = await fetchWithTimeout(`${API_URL}/sync/pull`, { method: 'POST' });
+      if (!res.ok) throw new Error('Failed to pull downstream updates');
+      return res.json();
     }
   },
 

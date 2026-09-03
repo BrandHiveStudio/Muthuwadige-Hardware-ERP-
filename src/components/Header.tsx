@@ -70,11 +70,16 @@ export function Header({
       setSyncStatus(data);
     } catch (_) {
       const isElectron = typeof window !== 'undefined' && Boolean((window as any).electronAPI);
-      setSyncStatus(prev => prev ? { ...prev, isOnline: false } : {
+      setSyncStatus(prev => prev ? { ...prev, isOnline: false, status: 'offline' } : {
         isOnline: false,
         isWebClient: !isElectron,
+        lastUpstreamSync: null,
+        lastDownstreamSync: null,
+        lastCounterSync: null,
         lastSyncedAt: null,
+        queuedCount: 0,
         pendingCount: 0,
+        status: 'offline',
         isSyncing: false
       });
     }
@@ -116,21 +121,18 @@ export function Header({
     return `${days}d ago`;
   };
 
-  const formatWebTimestamp = (isoString: string | null | undefined) => {
-    if (!isoString) return 'Never';
+  const formatTooltipTime = (isoString: string | null | undefined) => {
+    if (!isoString) return 'Not yet synced';
     const d = new Date(isoString);
-    if (isNaN(d.getTime())) return 'Never';
-    const today = new Date();
-    const isToday = d.toDateString() === today.toDateString();
-    const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    if (isToday) return `Today at ${timeStr}`;
-    return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} at ${timeStr}`;
+    if (isNaN(d.getTime())) return 'Not yet synced';
+    return d.toLocaleString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
   };
-
-  const isWebActive = Boolean(
-    syncStatus?.lastSyncedAt &&
-    (Date.now() - new Date(syncStatus.lastSyncedAt).getTime() < 30 * 60 * 1000)
-  );
 
   const handleGlobalRefresh = async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -192,68 +194,122 @@ export function Header({
 
       {/* Live Sync / Cloud Status Pill */}
       {isWeb ? (
-        // Web Portal View (Browser / Vercel Cloud)
-        (syncStatus && syncStatus.isOnline === false) ? (
+        // Web Cloud Portal (Online App)
+        (syncStatus && (syncStatus.status === 'offline' || syncStatus.isOnline === false)) ? (
           <div
             className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-red-50 text-red-700 border border-red-200 shadow-sm select-none"
             title="Unable to reach cloud database server. Please check your internet connection."
           >
             <span>🔴 Cloud Disconnected</span>
           </div>
-        ) : syncStatus?.lastSyncedAt ? (
-          isWebActive ? (
+        ) : (() => {
+          const counterTime = syncStatus?.lastCounterSync || syncStatus?.lastSyncedAt;
+          const queuedCount = syncStatus?.queuedCount ?? syncStatus?.pendingCount ?? 0;
+
+          if (!counterTime) {
+            return (
+              <div
+                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm select-none"
+                title="Connected to cloud database. Reading live counter updates."
+              >
+                <span>🟢 Cloud Connected</span>
+              </div>
+            );
+          }
+
+          const diffMs = Date.now() - new Date(counterTime).getTime();
+          const isCounterActive = !isNaN(diffMs) && diffMs < 30 * 60 * 1000;
+          const counterTimeText = formatTimeAgo(counterTime);
+
+          if (isCounterActive) {
+            if (queuedCount > 0) {
+              return (
+                <div
+                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm select-none"
+                  title={`Connected to cloud database. Store counter heartbeat active.\nLast counter sync: ${formatTooltipTime(counterTime)}\nPending queued syncs reported by counter: ${queuedCount}`}
+                >
+                  <span>🟢 Cloud Connected • Counter Synced: {counterTimeText} • {queuedCount} Queued Syncs</span>
+                </div>
+              );
+            } else {
+              return (
+                <div
+                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm select-none"
+                  title={`Connected to cloud database. Store counter heartbeat active.\nLast counter sync: ${formatTooltipTime(counterTime)}`}
+                >
+                  <span>🟢 Cloud Connected • Counter Synced: {counterTimeText}</span>
+                </div>
+              );
+            }
+          } else {
+            return (
+              <div
+                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 shadow-sm select-none"
+                title={`Connected to cloud database. Store counter has not synced in over 30 minutes.\nLast counter sync: ${formatTooltipTime(counterTime)}`}
+              >
+                <span>🟠 Cloud Connected • Counter Inactive ({counterTimeText})</span>
+              </div>
+            );
+          }
+        })()
+      ) : (() => {
+        // Offline / Desktop Electron App (In-Store POS)
+        const isSyncingActive = syncStatus?.status === 'syncing' || syncStatus?.isSyncing || isManualSyncing;
+        const isOffline = syncStatus?.status === 'offline' || (syncStatus && syncStatus.isOnline === false);
+        const queued = syncStatus?.queuedCount ?? syncStatus?.pendingCount ?? 0;
+        const syncTime = syncStatus?.lastUpstreamSync || syncStatus?.lastCounterSync || syncStatus?.lastSyncedAt;
+
+        const desktopTooltip = `Upstream: Last pushed to Super Admin at ${formatTooltipTime(syncStatus?.lastUpstreamSync || syncTime)}\nDownstream: Last pulled catalog/pricing at ${formatTooltipTime(syncStatus?.lastDownstreamSync || syncTime)}\nQueued Records: ${queued} transactions pending upload`;
+
+        if (isSyncingActive) {
+          return (
             <div
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm select-none"
-              title={`Connected to cloud database. Reading live counter updates. Last counter sync: ${new Date(syncStatus.lastSyncedAt).toLocaleString()}`}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 shadow-sm animate-pulse select-none"
+              title={desktopTooltip}
             >
-              <span>🟢 Database Status: Live • Counter synced: {formatTimeAgo(syncStatus.lastSyncedAt)}</span>
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
+              <span>🔄 Syncing with Super Admin...</span>
             </div>
-          ) : (
-            <div
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 shadow-sm select-none"
-              title={`Connected to cloud database. In-store counter has not synced in over 30 minutes. Last counter sync: ${new Date(syncStatus.lastSyncedAt).toLocaleString()}`}
-            >
-              <span>🟠 Database: Live • Counter Inactive ({formatTimeAgo(syncStatus.lastSyncedAt)})</span>
-            </div>
-          )
-        ) : (
-          <div
-            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm select-none"
-            title="Connected to cloud database. Reading live counter updates."
-          >
-            <span>🟢 Cloud Connected (Live Turso DB)</span>
-          </div>
-        )
-      ) : (
-        // Desktop Electron App (Local Counter POS)
-        (syncStatus?.isSyncing || isManualSyncing) ? (
-          <div
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 shadow-sm animate-pulse select-none"
-            title="Synchronizing pending local mutations with Turso Cloud..."
-          >
-            <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
-            <span>🔄 Syncing {syncStatus?.pendingCount ? `${syncStatus.pendingCount} pending sales...` : 'with cloud...'}</span>
-          </div>
-        ) : (syncStatus && !syncStatus.isOnline) ? (
-          <button
-            type="button"
-            onClick={handleManualSync}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 shadow-sm hover:bg-amber-100 transition-colors"
-            title="Local POS is fully operational. Transactions are queued safely in local database and will automatically sync when network restores. Click to retry sync."
-          >
-            <span>🟠 Offline ({syncStatus.pendingCount} sales queued locally)</span>
-          </button>
-        ) : (
+          );
+        }
+
+        if (isOffline) {
+          if (queued > 0) {
+            return (
+              <button
+                type="button"
+                onClick={handleManualSync}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 shadow-sm hover:bg-amber-100 transition-colors"
+                title={`${desktopTooltip}\nClick to retry sync.`}
+              >
+                <span>🟠 Offline • {queued} sales queued locally</span>
+              </button>
+            );
+          } else {
+            return (
+              <button
+                type="button"
+                onClick={handleManualSync}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200 shadow-sm hover:bg-slate-200 transition-colors"
+                title={`${desktopTooltip}\nClick to retry sync.`}
+              >
+                <span>⚪ Offline (Local Mode)</span>
+              </button>
+            );
+          }
+        }
+
+        return (
           <button
             type="button"
             onClick={handleManualSync}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm hover:bg-emerald-100 transition-colors"
-            title={`All local transactions synced with Turso Cloud. Last synced: ${syncStatus?.lastSyncedAt ? new Date(syncStatus.lastSyncedAt).toLocaleString() : 'Just now'}. Click to trigger sync now.`}
+            title={`${desktopTooltip}\nClick to trigger sync now.`}
           >
-            <span>🟢 Synced {formatTimeAgo(syncStatus?.lastSyncedAt)}</span>
+            <span>🟢 Synced to Super Admin • {formatTimeAgo(syncTime)}</span>
           </button>
-        )
-      )}
+        );
+      })()}
 
       {/* Refresh Page Button */}
       <button

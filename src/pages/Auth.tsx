@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { EyeIcon, EyeOffIcon, AlertCircleIcon, ShieldCheckIcon, GiftIcon, ThumbsUpIcon, Loader2Icon, SettingsIcon, XIcon, CheckIcon } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient'; 
-import { setApiUrl, API_URL, getBaseUrl, fetchWithTimeout } from '../lib/api';
+import { setApiUrl, API_URL, getBaseUrl, fetchWithTimeout, api } from '../lib/api';
 import type { User } from '../types';
 
 interface AuthProps {
@@ -130,6 +130,9 @@ export function Auth({ onLogin }: AuthProps) {
 
   useEffect(() => {
     let isMounted = true;
+    // Pre-auth background sync: Pull newly created staff profiles from cloud on startup
+    api.sync.pullDownstream().catch(() => {});
+
     const fetchSettings = async () => {
       const activeBaseUrl = getBaseUrl();
       try {

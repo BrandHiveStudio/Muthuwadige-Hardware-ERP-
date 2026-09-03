@@ -3,11 +3,17 @@ import type { Database } from 'sqlite';
 import type { Client } from '@libsql/client';
 
 export interface SyncStatus {
-  isOnline: boolean;
   isWebClient: boolean;
-  lastSyncedAt: string | null;
-  pendingCount: number;
-  isSyncing: boolean;
+  lastUpstreamSync: string | null;
+  lastDownstreamSync: string | null;
+  lastCounterSync: string | null;
+  queuedCount: number;
+  status: 'online' | 'offline' | 'syncing';
+  // Legacy / convenience aliases
+  isOnline?: boolean;
+  lastSyncedAt?: string | null;
+  pendingCount?: number;
+  isSyncing?: boolean;
 }
 
 export interface SyncQueueItem {
@@ -23,6 +29,9 @@ export interface SyncQueueItem {
 let isOnline = true;
 let isSyncing = false;
 let lastSyncedAt: string | null = null;
+let lastUpstreamSync: string | null = null;
+let lastDownstreamSync: string | null = null;
+let lastCounterSync: string | null = null;
 let syncIntervalId: any = null;
 let isWebClient = false;
 
@@ -66,6 +75,7 @@ export async function ensureSyncSchema(db: any): Promise<void> {
     try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status, created_at);"); } catch {}
     try { await db.exec("ALTER TABLE system_settings ADD COLUMN last_counter_sync_timestamp TEXT;"); } catch {}
     try { await db.exec("ALTER TABLE system_settings ADD COLUMN counter_sync_status TEXT DEFAULT 'IDLE';"); } catch {}
+    try { await db.exec("ALTER TABLE system_settings ADD COLUMN counter_pending_count INTEGER DEFAULT 0;"); } catch {}
     schemaEnsured = true;
   } catch {}
 }
@@ -166,52 +176,42 @@ export async function runSyncCycle(localDb: any): Promise<void> {
 
       if (statements.length > 0) {
         await tursoClient.batch(statements, 'write');
+        lastUpstreamSync = new Date().toISOString();
       }
 
       if (successfulIds.length > 0) {
         const placeholders = successfulIds.map(() => '?').join(', ');
         await localDb.run(`DELETE FROM sync_queue WHERE id IN (${placeholders})`, successfulIds);
       }
+    } else {
+      if (!lastUpstreamSync) lastUpstreamSync = new Date().toISOString();
     }
 
-    const prevSyncTime = lastSyncedAt;
+    // Step C: Pull Remote Admin Updates from Cloud
+    await pullDownstreamChanges(localDb, tursoClient);
+    lastDownstreamSync = new Date().toISOString();
+
     const nowIso = new Date().toISOString();
-
-    if (prevSyncTime) {
-      try {
-        const remoteProducts = await tursoClient.execute({
-          sql: "SELECT * FROM products WHERE created_at > ?",
-          args: [prevSyncTime]
-        });
-
-        if (remoteProducts?.rows?.length > 0) {
-          for (const prod of remoteProducts.rows) {
-            const cols = Object.keys(prod);
-            const colNames = cols.map(c => `"${c}"`).join(', ');
-            const placeholders = cols.map(() => '?').join(', ');
-            const args = cols.map(c => prod[c] !== undefined ? prod[c] : null);
-            await localDb.run(
-              `INSERT OR REPLACE INTO products (${colNames}) VALUES (${placeholders})`,
-              args
-            );
-          }
-        }
-      } catch {}
-    }
-
+    lastCounterSync = nowIso;
     lastSyncedAt = nowIso;
+
+    let remainingPending = 0;
+    try {
+      const qCount = await localDb.get("SELECT COUNT(*) as count FROM sync_queue WHERE status = 'PENDING'");
+      remainingPending = Number(qCount?.count ?? 0);
+    } catch {}
 
     try {
       await localDb.run(
-        "UPDATE system_settings SET last_counter_sync_timestamp = ?, counter_sync_status = 'IDLE' WHERE id = 'global'",
-        [nowIso]
+        "UPDATE system_settings SET last_counter_sync_timestamp = ?, counter_sync_status = 'IDLE', counter_pending_count = ? WHERE id = 'global'",
+        [nowIso, remainingPending]
       );
     } catch {}
 
     try {
       await tursoClient.execute({
-        sql: "UPDATE system_settings SET last_counter_sync_timestamp = ?, counter_sync_status = 'IDLE' WHERE id = 'global'",
-        args: [nowIso]
+        sql: "UPDATE system_settings SET last_counter_sync_timestamp = ?, counter_sync_status = 'IDLE', counter_pending_count = ? WHERE id = 'global'",
+        args: [nowIso, remainingPending]
       });
     } catch {}
 
@@ -219,6 +219,53 @@ export async function runSyncCycle(localDb: any): Promise<void> {
     console.error('[BackgroundSync] Error during sync cycle:', syncErr?.message);
   } finally {
     isSyncing = false;
+  }
+}
+
+/**
+ * Pull downstream changes from Turso Cloud to local SQLite (hardware.db)
+ * Replicates newly created or updated profiles and product catalogue records.
+ */
+export async function pullDownstreamChanges(localDb: any, tursoClient: Client | null): Promise<void> {
+  if (!localDb || !tursoClient) return;
+
+  // 1. Pull user profiles (ensures cloud web users are available for offline desktop login)
+  try {
+    const remoteProfiles = await tursoClient.execute('SELECT * FROM profiles');
+    if (remoteProfiles?.rows?.length > 0) {
+      for (const prof of remoteProfiles.rows) {
+        const cols = Object.keys(prof);
+        const colNames = cols.map(c => `"${c}"`).join(', ');
+        const placeholders = cols.map(() => '?').join(', ');
+        const args = cols.map(c => (prof as any)[c] !== undefined ? (prof as any)[c] : null);
+        await localDb.run(
+          `INSERT OR REPLACE INTO profiles (${colNames}) VALUES (${placeholders})`,
+          args
+        );
+      }
+      console.log(`[BackgroundSync] Synced ${remoteProfiles.rows.length} user profile(s) from Turso Cloud.`);
+    }
+  } catch (profErr: any) {
+    console.warn('[BackgroundSync] Notice during remote profiles sync:', profErr?.message);
+  }
+
+  // 2. Pull remote products catalogue updates
+  try {
+    const remoteProducts = await tursoClient.execute('SELECT * FROM products ORDER BY created_at DESC LIMIT 200');
+    if (remoteProducts?.rows?.length > 0) {
+      for (const prod of remoteProducts.rows) {
+        const cols = Object.keys(prod);
+        const colNames = cols.map(c => `"${c}"`).join(', ');
+        const placeholders = cols.map(() => '?').join(', ');
+        const args = cols.map(c => (prod as any)[c] !== undefined ? (prod as any)[c] : null);
+        await localDb.run(
+          `INSERT OR REPLACE INTO products (${colNames}) VALUES (${placeholders})`,
+          args
+        );
+      }
+    }
+  } catch (prodErr: any) {
+    console.warn('[BackgroundSync] Notice during remote products sync:', prodErr?.message);
   }
 }
 
@@ -256,20 +303,31 @@ export async function getSyncStatus(localDb: any): Promise<SyncStatus> {
   if (isWeb) {
     const tursoClient = getTursoClient();
     let webLastSync: string | null = null;
+    let counterQueued = 0;
     if (tursoClient) {
       try {
-        const res = await tursoClient.execute("SELECT last_counter_sync_timestamp FROM system_settings WHERE id = 'global'");
-        if (res?.rows?.[0]?.last_counter_sync_timestamp) {
-          webLastSync = String(res.rows[0].last_counter_sync_timestamp);
+        const res = await tursoClient.execute("SELECT last_counter_sync_timestamp, counter_pending_count FROM system_settings WHERE id = 'global'");
+        if (res?.rows?.[0]) {
+          if (res.rows[0].last_counter_sync_timestamp) {
+            webLastSync = String(res.rows[0].last_counter_sync_timestamp);
+          }
+          if (res.rows[0].counter_pending_count !== undefined && res.rows[0].counter_pending_count !== null) {
+            counterQueued = Number(res.rows[0].counter_pending_count) || 0;
+          }
         }
       } catch {}
     }
 
     return {
-      isOnline: true,
       isWebClient: true,
+      lastUpstreamSync: null,
+      lastDownstreamSync: null,
+      lastCounterSync: webLastSync,
+      queuedCount: counterQueued,
+      status: 'online',
+      isOnline: true,
       lastSyncedAt: webLastSync,
-      pendingCount: 0,
+      pendingCount: counterQueued,
       isSyncing: false
     };
   }
@@ -280,20 +338,28 @@ export async function getSyncStatus(localDb: any): Promise<SyncStatus> {
       pendingCount = Number(qRes?.count ?? 0);
     } catch {}
 
-    if (!lastSyncedAt) {
+    if (!lastCounterSync) {
       try {
         const sRes = await localDb.get("SELECT last_counter_sync_timestamp FROM system_settings WHERE id = 'global'");
         if (sRes?.last_counter_sync_timestamp) {
-          lastSyncedAt = String(sRes.last_counter_sync_timestamp);
+          lastCounterSync = String(sRes.last_counter_sync_timestamp);
+          lastSyncedAt = lastCounterSync;
         }
       } catch {}
     }
   }
 
+  const currentStatus: 'online' | 'offline' | 'syncing' = isSyncing ? 'syncing' : (isOnline ? 'online' : 'offline');
+
   return {
-    isOnline,
     isWebClient: false,
-    lastSyncedAt,
+    lastUpstreamSync: lastUpstreamSync || lastCounterSync,
+    lastDownstreamSync: lastDownstreamSync || lastCounterSync,
+    lastCounterSync: lastCounterSync,
+    queuedCount: pendingCount,
+    status: currentStatus,
+    isOnline,
+    lastSyncedAt: lastCounterSync || lastUpstreamSync,
     pendingCount,
     isSyncing
   };
@@ -303,6 +369,7 @@ export default {
   pingTurso,
   enqueueSync,
   runSyncCycle,
+  pullDownstreamChanges,
   startBackgroundSyncWorker,
   stopBackgroundSyncWorker,
   getSyncStatus
