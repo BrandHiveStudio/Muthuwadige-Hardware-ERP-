@@ -61,14 +61,18 @@ export function Header({
   const [isManualSyncing, setIsManualSyncing] = useState(false);
   const pageInfo = pageTitles[currentPage] || { title: 'Hardware Store ERP', breadcrumb: 'System' };
 
+  const isElectronApp = typeof window !== 'undefined' && Boolean((window as any).electronAPI);
+  const isWeb = !isElectronApp || Boolean(syncStatus?.isWebClient);
+
   const fetchSyncStatus = useCallback(async () => {
     try {
       const data = await api.sync.getStatus();
       setSyncStatus(data);
     } catch (_) {
+      const isElectron = typeof window !== 'undefined' && Boolean((window as any).electronAPI);
       setSyncStatus(prev => prev ? { ...prev, isOnline: false } : {
         isOnline: false,
-        isWebClient: false,
+        isWebClient: !isElectron,
         lastSyncedAt: null,
         pendingCount: 0,
         isSyncing: false
@@ -186,26 +190,42 @@ export function Header({
         <p className="text-xs text-slate-400 mt-0.5 hidden sm:block">{pageInfo.breadcrumb}</p>
       </div>
 
-      {/* Live Sync Status Pill */}
-      {syncStatus?.isWebClient ? (
-        // Web Portal View
-        isWebActive ? (
+      {/* Live Sync / Cloud Status Pill */}
+      {isWeb ? (
+        // Web Portal View (Browser / Vercel Cloud)
+        (syncStatus && syncStatus.isOnline === false) ? (
           <div
-            className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm select-none"
-            title={`Store counter heartbeat active. Last counter sync: ${syncStatus?.lastSyncedAt ? new Date(syncStatus.lastSyncedAt).toLocaleString() : 'Never'}`}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-red-50 text-red-700 border border-red-200 shadow-sm select-none"
+            title="Unable to reach cloud database server. Please check your internet connection."
           >
-            <span>Counter Last Synced: {formatWebTimestamp(syncStatus?.lastSyncedAt)} • Database Status: Live 🟢</span>
+            <span>🔴 Cloud Disconnected</span>
           </div>
+        ) : syncStatus?.lastSyncedAt ? (
+          isWebActive ? (
+            <div
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm select-none"
+              title={`Connected to cloud database. Reading live counter updates. Last counter sync: ${new Date(syncStatus.lastSyncedAt).toLocaleString()}`}
+            >
+              <span>🟢 Database Status: Live • Counter synced: {formatTimeAgo(syncStatus.lastSyncedAt)}</span>
+            </div>
+          ) : (
+            <div
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 shadow-sm select-none"
+              title={`Connected to cloud database. In-store counter has not synced in over 30 minutes. Last counter sync: ${new Date(syncStatus.lastSyncedAt).toLocaleString()}`}
+            >
+              <span>🟠 Database: Live • Counter Inactive ({formatTimeAgo(syncStatus.lastSyncedAt)})</span>
+            </div>
+          )
         ) : (
           <div
-            className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 shadow-sm select-none"
-            title={`Store counter has not synced for > 30 minutes. Last sync: ${syncStatus?.lastSyncedAt ? new Date(syncStatus.lastSyncedAt).toLocaleString() : 'Never'}`}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm select-none"
+            title="Connected to cloud database. Reading live counter updates."
           >
-            <span>Counter Last Synced: {formatWebTimestamp(syncStatus?.lastSyncedAt)} • Status: Counter Inactive / Offline 🟠</span>
+            <span>🟢 Cloud Connected (Live Turso DB)</span>
           </div>
         )
       ) : (
-        // Desktop Electron App (Local Counter)
+        // Desktop Electron App (Local Counter POS)
         (syncStatus?.isSyncing || isManualSyncing) ? (
           <div
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 shadow-sm animate-pulse select-none"

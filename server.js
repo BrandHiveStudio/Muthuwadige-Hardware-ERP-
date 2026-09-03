@@ -1785,6 +1785,15 @@ if (!process.env.VERCEL) {
 // 🚀 REST API ROUTING
 // ----------------------------------------------------
 
+// Explicit health check route for connectivity validation and uptime monitoring
+app.get(['/api/health', '/health'], (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    environment: process.env.VERCEL ? 'vercel-serverless' : 'desktop-local',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // TRIGGER MANUAL BACKUP API
 app.post('/api/settings/trigger-backup', async (req, res) => {
   try {

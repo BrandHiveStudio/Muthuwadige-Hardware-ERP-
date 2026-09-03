@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { EyeIcon, EyeOffIcon, AlertCircleIcon, ShieldCheckIcon, GiftIcon, ThumbsUpIcon, Loader2Icon, SettingsIcon, XIcon, CheckIcon } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient'; 
-import { setApiUrl, API_URL, fetchWithTimeout } from '../lib/api';
+import { setApiUrl, API_URL, getBaseUrl, fetchWithTimeout } from '../lib/api';
 import type { User } from '../types';
 
 interface AuthProps {
@@ -117,27 +117,56 @@ export function Auth({ onLogin }: AuthProps) {
   
   const [showConnectionSettings, setShowConnectionSettings] = useState(false);
   const [connectionError, setConnectionError] = useState(false);
-  const [hostAddressInput, setHostAddressInput] = useState(
-    localStorage.getItem('erp_host_address') || 'http://localhost:5001'
-  );
+  const [hostAddressInput, setHostAddressInput] = useState(() => {
+    const stored = localStorage.getItem('erp_host_address') || localStorage.getItem('api_server_url') || localStorage.getItem('server_address');
+    if (stored) return stored;
+    if (typeof window !== 'undefined' && window.location && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')) {
+      return window.location.origin;
+    }
+    return 'http://localhost:5001';
+  });
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [connectionTestResult, setConnectionTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   useEffect(() => {
+    let isMounted = true;
     const fetchSettings = async () => {
+      const activeBaseUrl = getBaseUrl();
       try {
+        // Fast pre-flight health check to verify server connectivity
+        const healthRes = await fetchWithTimeout(`${activeBaseUrl}/health`, {}, 4000).catch(() => null);
+        if (healthRes && healthRes.ok && isMounted) {
+          setConnectionError(false);
+        }
+
         const { data, error } = await supabase.from('system_settings').select('*').single();
         if (error) throw error;
-        if (data) {
+        if (data && isMounted) {
           setShopSettings(data);
           setConnectionError(false);
         }
       } catch (err) {
-        console.error(err);
-        setConnectionError(true);
+        console.warn('[Connection Check] Database check notice:', err);
+        if (isMounted) {
+          const isLiveWebDomain = typeof window !== 'undefined' &&
+            !window.location.hostname.includes('localhost') &&
+            !window.location.hostname.includes('127.0.0.1');
+
+          if (isLiveWebDomain) {
+            try {
+              const check = await fetchWithTimeout(`${activeBaseUrl}/health`, {}, 3000);
+              if (check.ok) {
+                setConnectionError(false);
+                return;
+              }
+            } catch (_) {}
+          }
+          setConnectionError(true);
+        }
       }
     };
     fetchSettings();
+    return () => { isMounted = false; };
   }, []);
 
   const handleTestConnection = async () => {
@@ -146,7 +175,7 @@ export function Auth({ onLogin }: AuthProps) {
       return;
     }
     
-    let cleanAddress = hostAddressInput.trim().replace(/\/$/, '');
+    let cleanAddress = hostAddressInput.trim().replace(/\/+$/, '');
     if (!/^https?:\/\//i.test(cleanAddress)) {
       cleanAddress = `http://${cleanAddress}`;
     }
@@ -155,16 +184,22 @@ export function Auth({ onLogin }: AuthProps) {
     setConnectionTestResult(null);
     
     try {
-      const res = await fetchWithTimeout(`${cleanAddress}/api/settings`, {}, 5000);
-      if (res.ok) {
+      const healthUrl = cleanAddress.endsWith('/api') ? `${cleanAddress}/health` : `${cleanAddress}/api/health`;
+      let res = await fetchWithTimeout(healthUrl, {}, 5000).catch(() => null);
+      if (!res || !res.ok) {
+        const settingsUrl = cleanAddress.endsWith('/api') ? `${cleanAddress}/settings` : `${cleanAddress}/api/settings`;
+        res = await fetchWithTimeout(settingsUrl, {}, 5000);
+      }
+      if (res && res.ok) {
         setConnectionTestResult({ 
           success: true, 
           message: 'Connection successful! Host is online.' 
         });
+        setConnectionError(false);
       } else {
         setConnectionTestResult({ 
           success: false, 
-          message: `Failed to connect (Status: ${res.status}). Verify this is a Muthuwadige ERP host.` 
+          message: `Failed to connect (Status: ${res?.status || 'unreachable'}). Verify this is a Muthuwadige ERP host.` 
         });
       }
     } catch (err: any) {

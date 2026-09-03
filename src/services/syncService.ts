@@ -251,7 +251,9 @@ export async function getSyncStatus(localDb: any): Promise<SyncStatus> {
   let pendingCount = 0;
   if (localDb) await ensureSyncSchema(localDb);
 
-  if (isWebClient) {
+  const isWeb = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.IS_WEB_CLIENT === '1' || isWebClient;
+
+  if (isWeb) {
     const tursoClient = getTursoClient();
     let webLastSync: string | null = null;
     if (tursoClient) {

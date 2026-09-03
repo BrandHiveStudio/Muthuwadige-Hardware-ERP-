@@ -271,7 +271,9 @@ export async function getSyncStatus(localDb) {
   let pendingCount = 0;
   if (localDb) await ensureSyncSchema(localDb);
 
-  if (isWebClient) {
+  const isWeb = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.IS_WEB_CLIENT === '1' || isWebClient;
+
+  if (isWeb) {
     // In web mode, query Turso system_settings for counter timestamp
     const tursoClient = getTursoClient();
     let webLastSync = null;

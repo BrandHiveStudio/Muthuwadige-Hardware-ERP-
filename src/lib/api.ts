@@ -1,47 +1,51 @@
-const getDefaultApiUrl = () => {
-  if (typeof window !== 'undefined') {
-    const { protocol, port, origin } = window.location;
-    if (protocol === 'file:') {
-      return 'http://localhost:5001/api';
+export const getBaseUrl = (): string => {
+  if (typeof window !== 'undefined' && window.location && window.location.origin) {
+    const isLiveWebDomain = !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1');
+
+    // 1. If stored in localStorage, use it (skip if it points to localhost while browsing on a live domain)
+    const stored = localStorage.getItem('api_server_url') || localStorage.getItem('server_address') || localStorage.getItem('erp_host_address');
+    if (stored) {
+      const cleanStored = stored.replace(/\/+$/, '');
+      const isStoredLocal = cleanStored.includes('localhost') || cleanStored.includes('127.0.0.1');
+      if (!isLiveWebDomain || !isStoredLocal) {
+        return cleanStored.endsWith('/api') ? cleanStored : `${cleanStored}/api`;
+      }
     }
-    if (port.startsWith('517')) {
-      return 'http://localhost:5001/api';
-    }
-    const envUrl = (import.meta.env as any)?.VITE_API_URL;
-    if (envUrl) {
-      return envUrl;
-    }
-    if (protocol === 'http:' || protocol === 'https:') {
-      return `${origin}/api`;
+
+    // 2. If running in a web browser (Vercel / Cloud / custom domain), automatically default to origin + /api
+    if (isLiveWebDomain) {
+      return `${window.location.origin}/api`;
     }
   }
-  return (import.meta.env as any)?.VITE_API_URL || 'http://localhost:5001/api';
-};
 
-const getStoredHost = () => {
-  if (typeof window !== 'undefined') {
-    return localStorage.getItem('erp_host_address');
+  // 3. Fallback to build-time environment variable if configured
+  const envUrl = (import.meta.env as any)?.VITE_API_URL;
+  if (envUrl) {
+    return envUrl.replace(/\/+$/, '');
   }
-  return null;
+
+  // 4. Fallback for local desktop Electron POS
+  return 'http://localhost:5001/api';
 };
 
-export let API_URL = getStoredHost() 
-  ? `${getStoredHost()}/api` 
-  : getDefaultApiUrl();
-
+export let API_URL = getBaseUrl();
 export let BASE_URL = API_URL.replace(/\/api$/, '');
 
 export const setApiUrl = (newUrl: string | null) => {
   if (newUrl) {
-    const cleanUrl = newUrl.replace(/\/$/, '');
+    const cleanUrl = newUrl.replace(/\/+$/, '');
     localStorage.setItem('erp_host_address', cleanUrl);
-    API_URL = `${cleanUrl}/api`;
+    localStorage.setItem('api_server_url', cleanUrl);
+    API_URL = cleanUrl.endsWith('/api') ? cleanUrl : `${cleanUrl}/api`;
   } else {
     localStorage.removeItem('erp_host_address');
-    API_URL = getDefaultApiUrl();
+    localStorage.removeItem('api_server_url');
+    localStorage.removeItem('server_address');
+    API_URL = getBaseUrl();
   }
   BASE_URL = API_URL.replace(/\/api$/, '');
 };
+
 
 export const getAuthHeaders = (): Record<string, string> => {
   try {
