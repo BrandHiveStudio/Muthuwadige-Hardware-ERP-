@@ -112,6 +112,89 @@ export async function enqueueSync(
   }
 }
 
+/**
+ * Push pending local mutations to Turso Cloud
+ */
+export async function pushUpstreamChanges(localDb: any, tursoClient: Client | null): Promise<void> {
+  if (!localDb || !tursoClient) return;
+  const nowIso = new Date().toISOString();
+
+  const pendingItems: SyncQueueItem[] = await localDb.all(
+    "SELECT * FROM sync_queue WHERE status = 'PENDING' ORDER BY created_at ASC LIMIT 100"
+  );
+
+  if (pendingItems && pendingItems.length > 0) {
+    const statements: Array<{ sql: string; args: any[] }> = [];
+    const successfulIds: string[] = [];
+
+    for (const item of pendingItems) {
+      let row: any = null;
+      try {
+        row = typeof item.payload === 'string' ? JSON.parse(item.payload) : item.payload;
+      } catch {}
+
+      if (!row || Object.keys(row).length === 0) {
+        try {
+          row = await localDb.get(`SELECT * FROM "${item.table_name}" WHERE id = ?`, [item.record_id]);
+        } catch {}
+      }
+
+      if (item.action === 'DELETE') {
+        statements.push({
+          sql: `DELETE FROM "${item.table_name}" WHERE id = ?`,
+          args: [item.record_id]
+        });
+        successfulIds.push(item.id);
+      } else if (row && typeof row === 'object') {
+        const columns = Object.keys(row);
+        const colNames = columns.map(c => `"${c}"`).join(', ');
+        const placeholders = columns.map(() => '?').join(', ');
+        const args = columns.map(c => (row as any)[c] !== undefined ? (row as any)[c] : null);
+
+        statements.push({
+          sql: `INSERT OR REPLACE INTO "${item.table_name}" (${colNames}) VALUES (${placeholders})`,
+          args
+        });
+        successfulIds.push(item.id);
+      } else {
+        successfulIds.push(item.id);
+      }
+    }
+
+    if (statements.length > 0) {
+      await tursoClient.batch(statements, 'write');
+      lastUpstreamSync = new Date().toISOString();
+    }
+
+    if (successfulIds.length > 0) {
+      const placeholders = successfulIds.map(() => '?').join(', ');
+      await localDb.run(`DELETE FROM sync_queue WHERE id IN (${placeholders})`, successfulIds);
+    }
+  } else {
+    if (!lastUpstreamSync) lastUpstreamSync = new Date().toISOString();
+  }
+
+  let remainingPending = 0;
+  try {
+    const qCount = await localDb.get("SELECT COUNT(*) as count FROM sync_queue WHERE status = 'PENDING'");
+    remainingPending = Number(qCount?.count ?? 0);
+  } catch {}
+
+  try {
+    await localDb.run(
+      "UPDATE system_settings SET last_counter_sync_timestamp = ?, counter_sync_status = 'IDLE', counter_pending_count = ? WHERE id = 'global'",
+      [nowIso, remainingPending]
+    );
+  } catch {}
+
+  try {
+    await tursoClient.execute({
+      sql: "UPDATE system_settings SET last_counter_sync_timestamp = ?, counter_sync_status = 'IDLE', counter_pending_count = ? WHERE id = 'global'",
+      args: [nowIso, remainingPending]
+    });
+  } catch {}
+}
+
 export async function runSyncCycle(localDb: any): Promise<void> {
   if (isSyncing || !localDb) return;
   await ensureSyncSchema(localDb);
@@ -131,93 +214,20 @@ export async function runSyncCycle(localDb: any): Promise<void> {
 
   isOnline = true;
   isSyncing = true;
+  const nowIso = new Date().toISOString();
 
   try {
-    // Step A.5: Reconcile un-synced local items (e.g. initial desktop inventory) with Cloud
+    // Step 1: Catalog Reconciliation
     await reconcileLocalCatalogWithCloud(localDb, tursoClient);
-    const pendingItems: SyncQueueItem[] = await localDb.all(
-      "SELECT * FROM sync_queue WHERE status = 'PENDING' ORDER BY created_at ASC LIMIT 100"
-    );
 
-    if (pendingItems && pendingItems.length > 0) {
-      const statements: Array<{ sql: string; args: any[] }> = [];
-      const successfulIds: string[] = [];
+    // Step 2: Push Upstream Queue to Cloud
+    await pushUpstreamChanges(localDb, tursoClient);
 
-      for (const item of pendingItems) {
-        let row: any = null;
-        try {
-          row = typeof item.payload === 'string' ? JSON.parse(item.payload) : item.payload;
-        } catch {}
-
-        if (!row || Object.keys(row).length === 0) {
-          try {
-            row = await localDb.get(`SELECT * FROM "${item.table_name}" WHERE id = ?`, [item.record_id]);
-          } catch {}
-        }
-
-        if (item.action === 'DELETE') {
-          statements.push({
-            sql: `DELETE FROM "${item.table_name}" WHERE id = ?`,
-            args: [item.record_id]
-          });
-          successfulIds.push(item.id);
-        } else if (row && typeof row === 'object') {
-          const columns = Object.keys(row);
-          const colNames = columns.map(c => `"${c}"`).join(', ');
-          const placeholders = columns.map(() => '?').join(', ');
-          const args = columns.map(c => row[c] !== undefined ? row[c] : null);
-
-          statements.push({
-            sql: `INSERT OR REPLACE INTO "${item.table_name}" (${colNames}) VALUES (${placeholders})`,
-            args
-          });
-          successfulIds.push(item.id);
-        } else {
-          successfulIds.push(item.id);
-        }
-      }
-
-      if (statements.length > 0) {
-        await tursoClient.batch(statements, 'write');
-        lastUpstreamSync = new Date().toISOString();
-      }
-
-      if (successfulIds.length > 0) {
-        const placeholders = successfulIds.map(() => '?').join(', ');
-        await localDb.run(`DELETE FROM sync_queue WHERE id IN (${placeholders})`, successfulIds);
-      }
-    } else {
-      if (!lastUpstreamSync) lastUpstreamSync = new Date().toISOString();
-    }
-
-    // Step C: Pull Remote Admin Updates from Cloud
+    // Step 3: Pull Downstream Changes from Cloud
     await pullDownstreamChanges(localDb, tursoClient);
-    lastDownstreamSync = new Date().toISOString();
 
-    const nowIso = new Date().toISOString();
     lastCounterSync = nowIso;
     lastSyncedAt = nowIso;
-
-    let remainingPending = 0;
-    try {
-      const qCount = await localDb.get("SELECT COUNT(*) as count FROM sync_queue WHERE status = 'PENDING'");
-      remainingPending = Number(qCount?.count ?? 0);
-    } catch {}
-
-    try {
-      await localDb.run(
-        "UPDATE system_settings SET last_counter_sync_timestamp = ?, counter_sync_status = 'IDLE', counter_pending_count = ? WHERE id = 'global'",
-        [nowIso, remainingPending]
-      );
-    } catch {}
-
-    try {
-      await tursoClient.execute({
-        sql: "UPDATE system_settings SET last_counter_sync_timestamp = ?, counter_sync_status = 'IDLE', counter_pending_count = ? WHERE id = 'global'",
-        args: [nowIso, remainingPending]
-      });
-    } catch {}
-
   } catch (syncErr: any) {
     console.error('[BackgroundSync] Error during sync cycle:', syncErr?.message);
   } finally {
@@ -227,16 +237,39 @@ export async function runSyncCycle(localDb: any): Promise<void> {
 
 /**
  * Pull downstream changes from Turso Cloud to local SQLite (hardware.db)
- * Replicates newly created or updated profiles and product catalogue records.
+ * Replicates newly created or updated profiles, products, suppliers, customers,
+ * permissions, and pricing rules. Automatically prunes deleted staff profiles.
  */
 export async function pullDownstreamChanges(localDb: any, tursoClient: Client | null): Promise<void> {
   if (!localDb || !tursoClient) return;
 
-  // 1. Pull user profiles (ensures cloud web users are available for offline desktop login)
+  const syncEntityDownstream = async (tableName: string, selectSql?: string) => {
+    try {
+      const res = await tursoClient.execute(selectSql || `SELECT * FROM "${tableName}"`);
+      if (res?.rows && res.rows.length > 0) {
+        for (const row of res.rows) {
+          const cols = Object.keys(row);
+          const colNames = cols.map(c => `"${c}"`).join(', ');
+          const placeholders = cols.map(() => '?').join(', ');
+          const args = cols.map(c => (row as any)[c] !== undefined ? (row as any)[c] : null);
+          await localDb.run(
+            `INSERT OR REPLACE INTO "${tableName}" (${colNames}) VALUES (${placeholders})`,
+            args
+          );
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[BackgroundSync] Notice syncing ${tableName} downstream:`, err?.message);
+    }
+  };
+
+  // 1. Pull user profiles with DELETION PRUNING (Revocation / deletion propagation)
   try {
     const remoteProfiles = await tursoClient.execute('SELECT * FROM profiles');
-    if (remoteProfiles?.rows?.length > 0) {
+    if (remoteProfiles?.rows && remoteProfiles.rows.length > 0) {
+      const activeRemoteIds: string[] = [];
       for (const prof of remoteProfiles.rows) {
+        activeRemoteIds.push(String(prof.id));
         const cols = Object.keys(prof);
         const colNames = cols.map(c => `"${c}"`).join(', ');
         const placeholders = cols.map(() => '?').join(', ');
@@ -246,30 +279,42 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
           args
         );
       }
+
+      // Deletion pruning: Prune local profiles that no longer exist on Turso Cloud
+      if (activeRemoteIds.length > 0) {
+        const placeholders = activeRemoteIds.map(() => '?').join(', ');
+        const deletedResult = await localDb.run(
+          `DELETE FROM profiles WHERE id NOT IN (${placeholders}) AND LOWER(role) != 'super_admin' AND id != 'u1'`,
+          activeRemoteIds
+        );
+        if (deletedResult?.changes && deletedResult.changes > 0) {
+          console.log(`[BackgroundSync] Pruned ${deletedResult.changes} deleted staff profile(s) locally.`);
+        }
+      }
       console.log(`[BackgroundSync] Synced ${remoteProfiles.rows.length} user profile(s) from Turso Cloud.`);
     }
   } catch (profErr: any) {
     console.warn('[BackgroundSync] Notice during remote profiles sync:', profErr?.message);
   }
 
-  // 2. Pull remote products catalogue updates
-  try {
-    const remoteProducts = await tursoClient.execute('SELECT * FROM products ORDER BY created_at DESC LIMIT 200');
-    if (remoteProducts?.rows?.length > 0) {
-      for (const prod of remoteProducts.rows) {
-        const cols = Object.keys(prod);
-        const colNames = cols.map(c => `"${c}"`).join(', ');
-        const placeholders = cols.map(() => '?').join(', ');
-        const args = cols.map(c => (prod as any)[c] !== undefined ? (prod as any)[c] : null);
-        await localDb.run(
-          `INSERT OR REPLACE INTO products (${colNames}) VALUES (${placeholders})`,
-          args
-        );
-      }
-    }
-  } catch (prodErr: any) {
-    console.warn('[BackgroundSync] Notice during remote products sync:', prodErr?.message);
-  }
+  // 2. Products
+  await syncEntityDownstream('products', 'SELECT * FROM products ORDER BY created_at DESC LIMIT 1000');
+
+  // 3. Customers
+  await syncEntityDownstream('customers', 'SELECT * FROM customers');
+
+  // 4. Suppliers
+  await syncEntityDownstream('suppliers', 'SELECT * FROM suppliers');
+
+  // 5. Custom Permissions
+  await syncEntityDownstream('custom_permissions', 'SELECT * FROM custom_permissions');
+
+  // 6. Safe checks
+  await syncEntityDownstream('discounts');
+  await syncEntityDownstream('promotions');
+  await syncEntityDownstream('categories');
+
+  lastDownstreamSync = new Date().toISOString();
 }
 
 /**
@@ -362,14 +407,14 @@ export async function reconcileLocalCatalogWithCloud(localDb: any, tursoClient: 
   }
 }
 
-export function startBackgroundSyncWorker(localDb: any, intervalMs = 30000): any {
+export function startBackgroundSyncWorker(localDb: any, intervalMs = 20000): any {
   if (isWebClient) return null;
 
   if (syncIntervalId) {
     clearInterval(syncIntervalId);
   }
 
-  console.log(`⏱️ [BackgroundSync] Starting automated 30s background sync worker...`);
+  console.log(`⏱️ [BackgroundSync] Starting automated 20s background sync worker...`);
 
   setTimeout(() => {
     runSyncCycle(localDb).catch(() => {});

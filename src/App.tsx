@@ -19,7 +19,7 @@ import { CurrencyProvider } from './context/CurrencyContext';
 import { ScannerProvider } from './context/ScannerContext';
 import { SettingsProvider } from './context/SettingsContext';
 import { ROLE_PERMISSIONS, hasPermission, hasUserPermission } from './utils/permissions';
-import { API_URL, fetchWithTimeout } from './lib/api';
+import { api, API_URL, fetchWithTimeout } from './lib/api';
 import type { User, PageName } from './types';
 import { Notifications, notify } from './components/Notifications';
 import { Trash2, AlertTriangle, CheckCircle, HelpCircle, MessageSquare } from 'lucide-react';
@@ -284,6 +284,10 @@ export function App() {
     localStorage.removeItem('erp_user');
     setCurrentUser(user);
     setIsAuthenticated(true);
+
+    // Trigger immediate bidirectional sync cycle on successful login
+    api.sync.triggerSync().catch(() => {});
+    api.sync.pullDownstream().catch(() => {});
     
     const roleStr = (user.role || '').toLowerCase();
     if (roleStr === 'admin' || roleStr === 'manager' || roleStr === 'super_admin') {
@@ -305,6 +309,48 @@ export function App() {
     setIsAuthenticated(false);
     setCurrentPage('dashboard');
   };
+
+  // Active session validation: Ensure currentUser still exists in local profiles
+  // If Super Admin deleted the account from Cloud and downstream sync pruned it locally, force logout immediately.
+  const validateActiveSession = async () => {
+    if (!currentUser || !currentUser.id) return;
+    try {
+      const res = await fetchWithTimeout(`${API_URL}/profiles/${currentUser.id}`, {}, 5000);
+      if (res.status === 404) {
+        console.warn(`[AuthGuard] Active session invalidated: user profile ${currentUser.id} was deleted or revoked.`);
+        handleLogout();
+        notify("Your session has expired or your account has been removed by Super Admin.", 'Muthuwadige Hardware ERP', 'error');
+      }
+    } catch (_) {
+      // Network timeout / offline: allow offline operation if profile was already cached
+    }
+  };
+
+  // Validate session on mount and when currentUser changes
+  useEffect(() => {
+    if (currentUser) {
+      validateActiveSession();
+    }
+  }, [currentUser]);
+
+  // Re-validate session whenever a downstream sync completes or periodically
+  useEffect(() => {
+    const onSyncCompleted = () => {
+      if (currentUser) {
+        validateActiveSession();
+      }
+    };
+    window.addEventListener('sync-completed', onSyncCompleted);
+    const interval = setInterval(() => {
+      if (currentUser) {
+        validateActiveSession();
+      }
+    }, 30000);
+    return () => {
+      window.removeEventListener('sync-completed', onSyncCompleted);
+      clearInterval(interval);
+    };
+  }, [currentUser]);
 
   // ==========================================
   // 1. RENDER SPLASH SCREEN (First 4 Seconds)

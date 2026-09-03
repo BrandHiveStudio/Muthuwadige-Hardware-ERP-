@@ -102,6 +102,7 @@ export function Header({
     try {
       const res = await api.sync.triggerSync();
       setSyncStatus(res);
+      window.dispatchEvent(new Event('sync-completed'));
     } catch (_) {
     } finally {
       setIsManualSyncing(false);
@@ -145,6 +146,12 @@ export function Header({
       if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
         document.activeElement.blur();
       }
+
+      // Trigger immediate bidirectional sync before reloading
+      try {
+        await api.sync.triggerSync();
+        window.dispatchEvent(new Event('sync-completed'));
+      } catch (_) {}
 
       if (onRefresh) {
         try {

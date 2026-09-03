@@ -141,7 +141,8 @@ export function Auth({ onLogin }: AuthProps) {
 
   useEffect(() => {
     let isMounted = true;
-    // Pre-auth background sync: Pull newly created staff profiles from cloud on startup
+    // Pre-auth background sync: Flush pending mutations and pull newly created staff profiles from cloud on startup
+    api.sync.triggerSync().catch(() => {});
     api.sync.pullDownstream().catch(() => {});
 
     const fetchSettings = async () => {

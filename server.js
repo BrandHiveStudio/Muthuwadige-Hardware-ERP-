@@ -13,7 +13,7 @@ import os from 'os';
 import https from 'https';
 import selfsigned from 'selfsigned';
 import dbAdapter, { initDb, isTurso, getTursoClient, FALLBACK_TURSO_DATABASE_URL, FALLBACK_TURSO_AUTH_TOKEN } from './src/db/connection.js';
-import { startBackgroundSyncWorker, getSyncStatus, runSyncCycle, enqueueSync, pullDownstreamChanges, reconcileLocalCatalogWithCloud } from './src/services/syncService.js';
+import { startBackgroundSyncWorker, getSyncStatus, runSyncCycle, enqueueSync, pullDownstreamChanges, reconcileLocalCatalogWithCloud, pushUpstreamChanges } from './src/services/syncService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2129,6 +2129,7 @@ app.post('/api/products', async (req, res) => {
       ]
     );
     await logAudit(user_email, 'PRODUCT_CREATED', `Product ${p.name} (SKU: ${p.sku}) was added to the inventory.`);
+    enqueueSync(db, 'products', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
     res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2192,6 +2193,7 @@ app.put('/api/products/:id', async (req, res) => {
       [name, sku, category, price, cost_price, stock, min_stock, supplier, unit, barcode, brand, serial_no, batch_code, expiry_date, supplier_phone, measure_details, targetId]
     );
     await logAudit(user_email, 'PRODUCT_UPDATED', `Product ${name} (SKU: ${sku}) details were updated.`);
+    enqueueSync(db, 'products', targetId, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2207,6 +2209,7 @@ app.delete('/api/products/:id', async (req, res) => {
     const prodSku = existing ? existing.sku : '';
     await db.run('DELETE FROM products WHERE id = ?', [id]);
     await logAudit(user_email, 'PRODUCT_DELETED', `Product ${prodName} (SKU: ${prodSku}) was deleted.`);
+    enqueueSync(db, 'products', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => {});
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2242,6 +2245,7 @@ app.post('/api/customers', async (req, res) => {
       'INSERT INTO customers (id, name, email, phone, address, nic, loyalty_points, total_purchases, join_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [id, c.name, c.email, c.phone, c.address, c.nic, c.loyalty_points !== undefined ? c.loyalty_points : c.loyaltyPoints || 0, c.total_purchases !== undefined ? c.total_purchases : c.totalPurchases || 0, c.join_date !== undefined ? c.join_date : c.joinDate]
     );
+    enqueueSync(db, 'customers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
     res.json({ success: true, id, name: c.name, email: c.email, phone: c.phone, address: c.address, nic: c.nic });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2257,6 +2261,7 @@ app.put('/api/customers/:id', async (req, res) => {
       [c.name, c.email, c.phone, c.address, c.nic, c.loyalty_points !== undefined ? c.loyalty_points : c.loyaltyPoints, c.total_purchases !== undefined ? c.total_purchases : c.totalPurchases, c.join_date !== undefined ? c.join_date : c.joinDate, id]
     );
     await logAudit(c.user_email || 'system', 'CUSTOMER_UPDATED', `Customer ${c.name} details were updated.`);
+    enqueueSync(db, 'customers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2267,6 +2272,7 @@ app.delete('/api/customers/:id', async (req, res) => {
   const { id } = req.params;
   try {
     await db.run('DELETE FROM customers WHERE id = ?', [id]);
+    enqueueSync(db, 'customers', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => {});
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2717,6 +2723,23 @@ app.post('/api/sales', async (req, res) => {
 
     await logAudit(s.user_email || 'system', 'SALE_COMPLETED', `Invoice ${finalInvoiceNo} (Total: Rs. ${s.total_amount}) was generated.`);
 
+    // Enqueue upstream sync for sale, inventory decrements, and customer balance
+    try {
+      enqueueSync(db, 'sales', id, 'UPSERT').catch(() => {});
+      if (Array.isArray(enrichedItems)) {
+        for (const item of enrichedItems) {
+          const prodId = item.productId || item.product_id;
+          if (prodId) {
+            enqueueSync(db, 'products', prodId, 'UPSERT').catch(() => {});
+          }
+        }
+      }
+      if (s.customer_id) {
+        enqueueSync(db, 'customers', s.customer_id, 'UPSERT').catch(() => {});
+      }
+      runSyncCycle(db).catch(() => {});
+    } catch (_) {}
+
     // Return mock database record resembling database insertion output
     res.json({
       success: true,
@@ -2902,6 +2925,12 @@ const handleCreditPaymentInsert = async (req, res) => {
         ).catch(e => console.error('Error logging credit repayment transaction:', e));
       }
     }
+
+    enqueueSync(db, 'credit_payments', id, 'UPSERT').catch(() => {});
+    if (p.customer_id) {
+      enqueueSync(db, 'customers', p.customer_id, 'UPSERT').catch(() => {});
+    }
+    runSyncCycle(db).catch(() => {});
 
     res.json({ success: true, id, authorName });
   } catch (err) {
@@ -6390,6 +6419,19 @@ app.get('/api/profiles', async (req, res) => {
   }
 });
 
+app.get('/api/profiles/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const user = await db.get('SELECT id, email, role, full_name, username FROM profiles WHERE id = ?', [id]);
+    if (!user) {
+      return res.status(404).json({ error: 'User profile not found' });
+    }
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.put('/api/profiles/:id', async (req, res) => {
   const { id } = req.params;
   const p = req.body;
@@ -6410,6 +6452,7 @@ app.put('/api/profiles/:id', async (req, res) => {
         [p.name, p.role, p.avatar, id]
       );
     }
+    enqueueSync(db, 'profiles', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -6420,6 +6463,7 @@ app.delete('/api/profiles/:id', async (req, res) => {
   const { id } = req.params;
   try {
     await db.run('DELETE FROM profiles WHERE id = ?', [id]);
+    enqueueSync(db, 'profiles', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => {});
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -6734,6 +6778,12 @@ app.post('/api/stock_adjustments', async (req, res) => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [adjId, product_id, product_name, old_qty || 0, new_qty || 0, reason || '', type || 'Adjustment', user_email || '', timestamp]
     );
+    enqueueSync(db, 'stock_adjustments', adjId, 'UPSERT').catch(() => {});
+    if (product_id) {
+      enqueueSync(db, 'products', product_id, 'UPSERT').catch(() => {});
+    }
+    runSyncCycle(db).catch(() => {});
+
     res.json({ success: true, id: adjId });
   } catch (err) {
     res.status(500).json({ error: err.message });
