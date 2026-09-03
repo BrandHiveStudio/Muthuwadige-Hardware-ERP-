@@ -133,6 +133,8 @@ export async function runSyncCycle(localDb: any): Promise<void> {
   isSyncing = true;
 
   try {
+    // Step A.5: Reconcile un-synced local items (e.g. initial desktop inventory) with Cloud
+    await reconcileLocalCatalogWithCloud(localDb, tursoClient);
     const pendingItems: SyncQueueItem[] = await localDb.all(
       "SELECT * FROM sync_queue WHERE status = 'PENDING' ORDER BY created_at ASC LIMIT 100"
     );
@@ -270,6 +272,96 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
   }
 }
 
+/**
+ * Startup & periodic catalog reconciliation:
+ * Scans local products, categories, and suppliers in local SQLite (hardware.db).
+ * If records exist locally that are not yet recorded on Turso Cloud,
+ * pushes them directly upstream to ensure catalog consistency across web and desktop.
+ */
+export async function reconcileLocalCatalogWithCloud(localDb: any, tursoClient: Client | null): Promise<void> {
+  if (!localDb || !tursoClient) return;
+
+  // 1. Categories reconciliation
+  try {
+    const localCats = await localDb.all('SELECT * FROM categories');
+    if (localCats && localCats.length > 0) {
+      const cloudRes = await tursoClient.execute('SELECT id FROM categories');
+      const cloudIds = new Set((cloudRes?.rows || []).map(r => String(r.id)));
+      for (const cat of localCats) {
+        if (!cloudIds.has(String(cat.id))) {
+          const cols = Object.keys(cat);
+          const colNames = cols.map(c => `"${c}"`).join(', ');
+          const placeholders = cols.map(() => '?').join(', ');
+          const args = cols.map(c => (cat as any)[c] !== undefined ? (cat as any)[c] : null);
+          await tursoClient.execute({
+            sql: `INSERT OR REPLACE INTO categories (${colNames}) VALUES (${placeholders})`,
+            args
+          });
+        }
+      }
+    }
+  } catch (catErr: any) {
+    console.warn('[Reconciliation] Notice reconciling categories:', catErr?.message);
+  }
+
+  // 2. Suppliers reconciliation
+  try {
+    const localSups = await localDb.all('SELECT * FROM suppliers');
+    if (localSups && localSups.length > 0) {
+      const cloudRes = await tursoClient.execute('SELECT id FROM suppliers');
+      const cloudIds = new Set((cloudRes?.rows || []).map(r => String(r.id)));
+      for (const sup of localSups) {
+        if (!cloudIds.has(String(sup.id))) {
+          const cols = Object.keys(sup);
+          const colNames = cols.map(c => `"${c}"`).join(', ');
+          const placeholders = cols.map(() => '?').join(', ');
+          const args = cols.map(c => (sup as any)[c] !== undefined ? (sup as any)[c] : null);
+          await tursoClient.execute({
+            sql: `INSERT OR REPLACE INTO suppliers (${colNames}) VALUES (${placeholders})`,
+            args
+          });
+        }
+      }
+    }
+  } catch (supErr: any) {
+    console.warn('[Reconciliation] Notice reconciling suppliers:', supErr?.message);
+  }
+
+  // 3. Products catalog reconciliation (e.g. Drills, Paint, Pipes, Hammer, Pliers)
+  try {
+    const localProds = await localDb.all('SELECT * FROM products');
+    if (localProds && localProds.length > 0) {
+      const cloudRes = await tursoClient.execute('SELECT id, sku FROM products');
+      const cloudIds = new Set((cloudRes?.rows || []).map(r => String(r.id)));
+      const cloudSkus = new Set((cloudRes?.rows || []).map(r => String(r.sku || '')));
+
+      let pushed = 0;
+      for (const prod of localProds) {
+        const prodId = String(prod.id);
+        const prodSku = String(prod.sku || '');
+        if (!cloudIds.has(prodId) && (!prodSku || !cloudSkus.has(prodSku))) {
+          const cols = Object.keys(prod);
+          const colNames = cols.map(c => `"${c}"`).join(', ');
+          const placeholders = cols.map(() => '?').join(', ');
+          const args = cols.map(c => (prod as any)[c] !== undefined ? (prod as any)[c] : null);
+          await tursoClient.execute({
+            sql: `INSERT OR REPLACE INTO products (${colNames}) VALUES (${placeholders})`,
+            args
+          });
+          cloudIds.add(prodId);
+          if (prodSku) cloudSkus.add(prodSku);
+          pushed++;
+        }
+      }
+      if (pushed > 0) {
+        console.log(`[Reconciliation] Successfully pushed ${pushed} local product(s) to Turso Cloud catalog.`);
+      }
+    }
+  } catch (prodErr: any) {
+    console.warn('[Reconciliation] Notice reconciling products:', prodErr?.message);
+  }
+}
+
 export function startBackgroundSyncWorker(localDb: any, intervalMs = 30000): any {
   if (isWebClient) return null;
 
@@ -277,9 +369,11 @@ export function startBackgroundSyncWorker(localDb: any, intervalMs = 30000): any
     clearInterval(syncIntervalId);
   }
 
+  console.log(`⏱️ [BackgroundSync] Starting automated 30s background sync worker...`);
+
   setTimeout(() => {
     runSyncCycle(localDb).catch(() => {});
-  }, 3000);
+  }, 1000);
 
   syncIntervalId = setInterval(() => {
     runSyncCycle(localDb).catch(() => {});

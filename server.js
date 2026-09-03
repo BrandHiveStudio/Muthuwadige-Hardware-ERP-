@@ -12,8 +12,8 @@ import { exec, execSync, spawn } from 'child_process';
 import os from 'os';
 import https from 'https';
 import selfsigned from 'selfsigned';
-import dbAdapter, { initDb, isTurso, getTursoClient } from './src/db/connection.js';
-import { startBackgroundSyncWorker, getSyncStatus, runSyncCycle, enqueueSync, pullDownstreamChanges } from './src/services/syncService.js';
+import dbAdapter, { initDb, isTurso, getTursoClient, FALLBACK_TURSO_DATABASE_URL, FALLBACK_TURSO_AUTH_TOKEN } from './src/db/connection.js';
+import { startBackgroundSyncWorker, getSyncStatus, runSyncCycle, enqueueSync, pullDownstreamChanges, reconcileLocalCatalogWithCloud } from './src/services/syncService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -65,15 +65,34 @@ if (!process.env.VERCEL) {
 
     console.log('📂 Production Electron database path:', DB_FILE);
 
-    // Auto-migrate env config: copy .env from bundled code to AppData folder
-    const bundledEnv = path.join(__dirname, '.env');
-    if (!fs.existsSync(envPath) && fs.existsSync(bundledEnv)) {
-      try {
-        fs.copyFileSync(bundledEnv, envPath);
-        console.log('✅ .env file successfully initialized in AppData:', envPath);
-      } catch (err) {
-        console.error('❌ Failed to copy .env to AppData path:', err);
+    // Auto-migrate env config & ensure Turso cloud credentials in AppData folder
+    try {
+      let existingEnv = '';
+      if (fs.existsSync(envPath)) {
+        existingEnv = fs.readFileSync(envPath, 'utf-8');
+      } else {
+        const bundledEnv = path.join(__dirname, '.env');
+        if (fs.existsSync(bundledEnv)) {
+          existingEnv = fs.readFileSync(bundledEnv, 'utf-8');
+        }
       }
+
+      let appendContent = '';
+      if (!existingEnv.includes('TURSO_DATABASE_URL=')) {
+        appendContent += `\nTURSO_DATABASE_URL=${FALLBACK_TURSO_DATABASE_URL}\n`;
+        process.env.TURSO_DATABASE_URL = FALLBACK_TURSO_DATABASE_URL;
+      }
+      if (!existingEnv.includes('TURSO_AUTH_TOKEN=')) {
+        appendContent += `TURSO_AUTH_TOKEN=${FALLBACK_TURSO_AUTH_TOKEN}\n`;
+        process.env.TURSO_AUTH_TOKEN = FALLBACK_TURSO_AUTH_TOKEN;
+      }
+
+      if (appendContent) {
+        fs.writeFileSync(envPath, (existingEnv + appendContent).trim() + '\n');
+        console.log('✅ AppData .env successfully updated with Turso cloud credentials:', envPath);
+      }
+    } catch (err) {
+      console.warn('Notice ensuring .env in AppData path:', err.message);
     }
   } else {
     // In development mode, write directly to the workspace folder so that changes are saved permanently in the repository
@@ -5763,6 +5782,7 @@ app.all(['/api/sync/pull', '/api/sync/downstream'], async (req, res) => {
   try {
     const tursoClient = getTursoClient();
     if (tursoClient) {
+      await reconcileLocalCatalogWithCloud(db, tursoClient);
       await pullDownstreamChanges(db, tursoClient);
     }
     const status = await getSyncStatus(db);
@@ -7239,6 +7259,15 @@ if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
       await ensureDbInitialized();
       await scheduleAutomaticBackups();
       startBackgroundSyncWorker(db);
+
+      // Trigger immediate initial catalog reconciliation and downstream profile pull
+      const tursoClient = getTursoClient();
+      if (tursoClient) {
+        reconcileLocalCatalogWithCloud(db, tursoClient)
+          .then(() => pullDownstreamChanges(db, tursoClient))
+          .then(() => console.log('✅ [Startup Sync] Initial catalog & profile sync complete.'))
+          .catch(err => console.warn('[Startup Sync] Notice:', err.message));
+      }
 
       // 1. HTTP Server for desktop app and fast local REST API
       app.listen(PORT, '0.0.0.0', () => {

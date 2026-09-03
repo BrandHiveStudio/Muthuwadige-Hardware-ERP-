@@ -65,9 +65,15 @@ function resolveLocalDbPath() {
   return workspaceDb;
 }
 
+export const FALLBACK_TURSO_DATABASE_URL = 'libsql://mwhardware-db-sanoj-hardware.aws-ap-south-1.turso.io';
+export const FALLBACK_TURSO_AUTH_TOKEN = 'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODg0NTg4MjQsImlkIjoiMDFhMDY3Y2YtZWQwMS03MDYzLWE3MjQtNmIyZTE1ZjJmZWU5Iiwia2lkIjoiSUNBcmxEQWtuSmRPOVBfalA3WG03dDlvdE91NGI1SjFTbWpmY281b1dJayIsInJpZCI6IjQzNzRjMmFjLThiZjQtNDczNi05NzllLTdlYTUyNTk1MWVjNiJ9.Gz4XtMMKAAEGHQN2uEO4tTN3ZRaIWMBU7QrXkHkxRae-1nkw35-old6H_o_S6BioJPtiPvncMxVdP4uN_yOyAQ';
+
+if (!process.env.TURSO_DATABASE_URL) process.env.TURSO_DATABASE_URL = FALLBACK_TURSO_DATABASE_URL;
+if (!process.env.TURSO_AUTH_TOKEN) process.env.TURSO_AUTH_TOKEN = FALLBACK_TURSO_AUTH_TOKEN;
+
 export function getTursoClient() {
-  const tursoUrl = process.env.TURSO_DATABASE_URL;
-  const tursoToken = process.env.TURSO_AUTH_TOKEN;
+  const tursoUrl = process.env.TURSO_DATABASE_URL || FALLBACK_TURSO_DATABASE_URL;
+  const tursoToken = process.env.TURSO_AUTH_TOKEN || FALLBACK_TURSO_AUTH_TOKEN;
   if (tursoUrl && tursoToken) {
     if (!tursoClient) {
       tursoClient = createClient({ url: tursoUrl, authToken: tursoToken });
@@ -79,8 +85,8 @@ export function getTursoClient() {
 
 export async function initDb(customDbPath) {
   const isWebEnvironment = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.DATABASE_ENGINE === 'turso';
-  const tursoUrl = process.env.TURSO_DATABASE_URL;
-  const tursoToken = process.env.TURSO_AUTH_TOKEN;
+  const tursoUrl = process.env.TURSO_DATABASE_URL || FALLBACK_TURSO_DATABASE_URL;
+  const tursoToken = process.env.TURSO_AUTH_TOKEN || FALLBACK_TURSO_AUTH_TOKEN;
 
   if (isWebEnvironment || (tursoUrl && tursoToken && (process.env.VERCEL || process.env.APP_ROLE === 'web'))) {
     if (!tursoUrl || !tursoToken) {

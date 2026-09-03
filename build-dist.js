@@ -42,7 +42,15 @@ try {
     const dest = path.join(localOutputDir, file);
 
     console.log(`Copying ${file}...`);
-    fs.cpSync(src, dest, { recursive: true, force: true });
+    try {
+      fs.cpSync(src, dest, { recursive: true, force: true });
+    } catch (copyErr) {
+      if (file === 'win-unpacked') {
+        console.warn(`⚠️ Warning: Could not overwrite ${file} (likely in use). Installer .exe was generated successfully.`);
+      } else {
+        throw copyErr;
+      }
+    }
   }
 
   console.log('✅ Packaging complete! Build artifacts are in release-dist/');
