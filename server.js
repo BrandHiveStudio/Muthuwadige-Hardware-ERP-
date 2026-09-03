@@ -24,55 +24,69 @@ let envPath = path.join(__dirname, '.env');
 let USER_DATA_PATH = process.env.USER_DATA_PATH || '';
 
 // Dynamically check if running inside Electron / Node-in-Electron to write databases, backups & env configs to Local AppData
-const isNodeInElectron = process.env.ELECTRON_RUN_AS_NODE === '1';
-const isProduction = process.env.NODE_ENV === 'production';
+if (!process.env.VERCEL) {
+  const isNodeInElectron = process.env.ELECTRON_RUN_AS_NODE === '1';
+  const isProduction = process.env.NODE_ENV === 'production';
 
-if (!USER_DATA_PATH && (isNodeInElectron || isProduction)) {
-  const appDataRoot = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
-  USER_DATA_PATH = path.join(appDataRoot, 'Muthuwadige Hardware ERP');
-}
-
-let electronApp = null;
-try {
-  const electron = await import('electron');
-  electronApp = electron.app || (electron.default && electron.default.app) || null;
-} catch (e) {
-  // Silent fallback for standalone Node environments
-}
-
-const isPackagedApp = (electronApp && electronApp.isPackaged) || isNodeInElectron || (isProduction && Boolean(USER_DATA_PATH));
-
-if (isPackagedApp && USER_DATA_PATH) {
-  // Ensure target AppData directory exists before database initialization
-  if (!fs.existsSync(USER_DATA_PATH)) {
-    fs.mkdirSync(USER_DATA_PATH, { recursive: true });
+  if (!USER_DATA_PATH && (isNodeInElectron || isProduction)) {
+    const appDataRoot = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    USER_DATA_PATH = path.join(appDataRoot, 'Muthuwadige Hardware ERP');
   }
 
-  DB_FILE = path.join(USER_DATA_PATH, 'hardware.db');
-  backupsDir = path.join(USER_DATA_PATH, 'backups');
-  envPath = path.join(USER_DATA_PATH, '.env');
-
-  if (!fs.existsSync(backupsDir)) {
-    fs.mkdirSync(backupsDir, { recursive: true });
-  }
-
-  console.log('📂 Production Electron database path:', DB_FILE);
-
-  // Auto-migrate env config: copy .env from bundled code to AppData folder
-  const bundledEnv = path.join(__dirname, '.env');
-  if (!fs.existsSync(envPath) && fs.existsSync(bundledEnv)) {
+  let electronApp = null;
+  if (process.versions?.electron || isNodeInElectron) {
     try {
-      fs.copyFileSync(bundledEnv, envPath);
-      console.log('✅ .env file successfully initialized in AppData:', envPath);
-    } catch (err) {
-      console.error('❌ Failed to copy .env to AppData path:', err);
+      const electron = await import('electron');
+      electronApp = electron.app || (electron.default && electron.default.app) || null;
+    } catch (e) {
+      // Silent fallback for standalone Node environments
     }
   }
+
+  const isPackagedApp = (electronApp && electronApp.isPackaged) || isNodeInElectron || (isProduction && Boolean(USER_DATA_PATH));
+
+  if (isPackagedApp && USER_DATA_PATH) {
+    // Ensure target AppData directory exists before database initialization
+    if (!fs.existsSync(USER_DATA_PATH)) {
+      try {
+        fs.mkdirSync(USER_DATA_PATH, { recursive: true });
+      } catch (_) {}
+    }
+
+    DB_FILE = path.join(USER_DATA_PATH, 'hardware.db');
+    backupsDir = path.join(USER_DATA_PATH, 'backups');
+    envPath = path.join(USER_DATA_PATH, '.env');
+
+    if (!fs.existsSync(backupsDir)) {
+      try {
+        fs.mkdirSync(backupsDir, { recursive: true });
+      } catch (_) {}
+    }
+
+    console.log('📂 Production Electron database path:', DB_FILE);
+
+    // Auto-migrate env config: copy .env from bundled code to AppData folder
+    const bundledEnv = path.join(__dirname, '.env');
+    if (!fs.existsSync(envPath) && fs.existsSync(bundledEnv)) {
+      try {
+        fs.copyFileSync(bundledEnv, envPath);
+        console.log('✅ .env file successfully initialized in AppData:', envPath);
+      } catch (err) {
+        console.error('❌ Failed to copy .env to AppData path:', err);
+      }
+    }
+  } else {
+    // In development mode, write directly to the workspace folder so that changes are saved permanently in the repository
+    DB_FILE = path.join(__dirname, 'hardware.db');
+    backupsDir = path.join(__dirname, 'backups');
+    envPath = path.join(__dirname, '.env');
+  }
 } else {
-  // In development mode, write directly to the workspace folder so that changes are saved permanently in the repository
-  DB_FILE = path.join(__dirname, 'hardware.db');
-  backupsDir = path.join(__dirname, 'backups');
-  envPath = path.join(__dirname, '.env');
+  // Running inside Vercel Serverless environment: do not access AppData or local files
+  USER_DATA_PATH = '/tmp';
+  DB_FILE = '/tmp/hardware.db';
+  backupsDir = '/tmp/backups';
+  envPath = path.join(process.cwd(), '.env');
 }
 
 dotenv.config({ path: envPath });
@@ -7120,31 +7134,34 @@ const serveMobileScannerHtml = (req, res) => {
 app.get('/mobile-scanner', serveMobileScannerHtml);
 app.get('/mobile-scanner.html', serveMobileScannerHtml);
 
-// Serve static React production build files from the 'dist' directory
+// Serve static React production build files from the 'dist' directory (Desktop / standalone only)
 let distPath = path.join(__dirname, 'dist');
-try {
-  // If running in packaged Electron environment, read dist folder relative to app.getAppPath()
-  const electron = await import('electron');
-  const electronApp = electron.app || (electron.default && electron.default.app);
-  if (electronApp && electronApp.isPackaged) {
-    distPath = path.join(electronApp.getAppPath(), 'dist');
+if (!process.env.VERCEL) {
+  if (process.versions?.electron || process.env.ELECTRON_RUN_AS_NODE === '1') {
+    try {
+      const electron = await import('electron');
+      const electronApp = electron.app || (electron.default && electron.default.app);
+      if (electronApp && electronApp.isPackaged) {
+        distPath = path.join(electronApp.getAppPath(), 'dist');
+      }
+    } catch (e) {
+      // Silent fallback for standalone Node environment
+    }
   }
-} catch (e) {
-  // Silent fallback for standalone Node environment
-}
 
-if (fs.existsSync(distPath)) {
-  app.use(express.static(distPath));
-  // Catch-all middleware to serve the React SPA for any client-side routes (independent of Express routing wildcards)
-  app.use((req, res, next) => {
-    if (req.method !== 'GET') {
-      return next();
-    }
-    if (req.path.startsWith('/api') || req.path.startsWith('/backups')) {
-      return next();
-    }
-    res.sendFile(path.join(distPath, 'index.html'));
-  });
+  if (fs.existsSync(distPath)) {
+    app.use(express.static(distPath));
+    // Catch-all middleware to serve the React SPA for any client-side routes (independent of Express routing wildcards)
+    app.use((req, res, next) => {
+      if (req.method !== 'GET') {
+        return next();
+      }
+      if (req.path.startsWith('/api') || req.path.startsWith('/backups')) {
+        return next();
+      }
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
 }
 
 // Express server launch hook listening on all network interfaces (HTTP & HTTPS)

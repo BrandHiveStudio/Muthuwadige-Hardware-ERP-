@@ -61,6 +61,7 @@ function normalizeParams(params: any[]): any {
 }
 
 function resolveLocalDbPath(): string {
+  if (process.env.VERCEL) return '/tmp/hardware.db';
   const isNodeInElectron = process.env.ELECTRON_RUN_AS_NODE === '1';
   const isProduction = process.env.NODE_ENV === 'production';
   let userDataPath = process.env.USER_DATA_PATH || '';
