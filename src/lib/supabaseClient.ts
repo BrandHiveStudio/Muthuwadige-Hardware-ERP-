@@ -73,7 +73,11 @@ const insertTable = async (table: string, payload: any) => {
     if (table === 'products') {
       result = await api.products.save(payload);
     } else if (table === 'customers') {
-      result = await api.customers.save(payload);
+      if (Array.isArray(payload) && payload.length > 1) {
+        result = await (api.customers as any).import(payload);
+      } else {
+        result = await api.customers.save(Array.isArray(payload) ? payload[0] : payload);
+      }
     } else if (table === 'suppliers') {
       result = await api.suppliers.save(payload);
     } else if (table === 'sales') {

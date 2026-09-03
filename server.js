@@ -2239,16 +2239,131 @@ app.get('/api/customers', async (req, res) => {
 });
 
 app.post('/api/customers', async (req, res) => {
-  const c = req.body;
-  const id = 'c_' + Date.now();
+  const body = req.body;
+  // If array with multiple items, redirect to bulk import
+  if (Array.isArray(body) && body.length > 1) {
+    req.url = '/api/customers/import';
+    return app._router.handle(req, res);
+  }
+
+  const c = Array.isArray(body) ? (body[0] || {}) : (body || {});
+  const id = c.id || ('c_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6));
+  const name = String(c.name || c.customerName || c.customer_name || '').trim() || 'Valued Customer';
+  const email = String(c.email || '').trim();
+  const phone = String(c.phone || c.phone_no || c.mobile || '').trim();
+  const address = String(c.address || '').trim();
+  const nic = String(c.nic || '').trim();
+  const loyalty_points = Number(c.loyalty_points !== undefined ? c.loyalty_points : c.loyaltyPoints || 0);
+  const total_purchases = Number(c.total_purchases !== undefined ? c.total_purchases : c.totalPurchases || 0);
+  const join_date = c.join_date || c.joinDate || new Date().toISOString().split('T')[0];
+  const credit_balance = Number(c.credit_balance || c.current_credit || 0);
+  const current_credit = Number(c.current_credit || c.credit_balance || 0);
+
   try {
     await db.run(
-      'INSERT INTO customers (id, name, email, phone, address, nic, loyalty_points, total_purchases, join_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, c.name, c.email, c.phone, c.address, c.nic, c.loyalty_points !== undefined ? c.loyalty_points : c.loyaltyPoints || 0, c.total_purchases !== undefined ? c.total_purchases : c.totalPurchases || 0, c.join_date !== undefined ? c.join_date : c.joinDate]
+      `INSERT INTO customers (id, name, email, phone, address, nic, loyalty_points, total_purchases, join_date, credit_balance, current_credit)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, name, email, phone, address, nic, loyalty_points, total_purchases, join_date, credit_balance, current_credit]
     );
     enqueueSync(db, 'customers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
-    res.json({ success: true, id, name: c.name, email: c.email, phone: c.phone, address: c.address, nic: c.nic });
+    res.json({ success: true, id, name, email, phone, address, nic });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/customers/import', async (req, res) => {
+  try {
+    const rawItems = Array.isArray(req.body) ? req.body : (req.body.customers || req.body.items || [req.body]);
+    if (!Array.isArray(rawItems) || rawItems.length === 0) {
+      return res.status(400).json({ error: 'No customer records provided for import.' });
+    }
+
+    const cleanKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const getValue = (row, possibleKeys) => {
+      if (!row || typeof row !== 'object') return '';
+      const keys = Object.keys(row);
+      for (const pKey of possibleKeys) {
+        const targetClean = cleanKey(pKey);
+        const matched = keys.find(k => cleanKey(k) === targetClean);
+        if (matched && row[matched] !== undefined && row[matched] !== null) {
+          const val = String(row[matched]).trim();
+          if (val !== '' && val !== 'null' && val !== 'undefined' && val !== '—' && val !== '-') {
+            return val;
+          }
+        }
+      }
+      return '';
+    };
+
+    let importedCount = 0;
+    const insertedIds = [];
+
+    for (let idx = 0; idx < rawItems.length; idx++) {
+      const row = rawItems[idx];
+      let name = getValue(row, ['name', 'customer name', 'customer_name', 'customer', 'client', 'contactname', 'fullname']);
+      if (!name) {
+        name = row.name ? String(row.name).trim() : `Customer #${idx + 1}`;
+      }
+
+      let phone = getValue(row, ['phone', 'phone number', 'phone_number', 'mobile', 'contact', 'tel', 'telephone']);
+      if (!phone) {
+        phone = row.phone ? String(row.phone).trim() : '';
+      }
+
+      const email = getValue(row, ['email', 'email address', 'mail']) || row.email || '';
+      const address = getValue(row, ['address', 'customer_address', 'street', 'city', 'location']) || row.address || '';
+      const nic = getValue(row, ['nic', 'nic number', 'nic_number', 'national id', 'id', 'nic_no', 'identitycard']) || row.nic || '';
+      
+      const rawLoyalty = getValue(row, ['loyaltypoints', 'loyalty_points', 'points', 'loyalty']) || row.loyalty_points || 0;
+      const loyaltyPoints = parseInt(rawLoyalty) || 0;
+
+      const rawPurchases = getValue(row, ['totalpurchases', 'total_purchases', 'spend', 'purchases']) || row.total_purchases || 0;
+      const totalPurchases = parseFloat(rawPurchases) || 0;
+
+      const rawDate = getValue(row, ['joindate', 'join_date', 'date', 'createdat']) || row.join_date;
+      const joinDate = rawDate ? String(rawDate).trim() : new Date().toISOString().split('T')[0];
+
+      // Check if existing customer matches phone or name
+      let existing = null;
+      if (phone) {
+        existing = await db.get('SELECT id FROM customers WHERE phone = ?', [phone]);
+      }
+      if (!existing && name) {
+        existing = await db.get('SELECT id FROM customers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))', [name]);
+      }
+
+      const id = existing ? existing.id : ('c_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6));
+
+      if (existing) {
+        await db.run(
+          `UPDATE customers SET name = ?, email = ?, phone = ?, address = ?, nic = ?, loyalty_points = ?, total_purchases = ?, join_date = ? WHERE id = ?`,
+          [name, email, phone, address, nic, loyaltyPoints, totalPurchases, joinDate, id]
+        );
+      } else {
+        await db.run(
+          `INSERT INTO customers (id, name, email, phone, address, nic, loyalty_points, total_purchases, join_date, credit_balance, current_credit)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
+          [id, name, email, phone, address, nic, loyaltyPoints, totalPurchases, joinDate]
+        );
+      }
+
+      await enqueueSync(db, 'customers', id, 'UPSERT');
+      insertedIds.push(id);
+      importedCount++;
+    }
+
+    // Trigger immediate upstream sync cycle asynchronously
+    runSyncCycle(db).catch(() => {});
+
+    res.json({
+      success: true,
+      imported: importedCount,
+      ids: insertedIds,
+      message: `Successfully imported and synced ${importedCount} customer profiles.`
+    });
+  } catch (err) {
+    console.error('Error importing customers:', err);
     res.status(500).json({ error: err.message });
   }
 });

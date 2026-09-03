@@ -256,6 +256,15 @@ export const api = {
       const res = await fetchWithTimeout(`${API_URL}/customers/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Failed to remove customer');
       return res.json();
+    },
+    import: async (customers: any[]) => {
+      const res = await fetchWithTimeout(`${API_URL}/customers/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(customers)
+      });
+      if (!res.ok) throw new Error('Failed to import customers');
+      return res.json();
     }
   },
 

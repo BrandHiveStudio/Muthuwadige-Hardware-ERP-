@@ -405,6 +405,44 @@ export async function reconcileLocalCatalogWithCloud(localDb: any, tursoClient: 
   } catch (prodErr: any) {
     console.warn('[Reconciliation] Notice reconciling products:', prodErr?.message);
   }
+
+  // 4. Customers catalog reconciliation
+  try {
+    const localCusts = await localDb.all('SELECT * FROM customers');
+    if (localCusts && localCusts.length > 0) {
+      const cloudRes = await tursoClient.execute('SELECT id, name, phone FROM customers');
+      const cloudIds = new Set((cloudRes?.rows || []).map((r: any) => String(r.id)));
+      const cloudPhones = new Set((cloudRes?.rows || []).map((r: any) => String(r.phone || '')));
+      const cloudNames = new Set((cloudRes?.rows || []).map((r: any) => String(r.name || '').trim().toLowerCase()));
+
+      let pushedCust = 0;
+      for (const cust of localCusts) {
+        const custId = String(cust.id);
+        const custPhone = String(cust.phone || '');
+        const custName = String(cust.name || '').trim().toLowerCase();
+        const exists = cloudIds.has(custId) || (custPhone && cloudPhones.has(custPhone)) || (custName && cloudNames.has(custName));
+        if (!exists) {
+          const cols = Object.keys(cust);
+          const colNames = cols.map(c => `"${c}"`).join(', ');
+          const placeholders = cols.map(() => '?').join(', ');
+          const args = cols.map(c => cust[c] !== undefined ? cust[c] : null);
+          await tursoClient.execute({
+            sql: `INSERT OR REPLACE INTO customers (${colNames}) VALUES (${placeholders})`,
+            args
+          });
+          cloudIds.add(custId);
+          if (custPhone) cloudPhones.add(custPhone);
+          if (custName) cloudNames.add(custName);
+          pushedCust++;
+        }
+      }
+      if (pushedCust > 0) {
+        console.log(`[Reconciliation] Successfully pushed ${pushedCust} local customer(s) to Turso Cloud catalog.`);
+      }
+    }
+  } catch (custErr: any) {
+    console.warn('[Reconciliation] Notice reconciling customers:', custErr?.message);
+  }
 }
 
 export function startBackgroundSyncWorker(localDb: any, intervalMs = 3000): any {

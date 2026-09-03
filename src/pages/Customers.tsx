@@ -87,6 +87,8 @@ export function Customers({ currentUser }: CustomersProps = {}) {
         return '';
       };
 
+      const batchPayload: any[] = [];
+
       for (let idx = 0; idx < rawRows.length; idx++) {
         const row = rawRows[idx];
         
@@ -102,75 +104,70 @@ export function Customers({ currentUser }: CustomersProps = {}) {
           'phone', 'phone number', 'phone_number', 'mobile', 'mobile_no', 'contact',
           'contact_no', 'tel', 'telephone', 'cell'
         ]);
-        if (!phone) {
-          phone = '0770000000';
-        }
 
         const nic = getValueByKeys(row, [
           'nic', 'nic number', 'nic_number', 'national id', 'national_id', 'id', 'nic_no',
           'nicno', 'idnumber', 'identitycard'
         ]);
 
-          const address = getValueByKeys(row, [
-            'address', 'customer_address', 'customeraddress', 'street', 'location', 'city',
-            'homeaddress', 'residence', 'addressline1'
-          ]);
+        const address = getValueByKeys(row, [
+          'address', 'customer_address', 'customeraddress', 'street', 'location', 'city',
+          'homeaddress', 'residence', 'addressline1'
+        ]);
 
-          const rawCreditLimit = getValueByKeys(row, ['credit limit', 'credit_limit', 'limit', 'max_credit', 'creditlimit']);
-          const creditLimit = parseFloat(rawCreditLimit) || 0;
+        const rawCreditLimit = getValueByKeys(row, ['credit limit', 'credit_limit', 'limit', 'max_credit', 'creditlimit']);
+        const creditLimit = parseFloat(rawCreditLimit) || 0;
 
-          const rawCreditPeriod = getValueByKeys(row, ['credit period', 'credit_period', 'payment terms', 'payment_terms', 'terms', 'days', 'period', 'creditperiod']);
-          const creditPeriod = parseInt(rawCreditPeriod) || 30;
+        const rawCreditPeriod = getValueByKeys(row, ['credit period', 'credit_period', 'payment terms', 'payment_terms', 'terms', 'days', 'period', 'creditperiod']);
+        const creditPeriod = parseInt(rawCreditPeriod) || 30;
 
-          const rawType = getValueByKeys(row, ['type', 'customer type', 'customer_type', 'customertype']);
-          const type = rawType || 'registered';
+        const rawType = getValueByKeys(row, ['type', 'customer type', 'customer_type', 'customertype']);
+        const type = rawType || 'registered';
 
-          const rawLoyalty = getValueByKeys(row, ['loyaltypoints', 'points', 'loyalty']);
-          const loyaltyPoints = parseInt(rawLoyalty) || 0;
+        const rawLoyalty = getValueByKeys(row, ['loyaltypoints', 'points', 'loyalty']);
+        const loyaltyPoints = parseInt(rawLoyalty) || 0;
 
-          const rawPurchases = getValueByKeys(row, ['totalpurchases', 'spend', 'totalspend', 'purchases']);
-          const totalPurchases = parseFloat(rawPurchases) || 0;
+        const rawPurchases = getValueByKeys(row, ['totalpurchases', 'spend', 'totalspend', 'purchases']);
+        const totalPurchases = parseFloat(rawPurchases) || 0;
 
-          const rawDate = getValueByKeys(row, ['joindate', 'registereddate', 'date', 'createdat']);
-          const joinDate = rawDate ? rawDate.toString().trim() : new Date().toISOString().split('T')[0];
+        const rawDate = getValueByKeys(row, ['joindate', 'registereddate', 'date', 'createdat']);
+        const joinDate = rawDate ? rawDate.toString().trim() : new Date().toISOString().split('T')[0];
 
-          const dbPayload: any = {
-            name,
-            phone,
-            address,
-            nic,
-            credit_limit: creditLimit,
-            credit_period: creditPeriod,
-            type,
-            loyalty_points: loyaltyPoints,
-            total_purchases: totalPurchases,
-            join_date: joinDate
-          };
-          if (user?.id) {
-            dbPayload.user_id = user.id;
-          }
+        batchPayload.push({
+          name,
+          phone: phone || '',
+          address: address || '',
+          nic: nic || '',
+          credit_limit: creditLimit,
+          credit_period: creditPeriod,
+          type,
+          loyalty_points: loyaltyPoints,
+          total_purchases: totalPurchases,
+          join_date: joinDate,
+          user_id: user?.id || null
+        });
+      }
 
-          const { error } = await supabase.from('customers').insert([dbPayload]);
-          if (error) {
-            const { error: updateError } = await supabase.from('customers').update(dbPayload).eq('name', name);
-            if (updateError) {
-              if (phone) {
-                const { error: phoneErr } = await supabase.from('customers').update(dbPayload).eq('phone', phone);
-                if (phoneErr) errors++;
-                else imported++;
-              } else {
-                errors++;
-              }
-            } else {
-              imported++;
+      if (batchPayload.length > 0) {
+        try {
+          const res = await (api.customers as any).import(batchPayload);
+          imported = res?.imported || batchPayload.length;
+        } catch (bulkErr) {
+          console.warn("Bulk import endpoint failed, falling back to sequential:", bulkErr);
+          for (const item of batchPayload) {
+            try {
+              const { error } = await supabase.from('customers').insert(item);
+              if (!error) imported++;
+              else errors++;
+            } catch (_) {
+              errors++;
             }
-          } else {
-            imported++;
           }
         }
+      }
 
-        setToast({ message: `Successfully imported ${imported} customer profiles! (Skipped: ${errors})`, type: imported > 0 ? 'success' : 'error' });
-        fetchData();
+      setToast({ message: `Successfully imported ${imported} customer profiles!${errors > 0 ? ` (Skipped: ${errors})` : ''}`, type: imported > 0 ? 'success' : 'error' });
+      fetchData();
       } catch (err: any) {
         setToast({ message: "Excel parse failed: " + err.message, type: 'error' });
       } finally {
