@@ -24,6 +24,7 @@ import { supabase } from '../lib/supabaseClient';
 import { api } from '../lib/api';
 import { useCurrency } from '../context/CurrencyContext';
 import { getTodaySriLankaDate } from '../utils/accounting';
+import { getCachedData, setCachedData } from '../services/dataCache';
 
 interface Supplier {
   id: string;
@@ -69,9 +70,14 @@ export function Suppliers() {
   const symbol = 'Rs.';
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [purchaseOrders, setPurchaseOrders] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+
+  const cachedSuppliers = getCachedData<Supplier[]>('suppliers');
+  const cachedPos = getCachedData<any[]>('sales');
+
+  const [suppliers, setSuppliers] = useState<Supplier[]>(cachedSuppliers || []);
+  const [purchaseOrders, setPurchaseOrders] = useState<any[]>(cachedPos || []);
+  const [isLoading, setIsLoading] = useState(!cachedSuppliers);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
@@ -100,8 +106,13 @@ export function Suppliers() {
     }
   }, [toast]);
 
-  const fetchData = async () => {
-    setIsLoading(true);
+  const fetchData = async (silent = false) => {
+    if (!silent && !getCachedData('suppliers')) {
+      setIsLoading(true);
+    } else {
+      setIsSyncing(true);
+    }
+
     try {
       // 1. Load Suppliers
       const { data: supplierData } = await supabase
@@ -121,6 +132,7 @@ export function Suppliers() {
           createdAt: s.createdAt || s.created_at || ''
         }));
         setSuppliers(mapped);
+        setCachedData('suppliers', mapped);
       }
 
       // 2. Load Purchase Orders to calculate total purchased
@@ -135,6 +147,7 @@ export function Suppliers() {
       console.error("Error loading suppliers or POs:", error);
     } finally {
       setIsLoading(false);
+      setIsSyncing(false);
     }
   };
 
@@ -612,12 +625,20 @@ export function Suppliers() {
             <h3 className="text-sm font-black text-white">Suppliers Registry & Payables Ledger</h3>
             <p className="text-[10px] text-slate-400 font-semibold mt-0.5">Manage partner suppliers, contact files, credit terms, and payable balances</p>
           </div>
-          <span className="px-3 py-1.5 bg-[#DAA520]/20 text-[#DAA520] text-xs font-black rounded-full border border-[#DAA520]/30">
-            {filtered.length} Suppliers Listed
-          </span>
+          <div className="flex items-center gap-2">
+            {isSyncing && (
+              <span className="flex items-center gap-1.5 text-[10px] text-amber-400 font-semibold bg-amber-400/10 px-2.5 py-1 rounded-full border border-amber-400/20">
+                <Loader2Icon className="w-3 h-3 animate-spin text-amber-400" />
+                <span>Syncing...</span>
+              </span>
+            )}
+            <span className="px-3 py-1.5 bg-[#DAA520]/20 text-[#DAA520] text-xs font-black rounded-full border border-[#DAA520]/30">
+              {filtered.length} Suppliers Listed
+            </span>
+          </div>
         </div>
         <div className="overflow-x-auto">
-          {isLoading ? (
+          {isLoading && suppliers.length === 0 ? (
             <div className="p-20 text-center text-slate-500">
               <Loader2Icon className="animate-spin w-8 h-8 text-[#DAA520] mx-auto mb-4" />
               <p className="font-bold">Syncing Suppliers Directory...</p>

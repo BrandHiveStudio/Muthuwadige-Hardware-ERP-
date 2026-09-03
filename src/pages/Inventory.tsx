@@ -17,7 +17,9 @@ import {
 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabaseClient';
-import { api, API_URL } from '../lib/api';
+import { api } from '../lib/api';
+import { useCurrency } from '../context/CurrencyContext';
+import { getCachedData, setCachedData } from '../services/dataCache';
 import type { Product } from '../types';
 import { formatStock } from '../utils/formatters';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
@@ -424,8 +426,12 @@ export function Inventory() {
     }
   };
 
-  const [products, setProducts] = useState<Product[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const cachedProducts = getCachedData<Product[]>('products');
+  const cachedSuppliers = getCachedData<any[]>('suppliers');
+
+  const [products, setProducts] = useState<Product[]>(cachedProducts || []);
+  const [isLoading, setIsLoading] = useState(!cachedProducts);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
@@ -442,7 +448,7 @@ export function Inventory() {
   const [reasonNotes, setReasonNotes] = useState('');
   const [formData, setFormData] = useState<Omit<Product, 'id'>>(emptyProduct);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
-  const [suppliersList, setSuppliersList] = useState<any[]>([]);
+  const [suppliersList, setSuppliersList] = useState<any[]>(cachedSuppliers || []);
 
   const [customConversionRate, setCustomConversionRate] = useState<number>(1);
   const [customConversionsList, setCustomConversionsList] = useState<{ unit: string; kgVal: number; price?: number }[]>([]);
@@ -454,12 +460,19 @@ export function Inventory() {
   const fetchSuppliers = async () => {
     try {
       const { data } = await supabase.from('suppliers').select('*');
-      if (data) setSuppliersList(data);
+      if (data) {
+        setSuppliersList(data);
+        setCachedData('suppliers', data);
+      }
     } catch (e) {}
   };
 
-  const fetchProducts = async () => {
-    setIsLoading(true);
+  const fetchProducts = async (silent = false) => {
+    if (!silent && !getCachedData('products')) {
+      setIsLoading(true);
+    } else {
+      setIsSyncing(true);
+    }
     const { data, error } = await supabase
       .from('products')
       .select('*')
@@ -475,8 +488,10 @@ export function Inventory() {
         supplierPhone: item.supplierPhone !== undefined ? item.supplierPhone : item.supplier_phone !== undefined ? item.supplier_phone : ''
       }));
       setProducts(mappedData || []);
+      setCachedData('products', mappedData || []);
     }
     setIsLoading(false);
+    setIsSyncing(false);
   };
 
   useEffect(() => {
@@ -1018,12 +1033,20 @@ export function Inventory() {
             <h3 className="text-sm font-black text-white">{t('Inventory Database Catalog', 'තොග දත්ත ගබඩා නාමාවලිය')}</h3>
             <p className="text-[10px] text-slate-400 font-semibold mt-0.5">{t('Manage product stock counts, pricing, cost items, and suppliers', 'නිෂ්පාදන තොග ගණන්, මිල නියම කිරීම්, පිරිවැය සහ සැපයුම්කරුවන් කළමනාකරණය කරන්න')}</p>
           </div>
-          <span className="px-3 py-1.5 bg-[#DAA520]/20 text-[#DAA520] text-xs font-black rounded-full border border-[#DAA520]/30">
-            {filtered.length} {t('Products', 'නිෂ්පාදන')}
-          </span>
+          <div className="flex items-center gap-2">
+            {isSyncing && (
+              <span className="flex items-center gap-1.5 text-[10px] text-amber-400 font-semibold bg-amber-400/10 px-2.5 py-1 rounded-full border border-amber-400/20">
+                <Loader2Icon className="w-3 h-3 animate-spin text-amber-400" />
+                <span>{t('Syncing...', 'සමමුහුර්ත කරමින්...')}</span>
+              </span>
+            )}
+            <span className="px-3 py-1.5 bg-[#DAA520]/20 text-[#DAA520] text-xs font-black rounded-full border border-[#DAA520]/30">
+              {filtered.length} {t('Products', 'නිෂ්පාදන')}
+            </span>
+          </div>
         </div>
         <div className="overflow-x-auto">
-          {isLoading ? (
+          {isLoading && products.length === 0 ? (
             <div className="p-20 text-center text-gray-400">
               <Loader2Icon className="animate-spin w-8 h-8 text-[#DAA520] mx-auto mb-4" />
               <p className="font-bold">{t('Syncing inventory database...', 'තොග දත්ත ගබඩාව සමකාලීන වෙමින්...')}</p>

@@ -18,6 +18,7 @@ import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabaseClient';
 import { api } from '../lib/api';
 import { useCurrency } from '../context/CurrencyContext'; // Global currency sync
+import { getCachedData, setCachedData } from '../services/dataCache';
 import type { Customer, SaleOrder, ChequeType } from '../types';
 import { calculateSaleAccounting, isCreditSaleRecord } from '../utils/accounting';
 import { openExternalUrl, formatWhatsAppUrl } from '../utils/openExternalUrl';
@@ -179,10 +180,16 @@ export function Customers({ currentUser }: CustomersProps = {}) {
   // Helper to convert base prices for display
   const convert = (val: number) => val;
 
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [allSales, setAllSales] = useState<SaleOrder[]>([]);
-  const [allReturns, setAllReturns] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const cachedCust = getCachedData<Customer[]>('customers');
+  const cachedSales = getCachedData<SaleOrder[]>('sales');
+  const cachedRet = getCachedData<any[]>('returns');
+  const cachedSettings = getCachedData<any>('settings');
+
+  const [customers, setCustomers] = useState<Customer[]>(cachedCust || []);
+  const [allSales, setAllSales] = useState<SaleOrder[]>(cachedSales || []);
+  const [allReturns, setAllReturns] = useState<any[]>(cachedRet || []);
+  const [isLoading, setIsLoading] = useState(!cachedCust);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [search, setSearch] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
@@ -191,7 +198,7 @@ export function Customers({ currentUser }: CustomersProps = {}) {
   const [formData, setFormData] = useState<Omit<Customer, 'id'>>(emptyCustomer);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<string[]>([]);
-  const [shopSettings, setShopSettings] = useState<any>(null);
+  const [shopSettings, setShopSettings] = useState<any>(cachedSettings || null);
 
   // New Credit Ledger State Variables
   const [activeTab, setActiveTab] = useState<'registry' | 'ledger'>('registry');
@@ -951,8 +958,13 @@ export function Customers({ currentUser }: CustomersProps = {}) {
     }
   }, [toast]);
 
-  const fetchData = async () => {
-    setIsLoading(true);
+  const fetchData = async (silent = false) => {
+    if (!silent && !getCachedData('customers')) {
+      setIsLoading(true);
+    } else {
+      setIsSyncing(true);
+    }
+
     try {
       const { data: custData } = await supabase
         .from('customers')
@@ -963,7 +975,10 @@ export function Customers({ currentUser }: CustomersProps = {}) {
       const { data: returnsData } = await supabase.from('sales_returns').select('*');
 
       const { data: settingsData } = await supabase.from('system_settings').select('*').single();
-      if (settingsData) setShopSettings(settingsData);
+      if (settingsData) {
+        setShopSettings(settingsData);
+        setCachedData('settings', settingsData);
+      }
 
       if (custData) {
         const mappedCustomers = custData.map(c => ({
@@ -973,13 +988,21 @@ export function Customers({ currentUser }: CustomersProps = {}) {
           joinDate: c.join_date || c.created_at?.split('T')[0]
         }));
         setCustomers(mappedCustomers);
+        setCachedData('customers', mappedCustomers);
       }
-      if (salesData) setAllSales(salesData);
-      if (returnsData) setAllReturns(returnsData);
+      if (salesData) {
+        setAllSales(salesData);
+        setCachedData('sales', salesData);
+      }
+      if (returnsData) {
+        setAllReturns(returnsData);
+        setCachedData('returns', returnsData);
+      }
     } catch (error) {
       console.error("Error loading customers:", error);
     } finally {
       setIsLoading(false);
+      setIsSyncing(false);
     }
   };
 
@@ -1351,12 +1374,20 @@ export function Customers({ currentUser }: CustomersProps = {}) {
                 <h3 className="text-sm font-black text-white">{t('Customer Directory', 'පාරිභෝගික ලැයිස්තුව')}</h3>
                 <p className="text-[10px] text-slate-400 font-semibold mt-0.5">{t('Registered database profiles', 'ලියාපදිංචි පාරිභෝගික ගිණුම්')}</p>
               </div>
-              <span className="px-3 py-1.5 bg-[#DAA520]/20 text-[#DAA520] text-xs font-black rounded-full border border-[#DAA520]/30">
-                {filtered.length} {t('Records', 'වාර්තා')}
-              </span>
+              <div className="flex items-center gap-2">
+                {isSyncing && (
+                  <span className="flex items-center gap-1.5 text-[10px] text-amber-400 font-semibold bg-amber-400/10 px-2.5 py-1 rounded-full border border-amber-400/20">
+                    <Loader2Icon className="w-3 h-3 animate-spin text-amber-400" />
+                    <span>{t('Syncing...', 'සමමුහුර්ත කරමින්...')}</span>
+                  </span>
+                )}
+                <span className="px-3 py-1.5 bg-[#DAA520]/20 text-[#DAA520] text-xs font-black rounded-full border border-[#DAA520]/30">
+                  {filtered.length} {t('Records', 'වාර්තා')}
+                </span>
+              </div>
             </div>
             <div className="overflow-x-auto">
-              {isLoading ? (
+              {isLoading && customers.length === 0 ? (
                 <div className="p-20 text-center text-slate-500">
                   <Loader2Icon className="animate-spin w-8 h-8 text-[#DAA520] mx-auto mb-4" />
                   <p className="font-bold">{t("Syncing Customer Profiles...", "පාරිභෝගික ගිණුම් සමමුහුර්ත කරමින්...")}</p>
@@ -1595,12 +1626,20 @@ export function Customers({ currentUser }: CustomersProps = {}) {
                 <h3 className="text-sm font-black text-white">{t('Credit Outstanding Ledger', 'ණය හිඟ ලෙජරය')}</h3>
                 <p className="text-[10px] text-slate-400 font-semibold mt-0.5">{t('Customers with unpaid balances', 'නොගෙවූ ශේෂ ඇති පාරිභෝගිකයින්')}</p>
               </div>
-              <span className="px-3 py-1.5 bg-red-500/20 text-red-400 text-xs font-black rounded-full border border-red-500/30">
-                {filteredCreditCustomers.length} {t('Records', 'වාර්තා')}
-              </span>
+              <div className="flex items-center gap-2">
+                {isSyncing && (
+                  <span className="flex items-center gap-1.5 text-[10px] text-amber-400 font-semibold bg-amber-400/10 px-2.5 py-1 rounded-full border border-amber-400/20">
+                    <Loader2Icon className="w-3 h-3 animate-spin text-amber-400" />
+                    <span>{t('Syncing...', 'සමමුහුර්ත කරමින්...')}</span>
+                  </span>
+                )}
+                <span className="px-3 py-1.5 bg-red-500/20 text-red-400 text-xs font-black rounded-full border border-red-500/30">
+                  {filteredCreditCustomers.length} {t('Records', 'වාර්තා')}
+                </span>
+              </div>
             </div>
             <div className="overflow-x-auto">
-              {isLoading ? (
+              {isLoading && customers.length === 0 ? (
                 <div className="p-20 text-center text-slate-500">
                   <Loader2Icon className="animate-spin w-8 h-8 text-[#DAA520] mx-auto mb-4" />
                   <p className="font-bold">{t("Syncing Credit Ledger...", "ණය ලෙජරය සමමුහුර්ත කරමින්...")}</p>

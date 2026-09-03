@@ -57,7 +57,15 @@ export function Header({
 }: HeaderProps) {
   const [searchValue, setSearchValue] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const cached = sessionStorage.getItem('erp_last_sync_status');
+        if (cached) return JSON.parse(cached);
+      }
+    } catch (_) {}
+    return null;
+  });
   const [isManualSyncing, setIsManualSyncing] = useState(false);
   const [syncToastMessage, setSyncToastMessage] = useState<string | null>(null);
   const pageInfo = pageTitles[currentPage] || { title: 'Hardware Store ERP', breadcrumb: 'System' };
@@ -69,10 +77,15 @@ export function Header({
     try {
       const data = await api.sync.getStatus();
       setSyncStatus(data);
+      try {
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem('erp_last_sync_status', JSON.stringify(data));
+        }
+      } catch (_) {}
     } catch (_) {
       const isElectron = typeof window !== 'undefined' && Boolean((window as any).electronAPI);
       setSyncStatus(prev => prev ? { ...prev, isOnline: false, status: 'offline' } : {
-        isOnline: false,
+        isOnline: true,
         isWebClient: !isElectron,
         lastUpstreamSync: null,
         lastDownstreamSync: null,
@@ -80,7 +93,7 @@ export function Header({
         lastSyncedAt: null,
         queuedCount: 0,
         pendingCount: 0,
-        status: 'offline',
+        status: 'online',
         isSyncing: false
       });
     }
