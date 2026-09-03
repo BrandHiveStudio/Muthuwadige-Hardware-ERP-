@@ -217,13 +217,10 @@ export async function runSyncCycle(localDb: any): Promise<void> {
   const nowIso = new Date().toISOString();
 
   try {
-    // Step 1: Catalog Reconciliation
-    await reconcileLocalCatalogWithCloud(localDb, tursoClient);
-
-    // Step 2: Push Upstream Queue to Cloud
+    // Step 1: Push Upstream Queue to Cloud (strictly from sync_queue)
     await pushUpstreamChanges(localDb, tursoClient);
 
-    // Step 3: Pull Downstream Changes from Cloud
+    // Step 2: Pull Downstream Changes with Universal Deletion Pruning
     await pullDownstreamChanges(localDb, tursoClient);
 
     lastCounterSync = nowIso;
@@ -238,16 +235,27 @@ export async function runSyncCycle(localDb: any): Promise<void> {
 /**
  * Pull downstream changes from Turso Cloud to local SQLite (hardware.db)
  * Replicates newly created or updated profiles, products, suppliers, customers,
- * permissions, and pricing rules. Automatically prunes deleted staff profiles.
+ * permissions, and pricing rules.
+ * UNIVERSAL DELETION PRUNING: Automatically drops any local record deleted on Cloud.
  */
 export async function pullDownstreamChanges(localDb: any, tursoClient: Client | null): Promise<void> {
   if (!localDb || !tursoClient) return;
 
-  const syncEntityDownstream = async (tableName: string, selectSql?: string) => {
+  const syncAndPruneEntity = async (tableName: string, selectSql?: string, excludeClause = '', idCol = 'id') => {
     try {
+      const tableExists = await localDb.get(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        [tableName]
+      );
+      if (!tableExists) return;
+
       const res = await tursoClient.execute(selectSql || `SELECT * FROM "${tableName}"`);
+      const activeCloudIds: string[] = [];
       if (res?.rows && res.rows.length > 0) {
         for (const row of res.rows) {
+          if ((row as any)[idCol] !== undefined && (row as any)[idCol] !== null) {
+            activeCloudIds.push(String((row as any)[idCol]));
+          }
           const cols = Object.keys(row);
           const colNames = cols.map(c => `"${c}"`).join(', ');
           const placeholders = cols.map(() => '?').join(', ');
@@ -258,191 +266,69 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
           );
         }
       }
+
+      // Deletion pruning:
+      // Exclude local records that are currently awaiting upstream sync in sync_queue (offline creations)
+      const pendingExclude = `AND "${idCol}" NOT IN (SELECT record_id FROM sync_queue WHERE table_name = '${tableName}' AND status = 'PENDING')`;
+      const fullExclude = `${pendingExclude} ${excludeClause}`.trim();
+
+      if (activeCloudIds.length > 0) {
+        const placeholders = activeCloudIds.map(() => '?').join(', ');
+        const deletedResult = await localDb.run(
+          `DELETE FROM "${tableName}" WHERE "${idCol}" NOT IN (${placeholders}) ${fullExclude}`,
+          activeCloudIds
+        );
+        if (deletedResult?.changes && deletedResult.changes > 0) {
+          console.log(`[BackgroundSync] Pruned ${deletedResult.changes} deleted ${tableName} record(s) locally.`);
+        }
+      } else {
+        // Cloud table has 0 records -> Prune all local records for this entity
+        const deletedResult = await localDb.run(
+          `DELETE FROM "${tableName}" WHERE 1=1 ${fullExclude}`
+        );
+        if (deletedResult?.changes && deletedResult.changes > 0) {
+          console.log(`[BackgroundSync] Pruned all ${deletedResult.changes} local ${tableName} record(s) (cloud table is empty).`);
+        }
+      }
     } catch (err: any) {
-      console.warn(`[BackgroundSync] Notice syncing ${tableName} downstream:`, err?.message);
+      if (!err?.message?.includes('no such table')) {
+        console.warn(`[BackgroundSync] Notice syncing/pruning ${tableName} downstream:`, err?.message);
+      }
     }
   };
 
-  // 1. Pull user profiles with DELETION PRUNING (Revocation / deletion propagation)
-  try {
-    const remoteProfiles = await tursoClient.execute('SELECT * FROM profiles');
-    if (remoteProfiles?.rows && remoteProfiles.rows.length > 0) {
-      const activeRemoteIds: string[] = [];
-      for (const prof of remoteProfiles.rows) {
-        activeRemoteIds.push(String(prof.id));
-        const cols = Object.keys(prof);
-        const colNames = cols.map(c => `"${c}"`).join(', ');
-        const placeholders = cols.map(() => '?').join(', ');
-        const args = cols.map(c => (prof as any)[c] !== undefined ? (prof as any)[c] : null);
-        await localDb.run(
-          `INSERT OR REPLACE INTO profiles (${colNames}) VALUES (${placeholders})`,
-          args
-        );
-      }
+  // 1. Profiles (with super_admin / u1 protection)
+  await syncAndPruneEntity('profiles', 'SELECT * FROM profiles', "AND LOWER(role) != 'super_admin' AND id != 'u1'");
 
-      // Deletion pruning: Prune local profiles that no longer exist on Turso Cloud
-      if (activeRemoteIds.length > 0) {
-        const placeholders = activeRemoteIds.map(() => '?').join(', ');
-        const deletedResult = await localDb.run(
-          `DELETE FROM profiles WHERE id NOT IN (${placeholders}) AND LOWER(role) != 'super_admin' AND id != 'u1'`,
-          activeRemoteIds
-        );
-        if (deletedResult?.changes && deletedResult.changes > 0) {
-          console.log(`[BackgroundSync] Pruned ${deletedResult.changes} deleted staff profile(s) locally.`);
-        }
-      }
-      console.log(`[BackgroundSync] Synced ${remoteProfiles.rows.length} user profile(s) from Turso Cloud.`);
-    }
-  } catch (profErr: any) {
-    console.warn('[BackgroundSync] Notice during remote profiles sync:', profErr?.message);
-  }
+  // 2. Products (catalog, stock, prices, SKUs)
+  await syncAndPruneEntity('products', 'SELECT * FROM products ORDER BY created_at DESC LIMIT 1000');
 
-  // 2. Products
-  await syncEntityDownstream('products', 'SELECT * FROM products ORDER BY created_at DESC LIMIT 1000');
+  // 3. Customers (profiles, balances, credit limits)
+  await syncAndPruneEntity('customers', 'SELECT * FROM customers');
 
-  // 3. Customers
-  await syncEntityDownstream('customers', 'SELECT * FROM customers');
+  // 4. Suppliers (vendor records)
+  await syncAndPruneEntity('suppliers', 'SELECT * FROM suppliers');
 
-  // 4. Suppliers
-  await syncEntityDownstream('suppliers', 'SELECT * FROM suppliers');
+  // 5. Categories
+  await syncAndPruneEntity('categories', 'SELECT * FROM categories');
 
-  // 5. Custom Permissions
-  await syncEntityDownstream('custom_permissions', 'SELECT * FROM custom_permissions');
+  // 6. Custom Permissions (keyed by role)
+  await syncAndPruneEntity('custom_permissions', 'SELECT * FROM custom_permissions', '', 'role');
 
-  // 6. Safe checks
-  await syncEntityDownstream('discounts');
-  await syncEntityDownstream('promotions');
-  await syncEntityDownstream('categories');
+  // 7. Discounts & Promotions
+  await syncAndPruneEntity('discounts', 'SELECT * FROM discounts');
+  await syncAndPruneEntity('promotions', 'SELECT * FROM promotions');
 
   lastDownstreamSync = new Date().toISOString();
 }
 
 /**
- * Startup & periodic catalog reconciliation:
- * Scans local products, categories, and suppliers in local SQLite (hardware.db).
- * If records exist locally that are not yet recorded on Turso Cloud,
- * pushes them directly upstream to ensure catalog consistency across web and desktop.
+ * Disabled to eliminate the Zombie Deletion Loop permanently.
+ * All upstream changes MUST be initiated via explicit mutations in sync_queue.
  */
 export async function reconcileLocalCatalogWithCloud(localDb: any, tursoClient: Client | null): Promise<void> {
-  if (!localDb || !tursoClient) return;
-
-  // 1. Categories reconciliation
-  try {
-    const localCats = await localDb.all('SELECT * FROM categories');
-    if (localCats && localCats.length > 0) {
-      const cloudRes = await tursoClient.execute('SELECT id FROM categories');
-      const cloudIds = new Set((cloudRes?.rows || []).map(r => String(r.id)));
-      for (const cat of localCats) {
-        if (!cloudIds.has(String(cat.id))) {
-          const cols = Object.keys(cat);
-          const colNames = cols.map(c => `"${c}"`).join(', ');
-          const placeholders = cols.map(() => '?').join(', ');
-          const args = cols.map(c => (cat as any)[c] !== undefined ? (cat as any)[c] : null);
-          await tursoClient.execute({
-            sql: `INSERT OR REPLACE INTO categories (${colNames}) VALUES (${placeholders})`,
-            args
-          });
-        }
-      }
-    }
-  } catch (catErr: any) {
-    console.warn('[Reconciliation] Notice reconciling categories:', catErr?.message);
-  }
-
-  // 2. Suppliers reconciliation
-  try {
-    const localSups = await localDb.all('SELECT * FROM suppliers');
-    if (localSups && localSups.length > 0) {
-      const cloudRes = await tursoClient.execute('SELECT id FROM suppliers');
-      const cloudIds = new Set((cloudRes?.rows || []).map(r => String(r.id)));
-      for (const sup of localSups) {
-        if (!cloudIds.has(String(sup.id))) {
-          const cols = Object.keys(sup);
-          const colNames = cols.map(c => `"${c}"`).join(', ');
-          const placeholders = cols.map(() => '?').join(', ');
-          const args = cols.map(c => (sup as any)[c] !== undefined ? (sup as any)[c] : null);
-          await tursoClient.execute({
-            sql: `INSERT OR REPLACE INTO suppliers (${colNames}) VALUES (${placeholders})`,
-            args
-          });
-        }
-      }
-    }
-  } catch (supErr: any) {
-    console.warn('[Reconciliation] Notice reconciling suppliers:', supErr?.message);
-  }
-
-  // 3. Products catalog reconciliation (e.g. Drills, Paint, Pipes, Hammer, Pliers)
-  try {
-    const localProds = await localDb.all('SELECT * FROM products');
-    if (localProds && localProds.length > 0) {
-      const cloudRes = await tursoClient.execute('SELECT id, sku FROM products');
-      const cloudIds = new Set((cloudRes?.rows || []).map(r => String(r.id)));
-      const cloudSkus = new Set((cloudRes?.rows || []).map(r => String(r.sku || '')));
-
-      let pushed = 0;
-      for (const prod of localProds) {
-        const prodId = String(prod.id);
-        const prodSku = String(prod.sku || '');
-        if (!cloudIds.has(prodId) && (!prodSku || !cloudSkus.has(prodSku))) {
-          const cols = Object.keys(prod);
-          const colNames = cols.map(c => `"${c}"`).join(', ');
-          const placeholders = cols.map(() => '?').join(', ');
-          const args = cols.map(c => (prod as any)[c] !== undefined ? (prod as any)[c] : null);
-          await tursoClient.execute({
-            sql: `INSERT OR REPLACE INTO products (${colNames}) VALUES (${placeholders})`,
-            args
-          });
-          cloudIds.add(prodId);
-          if (prodSku) cloudSkus.add(prodSku);
-          pushed++;
-        }
-      }
-      if (pushed > 0) {
-        console.log(`[Reconciliation] Successfully pushed ${pushed} local product(s) to Turso Cloud catalog.`);
-      }
-    }
-  } catch (prodErr: any) {
-    console.warn('[Reconciliation] Notice reconciling products:', prodErr?.message);
-  }
-
-  // 4. Customers catalog reconciliation
-  try {
-    const localCusts = await localDb.all('SELECT * FROM customers');
-    if (localCusts && localCusts.length > 0) {
-      const cloudRes = await tursoClient.execute('SELECT id, name, phone FROM customers');
-      const cloudIds = new Set((cloudRes?.rows || []).map((r: any) => String(r.id)));
-      const cloudPhones = new Set((cloudRes?.rows || []).map((r: any) => String(r.phone || '')));
-      const cloudNames = new Set((cloudRes?.rows || []).map((r: any) => String(r.name || '').trim().toLowerCase()));
-
-      let pushedCust = 0;
-      for (const cust of localCusts) {
-        const custId = String(cust.id);
-        const custPhone = String(cust.phone || '');
-        const custName = String(cust.name || '').trim().toLowerCase();
-        const exists = cloudIds.has(custId) || (custPhone && cloudPhones.has(custPhone)) || (custName && cloudNames.has(custName));
-        if (!exists) {
-          const cols = Object.keys(cust);
-          const colNames = cols.map(c => `"${c}"`).join(', ');
-          const placeholders = cols.map(() => '?').join(', ');
-          const args = cols.map(c => cust[c] !== undefined ? cust[c] : null);
-          await tursoClient.execute({
-            sql: `INSERT OR REPLACE INTO customers (${colNames}) VALUES (${placeholders})`,
-            args
-          });
-          cloudIds.add(custId);
-          if (custPhone) cloudPhones.add(custPhone);
-          if (custName) cloudNames.add(custName);
-          pushedCust++;
-        }
-      }
-      if (pushedCust > 0) {
-        console.log(`[Reconciliation] Successfully pushed ${pushedCust} local customer(s) to Turso Cloud catalog.`);
-      }
-    }
-  } catch (custErr: any) {
-    console.warn('[Reconciliation] Notice reconciling customers:', custErr?.message);
-  }
+  // Permanently disabled
+  return;
 }
 
 export function startBackgroundSyncWorker(localDb: any, intervalMs = 3000): any {

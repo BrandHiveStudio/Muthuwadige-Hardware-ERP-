@@ -6009,7 +6009,6 @@ app.all(['/api/sync/pull', '/api/sync/downstream'], async (req, res) => {
   try {
     const tursoClient = getTursoClient();
     if (tursoClient) {
-      await reconcileLocalCatalogWithCloud(db, tursoClient);
       await pullDownstreamChanges(db, tursoClient);
     }
     const status = await getSyncStatus(db);
@@ -7511,9 +7510,8 @@ if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
       // Trigger immediate initial catalog reconciliation and downstream profile pull
       const tursoClient = getTursoClient();
       if (tursoClient) {
-        reconcileLocalCatalogWithCloud(db, tursoClient)
-          .then(() => pullDownstreamChanges(db, tursoClient))
-          .then(() => console.log('✅ [Startup Sync] Initial catalog & profile sync complete.'))
+        pullDownstreamChanges(db, tursoClient)
+          .then(() => console.log('✅ [Startup Sync] Initial downstream sync complete.'))
           .catch(err => console.warn('[Startup Sync] Notice:', err.message));
       }
 

@@ -85,13 +85,17 @@ async function resetSqliteDb(filePath, label) {
 
   // Verification counts
   const prodCount = await db.get("SELECT COUNT(*) as count FROM products").catch(() => ({ count: 0 }));
+  const custCount = await db.get("SELECT COUNT(*) as count FROM customers").catch(() => ({ count: 0 }));
+  const suppCount = await db.get("SELECT COUNT(*) as count FROM suppliers").catch(() => ({ count: 0 }));
   const salesCount = await db.get("SELECT COUNT(*) as count FROM sales").catch(() => ({ count: 0 }));
   const profCount = await db.get("SELECT COUNT(*) as count FROM profiles").catch(() => ({ count: 0 }));
 
   console.log(`  📊 Verification [${label}]:`);
-  console.log(`     - Products count: ${prodCount?.count}`);
-  console.log(`     - Sales count:    ${salesCount?.count}`);
-  console.log(`     - Profiles count: ${profCount?.count}`);
+  console.log(`     - Products count:  ${prodCount?.count}`);
+  console.log(`     - Customers count: ${custCount?.count}`);
+  console.log(`     - Suppliers count: ${suppCount?.count}`);
+  console.log(`     - Sales count:     ${salesCount?.count}`);
+  console.log(`     - Profiles count:  ${profCount?.count}`);
 
   await db.close();
 }
@@ -141,13 +145,17 @@ async function resetTursoCloud() {
 
   // Verification counts
   const prodRes = await turso.execute("SELECT COUNT(*) as count FROM products").catch(() => ({ rows: [{ count: 0 }] }));
+  const custRes = await turso.execute("SELECT COUNT(*) as count FROM customers").catch(() => ({ rows: [{ count: 0 }] }));
+  const suppRes = await turso.execute("SELECT COUNT(*) as count FROM suppliers").catch(() => ({ rows: [{ count: 0 }] }));
   const salesRes = await turso.execute("SELECT COUNT(*) as count FROM sales").catch(() => ({ rows: [{ count: 0 }] }));
   const profRes = await turso.execute("SELECT COUNT(*) as count FROM profiles").catch(() => ({ rows: [{ count: 0 }] }));
 
   console.log(`  📊 Verification [Turso Cloud]:`);
-  console.log(`     - Products count: ${prodRes?.rows?.[0]?.count}`);
-  console.log(`     - Sales count:    ${salesRes?.rows?.[0]?.count}`);
-  console.log(`     - Profiles count: ${profRes?.rows?.[0]?.count}`);
+  console.log(`     - Products count:  ${prodRes?.rows?.[0]?.count}`);
+  console.log(`     - Customers count: ${custRes?.rows?.[0]?.count}`);
+  console.log(`     - Suppliers count: ${suppRes?.rows?.[0]?.count}`);
+  console.log(`     - Sales count:     ${salesRes?.rows?.[0]?.count}`);
+  console.log(`     - Profiles count:  ${profRes?.rows?.[0]?.count}`);
 }
 
 async function main() {
