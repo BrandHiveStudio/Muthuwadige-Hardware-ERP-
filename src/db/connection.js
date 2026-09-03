@@ -1,6 +1,4 @@
 import { createClient } from '@libsql/client';
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -79,11 +77,14 @@ export function getTursoClient() {
 }
 
 export async function initDb(customDbPath) {
-  const isWebEnvironment = process.env.VERCEL === '1' || process.env.APP_ROLE === 'web' || process.env.DATABASE_ENGINE === 'turso';
+  const isWebEnvironment = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.DATABASE_ENGINE === 'turso';
   const tursoUrl = process.env.TURSO_DATABASE_URL;
   const tursoToken = process.env.TURSO_AUTH_TOKEN;
 
-  if (isWebEnvironment && tursoUrl && tursoToken) {
+  if (isWebEnvironment || (tursoUrl && tursoToken && (process.env.VERCEL || process.env.APP_ROLE === 'web'))) {
+    if (!tursoUrl || !tursoToken) {
+      throw new Error('Vercel serverless environment detected, but TURSO_DATABASE_URL or TURSO_AUTH_TOKEN environment variable is missing.');
+    }
     console.log('⚡ [DualEngine] Web environment detected. Primary: Turso Cloud libSQL.');
     tursoClient = createClient({
       url: tursoUrl,
@@ -92,12 +93,17 @@ export async function initDb(customDbPath) {
     isTursoActive = true;
     console.log(`✅ [DualEngine] Connected to Turso Cloud at: ${tursoUrl}`);
   } else {
+    // Desktop / In-Store local SQLite fallback: lazily load sqlite3 so Vercel never touches native binaries
+    const { open } = await import('sqlite');
+    const sqlite3Module = await import('sqlite3');
+    const sqlite3Driver = sqlite3Module.default || sqlite3Module;
+
     const targetDbPath = customDbPath || resolveLocalDbPath();
     console.log(`📁 [DualEngine] In-Store Desktop Counter mode. Primary: Local SQLite (${targetDbPath})`);
 
     localSqliteDb = await open({
       filename: targetDbPath,
-      driver: sqlite3.Database
+      driver: sqlite3Driver.Database
     });
 
     try {

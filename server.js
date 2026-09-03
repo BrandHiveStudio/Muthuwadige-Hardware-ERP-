@@ -1,7 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import cron from 'node-cron';
@@ -1654,6 +1652,7 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
 let activeBackupScheduleTimer = null;
 
 async function scheduleAutomaticBackups() {
+  if (process.env.VERCEL) return; // Serverless functions are ephemeral; do not schedule interval tasks
   // 1. Stop any existing active backup schedule timer
   if (activeBackupScheduleTimer) {
     clearInterval(activeBackupScheduleTimer);
@@ -1709,61 +1708,64 @@ function getBackupSchedulerStatus() {
   };
 }
 
-// 🕰️ Cron Scheduler: Checking for overdue credit sales every 6 hours ('0 */6 * * *')
-cron.schedule('0 */6 * * *', async () => {
-  try {
-    console.log('[Cron] Checking for overdue credit sales...');
-    const overdueSales = await db.all(`
-      SELECT s.id, s.invoice_no, s.customer_name, s.total_amount, s.due_date, c.phone as customer_phone
-      FROM sales s
-      LEFT JOIN customers c ON s.customer_id = c.id
-      WHERE s.status = 'Non Paid' AND s.due_date IS NOT NULL AND date(s.due_date) < date('now')
-    `);
+// Background schedulers only run in standalone / desktop mode
+if (!process.env.VERCEL) {
+  // 🕰️ Cron Scheduler: Checking for overdue credit sales every 6 hours ('0 */6 * * *')
+  cron.schedule('0 */6 * * *', async () => {
+    try {
+      console.log('[Cron] Checking for overdue credit sales...');
+      const overdueSales = await db.all(`
+        SELECT s.id, s.invoice_no, s.customer_name, s.total_amount, s.due_date, c.phone as customer_phone
+        FROM sales s
+        LEFT JOIN customers c ON s.customer_id = c.id
+        WHERE s.status = 'Non Paid' AND s.due_date IS NOT NULL AND date(s.due_date) < date('now')
+      `);
 
-    // Phase 2B optimization: batch fetch all reminders sent today
-    const todayReminders = await db.all(
-      "SELECT details FROM audit_logs WHERE action = 'AUTOMATED_WHATSAPP_REMINDER' AND date(timestamp) = date('now')"
-    );
-    const reminderSet = new Set();
-    todayReminders.forEach(log => {
-      // Extract invoice number from the message format
-      const match = log.details.match(/invoice (\S+) \(/);
-      if (match) reminderSet.add(match[1]);
-    });
+      // Phase 2B optimization: batch fetch all reminders sent today
+      const todayReminders = await db.all(
+        "SELECT details FROM audit_logs WHERE action = 'AUTOMATED_WHATSAPP_REMINDER' AND date(timestamp) = date('now')"
+      );
+      const reminderSet = new Set();
+      todayReminders.forEach(log => {
+        // Extract invoice number from the message format
+        const match = log.details.match(/invoice (\S+) \(/);
+        if (match) reminderSet.add(match[1]);
+      });
 
-    for (const sale of overdueSales) {
-      // Check if reminder was already sent today (using batched data)
-      if (!reminderSet.has(sale.invoice_no)) {
-        const phone = sale.customer_phone || '---';
-        const msg = `Automated WhatsApp reminder sent to ${sale.customer_name} (${phone}) for overdue invoice ${sale.invoice_no} (Due: ${sale.due_date}, Outstanding: Rs. ${sale.total_amount})`;
-        console.log(`[AUTOMATED WHATSAPP] 📲 ${msg}`);
+      for (const sale of overdueSales) {
+        // Check if reminder was already sent today (using batched data)
+        if (!reminderSet.has(sale.invoice_no)) {
+          const phone = sale.customer_phone || '---';
+          const msg = `Automated WhatsApp reminder sent to ${sale.customer_name} (${phone}) for overdue invoice ${sale.invoice_no} (Due: ${sale.due_date}, Outstanding: Rs. ${sale.total_amount})`;
+          console.log(`[AUTOMATED WHATSAPP] 📲 ${msg}`);
 
-        // Insert into audit logs
-        const logId = 'al_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-        const timestamp = new Date().toISOString();
-        await db.run(
-          'INSERT INTO audit_logs (id, user_email, action, details, timestamp) VALUES (?, ?, ?, ?, ?)',
-          [logId, 'automated_whatsapp_bot@hardware.com', 'AUTOMATED_WHATSAPP_REMINDER', msg, timestamp]
-        );
+          // Insert into audit logs
+          const logId = 'al_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+          const timestamp = new Date().toISOString();
+          await db.run(
+            'INSERT INTO audit_logs (id, user_email, action, details, timestamp) VALUES (?, ?, ?, ?, ?)',
+            [logId, 'automated_whatsapp_bot@hardware.com', 'AUTOMATED_WHATSAPP_REMINDER', msg, timestamp]
+          );
+        }
       }
+    } catch (err) {
+      console.error('[Cron] Automated WhatsApp reminder checking failed:', err);
     }
-  } catch (err) {
-    console.error('[Cron] Automated WhatsApp reminder checking failed:', err);
-  }
-});
+  });
 
-// 🕰️ Cron Scheduler: Weekly Sunday at 6:00 PM ('0 18 * * 0')
-cron.schedule('0 18 * * 0', async () => {
-  console.log('[Cron] Running weekly automated Sunday backup at 6:00 PM...');
-  try {
-    const settings = await getRuntimeSettingsSnapshot();
-    const targetEmail = settings.backup_email || settings.email || 'sanojhardware@gmail.com';
-    console.log(`[Cron] Weekly Sunday automated backup triggered for target email: ${targetEmail}`);
-    await performBackup(targetEmail, 'Auto');
-  } catch (err) {
-    console.error('[Cron] Weekly Sunday backup scheduler failed:', err);
-  }
-});
+  // 🕰️ Cron Scheduler: Weekly Sunday at 6:00 PM ('0 18 * * 0')
+  cron.schedule('0 18 * * 0', async () => {
+    console.log('[Cron] Running weekly automated Sunday backup at 6:00 PM...');
+    try {
+      const settings = await getRuntimeSettingsSnapshot();
+      const targetEmail = settings.backup_email || settings.email || 'sanojhardware@gmail.com';
+      console.log(`[Cron] Weekly Sunday automated backup triggered for target email: ${targetEmail}`);
+      await performBackup(targetEmail, 'Auto');
+    } catch (err) {
+      console.error('[Cron] Weekly Sunday backup scheduler failed:', err);
+    }
+  });
+}
 
 // ----------------------------------------------------
 // 🚀 REST API ROUTING
