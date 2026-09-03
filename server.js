@@ -178,6 +178,27 @@ app.use((req, res, next) => {
   next();
 });
 
+let dbInitPromise = null;
+export async function ensureDbInitialized() {
+  if (!dbInitPromise) {
+    dbInitPromise = initializeDatabase();
+  }
+  return dbInitPromise;
+}
+
+// Auto-initialize DB on serverless / incoming API requests
+app.use(async (req, res, next) => {
+  if (req.path.startsWith('/api')) {
+    try {
+      await ensureDbInitialized();
+    } catch (err) {
+      console.error('🔴 Database initialization error:', err);
+      return res.status(500).json({ error: 'Database initialization failed: ' + err.message });
+    }
+  }
+  next();
+});
+
 let requestCounter = 0;
 let txnCounter = 0;
 
@@ -7125,30 +7146,37 @@ if (fs.existsSync(distPath)) {
 }
 
 // Express server launch hook listening on all network interfaces (HTTP & HTTPS)
-(async () => {
-  try {
-    console.log('[Startup] Initializing SQLite Database & Schema...');
-    await initializeDatabase();
-    await scheduleAutomaticBackups();
-    startBackgroundSyncWorker(db);
-
-    // 1. HTTP Server for desktop app and fast local REST API
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`🚀 REST API Server running on http://0.0.0.0:${PORT}`);
-    });
-
-    // 2. HTTPS Server for Mobile Camera Scanner (getUserMedia requires Secure Context)
+// Only start standalone HTTP/HTTPS listeners if not running as a Vercel Serverless Function
+if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+  (async () => {
     try {
-      const ssl = await getOrCreateSslCertificate();
-      const httpsServer = https.createServer({ key: ssl.key, cert: ssl.cert }, app);
-      httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
-        console.log(`🔒 HTTPS Server running on https://0.0.0.0:${HTTPS_PORT} (Camera enabled for mobile devices)`);
+      console.log('[Startup] Initializing Database & Schema...');
+      await ensureDbInitialized();
+      await scheduleAutomaticBackups();
+      startBackgroundSyncWorker(db);
+
+      // 1. HTTP Server for desktop app and fast local REST API
+      app.listen(PORT, '0.0.0.0', () => {
+        console.log(`🚀 REST API Server running on http://0.0.0.0:${PORT}`);
       });
-    } catch (sslErr) {
-      console.warn('⚠️ Could not start HTTPS listener for mobile scanner:', sslErr.message);
+
+      // 2. HTTPS Server for Mobile Camera Scanner (getUserMedia requires Secure Context)
+      try {
+        const ssl = await getOrCreateSslCertificate();
+        const httpsServer = https.createServer({ key: ssl.key, cert: ssl.cert }, app);
+        httpsServer.listen(HTTPS_PORT, '0.0.0.0', () => {
+          console.log(`🔒 HTTPS Server running on https://0.0.0.0:${HTTPS_PORT} (Camera enabled for mobile devices)`);
+        });
+      } catch (sslErr) {
+        console.warn('⚠️ Could not start HTTPS listener for mobile scanner:', sslErr.message);
+      }
+    } catch (err) {
+      console.error('🔴 Failed to initialize database:', err);
+      process.exit(1);
     }
-  } catch (err) {
-    console.error('🔴 Failed to initialize local SQLite database:', err);
-    process.exit(1);
-  }
-})();
+  })();
+}
+
+export { app };
+export default app;
+
