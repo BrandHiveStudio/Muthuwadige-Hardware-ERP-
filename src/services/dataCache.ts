@@ -15,6 +15,7 @@ export interface CacheStore {
   cheques: any[] | null;
   purchaseOrders: any[] | null;
   reports: any | null;
+  finance: any | null;
   lastFetched: Record<string, number>;
 }
 
@@ -30,6 +31,7 @@ const memoryCache: CacheStore = {
   cheques: null,
   purchaseOrders: null,
   reports: null,
+  finance: null,
   lastFetched: {}
 };
 
@@ -60,8 +62,35 @@ export function invalidateCache(key?: CacheKey): void {
     memoryCache.cheques = null;
     memoryCache.purchaseOrders = null;
     memoryCache.reports = null;
+    memoryCache.finance = null;
     memoryCache.lastFetched = {};
   }
+}
+
+/**
+ * Full factory/boot cache reset: clears all memory cache, session storage, and stale local caches.
+ */
+export function resetAllCaches(): void {
+  invalidateCache();
+  try {
+    if (typeof window !== 'undefined') {
+      const keysToClear = [
+        'erp_cached_reports',
+        'erp_dashboard_cache',
+        'erp_finance_cache',
+        'hardware_erp_sales_draft',
+        'hardware_erp_cart',
+        'hardware_erp_finance_tab',
+        'hardware_erp_reports_filter'
+      ];
+      keysToClear.forEach(k => {
+        try {
+          sessionStorage.removeItem(k);
+          localStorage.removeItem(k);
+        } catch (_) {}
+      });
+    }
+  } catch (_) {}
 }
 
 export function isCacheStale(key: CacheKey, maxAgeMs = 30000): boolean {

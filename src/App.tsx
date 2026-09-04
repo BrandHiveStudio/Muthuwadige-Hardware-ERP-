@@ -26,6 +26,7 @@ import { Trash2, AlertTriangle, CheckCircle, HelpCircle, MessageSquare } from 'l
 import { supabase } from './lib/supabaseClient';
 import { Modal } from './components/Modal';
 import { openExternalUrl, formatWhatsAppUrl } from './utils/openExternalUrl';
+import { resetAllCaches } from './services/dataCache';
 
 export function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
@@ -55,6 +56,9 @@ export function App() {
 
   const [, setPermissionsTick] = useState(0);
   useEffect(() => {
+    // Initial boot clean state sweep
+    resetAllCaches();
+
     const handlePermsUpdate = () => setPermissionsTick(t => t + 1);
     window.addEventListener('permissions-updated', handlePermsUpdate);
     return () => window.removeEventListener('permissions-updated', handlePermsUpdate);
