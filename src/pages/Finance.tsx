@@ -20,6 +20,7 @@ import autoTable from 'jspdf-autotable';
 import XLSX from 'xlsx-js-style';
 import { calculateNetSalesRevenue, getTodaySriLankaDate, getCurrentSriLankaMonth, toSriLankaDateStr } from '../utils/accounting';
 import { ChequeRegistry } from '../components/accounting/ChequeRegistry';
+import { getCachedData, setCachedData } from '../services/dataCache';
 import type { User } from '../types';
 
 interface Transaction {
@@ -31,11 +32,13 @@ interface Transaction {
   date: string;
   reference: string;
   createdAt?: string;
+  created_at?: string;
+  flow_type?: string;
 }
 
 const emptyTransaction: Omit<Transaction, 'id'> = {
-  type: 'expense',
-  category: 'Utilities',
+  type: 'income',
+  category: 'Sales',
   description: '',
   amount: 0,
   date: getTodaySriLankaDate(),
@@ -50,11 +53,15 @@ export function Finance({ currentUser }: FinanceProps = {}) {
   const { currency, exchangeRate = 300 } = useCurrency();
   const symbol = 'Rs.';
 
+  const cachedTx = getCachedData<Transaction[]>('transactions');
+  const cachedSettings = getCachedData<any>('settings');
+
   const [activeTab, setActiveTab] = useState<'cash_book' | 'cheques'>('cash_book');
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>(cachedTx || []);
   const [pendingChequesCount, setPendingChequesCount] = useState(0);
-  const [shopSettings, setShopSettings] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [shopSettings, setShopSettings] = useState<any>(cachedSettings || null);
+  const [isLoading, setIsLoading] = useState(!cachedTx);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'income' | 'expense' | 'contra_revenue' | 'sales_return'>('all');
   const [categoryFilter, setCategoryFilter] = useState('all');
@@ -74,8 +81,12 @@ export function Finance({ currentUser }: FinanceProps = {}) {
     }
   }, [toast]);
 
-  const fetchData = async () => {
-    setIsLoading(true);
+  const fetchData = async (silent = false) => {
+    if (!silent && !getCachedData('transactions')) {
+      setIsLoading(true);
+    } else {
+      setIsSyncing(true);
+    }
     try {
       const { data } = await supabase
         .from('transactions')
@@ -83,12 +94,14 @@ export function Finance({ currentUser }: FinanceProps = {}) {
       
       if (data) {
         setTransactions(data);
+        setCachedData('transactions', data);
       }
 
       // Fetch pending cheques count for tab badge
       try {
         const chqs = await api.cheques.getAll();
         if (chqs && Array.isArray(chqs)) {
+          setCachedData('cheques', chqs);
           const pending = chqs.filter((c: any) => c.direction === 'INWARD' && (c.status === 'PENDING' || c.status === 'IN_HAND'));
           setPendingChequesCount(pending.length);
         }
@@ -99,12 +112,16 @@ export function Finance({ currentUser }: FinanceProps = {}) {
       // Fetch system settings
       try {
         const { data: st } = await supabase.from('system_settings').select('*').single();
-        if (st) setShopSettings(st);
+        if (st) {
+          setShopSettings(st);
+          setCachedData('settings', st);
+        }
       } catch (_) {}
     } catch (error) {
       console.error("Error loading transactions:", error);
     } finally {
       setIsLoading(false);
+      setIsSyncing(false);
     }
   };
 
@@ -654,12 +671,20 @@ export function Finance({ currentUser }: FinanceProps = {}) {
                 <h3 className="text-sm font-black text-white">Cash Book Ledger</h3>
                 <p className="text-[10px] text-slate-400 font-semibold mt-0.5">General financial transaction statements</p>
               </div>
-              <span className="px-3 py-1.5 bg-emerald-500/20 text-emerald-400 text-xs font-black rounded-full border border-emerald-500/30">
-                {filtered.length} Records
-              </span>
+              <div className="flex items-center gap-2">
+                {isSyncing && (
+                  <span className="flex items-center gap-1.5 text-[10px] text-amber-400 font-semibold bg-amber-400/10 px-2.5 py-1 rounded-full border border-amber-400/20">
+                    <Loader2Icon className="w-3 h-3 animate-spin text-amber-400" />
+                    <span>Syncing...</span>
+                  </span>
+                )}
+                <span className="px-3 py-1.5 bg-emerald-500/20 text-emerald-400 text-xs font-black rounded-full border border-emerald-500/30">
+                  {filtered.length} Records
+                </span>
+              </div>
             </div>
             <div className="overflow-x-auto">
-              {isLoading ? (
+              {isLoading && transactions.length === 0 ? (
                 <div className="p-20 text-center text-slate-500">
                   <Loader2Icon className="animate-spin w-8 h-8 text-[#DAA520] mx-auto mb-4" />
                   <p className="font-bold">Syncing Cash Ledger...</p>

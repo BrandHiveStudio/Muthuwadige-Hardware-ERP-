@@ -327,6 +327,11 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
   await syncAndPruneEntity('discounts', 'SELECT * FROM discounts');
   await syncAndPruneEntity('promotions', 'SELECT * FROM promotions');
 
+  // 8. Purchase Orders & PO Items
+  await syncAndPruneEntity('purchase_orders', 'SELECT * FROM purchase_orders ORDER BY created_at DESC LIMIT 1000');
+  await syncAndPruneEntity('purchase_order_items', 'SELECT * FROM purchase_order_items');
+  await syncAndPruneEntity('supplier_transactions', 'SELECT * FROM supplier_transactions');
+
   lastDownstreamSync = new Date().toISOString();
 }
 

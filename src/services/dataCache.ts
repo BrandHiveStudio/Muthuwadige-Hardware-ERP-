@@ -11,6 +11,10 @@ export interface CacheStore {
   sales: any[] | null;
   returns: any[] | null;
   settings: any | null;
+  transactions: any[] | null;
+  cheques: any[] | null;
+  purchaseOrders: any[] | null;
+  reports: any | null;
   lastFetched: Record<string, number>;
 }
 
@@ -22,6 +26,10 @@ const memoryCache: CacheStore = {
   sales: null,
   returns: null,
   settings: null,
+  transactions: null,
+  cheques: null,
+  purchaseOrders: null,
+  reports: null,
   lastFetched: {}
 };
 
@@ -48,6 +56,10 @@ export function invalidateCache(key?: CacheKey): void {
     memoryCache.sales = null;
     memoryCache.returns = null;
     memoryCache.settings = null;
+    memoryCache.transactions = null;
+    memoryCache.cheques = null;
+    memoryCache.purchaseOrders = null;
+    memoryCache.reports = null;
     memoryCache.lastFetched = {};
   }
 }

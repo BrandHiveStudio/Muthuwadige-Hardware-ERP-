@@ -1219,9 +1219,14 @@ async function initializeDatabase() {
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(email)"); } catch(e) {}
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_status ON sales(status)"); } catch(e) {}
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_credit_notes_status ON credit_notes(status)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_credit_notes_customer_id ON credit_notes(customer_id)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_returns_status ON sales_returns(status)"); } catch(e) {}
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_audit_logs_action_date ON audit_logs(action, timestamp)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales(created_at)"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales ADD COLUMN cashier_name TEXT"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_cashier ON sales(cashier_name)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_cashier_raw ON sales(cashier)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_po_created_at ON purchase_orders(created_at)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_credit_payments_created_at ON credit_payments(created_at)"); } catch(e) {}
 
   // Database Engine Level Constraint Trigger: Prevent negative stock
   try {
@@ -4249,6 +4254,7 @@ app.post('/api/purchase-orders', async (req, res) => {
     );
 
     await commitTxn(db, txn);
+    enqueueSync(db, 'purchase_orders', id, 'INSERT').then(() => runSyncCycle(db)).catch(() => {});
     res.json({ success: true, id, netTotal, originalTotal, debitNoteApplied });
   } catch (err) {
     if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
@@ -4323,6 +4329,7 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
     }
 
     await db.run('COMMIT');
+    enqueueSync(db, 'purchase_orders', id, 'UPDATE').then(() => runSyncCycle(db)).catch(() => {});
     res.json({ success: true });
   } catch (err) {
     await safeRollback(db);
@@ -4343,6 +4350,7 @@ app.delete('/api/purchase-orders/:id', async (req, res) => {
     } else {
       await db.run('DELETE FROM purchase_orders WHERE id = ?', [id]);
     }
+    enqueueSync(db, 'purchase_orders', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => {});
     res.json({ success: true });
   } catch (err) {
     if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
@@ -5411,6 +5419,7 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
     );
 
     await commitTxn(db, txn);
+    enqueueSync(db, 'purchase_orders', po.id, 'UPDATE').then(() => runSyncCycle(db)).catch(() => {});
 
     res.json({
       success: true,

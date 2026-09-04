@@ -47,6 +47,7 @@ import {
 } from '../utils/accounting';
 import { useCurrency } from '../context/CurrencyContext';
 import { formatStock } from '../utils/formatters';
+import { getCachedData, setCachedData } from '../services/dataCache';
 
 const isDecimalUnit = (unit: string | undefined): boolean => {
   if (!unit) return false;
@@ -98,12 +99,12 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   };
 
   const [tab, setTab] = useState<Tab>('sales');
-  const [sales, setSales] = useState<any[]>(() => cachedReportsData?.sales || []);
-  const [products, setProducts] = useState<any[]>(() => cachedReportsData?.products || []);
-  const [transactions, setTransactions] = useState<any[]>(() => cachedReportsData?.transactions || []);
-  const [customers, setCustomers] = useState<any[]>(() => cachedReportsData?.customers || []);
-  const [suppliers, setSuppliers] = useState<any[]>(() => cachedReportsData?.suppliers || []);
-  const [salesReturns, setSalesReturns] = useState<any[]>(() => cachedReportsData?.salesReturns || []);
+  const [sales, setSales] = useState<any[]>(() => getCachedData<any[]>('sales') || cachedReportsData?.sales || []);
+  const [products, setProducts] = useState<any[]>(() => getCachedData<any[]>('products') || cachedReportsData?.products || []);
+  const [transactions, setTransactions] = useState<any[]>(() => getCachedData<any[]>('transactions') || cachedReportsData?.transactions || []);
+  const [customers, setCustomers] = useState<any[]>(() => getCachedData<any[]>('customers') || cachedReportsData?.customers || []);
+  const [suppliers, setSuppliers] = useState<any[]>(() => getCachedData<any[]>('suppliers') || cachedReportsData?.suppliers || []);
+  const [salesReturns, setSalesReturns] = useState<any[]>(() => getCachedData<any[]>('returns') || cachedReportsData?.salesReturns || []);
   const [creditPayments, setCreditPayments] = useState<any[]>(() => cachedReportsData?.creditPayments || []);
   const [profiles, setProfiles] = useState<any[]>(() => cachedReportsData?.profiles || []);
   const [shopName, setShopName] = useState(() => cachedReportsData?.shopName || 'Sanoj Hardware');
@@ -122,12 +123,12 @@ export function Reports({ currentUser }: ReportsProps = {}) {
 
       if (!cachedReportsData) cachedReportsData = {};
 
-      if (sData) { setSales(sData); cachedReportsData.sales = sData; }
-      if (pData) { setProducts(pData); cachedReportsData.products = pData; }
-      if (tData) { setTransactions(tData); cachedReportsData.transactions = tData; }
-      if (cData) { setCustomers(cData); cachedReportsData.customers = cData; }
-      if (supData) { setSuppliers(supData); cachedReportsData.suppliers = supData; }
-      if (srData) { setSalesReturns(srData); cachedReportsData.salesReturns = srData; }
+      if (sData) { setSales(sData); cachedReportsData.sales = sData; setCachedData('sales', sData); }
+      if (pData) { setProducts(pData); cachedReportsData.products = pData; setCachedData('products', pData); }
+      if (tData) { setTransactions(tData); cachedReportsData.transactions = tData; setCachedData('transactions', tData); }
+      if (cData) { setCustomers(cData); cachedReportsData.customers = cData; setCachedData('customers', cData); }
+      if (supData) { setSuppliers(supData); cachedReportsData.suppliers = supData; setCachedData('suppliers', supData); }
+      if (srData) { setSalesReturns(srData); cachedReportsData.salesReturns = srData; setCachedData('returns', srData); }
       if (cpData) { setCreditPayments(cpData); cachedReportsData.creditPayments = cpData; }
       if (prData) { setProfiles(prData); cachedReportsData.profiles = prData; }
     } catch (e) {
@@ -166,7 +167,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   }, [tab]);
 
   // --- RANGE PRESETS EVALUATION ---
-  const [rangeType, setRangeType] = useState<'custom' | 'day' | 'month'>('custom');
+  const [rangeType, setRangeType] = useState<'custom' | 'day' | 'month'>('day');
   const [selectedDay, setSelectedDay] = useState(getLocalDateString());
   const [selectedMonth, setSelectedMonth] = useState(getLocalDateString().slice(0, 7));
 

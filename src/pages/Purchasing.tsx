@@ -31,6 +31,7 @@ import { supabase } from '../lib/supabaseClient';
 import { api } from '../lib/api';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { getCachedData, setCachedData } from '../services/dataCache';
 import type { PurchaseOrder, PurchaseItem, Product, Supplier, PurchaseReturn, PurchaseReturnItem, PurchaseReturnSettlementMode } from '../types';
 import { getTodaySriLankaDate } from '../utils/accounting';
 
@@ -83,11 +84,15 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
   const symbol = 'Rs.';
   const convert = (val: number) => val;
 
+  const cachedOrders = getCachedData<PurchaseOrder[]>('purchaseOrders');
+  const cachedProducts = getCachedData<Product[]>('products');
+  const cachedSuppliers = getCachedData<Supplier[]>('suppliers');
+
   const [tab, setTab] = useState<Tab>('history');
-  const [orders, setOrders] = useState<PurchaseOrder[]>([]);
-  const [suppliers, setSuppliers] = useState<string[]>([]);
-  const [supplierList, setSupplierList] = useState<Supplier[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
+  const [orders, setOrders] = useState<PurchaseOrder[]>(cachedOrders || []);
+  const [suppliers, setSuppliers] = useState<string[]>(() => cachedSuppliers?.map(s => s.name) || []);
+  const [supplierList, setSupplierList] = useState<Supplier[]>(cachedSuppliers || []);
+  const [products, setProducts] = useState<Product[]>(cachedProducts || []);
   const [purchaseReturns, setPurchaseReturns] = useState<PurchaseReturn[]>([]);
 
   // New PO State
@@ -95,7 +100,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
   const [poItems, setPoItems] = useState<PurchaseItem[]>([]);
   const [dueDate, setDueDate] = useState('');
   const [productSearch, setProductSearch] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(!cachedOrders);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [viewOrder, setViewOrder] = useState<PurchaseOrder | null>(null);
   const [selectedPoIds, setSelectedPoIds] = useState<string[]>([]);
   const [selectedDebitNoteCode, setSelectedDebitNoteCode] = useState<string>('');
@@ -131,13 +137,18 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
   const [receiveNotes, setReceiveNotes] = useState<string>('');
   const [isSubmittingReceive, setIsSubmittingReceive] = useState<boolean>(false);
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
+  const fetchData = useCallback(async (silent = false) => {
+    if (!silent && !getCachedData('purchaseOrders')) {
+      setIsLoading(true);
+    } else {
+      setIsSyncing(true);
+    }
     try {
       // 1. Fetch Products
       const { data: prodData } = await supabase.from('products').select('*');
       if (prodData) {
         setProducts(prodData);
+        setCachedData('products', prodData);
       }
 
       // 2. Fetch Suppliers
@@ -145,6 +156,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       if (supplierData && supplierData.length > 0) {
         setSupplierList(supplierData);
         setSuppliers(supplierData.map((s: any) => s.name));
+        setCachedData('suppliers', supplierData);
       } else if (prodData) {
         const uniqueSuppliers = Array.from(new Set(prodData.map((p) => p.supplier).filter(Boolean))) as string[];
         setSuppliers(uniqueSuppliers);
@@ -165,6 +177,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
           date: po.created_at ? new Date(po.created_at).toLocaleDateString() : (po.date || new Date().toLocaleDateString())
         }));
         setOrders(mappedOrders);
+        setCachedData('purchaseOrders', mappedOrders);
       }
 
       // 4. Fetch Purchase Returns
@@ -180,6 +193,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       console.error('Error fetching purchasing data:', err);
     } finally {
       setIsLoading(false);
+      setIsSyncing(false);
     }
   }, []);
 
