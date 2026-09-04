@@ -90,12 +90,19 @@ if (!process.env.TURSO_DATABASE_URL) process.env.TURSO_DATABASE_URL = FALLBACK_T
 if (!process.env.TURSO_AUTH_TOKEN) process.env.TURSO_AUTH_TOKEN = FALLBACK_TURSO_AUTH_TOKEN;
 
 export function getTursoClient(): Client | null {
-  const tursoUrl = process.env.TURSO_DATABASE_URL || FALLBACK_TURSO_DATABASE_URL;
+  let tursoUrl = process.env.TURSO_DATABASE_URL || FALLBACK_TURSO_DATABASE_URL;
   const tursoToken = process.env.TURSO_AUTH_TOKEN || FALLBACK_TURSO_AUTH_TOKEN;
+
+  if (tursoUrl && tursoUrl.startsWith('libsql://')) {
+    tursoUrl = tursoUrl.replace('libsql://', 'https://');
+  }
+
   if (tursoUrl && tursoToken) {
-    if (!tursoClient) {
-      tursoClient = createClient({ url: tursoUrl, authToken: tursoToken });
+    const globalForTurso = globalThis as unknown as { __tursoClientSingleton?: Client };
+    if (!globalForTurso.__tursoClientSingleton) {
+      globalForTurso.__tursoClientSingleton = createClient({ url: tursoUrl, authToken: tursoToken });
     }
+    tursoClient = globalForTurso.__tursoClientSingleton;
     return tursoClient;
   }
   return null;
@@ -103,18 +110,26 @@ export function getTursoClient(): Client | null {
 
 export async function initDb(customDbPath?: string): Promise<UnifiedDatabase> {
   const isWebEnvironment = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.DATABASE_ENGINE === 'turso';
-  const tursoUrl = process.env.TURSO_DATABASE_URL || FALLBACK_TURSO_DATABASE_URL;
+  let tursoUrl = process.env.TURSO_DATABASE_URL || FALLBACK_TURSO_DATABASE_URL;
   const tursoToken = process.env.TURSO_AUTH_TOKEN || FALLBACK_TURSO_AUTH_TOKEN;
+
+  if (tursoUrl && tursoUrl.startsWith('libsql://')) {
+    tursoUrl = tursoUrl.replace('libsql://', 'https://');
+  }
 
   if (isWebEnvironment || (tursoUrl && tursoToken && (process.env.VERCEL || process.env.APP_ROLE === 'web'))) {
     if (!tursoUrl || !tursoToken) {
       throw new Error('Vercel serverless environment detected, but TURSO_DATABASE_URL or TURSO_AUTH_TOKEN environment variable is missing.');
     }
-    console.log('⚡ [DualEngine] Web environment detected. Primary: Turso Cloud libSQL.');
-    tursoClient = createClient({
-      url: tursoUrl,
-      authToken: tursoToken
-    });
+    console.log('⚡ [DualEngine] Web environment detected. Primary: Turso Cloud libSQL (HTTPS Transport).');
+    const globalForTurso = globalThis as unknown as { __tursoClientSingleton?: Client };
+    if (!globalForTurso.__tursoClientSingleton) {
+      globalForTurso.__tursoClientSingleton = createClient({
+        url: tursoUrl,
+        authToken: tursoToken
+      });
+    }
+    tursoClient = globalForTurso.__tursoClientSingleton;
     isTursoActive = true;
     console.log(`✅ [DualEngine] Connected to Turso Cloud at: ${tursoUrl}`);
   } else {

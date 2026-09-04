@@ -554,6 +554,13 @@ async function getRuntimeEmployeesSnapshot() {
 }
 
 // Standard helper to initialize and migrate SQLite tables
+export async function ensureDbInitialized() {
+  if (!db) {
+    db = await initializeDatabase();
+  }
+  return db;
+}
+
 async function initializeDatabase() {
   db = await initDb(DB_FILE);
 
@@ -1810,13 +1817,27 @@ if (!process.env.VERCEL) {
 // 🚀 REST API ROUTING
 // ----------------------------------------------------
 
-// Explicit health check route for connectivity validation and uptime monitoring
-app.get(['/api/health', '/health'], (req, res) => {
-  res.status(200).json({
-    status: 'ok',
-    environment: process.env.VERCEL ? 'vercel-serverless' : 'desktop-local',
-    timestamp: new Date().toISOString()
-  });
+// Explicit health check route for connectivity validation and keep-alive uptime monitoring
+app.get(['/api/health', '/health'], async (req, res) => {
+  try {
+    const tursoClient = getTursoClient();
+    if (tursoClient && (process.env.VERCEL || process.env.APP_ROLE === 'web' || isTurso())) {
+      await tursoClient.execute('SELECT 1');
+    } else if (db) {
+      await db.get('SELECT 1');
+    }
+    return res.status(200).json({
+      status: 'ok',
+      environment: process.env.VERCEL ? 'vercel-serverless' : 'desktop-local',
+      timestamp: Date.now()
+    });
+  } catch (error) {
+    return res.status(500).json({
+      status: 'error',
+      message: error?.message || 'Database health check failed',
+      timestamp: Date.now()
+    });
+  }
 });
 
 // TRIGGER MANUAL BACKUP API
@@ -2529,6 +2550,8 @@ app.get('/api/sales', async (req, res) => {
       payment_received: s.payment_received || 0,
       transportation_fee: Number(s.transportation_fee || 0),
       transportationFee: Number(s.transportation_fee || 0),
+      delivery_fee: Number(s.transportation_fee || 0),
+      deliveryFee: Number(s.transportation_fee || 0),
       credit_note_applied: Number(s.credit_note_applied || 0),
       creditNoteApplied: Number(s.credit_note_applied || 0),
       credit_note_code: s.credit_note_code || '',
@@ -2674,7 +2697,12 @@ app.post('/api/sales', async (req, res) => {
   const created_at = new Date().toISOString();
   const creditNoteApplied = Number(s.credit_note_applied || s.creditNoteApplied || 0);
   const creditNoteCode = s.credit_note_code || s.creditNoteCode || '';
-  const transportationFeeVal = Number(s.transportation_fee !== undefined ? s.transportation_fee : (s.transportationFee || 0));
+  const transportationFeeVal = Number(
+    s.transportation_fee !== undefined ? s.transportation_fee : 
+    (s.transportationFee !== undefined ? s.transportationFee : 
+    (s.delivery_fee !== undefined ? s.delivery_fee : 
+    (s.deliveryFee !== undefined ? s.deliveryFee : 0)))
+  );
   const customerNameVal = s.customer_name !== undefined ? s.customer_name : (s.customerName !== undefined ? s.customerName : (s.customer_id ? '' : 'Guest Customer'));
   const customerPhoneVal = s.customer_phone || s.customerPhone || '';
   const customerAddressVal = s.customer_address || s.customerAddress || '';
@@ -2927,7 +2955,7 @@ app.post('/api/sales', async (req, res) => {
 
     // Enqueue upstream sync for sale, inventory decrements, and customer balance
     try {
-      enqueueSync(db, 'sales', id, 'UPSERT').catch(() => {});
+      await enqueueSync(db, 'sales', id, 'UPSERT');
       if (Array.isArray(enrichedItems)) {
         for (const item of enrichedItems) {
           const prodId = item.productId || item.product_id;
@@ -2939,7 +2967,13 @@ app.post('/api/sales', async (req, res) => {
       if (s.customer_id) {
         enqueueSync(db, 'customers', s.customer_id, 'UPSERT').catch(() => {});
       }
-      runSyncCycle(db).catch(() => {});
+      // Immediate non-blocking upstream sync push to Turso Cloud (1-2 second latency)
+      const tursoClient = getTursoClient();
+      if (tursoClient) {
+        pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Checkout Immediate Push Notice]:', err.message));
+      } else {
+        runSyncCycle(db).catch(() => {});
+      }
     } catch (_) {}
 
     // Return mock database record resembling database insertion output
@@ -7546,6 +7580,6 @@ if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
   })();
 }
 
-export { app };
+export { app, ensureDbInitialized };
 export default app;
 

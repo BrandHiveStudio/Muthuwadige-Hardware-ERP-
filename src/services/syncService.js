@@ -136,6 +136,13 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
         } catch (_) {}
       }
 
+      // Ensure delivery_fee / transportation_fee parity
+      if (item.table_name === 'sales' && row && typeof row === 'object') {
+        if (row.transportation_fee === undefined && row.delivery_fee !== undefined) {
+          row.transportation_fee = row.delivery_fee;
+        }
+      }
+
       if (item.action === 'DELETE') {
         statements.push({
           sql: `DELETE FROM "${item.table_name}" WHERE id = ?`,
@@ -341,9 +348,20 @@ export async function reconcileLocalCatalogWithCloud(localDb, tursoClient) {
 }
 
 /**
- * Start automated background sync worker (runs every 3 seconds for near-real-time dual engine sync)
+ * Trigger an immediate event-driven upstream push to cloud
  */
-export function startBackgroundSyncWorker(localDb, intervalMs = 3000) {
+export async function triggerPush(localDb) {
+  if (!localDb || isWebClient) return;
+  const tursoClient = getTursoClient();
+  if (tursoClient) {
+    return pushUpstreamChanges(localDb, tursoClient);
+  }
+}
+
+/**
+ * Start automated background sync worker (runs every 30 seconds fallback with immediate event-driven checkout pushes)
+ */
+export function startBackgroundSyncWorker(localDb, intervalMs = 30000) {
   if (isWebClient) {
     console.log('🌐 [BackgroundSync] Web client environment detected. Background worker disabled (direct cloud queries).');
     return;
@@ -353,14 +371,14 @@ export function startBackgroundSyncWorker(localDb, intervalMs = 3000) {
     clearInterval(syncIntervalId);
   }
 
-  console.log(`⏱️ [BackgroundSync] Starting automated 3s near-real-time background sync worker...`);
+  console.log(`⏱️ [BackgroundSync] Starting automated 30s fallback background sync worker...`);
 
   // Run initial sync cycle after 1 second to let server initialize
   setTimeout(() => {
     runSyncCycle(localDb).catch(() => {});
   }, 1000);
 
-  // Schedule recurring 3s cycle
+  // Schedule recurring 30s fallback cycle
   syncIntervalId = setInterval(() => {
     runSyncCycle(localDb).catch(() => {});
   }, intervalMs);

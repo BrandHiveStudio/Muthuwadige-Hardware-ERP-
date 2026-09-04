@@ -148,8 +148,8 @@ export function Auth({ onLogin }: AuthProps) {
     const fetchSettings = async () => {
       const activeBaseUrl = getBaseUrl();
       try {
-        // Fast pre-flight health check to verify server connectivity
-        const healthRes = await fetchWithTimeout(`${activeBaseUrl}/health`, {}, 4000).catch(() => null);
+        // Pre-flight health check to verify server connectivity (20s cold start tolerance)
+        const healthRes = await fetchWithTimeout(`${activeBaseUrl}/health`, {}, 20000).catch(() => null);
         if (healthRes && healthRes.ok && isMounted) {
           setConnectionError(false);
         }
@@ -173,7 +173,7 @@ export function Auth({ onLogin }: AuthProps) {
 
           if (isLiveWebDomain) {
             try {
-              const check = await fetchWithTimeout(`${activeBaseUrl}/health`, {}, 3000);
+              const check = await fetchWithTimeout(`${activeBaseUrl}/health`, {}, 20000);
               if (check.ok) {
                 setConnectionError(false);
                 return;
@@ -491,7 +491,7 @@ export function Auth({ onLogin }: AuthProps) {
                   disabled={isLoading}
                   className="w-full bg-[#DAA520] hover:bg-[#B8860B] text-white font-black py-4 rounded-xl transition-all shadow-lg shadow-[#DAA520]/20 uppercase tracking-widest text-xs mt-2 disabled:opacity-70 disabled:cursor-not-allowed"
                 >
-                  {isLoading ? 'Verifying Credentials...' : 'Secure Login'}
+                  {isLoading ? 'Waking server & connecting...' : 'Secure Login'}
                 </button>
               </form>
             )}

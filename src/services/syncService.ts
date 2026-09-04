@@ -147,6 +147,13 @@ export async function pushUpstreamChanges(localDb: any, tursoClient: Client | nu
         } catch {}
       }
 
+      // Ensure delivery_fee / transportation_fee parity
+      if (item.table_name === 'sales' && row && typeof row === 'object') {
+        if (row.transportation_fee === undefined && row.delivery_fee !== undefined) {
+          row.transportation_fee = row.delivery_fee;
+        }
+      }
+
       if (item.action === 'DELETE') {
         statements.push({
           sql: `DELETE FROM "${item.table_name}" WHERE id = ?`,
@@ -344,14 +351,25 @@ export async function reconcileLocalCatalogWithCloud(localDb: any, tursoClient: 
   return;
 }
 
-export function startBackgroundSyncWorker(localDb: any, intervalMs = 3000): any {
+/**
+ * Trigger an immediate event-driven upstream push to cloud
+ */
+export async function triggerPush(localDb: any): Promise<void> {
+  if (!localDb || isWebClient) return;
+  const tursoClient = getTursoClient();
+  if (tursoClient) {
+    return pushUpstreamChanges(localDb, tursoClient);
+  }
+}
+
+export function startBackgroundSyncWorker(localDb: any, intervalMs = 30000): any {
   if (isWebClient) return null;
 
   if (syncIntervalId) {
     clearInterval(syncIntervalId);
   }
 
-  console.log(`⏱️ [BackgroundSync] Starting automated 3s near-real-time background sync worker...`);
+  console.log(`⏱️ [BackgroundSync] Starting automated 30s fallback background sync worker...`);
 
   setTimeout(() => {
     runSyncCycle(localDb).catch(() => {});
