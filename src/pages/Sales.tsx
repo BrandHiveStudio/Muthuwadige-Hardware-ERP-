@@ -5373,77 +5373,94 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                         {t('Search Products & Sub-Items', 'භාණ්ඩ සහ උප-භාණ්ඩ සොයන්න')}
                       </h4>
 
-                      <div className="relative">
-                        <input
-                          type="text"
-                          ref={quoteSearchInputRef}
-                          placeholder={t('Scan barcode or type name, sub-item, SKU & press Enter...', 'බාර්කෝඩ් ස්කෑන් කරන්න හෝ නම ගහලා Enter ඔබන්න...')}
-                          value={quoteSearch}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setQuoteSearch(val);
-                            if (val.trim()) {
-                              const q = val.trim().toLowerCase();
-                              const exactMatch = matchingQuoteSelectables.find(i => i.barcode && i.barcode.trim().toLowerCase() === q);
-                              if (exactMatch) {
-                                handleAddSelectableToQuoteCart(exactMatch);
-                                setQuoteSearch('');
+                      {/* Search Input Container */}
+                      <div className="relative w-full">
+                        <div className="flex items-center bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 shadow-inner focus-within:ring-2 focus-within:ring-amber-500/20 focus-within:border-amber-500 transition-all">
+                          <SearchIcon className="w-4 h-4 text-amber-500 shrink-0 mr-2.5" />
+                          <input
+                            type="text"
+                            ref={quoteSearchInputRef}
+                            placeholder={t('Search product name or scan barcode...', 'භාණ්ඩයේ නම සොයන්න හෝ බාර්කෝඩ් ස්කෑන් කරන්න...')}
+                            value={quoteSearch}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setQuoteSearch(val);
+                              if (val.trim()) {
+                                const q = val.trim().toLowerCase();
+                                const exactMatch = matchingQuoteSelectables.find(i => i.barcode && i.barcode.trim().toLowerCase() === q);
+                                if (exactMatch) {
+                                  handleAddSelectableToQuoteCart(exactMatch);
+                                  setQuoteSearch('');
+                                }
                               }
-                            }
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              if (!quoteSearch.trim()) return;
-                              if (matchingQuoteSelectables.length > 0) {
-                                handleAddSelectableToQuoteCart(matchingQuoteSelectables[0]);
-                                setQuoteSearch('');
-                              } else {
-                                alert(t(`No product matching "${quoteSearch}" found!`, `"${quoteSearch}" නමින් භාණ්ඩයක් හමු නොවීය!`));
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                if (!quoteSearch.trim()) return;
+                                if (matchingQuoteSelectables.length > 0) {
+                                  handleAddSelectableToQuoteCart(matchingQuoteSelectables[0]);
+                                  setQuoteSearch('');
+                                } else {
+                                  alert(t(`No product matching "${quoteSearch}" found!`, `"${quoteSearch}" නමින් භාණ්ඩයක් හමු නොවීය!`));
+                                }
                               }
-                            }
-                          }}
-                          className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
-                        />
-                        {quoteSearch && (
-                          <button type="button" onClick={() => setQuoteSearch('')} className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 text-xs font-bold">✕</button>
+                            }}
+                            className="w-full bg-transparent text-xs font-bold text-slate-800 dark:text-slate-100 outline-none pr-6"
+                          />
+                          {quoteSearch && (
+                            <button
+                              type="button"
+                              onClick={() => setQuoteSearch('')}
+                              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors p-0.5"
+                            >
+                              <XIcon className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Search Results Dropdown: Force absolute overlay & high z-index */}
+                        {quoteSearch.trim().length > 0 && (
+                          <div className="absolute left-0 right-0 top-full mt-2 z-50 bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 max-h-80 overflow-y-auto">
+                            {matchingQuoteSelectables.length === 0 ? (
+                              <div className="p-4 text-center text-slate-400 dark:text-slate-500 font-bold text-xs italic">
+                                {t('No products or sub-items found.', 'කිසිදු භාණ්ඩයක් හමු නොවීය.')}
+                              </div>
+                            ) : (
+                              matchingQuoteSelectables.slice(0, 30).map((product) => (
+                                <div
+                                  key={product.key}
+                                  onClick={() => {
+                                    handleAddSelectableToQuoteCart(product);
+                                    setQuoteSearch('');
+                                  }}
+                                  className="p-3 hover:bg-slate-50 dark:hover:bg-slate-700/50 cursor-pointer flex justify-between items-center transition border-b border-slate-100 dark:border-slate-700/50 last:border-b-0"
+                                >
+                                  <div>
+                                    <div className="font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-1.5 text-xs">
+                                      <span>{product.displayName}</span>
+                                      {product.isSubItem && (
+                                        <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 text-[8px] font-black rounded uppercase">
+                                          Sub
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                                      SKU: {product.sku || product.barcode || 'N/A'} • Stock: {product.stock} {product.unit || ''}
+                                    </div>
+                                  </div>
+                                  <div className="font-bold text-amber-600 dark:text-amber-400 text-xs">
+                                    {symbol} {Number(product.price).toFixed(2)}
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
                         )}
                       </div>
 
-                      {/* Matching Selectables List (Sand, Bucket, Shovel, Sub-items) */}
-                      <div className="max-h-56 overflow-y-auto divide-y divide-slate-100 pr-1">
-                        {matchingQuoteSelectables.length === 0 ? (
-                          <div className="py-4 text-center text-slate-400 font-bold text-xs italic">
-                            {t('No products or sub-items found.', 'කිසිදු භාණ්ඩයක් හමු නොවීය.')}
-                          </div>
-                        ) : (
-                          matchingQuoteSelectables.slice(0, 15).map(item => (
-                            <div
-                              key={item.key}
-                              onClick={() => {
-                                handleAddSelectableToQuoteCart(item);
-                                setQuoteSearch('');
-                              }}
-                              className="py-2.5 px-3 cursor-pointer hover:bg-amber-50/70 flex justify-between items-center transition-all rounded-xl group border border-transparent hover:border-amber-200"
-                            >
-                              <div className="space-y-0.5">
-                                <div className="text-xs font-bold text-slate-800 group-hover:text-amber-900 flex items-center gap-1.5">
-                                  <span>{item.displayName}</span>
-                                  {item.isSubItem && (
-                                    <span className="px-1 py-0.2 bg-amber-100 text-amber-800 text-[8px] font-black rounded uppercase">Sub</span>
-                                  )}
-                                </div>
-                                <div className="text-[9px] text-slate-400 font-mono">
-                                  Cat: {item.category} • SKU: {item.sku || 'N/A'} • Barcode: {item.barcode || 'N/A'}
-                                </div>
-                              </div>
-                              <div className="text-right">
-                                <div className="text-xs font-black text-amber-600">{symbol} {convert(item.price).toLocaleString()}</div>
-                                <span className="text-[9px] font-black text-amber-700 uppercase bg-amber-100 px-2 py-0.5 rounded group-hover:bg-amber-500 group-hover:text-white transition-all">+ Add</span>
-                              </div>
-                            </div>
-                          ))
-                        )}
+                      <div className="text-[10px] text-slate-400 font-semibold flex items-center gap-1.5 pt-0.5">
+                        <span>💡 {t('Type product name or scan barcode to view & add matching items.', 'භාණ්ඩයේ නම හෝ බාර්කෝඩ් ස්කෑන් කර භාණ්ඩ තෝරාගන්න.')}</span>
                       </div>
                     </div>
                   </div>
