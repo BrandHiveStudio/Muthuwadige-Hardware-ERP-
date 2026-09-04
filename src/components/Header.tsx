@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SearchIcon, BellIcon, MenuIcon, RotateCw, RefreshCw } from 'lucide-react';
 import type { User, PageName, SyncStatus } from '../types';
 import { api } from '../lib/api';
@@ -68,6 +68,7 @@ export function Header({
   });
   const [isManualSyncing, setIsManualSyncing] = useState(false);
   const [syncToastMessage, setSyncToastMessage] = useState<string | null>(null);
+  const consecutiveFailuresRef = useRef<number>(0);
   const pageInfo = pageTitles[currentPage] || { title: 'Hardware Store ERP', breadcrumb: 'System' };
 
   const isElectronApp = typeof window !== 'undefined' && Boolean((window as any).electronAPI);
@@ -76,6 +77,8 @@ export function Header({
   const fetchSyncStatus = useCallback(async () => {
     try {
       const data = await api.sync.getStatus();
+      // Any successful response immediately resets failure counter to 0
+      consecutiveFailuresRef.current = 0;
       setSyncStatus(data);
       try {
         if (typeof window !== 'undefined') {
@@ -83,19 +86,24 @@ export function Header({
         }
       } catch (_) {}
     } catch (_) {
+      consecutiveFailuresRef.current += 1;
       const isElectron = typeof window !== 'undefined' && Boolean((window as any).electronAPI);
-      setSyncStatus(prev => prev ? { ...prev, isOnline: false, status: 'offline' } : {
-        isOnline: true,
-        isWebClient: !isElectron,
-        lastUpstreamSync: null,
-        lastDownstreamSync: null,
-        lastCounterSync: null,
-        lastSyncedAt: null,
-        queuedCount: 0,
-        pendingCount: 0,
-        status: 'online',
-        isSyncing: false
-      });
+
+      // Only toggle status to offline after 3 consecutive failures (30 seconds sustained)
+      if (consecutiveFailuresRef.current >= 3) {
+        setSyncStatus(prev => prev ? { ...prev, isOnline: false, status: 'offline' } : {
+          isOnline: false,
+          isWebClient: !isElectron,
+          lastUpstreamSync: null,
+          lastDownstreamSync: null,
+          lastCounterSync: null,
+          lastSyncedAt: null,
+          queuedCount: 0,
+          pendingCount: 0,
+          status: 'offline',
+          isSyncing: false
+        });
+      }
     }
   }, []);
 

@@ -456,6 +456,7 @@ export function Inventory() {
   const [newConversionKg, setNewConversionKg] = useState<string>('');
   const [newConversionPrice, setNewConversionPrice] = useState<string>('');
   const [isCustomCategory, setIsCustomCategory] = useState<boolean>(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
 
   const fetchSuppliers = async () => {
     try {
@@ -473,25 +474,41 @@ export function Inventory() {
     } else {
       setIsSyncing(true);
     }
-    const { data, error } = await supabase
-      .from('products')
-      .select('*')
-      .order('name', { ascending: true });
+    try {
+      const { data, error } = await supabase
+        .from('products')
+        .select('*')
+        .order('name', { ascending: true });
 
-    if (error) {
-      console.error('Error fetching inventory:', error.message);
-    } else {
-      const mappedData = data?.map(item => ({
-        ...item,
-        costPrice: item.costPrice !== undefined ? item.costPrice : item.cost_price !== undefined ? item.cost_price : 0,
-        measureDetails: item.measureDetails !== undefined ? item.measureDetails : item.measure_details !== undefined ? item.measure_details : '',
-        supplierPhone: item.supplierPhone !== undefined ? item.supplierPhone : item.supplier_phone !== undefined ? item.supplier_phone : ''
-      }));
-      setProducts(mappedData || []);
-      setCachedData('products', mappedData || []);
+      if (error) {
+        console.error('Error fetching inventory:', error.message);
+        setCatalogError('Unable to refresh live catalog. Displaying cached inventory.');
+      } else {
+        const mappedData = data?.map(item => ({
+          ...item,
+          costPrice: item.costPrice !== undefined ? item.costPrice : item.cost_price !== undefined ? item.cost_price : 0,
+          measureDetails: item.measureDetails !== undefined ? item.measureDetails : item.measure_details !== undefined ? item.measure_details : '',
+          supplierPhone: item.supplierPhone !== undefined ? item.supplierPhone : item.supplier_phone !== undefined ? item.supplier_phone : ''
+        }));
+        if (mappedData && mappedData.length > 0) {
+          setProducts(mappedData);
+          setCachedData('products', mappedData);
+          setCatalogError(null);
+        } else if (mappedData) {
+          // If the server explicitly returned an empty array, update only if not already populated with cached data
+          setProducts(prev => (prev.length > 0 ? prev : []));
+          setCachedData('products', mappedData);
+          setCatalogError(null);
+        }
+      }
+    } catch (err: any) {
+      console.error('Exception fetching inventory:', err?.message || err);
+      // Retain existing products in state, do NOT zero out the inventory
+      setCatalogError('Unable to refresh live catalog. Displaying cached inventory.');
+    } finally {
+      setIsLoading(false);
+      setIsSyncing(false);
     }
-    setIsLoading(false);
-    setIsSyncing(false);
   };
 
   useEffect(() => {
@@ -924,6 +941,23 @@ export function Inventory() {
 
   return (
     <div className="p-4 sm:p-6 space-y-6">
+      {/* Warning Banner when live catalog fetch fails but cached products are preserved */}
+      {catalogError && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-xl flex items-center justify-between shadow-sm">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">⚠️</span>
+            <span className="text-xs sm:text-sm font-semibold">{catalogError}</span>
+          </div>
+          <button
+            onClick={() => fetchProducts(false)}
+            disabled={isLoading || isSyncing}
+            className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
+          >
+            {isLoading || isSyncing ? t('Retrying...', 'යළි උත්සාහ කරමින්...') : t('Retry Now', 'දැන් නැවත උත්සාහ කරන්න')}
+          </button>
+        </div>
+      )}
+
       {/* Stats Section */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">

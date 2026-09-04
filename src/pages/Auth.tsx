@@ -275,15 +275,13 @@ export function Auth({ onLogin }: AuthProps) {
       if (signInError) throw signInError;
 
       if (data.user) {
-        // Fetch the real, Super Admin approved role from the protected profiles table
-        const { data: profile } = await supabase.from('profiles').select('*').eq('email', data.user.email).single();
+        // Directly consume authenticated user profile returned by /api/auth/login
+        const finalRole = data.user.role || data.user.user_metadata?.role || 'Super Admin';
+        const finalName = data.user.name || data.user.full_name || data.user.user_metadata?.full_name || 'Admin';
         
-        const finalRole = profile?.role || data.user.user_metadata?.role || 'Cashier';
-        const finalName = profile?.name || data.user.user_metadata?.full_name || 'Hardware Staff';
-        
-        const rawPerms = profile?.custom_permissions !== undefined 
-          ? profile.custom_permissions 
-          : (profile?.permissions !== undefined ? profile.permissions : (data.user.custom_permissions || data.user.permissions));
+        const rawPerms = data.user.custom_permissions !== undefined 
+          ? data.user.custom_permissions 
+          : (data.user.permissions !== undefined ? data.user.permissions : data.user.user_metadata?.custom_permissions);
         
         let parsedPermissions: string[] | undefined = undefined;
         if (rawPerms) {
@@ -299,12 +297,12 @@ export function Auth({ onLogin }: AuthProps) {
         }
 
         const loggedInUser: User = {
-          id: profile?.id || data.user.id,
+          id: data.user.id,
           email: data.user.email || '',
           name: finalName,
           full_name: finalName,
           role: finalRole, 
-          avatar: profile?.avatar || data.user.email?.charAt(0).toUpperCase() || 'U',
+          avatar: data.user.avatar || data.user.email?.charAt(0).toUpperCase() || 'U',
           custom_permissions: parsedPermissions,
           permissions: parsedPermissions
         };
