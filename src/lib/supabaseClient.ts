@@ -28,8 +28,16 @@ const fetchTable = async (table: string, type?: string, filter?: { col: string; 
       data = await api.purchaseOrders.getAll();
     } else if (table === 'employees') {
       data = await api.employees.getAll();
-    } else if (table === 'transactions') {
+    } else if (table === 'transactions' || table === 'cash_book' || table === 'cash-book' || table === 'ledger') {
       data = await api.transactions.getAll();
+    } else if (table === 'quotations') {
+      data = await api.quotations.getAll();
+    } else if (table === 'quotation_items') {
+      const res = await fetchWithTimeout(`${API_URL}/quotation_items`);
+      if (res.ok) data = await res.json();
+    } else if (table === 'sales_return_items') {
+      const res = await fetchWithTimeout(`${API_URL}/sales_return_items`);
+      if (res.ok) data = await res.json();
     } else if (table === 'profiles') {
       data = await api.profiles.getAll();
     } else if (table === 'system_settings') {
@@ -86,8 +94,10 @@ const insertTable = async (table: string, payload: any) => {
       result = await api.purchaseOrders.save(payload);
     } else if (table === 'employees') {
       result = await api.employees.save(payload);
-    } else if (table === 'transactions') {
+    } else if (table === 'transactions' || table === 'cash_book' || table === 'cash-book' || table === 'ledger') {
       result = await api.transactions.save(payload);
+    } else if (table === 'quotations') {
+      result = await api.quotations.save(payload);
     } else if (table === 'sales_returns') {
       result = await api.sales.returns.process(payload);
     } else if (table === 'credit_payments' || table === 'credit_settlements') {
@@ -178,8 +188,10 @@ const deleteTable = async (table: string, val: any) => {
       result = await api.suppliers.delete(val);
     } else if (table === 'employees') {
       result = await api.employees.delete(val);
-    } else if (table === 'transactions') {
+    } else if (table === 'transactions' || table === 'cash_book' || table === 'cash-book' || table === 'ledger') {
       return { data: null, error: new Error('Deleting finance/accounting transaction records is disabled for financial audit compliance.') };
+    } else if (table === 'quotations') {
+      result = await api.quotations.delete(val);
     } else if (table === 'sales') {
       result = await api.sales.delete(val);
     } else if (table === 'profiles') {

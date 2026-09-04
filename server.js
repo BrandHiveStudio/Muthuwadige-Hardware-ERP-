@@ -912,6 +912,22 @@ async function initializeDatabase() {
     )
   `);
 
+  // 13.5 Create Quotation Items Table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS quotation_items (
+      id TEXT PRIMARY KEY,
+      quotation_id TEXT,
+      product_id TEXT,
+      product_name TEXT,
+      quantity REAL DEFAULT 1,
+      price REAL DEFAULT 0,
+      unit TEXT,
+      discount REAL DEFAULT 0,
+      total REAL DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
   // 14. Create Delivery Notes Table
   await db.exec(`
     CREATE TABLE IF NOT EXISTS delivery_notes (
@@ -1144,6 +1160,21 @@ async function initializeDatabase() {
   `);
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN difference_payment_method TEXT DEFAULT 'Cash'"); } catch (e) {}
 
+  // 17.5 Create Sales Return Items Table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS sales_return_items (
+      id TEXT PRIMARY KEY,
+      return_id TEXT,
+      product_id TEXT,
+      product_name TEXT,
+      quantity REAL DEFAULT 1,
+      unit_price REAL DEFAULT 0,
+      cost_price REAL DEFAULT 0,
+      total REAL DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
   // 18. Create Cheque Registry Table
   await db.exec(`
     CREATE TABLE IF NOT EXISTS cheque_registry (
@@ -1166,6 +1197,10 @@ async function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // Financial Views for cash_book and cheques
+  try { await db.exec(`CREATE VIEW IF NOT EXISTS cash_book AS SELECT * FROM transactions;`); } catch (_) {}
+  try { await db.exec(`CREATE VIEW IF NOT EXISTS cheques AS SELECT * FROM cheque_registry;`); } catch (_) {}
 
   // 19. Create Purchase Returns Table
   await db.exec(`
@@ -2559,7 +2594,7 @@ app.get('/api/sales', async (req, res) => {
   }
 });
 
-app.get('/api/reports/summary', async (req, res) => {
+app.get(['/api/reports/summary', '/api/sales/summary'], async (req, res) => {
   try {
     const { from_date, to_date, from, to } = req.query;
     
@@ -2573,9 +2608,16 @@ app.get('/api/reports/summary', async (req, res) => {
        WHERE status NOT IN ('cancelled', 'Voided', 'voided')`
     );
 
-    let totalRevenue = 0;
+    const returns = await db.all(
+      `SELECT * FROM sales_returns 
+       WHERE status NOT IN ('cancelled', 'Voided', 'voided')`
+    ).catch(() => []);
+
+    let grossStickerSales = 0;
+    let customerDiscounts = 0;
+    let deliveryFees = 0;
     let ordersCount = 0;
-    let cogs = 0;
+    let grossCogs = 0;
     let cashSales = 0;
     let creditSales = 0;
 
@@ -2593,7 +2635,13 @@ app.get('/api/reports/summary', async (req, res) => {
 
       if (saleDateStr >= startDate && saleDateStr <= endDate) {
         const total = Number(s.total_amount || s.total || 0);
-        totalRevenue += total;
+        const subtotal = Number(s.subtotal !== undefined ? s.subtotal : total);
+        const disc = Number(s.discount_amount || s.discount || 0);
+        const delFee = Number(s.delivery_fee !== undefined ? s.delivery_fee : (s.transportation_fee || s.deliveryFee || 0));
+
+        grossStickerSales += (subtotal > 0 ? subtotal : total);
+        customerDiscounts += disc;
+        deliveryFees += delFee;
         ordersCount += 1;
 
         if (String(s.payment_method).toLowerCase() === 'credit') {
@@ -2611,22 +2659,61 @@ app.get('/api/reports/summary', async (req, res) => {
           for (const it of items) {
             const cost = Number(it.cost_price || it.costPrice || 0);
             const qty = Number(it.quantity || it.qty || 1);
-            cogs += (cost * qty);
+            grossCogs += (cost * qty);
           }
         }
       }
     }
 
-    const netProfit = totalRevenue - cogs;
+    let returnsSellingRevenue = 0;
+    let returnsCostVal = 0;
+
+    for (const r of returns) {
+      let retDateStr = '';
+      if (r.created_at) {
+        try {
+          retDateStr = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Colombo' }).format(new Date(r.created_at));
+        } catch (_) {
+          retDateStr = String(r.created_at).substring(0, 10);
+        }
+      } else if (r.date) {
+        retDateStr = String(r.date).substring(0, 10);
+      }
+
+      if (retDateStr >= startDate && retDateStr <= endDate) {
+        const retAmt = Number(r.return_amount !== undefined ? r.return_amount : (r.total_refunded || r.amount || 0));
+        returnsSellingRevenue += retAmt;
+
+        let retItems = [];
+        try {
+          retItems = typeof r.returned_items === 'string' ? JSON.parse(r.returned_items) : (r.returned_items || r.items || []);
+        } catch (_) {}
+
+        if (Array.isArray(retItems)) {
+          for (const it of retItems) {
+            const cost = Number(it.cost_price || it.costPrice || 0);
+            const qty = Number(it.quantity || it.qty || 1);
+            returnsCostVal += (cost * qty);
+          }
+        }
+      }
+    }
+
+    const netSales = Math.max(0, grossStickerSales - customerDiscounts - returnsSellingRevenue + deliveryFees);
+    const netCogs = Math.max(0, grossCogs - returnsCostVal);
+    const netProfit = netSales - netCogs;
 
     res.json({
       success: true,
       from_date: startDate,
       to_date: endDate,
-      total_revenue: totalRevenue,
-      gross_sales: totalRevenue,
-      net_sales: totalRevenue,
-      cogs,
+      total_revenue: netSales,
+      gross_sales: grossStickerSales,
+      customer_discounts: customerDiscounts,
+      returns_revenue: returnsSellingRevenue,
+      delivery_fee: deliveryFees,
+      net_sales: netSales,
+      cogs: netCogs,
       net_profit: netProfit,
       orders_count: ordersCount,
       cash_sales: cashSales,
@@ -3155,6 +3242,8 @@ const handleCreditPaymentInsert = async (req, res) => {
           'INSERT INTO transactions (id, date, description, amount, type, category, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [txId, txDate, description, amountPaid, 'income', category, invoiceNo, authorName, createdAt]
         ).catch(e => console.error('Error logging credit repayment transaction:', e));
+        enqueueSync(db, 'transactions', txId, 'UPSERT').catch(() => {});
+        enqueueSync(db, 'cash_book', txId, 'UPSERT').catch(() => {});
       }
     }
 
@@ -3162,7 +3251,12 @@ const handleCreditPaymentInsert = async (req, res) => {
     if (p.customer_id) {
       enqueueSync(db, 'customers', p.customer_id, 'UPSERT').catch(() => {});
     }
-    runSyncCycle(db).catch(() => {});
+    const tursoClient = getTursoClient();
+    if (tursoClient) {
+      pushUpstreamChanges(db, tursoClient).catch(() => {});
+    } else {
+      runSyncCycle(db).catch(() => {});
+    }
 
     res.json({ success: true, id, authorName });
   } catch (err) {
@@ -3170,9 +3264,7 @@ const handleCreditPaymentInsert = async (req, res) => {
   }
 };
 
-app.post('/api/credit_payments', handleCreditPaymentInsert);
-app.post('/api/credit_settlements', handleCreditPaymentInsert);
-app.post('/api/credit-settlements', handleCreditPaymentInsert);
+app.post(['/api/credit_payments', '/api/credit_settlements', '/api/credit-settlements', '/api/customers/payment', '/api/customer/payment'], handleCreditPaymentInsert);
 
 app.get('/api/credit_settlements', async (req, res) => {
   try {
@@ -3474,6 +3566,32 @@ app.post('/api/sales/returns', async (req, res) => {
         userEmail || 'system', 'active', reason || '', created_at, isCreditCustomer ? 1 : 0, finalDiffMethod
       ]
     );
+    await enqueueSync(db, 'sales_returns', id, 'INSERT');
+
+    // 2b. Normalized Sales Return items persistence for analytics parity & COGS reconciliation
+    for (let idx = 0; idx < returnedItems.length; idx++) {
+      const item = returnedItems[idx];
+      const pId = item.productId || item.product_id || item.id || '';
+      const uKey = (item.unit || '').toLowerCase().trim();
+      const origItem = originalItems.find(i => 
+        (i.lineId && (i.lineId === item.lineId || i.lineId === item.line_id)) ||
+        ((i.productId || i.id || i.product_id) === pId && (i.unit || '').toLowerCase().trim() === uKey)
+      ) || originalItems.find(i => (i.productId || i.id || i.product_id) === pId);
+
+      const sriId = 'sri_' + id + '_' + (pId || idx) + '_' + idx;
+      const sriQty = Number(item.qty || 0);
+      const sriPrice = Number(item.price || 0);
+      const sriCost = Number(item.cost_price || item.costPrice || origItem?.cost_price || origItem?.costPrice || 0);
+      const sriTotal = Number(item.total || (sriQty * sriPrice));
+
+      await db.run(
+        `INSERT OR REPLACE INTO sales_return_items (
+          id, return_id, product_id, product_name, quantity, unit_price, cost_price, total, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [sriId, id, pId, item.name || item.product_name || origItem?.name || '', sriQty, sriPrice, sriCost, sriTotal, created_at]
+      );
+      await enqueueSync(db, 'sales_return_items', sriId, 'INSERT');
+    }
 
     // 3. Restock returned items (preserving original sale conversion rate)
     for (const item of returnedItems) {
@@ -3491,6 +3609,7 @@ app.post('/api/sales/returns', async (req, res) => {
         'UPDATE products SET stock = stock + ? WHERE id = ?',
         [baseQtyRestock, pId]
       );
+      await enqueueSync(db, 'products', pId, 'UPDATE');
     }
 
     // 4. Handle Exchange items stock deduction with ATOMIC AVAILABILITY GUARD
@@ -3515,6 +3634,7 @@ app.post('/api/sales/returns', async (req, res) => {
           'UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?',
           [baseQtyDeduction, prod.id]
         );
+        await enqueueSync(db, 'products', prod.id, 'UPDATE');
       }
     }
 
@@ -3531,6 +3651,7 @@ app.post('/api/sales/returns', async (req, res) => {
           JSON.stringify(returnedItems), calcReturnAmount, calcReturnAmount, calcReturnAmount, 'active', reason || 'Sales Return Credit Note', userEmail || 'system', created_at
         ]
       );
+      await enqueueSync(db, 'credit_notes', cnId, 'INSERT');
     }
 
     // 6. Log financial transactions & revenue adjustments
@@ -3543,6 +3664,8 @@ app.post('/api/sales/returns', async (req, res) => {
           'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
           [txId, 'contra_revenue', 'Sales Return (Credit Adjustment)', `Credit Return Revenue Adjustment for ${invoiceNo}`, calcReturnAmount, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
         );
+        await enqueueSync(db, 'transactions', txId, 'INSERT');
+        await enqueueSync(db, 'cash_book', txId, 'INSERT');
       }
       if (finalCustomerPaid > 0) {
         const txId = 't_' + Date.now() + '_ex';
@@ -3550,6 +3673,8 @@ app.post('/api/sales/returns', async (req, res) => {
           'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
           [txId, 'income', 'Exchange Payment', `Exchange Balance Payment for ${invoiceNo}`, finalCustomerPaid - finalChangeGiven, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
         );
+        await enqueueSync(db, 'transactions', txId, 'INSERT');
+        await enqueueSync(db, 'cash_book', txId, 'INSERT');
       }
     } else {
       // Non-credit (Cash / Normal Sale Return)
@@ -3561,6 +3686,8 @@ app.post('/api/sales/returns', async (req, res) => {
           'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
           [txId, 'contra_revenue', retCategory, retDesc, calcReturnAmount, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
         );
+        await enqueueSync(db, 'transactions', txId, 'INSERT');
+        await enqueueSync(db, 'cash_book', txId, 'INSERT');
       }
       if (finalReturnMethod === 'Exchange' && finalCustomerPaid > 0) {
         const txId = 't_' + Date.now() + '_ex';
@@ -3568,6 +3695,8 @@ app.post('/api/sales/returns', async (req, res) => {
           'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
           [txId, 'income', 'Exchange Payment', `Exchange Balance Payment for ${invoiceNo}`, finalCustomerPaid - finalChangeGiven, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
         );
+        await enqueueSync(db, 'transactions', txId, 'INSERT');
+        await enqueueSync(db, 'cash_book', txId, 'INSERT');
       }
     }
 
@@ -3590,11 +3719,18 @@ app.post('/api/sales/returns', async (req, res) => {
       newStatus = 'Partially Returned';
     }
     await db.run('UPDATE sales SET status = ? WHERE id = ?', [newStatus, sale.id]);
+    await enqueueSync(db, 'sales', sale.id, 'UPDATE');
 
     await logAudit(userEmail || 'system', 'SALES_RETURN', `Processed ${finalReturnMethod} (Return No: ${return_no}) for Invoice ${invoiceNo} (Amount: Rs. ${calcReturnAmount})`);
 
     await commitTxn(db, txn);
     console.log(`[END] Process Sales Return: Invoice ${invoiceNo} - ${Date.now() - startTime}ms`);
+
+    const tursoClient = getTursoClient();
+    if (tursoClient) {
+      pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Sales Return Immediate Sync Push Notice]:', err.message));
+    }
+
     res.json({ 
       success: true, 
       id, 
@@ -3631,16 +3767,19 @@ app.post('/api/sales/returns/:id/void', async (req, res) => {
 
     // 1. Mark status as voided
     await db.run("UPDATE sales_returns SET status = 'voided' WHERE id = ?", [id]);
+    await enqueueSync(db, 'sales_returns', id, 'UPDATE');
 
     // 2. Re-deduct stock for returned items
     const returnedItems = safeParseJson(sr.returned_items, []);
     for (const item of returnedItems) {
       const convRate = Number(item.conversionRate) || 1;
       const baseQtyDeduction = convRate > 0 ? (Number(item.qty || 0) / convRate) : Number(item.qty || 0);
+      const prodId = item.productId || item.product_id;
       await db.run(
         'UPDATE products SET stock = stock - ? WHERE id = ?',
-        [baseQtyDeduction, item.productId || item.product_id]
+        [baseQtyDeduction, prodId]
       );
+      if (prodId) await enqueueSync(db, 'products', prodId, 'UPDATE');
     }
 
     // 3. Re-add stock for exchange items if applicable
@@ -3648,15 +3787,19 @@ app.post('/api/sales/returns/:id/void', async (req, res) => {
     for (const item of exchangeItems) {
       const convRate = Number(item.conversionRate) || 1;
       const baseQtyRestock = convRate > 0 ? (Number(item.qty || 0) / convRate) : Number(item.qty || 0);
+      const prodId = item.productId || item.product_id;
       await db.run(
         'UPDATE products SET stock = stock + ? WHERE id = ?',
-        [baseQtyRestock, item.productId || item.product_id]
+        [baseQtyRestock, prodId]
       );
+      if (prodId) await enqueueSync(db, 'products', prodId, 'UPDATE');
     }
 
     // 4. Void associated Credit Note if applicable
     if (sr.credit_note_no) {
       await db.run("UPDATE credit_notes SET status = 'voided', balance_remaining = 0 WHERE credit_note_no = ?", [sr.credit_note_no]);
+      const cn = await db.get('SELECT id FROM credit_notes WHERE credit_note_no = ?', [sr.credit_note_no]);
+      if (cn) await enqueueSync(db, 'credit_notes', cn.id, 'UPDATE');
     }
 
     // 5. Reverse financial refund & credit adjustment transactions
@@ -3704,11 +3847,18 @@ app.post('/api/sales/returns/:id/void', async (req, res) => {
         newStatus = 'Partially Returned';
       }
       await db.run('UPDATE sales SET status = ? WHERE id = ?', [newStatus, sale.id]);
+      await enqueueSync(db, 'sales', sale.id, 'UPDATE');
     }
 
     await logAudit(user, 'VOID_SALES_RETURN', `Voided Sales Return ${id} for Invoice ${sr.invoice_no}. Reason: ${reason || 'N/A'}`);
 
     await db.run('COMMIT');
+
+    const tursoClient = getTursoClient();
+    if (tursoClient) {
+      pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Void Return Immediate Sync Push Notice]:', err.message));
+    }
+
     res.json({ success: true });
   } catch (err) {
     await safeRollback(db);
@@ -4441,9 +4591,23 @@ app.delete('/api/employees/:id', async (req, res) => {
   }
 });
 
-// TRANSACTIONS API (Ledger / Accounting)
-app.get('/api/transactions', async (req, res) => {
+// TRANSACTIONS / FINANCE / CASH BOOK API (Ledger / Accounting)
+app.get(['/api/transactions', '/api/finance/ledger', '/api/cash-book', '/api/cash_book'], async (req, res) => {
   try {
+    const tursoClient = getTursoClient();
+    if (tursoClient && (process.env.VERCEL || process.env.APP_ROLE === 'web' || isTurso())) {
+      try {
+        const rs = await tursoClient.execute('SELECT * FROM cash_book ORDER BY date DESC, created_at DESC');
+        return res.json(rs.rows);
+      } catch (cloudErr) {
+        try {
+          const rs2 = await tursoClient.execute('SELECT * FROM transactions ORDER BY date DESC, created_at DESC');
+          return res.json(rs2.rows);
+        } catch (e) {
+          console.warn('[Finance API] Turso query error:', e.message);
+        }
+      }
+    }
     const data = await db.all('SELECT * FROM transactions ORDER BY date DESC, created_at DESC');
     res.json(data);
   } catch (err) {
@@ -4451,7 +4615,7 @@ app.get('/api/transactions', async (req, res) => {
   }
 });
 
-app.post('/api/transactions', async (req, res) => {
+app.post(['/api/transactions', '/api/finance/ledger', '/api/cash-book', '/api/cash_book'], async (req, res) => {
   const t = req.body;
   try {
     const transaction = normalizeRuntimeTransaction(t);
@@ -4459,14 +4623,20 @@ app.post('/api/transactions', async (req, res) => {
       'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [transaction.id, transaction.type, transaction.category, transaction.description, transaction.amount, transaction.date, transaction.reference, transaction.user_id, transaction.created_at]
     );
-    enqueueSync(db, 'transactions', transaction.id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
+    await enqueueSync(db, 'transactions', transaction.id, 'INSERT');
+    await enqueueSync(db, 'cash_book', transaction.id, 'INSERT');
+
+    const tursoClient = getTursoClient();
+    if (tursoClient) {
+      pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Manual Ledger Sync Push Notice]:', err.message));
+    }
     res.json({ success: true, id: transaction.id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.delete('/api/transactions/:id', async (req, res) => {
+app.delete(['/api/transactions/:id', '/api/finance/ledger/:id', '/api/cash-book/:id', '/api/cash_book/:id'], async (req, res) => {
   return res.status(403).json({ error: 'Deleting finance/accounting transaction records is disabled for financial audit compliance.' });
 });
 
@@ -4589,6 +4759,14 @@ app.post('/api/cheques', async (req, res) => {
         new Date().toISOString()
       ]
     );
+
+    await enqueueSync(db, 'cheque_registry', id, 'INSERT');
+    await enqueueSync(db, 'cheques', id, 'INSERT');
+
+    const tursoClient = getTursoClient();
+    if (tursoClient) {
+      pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Cheque Immediate Sync Push Notice]:', err.message));
+    }
 
     await logAudit(
       createdByVal,
@@ -4926,7 +5104,15 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
       `Cheque #${cheque.cheque_number} status changed: ${prevStatus} -> ${targetStatus}`
     );
 
+    await enqueueSync(db, 'cheque_registry', id, 'UPDATE');
+    await enqueueSync(db, 'cheques', id, 'UPDATE');
+
     await commitTxn(db, txn);
+
+    const tursoClient = getTursoClient();
+    if (tursoClient) {
+      pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Cheque Status Immediate Sync Push Notice]:', err.message));
+    }
 
     const updatedCheque = await db.get('SELECT * FROM cheque_registry WHERE id = ?', [id]);
     res.json({
@@ -5714,7 +5900,16 @@ async function executeUndoChequeStatus({ cheque_id, revert_to, user_email }) {
       `Cheque #${chqNo} (${cheque.party_name || 'Party'}, Rs. ${chqAmt.toLocaleString()}) reverted from ${prevStatus} to ${targetStatus}. Ledger entries & balances rolled back.`
     );
 
+    await enqueueSync(db, 'cheque_registry', cheque.id, 'UPDATE');
+    await enqueueSync(db, 'cheques', cheque.id, 'UPDATE');
+
     await commitTxn(db, txn);
+
+    const tursoClient = getTursoClient();
+    if (tursoClient) {
+      pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Undo Cheque Sync Push Notice]:', err.message));
+    }
+
     return { success: true, message: 'Cheque status reverted successfully.' };
   } catch (err) {
     if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
@@ -6943,7 +7138,125 @@ app.post('/api/quotations', async (req, res) => {
         created_at
       ]
     );
+    await enqueueSync(db, 'quotations', id, 'INSERT');
+
+    // Persist normalized quotation line items
+    const parsedItems = typeof items === 'string' ? safeParseJson(items, []) : (Array.isArray(items) ? items : []);
+    for (let idx = 0; idx < parsedItems.length; idx++) {
+      const it = parsedItems[idx];
+      const pId = it.productId || it.product_id || it.id || '';
+      const qiId = 'qi_' + id + '_' + (pId || idx) + '_' + idx;
+      const qQty = Number(it.quantity || it.qty || 0);
+      const qPrice = Number(it.unit_price || it.unitPrice || it.price || 0);
+      const qDisc = Number(it.discount || 0);
+      const qTotal = Number(it.total || (qQty * qPrice - qDisc));
+
+      await db.run(
+        `INSERT OR REPLACE INTO quotation_items (
+          id, quotation_id, product_id, product_name, quantity, price, unit, discount, total, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [qiId, id, pId, it.name || it.product_name || '', qQty, qPrice, it.unit || 'pcs', qDisc, qTotal, created_at]
+      );
+      await enqueueSync(db, 'quotation_items', qiId, 'INSERT');
+    }
+
+    const tursoClient = getTursoClient();
+    if (tursoClient) {
+      pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Quotation Immediate Sync Push Notice]:', err.message));
+    }
+
     res.json({ success: true, id, quote_no: finalQuoteNo });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/quotations/:id', async (req, res) => {
+  const { id } = req.params;
+  const {
+    quote_no,
+    customer_name,
+    customer_phone,
+    customer_address,
+    validity_period,
+    items,
+    subtotal,
+    discount_type,
+    discount_value,
+    discount_amount,
+    transportation_fee,
+    tax_amount,
+    total,
+    status
+  } = req.body;
+
+  try {
+    await db.run(
+      `UPDATE quotations SET
+        quote_no = COALESCE(?, quote_no),
+        customer_name = COALESCE(?, customer_name),
+        customer_phone = COALESCE(?, customer_phone),
+        customer_address = COALESCE(?, customer_address),
+        validity_period = COALESCE(?, validity_period),
+        items = COALESCE(?, items),
+        subtotal = COALESCE(?, subtotal),
+        discount_type = COALESCE(?, discount_type),
+        discount_value = COALESCE(?, discount_value),
+        discount_amount = COALESCE(?, discount_amount),
+        transportation_fee = COALESCE(?, transportation_fee),
+        tax_amount = COALESCE(?, tax_amount),
+        total = COALESCE(?, total),
+        status = COALESCE(?, status)
+      WHERE id = ?`,
+      [
+        quote_no,
+        customer_name,
+        customer_phone,
+        customer_address,
+        validity_period,
+        items !== undefined ? (typeof items === 'string' ? items : JSON.stringify(items)) : undefined,
+        subtotal !== undefined ? Number(subtotal) : undefined,
+        discount_type,
+        discount_value !== undefined ? Number(discount_value) : undefined,
+        discount_amount !== undefined ? Number(discount_amount) : undefined,
+        transportation_fee !== undefined ? Number(transportation_fee) : undefined,
+        tax_amount !== undefined ? Number(tax_amount) : undefined,
+        total !== undefined ? Number(total) : undefined,
+        status,
+        id
+      ]
+    );
+
+    if (items) {
+      await db.run('DELETE FROM quotation_items WHERE quotation_id = ?', [id]);
+      const parsedItems = typeof items === 'string' ? safeParseJson(items, []) : (Array.isArray(items) ? items : []);
+      for (let idx = 0; idx < parsedItems.length; idx++) {
+        const it = parsedItems[idx];
+        const pId = it.productId || it.product_id || it.id || '';
+        const qiId = 'qi_' + id + '_' + (pId || idx) + '_' + idx;
+        const qQty = Number(it.quantity || it.qty || 0);
+        const qPrice = Number(it.unit_price || it.unitPrice || it.price || 0);
+        const qDisc = Number(it.discount || 0);
+        const qTotal = Number(it.total || (qQty * qPrice - qDisc));
+
+        await db.run(
+          `INSERT OR REPLACE INTO quotation_items (
+            id, quotation_id, product_id, product_name, quantity, price, unit, discount, total, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [qiId, id, pId, it.name || it.product_name || '', qQty, qPrice, it.unit || 'pcs', qDisc, qTotal, new Date().toISOString()]
+        );
+        await enqueueSync(db, 'quotation_items', qiId, 'INSERT');
+      }
+    }
+
+    await enqueueSync(db, 'quotations', id, 'UPDATE');
+
+    const tursoClient = getTursoClient();
+    if (tursoClient) {
+      pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Quotation Update Immediate Sync Push Notice]:', err.message));
+    }
+
+    res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -6952,8 +7265,51 @@ app.post('/api/quotations', async (req, res) => {
 app.delete('/api/quotations/:id', async (req, res) => {
   const { id } = req.params;
   try {
+    await db.run('DELETE FROM quotation_items WHERE quotation_id = ?', [id]);
     await db.run('DELETE FROM quotations WHERE id = ?', [id]);
+    await enqueueSync(db, 'quotations', id, 'DELETE');
+
+    const tursoClient = getTursoClient();
+    if (tursoClient) {
+      pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Quotation Delete Immediate Sync Push Notice]:', err.message));
+    }
+
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Normalized child table queries
+app.get('/api/quotation_items', async (req, res) => {
+  try {
+    const { quotation_id } = req.query;
+    let query = 'SELECT * FROM quotation_items';
+    const params = [];
+    if (quotation_id) {
+      query += ' WHERE quotation_id = ?';
+      params.push(quotation_id);
+    }
+    query += ' ORDER BY id ASC';
+    const data = await db.all(query, params);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/sales_return_items', async (req, res) => {
+  try {
+    const { return_id } = req.query;
+    let query = 'SELECT * FROM sales_return_items';
+    const params = [];
+    if (return_id) {
+      query += ' WHERE return_id = ?';
+      params.push(return_id);
+    }
+    query += ' ORDER BY id ASC';
+    const data = await db.all(query, params);
+    res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -7549,6 +7905,38 @@ if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
       // Trigger immediate initial catalog reconciliation and downstream profile pull
       const tursoClient = getTursoClient();
       if (tursoClient) {
+        try {
+          await tursoClient.batch([
+            `CREATE TABLE IF NOT EXISTS quotation_items (
+              id TEXT PRIMARY KEY,
+              quotation_id TEXT,
+              product_id TEXT,
+              product_name TEXT,
+              quantity REAL,
+              unit_price REAL,
+              discount REAL DEFAULT 0,
+              total REAL,
+              created_at TEXT
+            );`,
+            `CREATE TABLE IF NOT EXISTS sales_return_items (
+              id TEXT PRIMARY KEY,
+              return_id TEXT,
+              product_id TEXT,
+              product_name TEXT,
+              quantity REAL,
+              unit_price REAL,
+              cost_price REAL,
+              total REAL,
+              created_at TEXT
+            );`,
+            `CREATE VIEW IF NOT EXISTS cash_book AS SELECT * FROM transactions;`,
+            `CREATE VIEW IF NOT EXISTS cheques AS SELECT * FROM cheque_registry;`
+          ], 'write');
+          console.log('✅ [Startup] Turso Cloud financial & quotation tables verified.');
+        } catch (tursoInitErr) {
+          console.warn('[Startup] Turso schema sync notice:', tursoInitErr.message);
+        }
+
         pullDownstreamChanges(db, tursoClient)
           .then(() => console.log('✅ [Startup Sync] Initial downstream sync complete.'))
           .catch(err => console.warn('[Startup Sync] Notice:', err.message));

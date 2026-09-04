@@ -23,6 +23,32 @@ if (process.env.VERCEL === '1' || process.env.APP_ROLE === 'web' || process.env.
   isWebClient = true;
 }
 
+export const TABLES_TO_SYNC = [
+  'profiles',
+  'products',
+  'customers',
+  'suppliers',
+  'categories',
+  'custom_permissions',
+  'discounts',
+  'promotions',
+  'purchase_orders',
+  'purchase_order_items',
+  'supplier_transactions',
+  'sales',
+  'credit_payments',
+  'credit_notes',
+  'credit_note_usage',
+  'transactions',
+  'cash_book',
+  'cheques',
+  'cheque_registry',
+  'quotations',
+  'quotation_items',
+  'sales_returns',
+  'sales_return_items'
+];
+
 /**
  * Check connectivity to Turso Cloud libSQL with a 3-second timeout
  */
@@ -143,9 +169,22 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
         }
       }
 
+      // Ensure quotation_items price / unit_price parity
+      if (item.table_name === 'quotation_items' && row && typeof row === 'object') {
+        if (row.unit_price === undefined && row.price !== undefined) {
+          row.unit_price = row.price;
+        } else if (row.price === undefined && row.unit_price !== undefined) {
+          row.price = row.unit_price;
+        }
+      }
+
+      let targetTable = item.table_name;
+      if (targetTable === 'cash_book') targetTable = 'transactions';
+      if (targetTable === 'cheques') targetTable = 'cheque_registry';
+
       if (item.action === 'DELETE') {
         statements.push({
-          sql: `DELETE FROM "${item.table_name}" WHERE id = ?`,
+          sql: `DELETE FROM "${targetTable}" WHERE id = ?`,
           args: [item.record_id]
         });
         successfulIds.push(item.id);
@@ -156,7 +195,7 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
         const args = columns.map(c => row[c] !== undefined ? row[c] : null);
 
         statements.push({
-          sql: `INSERT OR REPLACE INTO "${item.table_name}" (${colNames}) VALUES (${placeholders})`,
+          sql: `INSERT OR REPLACE INTO "${targetTable}" (${colNames}) VALUES (${placeholders})`,
           args
         });
         successfulIds.push(item.id);
@@ -334,6 +373,20 @@ export async function pullDownstreamChanges(localDb, tursoClient) {
   await syncAndPruneEntity('purchase_orders', 'SELECT * FROM purchase_orders ORDER BY created_at DESC LIMIT 1000');
   await syncAndPruneEntity('purchase_order_items', 'SELECT * FROM purchase_order_items');
   await syncAndPruneEntity('supplier_transactions', 'SELECT * FROM supplier_transactions');
+
+  // 9. Quotations & Quotation Items
+  await syncAndPruneEntity('quotations', 'SELECT * FROM quotations ORDER BY created_at DESC LIMIT 1000');
+  await syncAndPruneEntity('quotation_items', 'SELECT * FROM quotation_items');
+
+  // 10. Sales Returns & Sales Return Items
+  await syncAndPruneEntity('sales_returns', 'SELECT * FROM sales_returns ORDER BY created_at DESC LIMIT 1000');
+  await syncAndPruneEntity('sales_return_items', 'SELECT * FROM sales_return_items');
+
+  // 11. Cheque Registry
+  await syncAndPruneEntity('cheque_registry', 'SELECT * FROM cheque_registry ORDER BY created_at DESC LIMIT 1000');
+
+  // 12. Transactions (General Ledger / Cash Book)
+  await syncAndPruneEntity('transactions', 'SELECT * FROM transactions ORDER BY created_at DESC LIMIT 1000');
 
   lastDownstreamSync = new Date().toISOString();
 }
