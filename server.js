@@ -210,9 +210,12 @@ app.use((req, res, next) => {
 });
 
 let dbInitPromise = null;
-export async function ensureDbInitialized() {
+async function ensureDbInitialized() {
   if (!dbInitPromise) {
-    dbInitPromise = initializeDatabase();
+    dbInitPromise = (async () => {
+      await initializeDatabase();
+      return db;
+    })();
   }
   return dbInitPromise;
 }
@@ -553,13 +556,6 @@ async function getRuntimeEmployeesSnapshot() {
   }));
 }
 
-// Standard helper to initialize and migrate SQLite tables
-export async function ensureDbInitialized() {
-  if (!db) {
-    db = await initializeDatabase();
-  }
-  return db;
-}
 
 async function initializeDatabase() {
   db = await initDb(DB_FILE);
