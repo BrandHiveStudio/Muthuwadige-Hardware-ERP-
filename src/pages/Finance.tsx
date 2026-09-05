@@ -174,12 +174,24 @@ export function Finance({ currentUser }: FinanceProps = {}) {
     return cat.includes('credit adjustment') || desc.includes('credit return') || desc.includes('credit adjustment');
   };
 
+  const isCashTrans = (t: any) => {
+    if (!t) return true;
+    const method = (t.payment_method || t.method || '').toUpperCase();
+    const desc = (t.description || '').toUpperCase();
+    const ref = (t.reference || '').toUpperCase();
+    if (method) return method === 'CASH';
+    return !desc.includes('CHEQUE') && !desc.includes('BANK') && !desc.includes('TRANSFER') &&
+           !ref.includes('CHQ') && !ref.includes('CHEQUE');
+  };
+
   const totalIncome = filtered.filter(t => t.type === 'income').reduce((sum, t) => sum + (t.amount || 0), 0);
   const totalSalesReturns = filtered.filter(t => isSalesReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
   const netSalesIncome = calculateNetSalesRevenue(totalIncome, 0, totalSalesReturns, 0);
   const totalExpense = filtered.filter(t => t.type === 'expense' && !isSalesReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  const cashIncome = filtered.filter(t => t.type === 'income' && isCashTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  const cashExpense = filtered.filter(t => t.type === 'expense' && !isSalesReturnTrans(t) && isCashTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
   const cashSalesReturns = filtered.filter(t => isSalesReturnTrans(t) && !isCreditAdjustmentTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
-  const cashBalance = totalIncome - cashSalesReturns - totalExpense;
+  const cashBalance = cashIncome - cashSalesReturns - cashExpense;
 
   const openAdd = () => {
     setFormData(emptyTransaction);
@@ -591,14 +603,14 @@ export function Finance({ currentUser }: FinanceProps = {}) {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-[10px] font-black text-white/80 uppercase tracking-widest">Total Cash Out (Expenses)</p>
-                  <p className="text-3xl font-black text-white mt-1.5">{symbol} {convert(totalExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  <p className="text-3xl font-black text-white mt-1.5">{symbol} {convert(cashExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                 </div>
                 <div className="w-12 h-12 bg-white/20 text-white rounded-xl flex items-center justify-center shadow-lg">
                   <ArrowDownRightIcon className="w-6 h-6" />
                 </div>
               </div>
               <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-white/95">
-                <span>Purchases</span>
+                <span>Drawer Cash Out: {symbol} {convert(cashExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })} | Total Outflow: {symbol} {convert(totalExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
               </div>
             </div>
           </div>

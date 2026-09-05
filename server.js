@@ -515,6 +515,13 @@ async function replaceRuntimeTransactionByDescription(description, payload) {
     'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
     [t.id, t.type, t.category, t.description, t.amount, t.date, t.reference, t.user_id, t.created_at]
   );
+  try {
+    await enqueueSync(db, 'transactions', t.id, 'INSERT');
+    const tursoClient = getTursoClient();
+    if (tursoClient) {
+      pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Runtime Txn Sync Notice]:', err.message));
+    }
+  } catch (_) {}
 }
 
 async function removeRuntimeTransactionsForSale(invoiceNo) {
@@ -2637,7 +2644,11 @@ app.get(['/api/reports/summary', '/api/sales/summary'], async (req, res) => {
         const total = Number(s.total_amount || s.total || 0);
         const subtotal = Number(s.subtotal !== undefined ? s.subtotal : total);
         const disc = Number(s.discount_amount || s.discount || 0);
-        const delFee = Number(s.delivery_fee !== undefined ? s.delivery_fee : (s.transportation_fee || s.deliveryFee || 0));
+        const delFee = Number(
+          s.transportation_fee !== undefined && s.transportation_fee !== null ? s.transportation_fee : 
+          (s.delivery_fee !== undefined && s.delivery_fee !== null ? s.delivery_fee : 
+          (s.deliveryFee || 0))
+        );
 
         grossStickerSales += (subtotal > 0 ? subtotal : total);
         customerDiscounts += disc;
@@ -3146,6 +3157,13 @@ app.put('/api/sales/:id', async (req, res) => {
     if (fields.length > 0) {
       params.push(id);
       await db.run(`UPDATE sales SET ${fields.join(', ')} WHERE id = ?`, params);
+      try {
+        await enqueueSync(db, 'sales', id, 'UPDATE');
+        const tursoClient = getTursoClient();
+        if (tursoClient) {
+          pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Sales Update Sync Push Notice]:', err.message));
+        }
+      } catch (_) {}
     }
     
     res.json({ success: true });

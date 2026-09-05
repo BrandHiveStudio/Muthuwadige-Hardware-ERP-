@@ -164,9 +164,14 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
 
       // Ensure delivery_fee / transportation_fee parity
       if (item.table_name === 'sales' && row && typeof row === 'object') {
-        if (row.transportation_fee === undefined && row.delivery_fee !== undefined) {
-          row.transportation_fee = row.delivery_fee;
-        }
+        const delFee = Number(
+          row.transportation_fee !== undefined && row.transportation_fee !== null && Number(row.transportation_fee) > 0
+            ? row.transportation_fee
+            : (row.delivery_fee !== undefined && row.delivery_fee !== null ? row.delivery_fee : (row.deliveryFee || 0))
+        );
+        row.transportation_fee = delFee;
+        delete row.delivery_fee;
+        delete row.deliveryFee;
       }
 
       // Ensure quotation_items price / unit_price parity
@@ -319,7 +324,8 @@ export async function pullDownstreamChanges(localDb, tursoClient) {
 
       // Deletion pruning:
       // Exclude local records that are currently awaiting upstream sync in sync_queue (offline creations)
-      const pendingExclude = `AND "${idCol}" NOT IN (SELECT record_id FROM sync_queue WHERE table_name = '${tableName}' AND status = 'PENDING')`;
+      const tableFilter = tableName === 'transactions' ? "('transactions', 'cash_book')" : `('${tableName}')`;
+      const pendingExclude = `AND "${idCol}" NOT IN (SELECT record_id FROM sync_queue WHERE table_name IN ${tableFilter} AND status = 'PENDING')`;
       const fullExclude = `${pendingExclude} ${excludeClause}`.trim();
 
       if (activeCloudIds.length > 0) {
@@ -347,46 +353,38 @@ export async function pullDownstreamChanges(localDb, tursoClient) {
     }
   };
 
-  // 1. Profiles (with super_admin / u1 protection)
-  await syncAndPruneEntity('profiles', 'SELECT * FROM profiles', "AND LOWER(role) != 'super_admin' AND id != 'u1'");
-
-  // 2. Products (catalog, stock, prices, SKUs)
-  await syncAndPruneEntity('products', 'SELECT * FROM products ORDER BY created_at DESC LIMIT 1000');
-
-  // 3. Customers (profiles, balances, credit limits)
-  await syncAndPruneEntity('customers', 'SELECT * FROM customers');
-
-  // 4. Suppliers (vendor records)
-  await syncAndPruneEntity('suppliers', 'SELECT * FROM suppliers');
-
-  // 5. Categories
-  await syncAndPruneEntity('categories', 'SELECT * FROM categories');
-
-  // 6. Custom Permissions (keyed by role)
-  await syncAndPruneEntity('custom_permissions', 'SELECT * FROM custom_permissions', '', 'role');
-
-  // 7. Discounts & Promotions
-  await syncAndPruneEntity('discounts', 'SELECT * FROM discounts');
-  await syncAndPruneEntity('promotions', 'SELECT * FROM promotions');
-
-  // 8. Purchase Orders & PO Items
-  await syncAndPruneEntity('purchase_orders', 'SELECT * FROM purchase_orders ORDER BY created_at DESC LIMIT 1000');
-  await syncAndPruneEntity('purchase_order_items', 'SELECT * FROM purchase_order_items');
-  await syncAndPruneEntity('supplier_transactions', 'SELECT * FROM supplier_transactions');
-
-  // 9. Quotations & Quotation Items
-  await syncAndPruneEntity('quotations', 'SELECT * FROM quotations ORDER BY created_at DESC LIMIT 1000');
-  await syncAndPruneEntity('quotation_items', 'SELECT * FROM quotation_items');
-
-  // 10. Sales Returns & Sales Return Items
-  await syncAndPruneEntity('sales_returns', 'SELECT * FROM sales_returns ORDER BY created_at DESC LIMIT 1000');
-  await syncAndPruneEntity('sales_return_items', 'SELECT * FROM sales_return_items');
-
-  // 11. Cheque Registry
-  await syncAndPruneEntity('cheque_registry', 'SELECT * FROM cheque_registry ORDER BY created_at DESC LIMIT 1000');
-
-  // 12. Transactions (General Ledger / Cash Book)
-  await syncAndPruneEntity('transactions', 'SELECT * FROM transactions ORDER BY created_at DESC LIMIT 1000');
+  // Execute all entity syncs in parallel to collapse HTTP latency roundtrips
+  await Promise.all([
+    // 1. Profiles (with super_admin / u1 protection)
+    syncAndPruneEntity('profiles', 'SELECT * FROM profiles', "AND LOWER(role) != 'super_admin' AND id != 'u1'"),
+    // 2. Products (catalog, stock, prices, SKUs)
+    syncAndPruneEntity('products', 'SELECT * FROM products ORDER BY created_at DESC LIMIT 1000'),
+    // 3. Customers (profiles, balances, credit limits)
+    syncAndPruneEntity('customers', 'SELECT * FROM customers'),
+    // 4. Suppliers (vendor records)
+    syncAndPruneEntity('suppliers', 'SELECT * FROM suppliers'),
+    // 5. Categories
+    syncAndPruneEntity('categories', 'SELECT * FROM categories'),
+    // 6. Custom Permissions (keyed by role)
+    syncAndPruneEntity('custom_permissions', 'SELECT * FROM custom_permissions', '', 'role'),
+    // 7. Discounts & Promotions
+    syncAndPruneEntity('discounts', 'SELECT * FROM discounts'),
+    syncAndPruneEntity('promotions', 'SELECT * FROM promotions'),
+    // 8. Purchase Orders & PO Items
+    syncAndPruneEntity('purchase_orders', 'SELECT * FROM purchase_orders ORDER BY created_at DESC LIMIT 1000'),
+    syncAndPruneEntity('purchase_order_items', 'SELECT * FROM purchase_order_items'),
+    syncAndPruneEntity('supplier_transactions', 'SELECT * FROM supplier_transactions'),
+    // 9. Quotations & Quotation Items
+    syncAndPruneEntity('quotations', 'SELECT * FROM quotations ORDER BY created_at DESC LIMIT 1000'),
+    syncAndPruneEntity('quotation_items', 'SELECT * FROM quotation_items'),
+    // 10. Sales Returns & Sales Return Items
+    syncAndPruneEntity('sales_returns', 'SELECT * FROM sales_returns ORDER BY created_at DESC LIMIT 1000'),
+    syncAndPruneEntity('sales_return_items', 'SELECT * FROM sales_return_items'),
+    // 11. Cheque Registry
+    syncAndPruneEntity('cheque_registry', 'SELECT * FROM cheque_registry ORDER BY created_at DESC LIMIT 1000'),
+    // 12. Transactions (General Ledger / Cash Book)
+    syncAndPruneEntity('transactions', 'SELECT * FROM transactions ORDER BY created_at DESC LIMIT 1000')
+  ]);
 
   lastDownstreamSync = new Date().toISOString();
 }
