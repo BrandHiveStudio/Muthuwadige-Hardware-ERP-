@@ -306,9 +306,11 @@ export function App() {
     sessionStorage.removeItem('hardware_erp_auth');
     sessionStorage.removeItem('erp_user');
     sessionStorage.removeItem('custom_permissions');
+    sessionStorage.removeItem('erp_session_token');
     localStorage.removeItem('hardware_erp_user');
     localStorage.removeItem('hardware_erp_auth');
     localStorage.removeItem('erp_user');
+    localStorage.removeItem('erp_session_token');
     setCurrentUser(null);
     setIsAuthenticated(false);
     setCurrentPage('dashboard');
@@ -354,6 +356,21 @@ export function App() {
       window.removeEventListener('sync-completed', onSyncCompleted);
       clearInterval(interval);
     };
+  }, [currentUser]);
+
+  // The backend session token can expire (24h) or be invalidated independently of the cached
+  // profile check above. Any API call that gets a 401 dispatches 'session-expired' (see
+  // fetchWithTimeout in lib/api.ts); force a clean logout/redirect to the login screen instead of
+  // leaving pages behind a wall of silent 401s.
+  useEffect(() => {
+    const onSessionExpired = () => {
+      if (currentUser) {
+        handleLogout();
+        notify('Your session has expired. Please log in again.', 'Muthuwadige Hardware ERP', 'error');
+      }
+    };
+    window.addEventListener('session-expired', onSessionExpired);
+    return () => window.removeEventListener('session-expired', onSessionExpired);
   }, [currentUser]);
 
   // ==========================================

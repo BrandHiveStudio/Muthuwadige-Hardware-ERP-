@@ -6,7 +6,6 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import os from 'os';
 import { createClient } from '@libsql/client';
-import { FALLBACK_TURSO_DATABASE_URL, FALLBACK_TURSO_AUTH_TOKEN } from '../src/db/connection.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -216,8 +215,8 @@ async function resetTursoCloudDatabase() {
   console.log(`🌐 [Turso Cloud] Performing Factory Reset on Cloud DB`);
   console.log(`======================================================`);
 
-  const tursoUrl = process.env.TURSO_DATABASE_URL || FALLBACK_TURSO_DATABASE_URL;
-  const tursoToken = process.env.TURSO_AUTH_TOKEN || FALLBACK_TURSO_AUTH_TOKEN;
+  const tursoUrl = process.env.TURSO_DATABASE_URL;
+  const tursoToken = process.env.TURSO_AUTH_TOKEN;
 
   if (!tursoUrl || !tursoToken) {
     console.warn('⚠️ Turso credentials not provided. Skipping cloud reset.');

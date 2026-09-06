@@ -193,6 +193,34 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
           args: [item.record_id]
         });
         successfulIds.push(item.id);
+      } else if (row && typeof row === 'object' && targetTable === 'profiles') {
+        // SECURITY: profiles/authentication credentials must not be blindly overwritten by an
+        // incidental sync of some other field (name/role/permissions edited elsewhere, or - as
+        // happened in production - a device-local password-hash-format upgrade). A generic
+        // profile upsert only ever creates a brand-new row (INSERT branch, which legitimately
+        // needs a password to make the account usable) or updates an EXISTING row's non-password
+        // columns; the receiving side's password is left exactly as it already is unless this
+        // enqueue was explicitly marked as a deliberate password change (register/reset/change-
+        // password routes - see their enqueueSync calls).
+        const isPasswordChange = row.__sync_password_change === true;
+        const cleanRow = { ...row };
+        delete cleanRow.__sync_password_change;
+
+        const columns = Object.keys(cleanRow);
+        const colNames = columns.map(c => `"${c}"`).join(', ');
+        const placeholders = columns.map(() => '?').join(', ');
+        const args = columns.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
+        const updateCols = columns.filter(c => c !== 'id' && (isPasswordChange || c !== 'password'));
+        const conflictClause = updateCols.length > 0
+          ? `DO UPDATE SET ${updateCols.map(c => `"${c}" = excluded."${c}"`).join(', ')}`
+          : 'DO NOTHING';
+
+        statements.push({
+          sql: `INSERT INTO "profiles" (${colNames}) VALUES (${placeholders})
+                ON CONFLICT("id") ${conflictClause}`,
+          args
+        });
+        successfulIds.push(item.id);
       } else if (row && typeof row === 'object') {
         const columns = Object.keys(row);
         const colNames = columns.map(c => `"${c}"`).join(', ');
@@ -377,6 +405,12 @@ export async function pullDownstreamChanges(localDb, tursoClient) {
     // 9. Quotations & Quotation Items
     syncAndPruneEntity('quotations', 'SELECT * FROM quotations ORDER BY created_at DESC LIMIT 1000'),
     syncAndPruneEntity('quotation_items', 'SELECT * FROM quotation_items'),
+    // 9.5. Sales (invoices) - previously missing from downstream pull entirely: a sale created on
+    // one desktop (or directly against the cloud, e.g. via the web portal) never reached any other
+    // desktop's local database, and a voided/deleted sale (see the void/delete routes in server.js,
+    // now correctly enqueued - see enqueueSync calls added there) never had anywhere to sync FROM
+    // even if it had synced up. Same pattern/limit as the other high-volume entities above.
+    syncAndPruneEntity('sales', 'SELECT * FROM sales ORDER BY created_at DESC LIMIT 1000'),
     // 10. Sales Returns & Sales Return Items
     syncAndPruneEntity('sales_returns', 'SELECT * FROM sales_returns ORDER BY created_at DESC LIMIT 1000'),
     syncAndPruneEntity('sales_return_items', 'SELECT * FROM sales_return_items'),

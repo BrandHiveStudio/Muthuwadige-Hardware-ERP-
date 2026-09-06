@@ -44,24 +44,31 @@ export const setApiUrl = (newUrl: string | null) => {
 
 
 export const getAuthHeaders = (): Record<string, string> => {
+  // SECURITY: this previously defaulted to `x-user-role: 'super_admin'` whenever no user was
+  // stored (e.g. a cleared/corrupted session) - since the server never verified any of these
+  // headers, every unauthenticated request silently identified itself as a super admin. The
+  // server now issues and verifies a real session token (see POST /api/auth/login /
+  // `authenticate` in server.js) and never trusts these headers for authorization - they remain
+  // only for human-readable audit-log labeling. When nothing is stored, no identity is sent at
+  // all, so an unauthenticated request is correctly rejected server-side instead of impersonating
+  // an admin.
+  const headers: Record<string, string> = {};
   try {
+    const token = sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token');
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
     const userStr = localStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user') || sessionStorage.getItem('erp_user') || sessionStorage.getItem('hardware_erp_user');
     if (userStr) {
       const u = JSON.parse(userStr);
       if (u && (u.email || u.name || u.username)) {
-        return {
-          'x-user-email': u.email || 'admin@hardware.com',
-          'x-user-name': u.name || u.username || 'Super_admin',
-          'x-user-role': u.role || 'super_admin'
-        };
+        headers['x-user-email'] = u.email || '';
+        headers['x-user-name'] = u.name || u.username || '';
+        headers['x-user-role'] = u.role || '';
       }
     }
   } catch (_) {}
-  return {
-    'x-user-email': 'admin@hardware.com',
-    'x-user-name': 'Super_admin',
-    'x-user-role': 'super_admin'
-  };
+  return headers;
 };
 
 // Robust fetch helper with configurable timeout & automatic abort controller handling
@@ -91,6 +98,16 @@ export async function fetchWithTimeout(url: string, options: RequestInit = {}, t
       headers: mergedHeaders,
       signal: controller.signal
     });
+    // A 401 means the session token is missing/expired/invalid server-side (see `authenticate` in
+    // server.js). Clear the stale token and let App.tsx force a clean logout/redirect to the login
+    // screen instead of leaving every page silently failing its API calls one by one.
+    if (res.status === 401 && !url.includes('/auth/login') && typeof window !== 'undefined') {
+      try {
+        sessionStorage.removeItem('erp_session_token');
+        localStorage.removeItem('erp_session_token');
+      } catch (_) {}
+      window.dispatchEvent(new Event('session-expired'));
+    }
     return res;
   } catch (err: any) {
     if (err.name === 'AbortError' || controller.signal?.aborted) {

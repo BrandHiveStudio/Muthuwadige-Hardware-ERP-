@@ -2,7 +2,7 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import path from 'path';
 import fs from 'fs';
-import { getTursoClient, FALLBACK_TURSO_DATABASE_URL, FALLBACK_TURSO_AUTH_TOKEN } from '../src/db/connection.js';
+import { getTursoClient } from '../src/db/connection.js';
 import { createClient } from '@libsql/client';
 
 const TABLES_TO_TRUNCATE = [
@@ -107,9 +107,10 @@ async function resetTursoCloud() {
 
   let turso = getTursoClient();
   if (!turso) {
-    const url = process.env.TURSO_DATABASE_URL || FALLBACK_TURSO_DATABASE_URL;
-    const authToken = process.env.TURSO_AUTH_TOKEN || FALLBACK_TURSO_AUTH_TOKEN;
-    turso = createClient({ url, authToken });
+    if (!process.env.TURSO_DATABASE_URL || !process.env.TURSO_AUTH_TOKEN) {
+      throw new Error('TURSO_DATABASE_URL / TURSO_AUTH_TOKEN must be set in the environment to run this script - no hardcoded fallback is used.');
+    }
+    turso = createClient({ url: process.env.TURSO_DATABASE_URL, authToken: process.env.TURSO_AUTH_TOKEN });
   }
 
   for (const table of TABLES_TO_TRUNCATE) {

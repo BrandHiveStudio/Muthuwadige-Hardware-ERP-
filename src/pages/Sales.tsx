@@ -1780,18 +1780,16 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
       const { data: saleRecord, error: saleError } = await supabase.from('sales').insert([newOrderData]).select().single();
       if (saleError && !saleRecord) {
-        console.warn("Supabase credit sale insert notice:", saleError);
+        // See the equivalent fix in processSale() above: the sale was never created (server-side
+        // transaction already rolled back), so no further checkout step (stock update, receipt)
+        // may run. Throwing routes into the existing catch/finally below.
+        throw new Error(saleError.message || 'Failed to save the credit sale. Please try again.');
       }
 
-      // Update product stock levels
-      for (const item of creditCartItems) {
-        const product = products.find(p => p.id === item.productId);
-        if (product) {
-          const convRate = item.conversionRate || 1;
-          const decr = convRate > 0 ? (item.qty / convRate) : item.qty;
-          await supabase.from('products').update({ stock: Math.max(0, product.stock - decr) }).eq('id', item.productId);
-        }
-      }
+      // See the equivalent removal in processSale() above: the backend already decrements stock
+      // atomically as part of the sale insert transaction; this redundant, absolute-value client
+      // update was both unnecessary on success (fetchData() below re-fetches authoritative stock)
+      // and unsafe on failure (it ran even when the sale was never created).
 
       const completedOrder: SaleOrder = {
         id: saleRecord?.id || `so_${Date.now()}`,
@@ -1981,15 +1979,31 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     }
   };
 
+  // Permanently deleting a sale is at least as sensitive as voiding one, so it is gated by the
+  // same void/return passkey the server now verifies (see requireVoidPasskey in server.js) -
+  // previously this action had no server-side protection at all (only a window.confirm dialog).
+  const deleteSaleWithPasskey = async (orderId: string, passkey: string) => {
+    const res = await fetchWithTimeout(`${API_URL}/sales/${orderId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ void_passkey: passkey })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to delete sales record');
+    }
+    return res.json();
+  };
+
   const handleDeleteOrder = async (orderId: string) => {
     if (!window.confirm(t('Delete this sales record?', 'මෙම විකිණීම් වාර්තාව මකන්නද?'))) {
       return;
     }
+    const passkey = window.prompt(t('Enter void/delete passkey to confirm:', 'තහවුරු කිරීමට මුරපදය ඇතුළත් කරන්න:')) || '';
 
     setIsLoading(true);
     try {
-      const { error } = await supabase.from('sales').delete().eq('id', orderId);
-      if (error) throw error;
+      await deleteSaleWithPasskey(orderId, passkey.trim());
       setOrders((prev) => prev.filter((order) => order.id !== orderId));
       alert(t('Sales record deleted successfully.', 'විකිණීම් වාර්තාව සාර්ථකව මකා දමන ලදි.'));
     } catch (err: any) {
@@ -2750,7 +2764,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
       const { data: saleRecord, error: saleError } = await supabase.from('sales').insert([newOrderData]).select().single();
       if (saleError && !saleRecord) {
-        console.warn("Supabase sale insert notice:", saleError);
+        // The sale was never created (server-side transaction already rolled back cleanly - see
+        // POST /api/sales in server.js). Previously this was only logged as a warning and checkout
+        // continued anyway: it went on to register a cheque, overwrite product stock with a
+        // client-computed absolute value, and show a "successful" receipt for a sale that does not
+        // exist. Throwing here routes into the existing catch/finally below, which already shows
+        // an error to the cashier and resets loading state - no other checkout step must run.
+        throw new Error(saleError.message || 'Failed to save the sale. Please try again.');
       }
 
       // Automatically register inward cheque into cheque registry
@@ -2778,16 +2798,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
         }
       }
 
-      // Note: SQLite backend handles product stock levels automatically, 
-      // but let's notify supabaseClient of sync so local caching updates.
-      for (const item of cartItems) {
-        const product = products.find(p => p.id === item.productId);
-        if (product) {
-          const convRate = item.conversionRate || 1;
-          const decr = convRate > 0 ? (item.qty / convRate) : item.qty;
-          await supabase.from('products').update({ stock: Math.max(0, product.stock - decr) }).eq('id', item.productId);
-        }
-      }
+      // The backend (POST /api/sales) already decrements product stock itself, inside the same
+      // SQL transaction as the sale insert - this used to be followed by a second, independent
+      // PUT /api/products/:id per cart item, computing an absolute "new stock" value from
+      // possibly-stale client-side state. That call was redundant on success (fetchData() below
+      // already re-fetches the authoritative post-sale stock from the server) and was the direct
+      // cause of a production incident on failure: because it ran unconditionally even when the
+      // sale insert above failed and was cleanly rolled back server-side, it silently overwrote
+      // correct stock with a wrong value for a sale that never existed. Removed entirely.
 
       const completedOrder: SaleOrder = {
         id: saleRecord?.id || `so_${Date.now()}`,
@@ -2927,7 +2945,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     }
   };
 
-  const handleVoidOrder = async (orderId: string) => {
+  const handleVoidOrder = async (orderId: string, voidPasskey: string) => {
     if (!window.confirm(t("Are you sure you want to void this invoice? This will restore product stock levels and cancel the sale transaction.", "මෙම ඉන්වොයිසිය අවලංගු කිරීමට ඔබට විශ්වාසද? මෙමඟින් නිෂ්පාදන තොග මට්ටම් නැවත යථා තත්ත්වයට පත් කර විකුණුම් ගනුදෙනුව අවලංගු කරනු ඇත."))) {
       return;
     }
@@ -2935,11 +2953,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       setIsLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
       const userEmail = user?.email || 'sanojhardware@gmail.com';
-      
+
       const res = await fetchWithTimeout(`${API_URL}/sales/${orderId}/void`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_email: userEmail })
+        body: JSON.stringify({ user_email: userEmail, void_passkey: voidPasskey })
       });
       
       if (res.ok) {
@@ -2956,14 +2974,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     }
   };
 
-  const handleVoidSalesReturn = async (returnId: string) => {
+  const handleVoidSalesReturn = async (returnId: string, voidPasskey: string) => {
     try {
       setIsLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
       const res = await fetchWithTimeout(`${API_URL}/sales/returns/${returnId}/void`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_email: user?.email || 'system' })
+        body: JSON.stringify({ user_email: user?.email || 'system', void_passkey: voidPasskey })
       });
       if (!res.ok) {
         const errData = await res.json();
@@ -3122,14 +3140,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     if (!window.confirm(t('Delete selected sales records?', 'තෝරාගත් විකිණීම් වාර්තා මකා දමන්නද?'))) {
       return;
     }
+    const passkey = window.prompt(t('Enter void/delete passkey to confirm:', 'තහවුරු කිරීමට මුරපදය ඇතුළත් කරන්න:')) || '';
 
     setIsLoading(true);
     try {
-      const results = await Promise.all(
-        selectedHistoryIds.map((orderId) => supabase.from('sales').delete().eq('id', orderId))
+      await Promise.all(
+        selectedHistoryIds.map((orderId) => deleteSaleWithPasskey(orderId, passkey.trim()))
       );
-      const firstError = results.find((result: any) => result?.error);
-      if (firstError) throw firstError.error;
       setOrders((prev) => prev.filter((order) => !selectedHistoryIds.includes(order.id)));
       setSelectedHistoryIds([]);
       alert(t('Selected sales records deleted successfully.', 'තෝරාගත් විකිණීම් වාර්තා සාර්ථකව මකා දමන ලදි.'));
@@ -3163,14 +3180,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     if (!window.confirm(t('Delete selected credit orders?', 'තෝරාගත් ණය ඇණවුම් මකා දමන්නද?'))) {
       return;
     }
+    const passkey = window.prompt(t('Enter void/delete passkey to confirm:', 'තහවුරු කිරීමට මුරපදය ඇතුළත් කරන්න:')) || '';
 
     setIsLoading(true);
     try {
-      const results = await Promise.all(
-        selectedCreditIds.map((orderId) => supabase.from('sales').delete().eq('id', orderId))
+      await Promise.all(
+        selectedCreditIds.map((orderId) => deleteSaleWithPasskey(orderId, passkey.trim()))
       );
-      const firstError = results.find((result: any) => result?.error);
-      if (firstError) throw firstError.error;
       setOrders((prev) => prev.filter((order) => !selectedCreditIds.includes(order.id)));
       setSelectedCreditIds([]);
       alert(t('Selected credit orders deleted successfully.', 'තෝරාගත් ණය ඇණවුම් සාර්ථකව මකා දමන ලදි.'));
@@ -3187,14 +3203,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     if (!window.confirm(t('Delete all credit orders?', 'සියලුම ණය ඇණවුම් මකා දමන්නද?'))) {
       return;
     }
+    const passkey = window.prompt(t('Enter void/delete passkey to confirm:', 'තහවුරු කිරීමට මුරපදය ඇතුළත් කරන්න:')) || '';
 
     setIsLoading(true);
     try {
-      const results = await Promise.all(
-        creditOrders.map((order) => supabase.from('sales').delete().eq('id', order.id))
+      await Promise.all(
+        creditOrders.map((order) => deleteSaleWithPasskey(order.id, passkey.trim()))
       );
-      const firstError = results.find((result: any) => result?.error);
-      if (firstError) throw firstError.error;
       setOrders((prev) => prev.filter((order) => order.status !== 'Non Paid' && order.status !== 'Paid'));
       setSelectedCreditIds([]);
       alert(t('All credit orders deleted successfully.', 'සියලුම ණය ඇණවුම් සාර්ථකව මකා දමන ලදි.'));
@@ -7568,10 +7583,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   }
                   setShowVoidModal(false);
                   if (targetVoidInvoiceId) {
-                    await handleVoidOrder(targetVoidInvoiceId);
+                    await handleVoidOrder(targetVoidInvoiceId, voidPasskeyInput.trim());
                     setTargetVoidInvoiceId(null);
                   } else if (targetVoidReturnId) {
-                    await handleVoidSalesReturn(targetVoidReturnId);
+                    await handleVoidSalesReturn(targetVoidReturnId, voidPasskeyInput.trim());
                     setTargetVoidReturnId(null);
                   }
                 }}

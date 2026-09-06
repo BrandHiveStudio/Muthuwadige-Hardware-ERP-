@@ -9,10 +9,12 @@ import { createMailTransporter, sendResetEmail as mailerSendResetEmail, sendNoti
 import fs from 'fs';
 import dotenv from 'dotenv';
 import { exec, execSync, spawn } from 'child_process';
+import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import os from 'os';
 import https from 'https';
 import selfsigned from 'selfsigned';
-import dbAdapter, { initDb, isTurso, getTursoClient, FALLBACK_TURSO_DATABASE_URL, FALLBACK_TURSO_AUTH_TOKEN } from './src/db/connection.js';
+import dbAdapter, { initDb, isTurso, getTursoClient } from './src/db/connection.js';
 import { startBackgroundSyncWorker, getSyncStatus, runSyncCycle, enqueueSync, pullDownstreamChanges, reconcileLocalCatalogWithCloud, pushUpstreamChanges } from './src/services/syncService.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -65,7 +67,12 @@ if (!process.env.VERCEL) {
 
     console.log('📂 Production Electron database path:', DB_FILE);
 
-    // Auto-migrate env config & ensure Turso cloud credentials in AppData folder
+    // Load Turso cloud credentials from AppData .env (or a bundled .env shipped alongside the
+    // installer) if present. SECURITY: this no longer auto-writes a hardcoded fallback credential
+    // into AppData - a previous version of this code injected a live, shared read-write Turso
+    // secret into every fresh install with no configured .env. If no credentials are found here,
+    // the app continues in local-SQLite-only mode (no crash) and cloud sync stays disabled until
+    // a real .env with this store's own TURSO_DATABASE_URL/TURSO_AUTH_TOKEN is provisioned.
     try {
       let existingEnv = '';
       if (fs.existsSync(envPath)) {
@@ -74,22 +81,16 @@ if (!process.env.VERCEL) {
         const bundledEnv = path.join(__dirname, '.env');
         if (fs.existsSync(bundledEnv)) {
           existingEnv = fs.readFileSync(bundledEnv, 'utf-8');
+          fs.writeFileSync(envPath, existingEnv);
         }
       }
 
-      let appendContent = '';
-      if (!existingEnv.includes('TURSO_DATABASE_URL=')) {
-        appendContent += `\nTURSO_DATABASE_URL=${FALLBACK_TURSO_DATABASE_URL}\n`;
-        process.env.TURSO_DATABASE_URL = FALLBACK_TURSO_DATABASE_URL;
-      }
-      if (!existingEnv.includes('TURSO_AUTH_TOKEN=')) {
-        appendContent += `TURSO_AUTH_TOKEN=${FALLBACK_TURSO_AUTH_TOKEN}\n`;
-        process.env.TURSO_AUTH_TOKEN = FALLBACK_TURSO_AUTH_TOKEN;
+      if (existingEnv) {
+        dotenv.config({ path: envPath, override: false });
       }
 
-      if (appendContent) {
-        fs.writeFileSync(envPath, (existingEnv + appendContent).trim() + '\n');
-        console.log('✅ AppData .env successfully updated with Turso cloud credentials:', envPath);
+      if (!process.env.TURSO_DATABASE_URL || !process.env.TURSO_AUTH_TOKEN) {
+        console.warn('⚠️  No TURSO_DATABASE_URL/TURSO_AUTH_TOKEN configured for this installation - cloud sync is disabled. Local operation is unaffected.');
       }
     } catch (err) {
       console.warn('Notice ensuring .env in AppData path:', err.message);
@@ -145,6 +146,12 @@ app.use((req, res, next) => {
   });
   next();
 });
+
+// Server-side session/authentication gate for all /api/* routes (see definition of `authenticate`
+// below for the exemption list). This is the fix for the previously confirmed absence of any
+// backend authorization: every route used to execute unconditionally for any HTTP client.
+app.use(authenticate);
+
 app.get('/backups/:filename', (req, res) => {
   const filename = path.basename(req.params.filename);
 
@@ -413,7 +420,11 @@ function normalizeRuntimeSettings(payload = {}) {
     phone: payload.phone || '',
     email: payload.email || '',
     currency: payload.currency || DEFAULT_RUNTIME_SETTINGS.currency,
-    tax_rate: payload.tax_rate !== undefined ? Number(payload.tax_rate) : Number(payload.taxRate ?? DEFAULT_RUNTIME_SETTINGS.tax_rate),
+    // TAX REMOVED: tax is not a supported feature. The Settings UI no longer sends this field at
+    // all, but this function is also reachable via a direct PUT /api/settings call - always store
+    // 0 regardless of what's in the payload, closing the same class of gap fixed on the
+    // Excel-restore import path above.
+    tax_rate: 0,
     backup_email: payload.backup_email || payload.backupEmail || '',
     backup_enabled: payload.backup_enabled === true || payload.backup_enabled === 1 || payload.backupEnabled === true ? 1 : 0,
     backup_interval_hours: intervalHours,
@@ -429,6 +440,177 @@ function normalizeRuntimeSettings(payload = {}) {
   };
 
   return normalized;
+}
+
+// ---------------------------------------------------------------------------
+// SERVER-SIDE AUTHENTICATION / AUTHORIZATION
+//
+// Previously there was no session mechanism at all: the frontend sent an
+// x-user-role header that no route ever verified, so any HTTP client could
+// call any route (including void/delete sale, settings changes, user
+// management) with zero credentials. This adds a real, server-verified
+// session token issued at login (see POST /api/auth/login) and validated on
+// every request via the `authenticate` middleware below. Role checks use
+// ONLY the role stored server-side on the session (looked up from the
+// `sessions` table, itself populated from profiles.role at login time) -
+// never a client-supplied header - matching this app's existing role-string
+// convention (case-insensitive 'admin' / 'super_admin' / 'super admin').
+// ---------------------------------------------------------------------------
+
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function generateSessionToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+async function createSession(profile) {
+  const token = generateSessionToken();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + SESSION_TTL_MS).toISOString();
+  await db.run(
+    'INSERT INTO sessions (token, user_id, email, role, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
+    [token, profile.id, profile.email, profile.role, now.toISOString(), expiresAt]
+  );
+  return { token, expiresAt };
+}
+
+// Password hashing with a safe, transparent migration path for the pre-existing plaintext
+// passwords column (profiles.password). No forced resets, no data loss, no historical fabrication:
+// a bcrypt hash is recognized by its '$2a$'/'$2b$'/'$2y$' prefix; anything else is treated as a
+// legacy plaintext password, compared directly, and - only on a successful match - transparently
+// re-hashed and saved so the plaintext value never has to be compared again for that account.
+function isBcryptHash(value) {
+  return typeof value === 'string' && /^\$2[aby]\$/.test(value);
+}
+
+async function verifyAndMigratePassword(profile, plainPassword) {
+  if (!profile.password) return true; // accounts with no password set (pre-existing behavior)
+  if (isBcryptHash(profile.password)) {
+    return bcrypt.compare(plainPassword || '', profile.password);
+  }
+  const matches = profile.password === plainPassword;
+  if (matches) {
+    try {
+      const newHash = await bcrypt.hash(plainPassword, 10);
+      await db.run('UPDATE profiles SET password = ? WHERE id = ?', [newHash, profile.id]);
+      // DELIBERATELY NOT enqueued for sync. This is a local storage-format upgrade of an
+      // already-known-correct password (plaintext -> hash for the SAME value), not a real
+      // password change - it must never leave this device. A prior version of this fix enqueued
+      // it, and the background sync engine pushed a locally-hashed password up to the shared
+      // production database as a side effect of merely logging in on one test install, breaking
+      // authentication for any other client still running code that only compares plaintext.
+      // Each device that logs in independently upgrades its own local copy the same way; genuine,
+      // user-initiated password changes (register/reset/change-password routes) remain the only
+      // paths that sync a new password across devices - see pushUpstreamChanges' profiles handling.
+    } catch (migrateErr) {
+      console.warn('[Auth] Notice: could not migrate legacy plaintext password to a hash:', migrateErr.message);
+    }
+  }
+  return matches;
+}
+
+function isAdminRole(role) {
+  const roleStr = (role || '').toLowerCase().trim();
+  return roleStr === 'admin' || roleStr === 'super_admin' || roleStr === 'super admin' || roleStr === 'superadmin';
+}
+
+// Routes reachable with no session at all, regardless of HTTP method (there is no mutating verb
+// for any of these): the login screen itself needs health + sync status/trigger/pull (status
+// metadata only - no business rows are ever in these responses, just counters like
+// queuedCount/isOnline) before a user has logged in, confirmed by live network trace during audit.
+const PUBLIC_API_PATHS = new Set([
+  '/api/health', '/health', '/api/auth/login',
+  '/api/auth/forgot-password', '/api/auth/reset-password', // pre-login "forgot password" flow; each is gated by its own emailed reset code, not a session
+  '/api/sync/status', '/api/sync/trigger', '/api/sync/pull', '/api/sync/downstream'
+]);
+
+// GET-only public paths - the same path's mutating verbs (PUT/POST/DELETE) still require a valid
+// session. /api/permissions (GET) is the page-visibility config map the login screen reads early;
+// PUT /api/permissions (editing it) is a privileged, authenticated+admin-only operation below.
+const PUBLIC_GET_API_PATHS = new Set(['/api/permissions']);
+
+async function authenticate(req, res, next) {
+  // Only /api/* routes are gated - static assets, /backups/:filename, and /mobile-scanner are
+  // unaffected. /api/scanner/* is also exempt by design: a phone scanning the on-screen QR code
+  // is an ephemeral barcode-input peripheral scoped to a random sessionId, never an authenticated
+  // ERP client, and was never expected to hold a login session - gating it would break that
+  // existing approved workflow.
+  if (!req.path.startsWith('/api/') || req.path.startsWith('/api/scanner/')) {
+    return next();
+  }
+  if (PUBLIC_API_PATHS.has(req.path)) {
+    return next();
+  }
+  if (req.method === 'GET' && PUBLIC_GET_API_PATHS.has(req.path)) {
+    return next();
+  }
+
+  // Guarantee `db` (and the `sessions` table) exists before querying it. On Vercel/serverless cold
+  // starts this middleware can otherwise run before the lazy per-request DB-init middleware below
+  // has had a chance to run; ensureDbInitialized() is idempotent so this is a no-op once warm.
+  try {
+    await ensureDbInitialized();
+  } catch (err) {
+    return res.status(503).json({ error: 'Database is not ready: ' + err.message });
+  }
+
+  const authHeader = req.headers['authorization'] || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : (req.headers['x-session-token'] || '');
+
+  if (!token) {
+    // GET /api/settings is allowed through unauthenticated so the login screen can fetch shop
+    // branding; the handler itself returns a reduced, non-sensitive payload in that case.
+    if (req.method === 'GET' && req.path === '/api/settings') {
+      req.authUser = null;
+      return next();
+    }
+    return res.status(401).json({ error: 'Authentication required. Please log in.' });
+  }
+
+  try {
+    const session = await db.get('SELECT * FROM sessions WHERE token = ?', [token]);
+    if (!session || new Date(session.expires_at).getTime() < Date.now()) {
+      if (req.method === 'GET' && req.path === '/api/settings') {
+        req.authUser = null;
+        return next();
+      }
+      return res.status(401).json({ error: 'Session expired or invalid. Please log in again.' });
+    }
+    req.authUser = { id: session.user_id, email: session.email, role: session.role };
+    next();
+  } catch (err) {
+    res.status(500).json({ error: 'Authentication check failed: ' + err.message });
+  }
+}
+
+// Applied on top of `authenticate` for routes that must be restricted to admin-equivalent roles
+// (user/permission management, settings changes, destructive/database operations).
+function requireAdmin(req, res, next) {
+  if (!req.authUser || !isAdminRole(req.authUser.role)) {
+    return res.status(403).json({ error: 'This action requires an administrator role.' });
+  }
+  next();
+}
+
+// Voiding/deleting a sale (or a sales return) is gated in the existing, approved UI by a shared
+// "void passkey" PIN, not by login role - any staff member who knows the PIN can void a sale, by
+// design (this app has no per-role void restriction). Previously that PIN was only ever checked
+// client-side (the void API call carried no proof the PIN was entered/correct at all), so any
+// direct HTTP call could void or delete a sale with no passkey. This middleware verifies the same
+// PIN server-side, preserving the existing authority model exactly rather than replacing it with a
+// role check that would change who is allowed to void a sale.
+async function requireVoidPasskey(req, res, next) {
+  try {
+    const settings = await getRuntimeSettingsSnapshot();
+    const configuredPasskey = (settings.void_passkey || settings.return_passkey || '1234').toString().trim();
+    const submitted = (req.body?.void_passkey || req.body?.voidPasskey || '').toString().trim();
+    if (!submitted || submitted !== configuredPasskey) {
+      return res.status(403).json({ error: 'Invalid or missing void passkey.' });
+    }
+    next();
+  } catch (err) {
+    res.status(500).json({ error: 'Passkey verification failed: ' + err.message });
+  }
 }
 
 async function getRuntimeSettingsSnapshot() {
@@ -504,17 +686,30 @@ function normalizeRuntimeTransaction(payload = {}) {
     date: payload.date || new Date().toLocaleDateString('sv-SE'),
     reference: payload.reference || '',
     user_id: payload.user_id || payload.userId || null,
-    created_at: payload.created_at || new Date().toISOString()
+    created_at: payload.created_at || new Date().toISOString(),
+    // Real payment method for this transaction, when the caller knows it (e.g. the POS checkout
+    // route knows exactly which method the customer paid with). Deliberately NOT defaulted here to
+    // 'CASH' or any other guessed value - if a caller genuinely doesn't know/pass one, the existing
+    // column-level schema default applies exactly as it always has (no historical fabrication is
+    // introduced by this fix; only the write paths that DO know the real method now record it).
+    payment_method: payload.payment_method || null
   };
 }
 
 async function replaceRuntimeTransactionByDescription(description, payload) {
   await db.run('DELETE FROM transactions WHERE description = ?', [description]);
   const t = normalizeRuntimeTransaction({ ...payload, description });
-  await db.run(
-    'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [t.id, t.type, t.category, t.description, t.amount, t.date, t.reference, t.user_id, t.created_at]
-  );
+  if (t.payment_method) {
+    await db.run(
+      'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [t.id, t.type, t.category, t.description, t.amount, t.date, t.reference, t.user_id, t.created_at, t.payment_method]
+    );
+  } else {
+    await db.run(
+      'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [t.id, t.type, t.category, t.description, t.amount, t.date, t.reference, t.user_id, t.created_at]
+    );
+  }
   try {
     await enqueueSync(db, 'transactions', t.id, 'INSERT');
     const tursoClient = getTursoClient();
@@ -525,6 +720,16 @@ async function replaceRuntimeTransactionByDescription(description, payload) {
 }
 
 async function removeRuntimeTransactionsForSale(invoiceNo) {
+  // Enqueue each affected row's deletion BEFORE deleting locally, so the cloud copy is removed too
+  // (previously these ledger rows were only ever deleted locally - a voided/deleted sale's income
+  // entry stayed permanently visible in the cloud Cash Book / web portal reports).
+  const rows = await db.all(
+    "SELECT id FROM transactions WHERE reference = ? AND (description = ? OR description = ?)",
+    [invoiceNo, `POS Sale ${invoiceNo}`, `POS Credit Payment ${invoiceNo}`]
+  );
+  for (const row of rows) {
+    enqueueSync(db, 'transactions', row.id, 'DELETE').catch(() => {});
+  }
   await db.run(
     "DELETE FROM transactions WHERE reference = ? AND (description = ? OR description = ?)",
     [invoiceNo, `POS Sale ${invoiceNo}`, `POS Credit Payment ${invoiceNo}`]
@@ -593,6 +798,21 @@ async function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS custom_permissions (
       role TEXT PRIMARY KEY,
       pages TEXT NOT NULL
+    )
+  `);
+
+  // 1.6 Create Sessions Table - server-side auth tokens issued at login and validated on every
+  // privileged request. NEW table, additive only - does not modify any existing table. Deliberately
+  // NOT part of the sync engine (a session token is local-device auth state, not business data, and
+  // must never be replicated to another device or the cloud database it authenticates against).
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      token TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      role TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      expires_at TEXT NOT NULL
     )
   `);
 
@@ -1943,8 +2163,14 @@ app.post('/api/auth/login', async (req, res) => {
           if (cloudResult?.rows?.[0]) {
             const cloudProfile = cloudResult.rows[0];
 
-            // Verify password
-            if (cloudProfile.password && cloudProfile.password !== password) {
+            // Verify password (bcrypt-aware, with legacy-plaintext fallback)
+            let cloudPasswordOk = true;
+            if (cloudProfile.password) {
+              cloudPasswordOk = isBcryptHash(cloudProfile.password)
+                ? await bcrypt.compare(password || '', cloudProfile.password)
+                : cloudProfile.password === password;
+            }
+            if (!cloudPasswordOk) {
               return res.status(400).json({ error: 'Incorrect password.' });
             }
 
@@ -1975,8 +2201,9 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'User profile not found. Try: sanojhardware@gmail.com' });
     }
     
-    // Validate password
-    if (profile.password && profile.password !== password) {
+    // Validate password (bcrypt-aware, with transparent legacy-plaintext migration)
+    const passwordOk = await verifyAndMigratePassword(profile, password);
+    if (!passwordOk) {
       return res.status(400).json({ error: 'Incorrect password.' });
     }
 
@@ -1992,8 +2219,15 @@ app.post('/api/auth/login', async (req, res) => {
       }
     }
 
+    // Issue a server-side session token - see `authenticate` middleware. Every subsequent request
+    // must present this token; role checks server-side are always resolved from this session
+    // record, never trusted from a client-supplied header.
+    const session = await createSession(profile);
+
     // Return standard payload resembling Supabase structure with custom_permissions
     res.json({
+      token: session.token,
+      expiresAt: session.expiresAt,
       user: {
         id: profile.id,
         email: profile.email,
@@ -2010,7 +2244,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', requireAdmin, async (req, res) => {
   const { email, password, name, full_name, role, permissions, custom_permissions } = req.body;
   try {
     // Filter out super_admin / Admin when evaluating staff quota limit (3 max additional staff)
@@ -2023,9 +2257,10 @@ app.post('/api/auth/register', async (req, res) => {
     const effectivePerms = custom_permissions !== undefined ? custom_permissions : permissions;
     const permsStr = effectivePerms ? (typeof effectivePerms === 'string' ? effectivePerms : JSON.stringify(effectivePerms)) : null;
     const effectiveName = name || full_name || 'Staff User';
+    const hashedPassword = await bcrypt.hash(password || '123456', 10);
     await db.run(
       'INSERT INTO profiles (id, name, email, role, avatar, password, permissions, custom_permissions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, effectiveName, email, normalizedRole, email.charAt(0).toUpperCase(), password || '123456', permsStr, permsStr]
+      [id, effectiveName, email, normalizedRole, email.charAt(0).toUpperCase(), hashedPassword, permsStr, permsStr]
     );
     res.json({
       success: true,
@@ -2107,9 +2342,10 @@ app.post('/api/auth/reset-password', async (req, res) => {
       return res.status(400).json({ error: 'Verification code has expired.' });
     }
 
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
     await db.run(
       'UPDATE profiles SET password = ?, reset_token = NULL, reset_token_expiry = NULL WHERE id = ?',
-      [newPassword, profile.id]
+      [hashedPassword, profile.id]
     );
 
     res.json({ success: true, message: 'Password has been updated successfully.' });
@@ -2840,9 +3076,27 @@ app.post('/api/sales', async (req, res) => {
     if (isTempInvoice) {
       // Fetch current next_invoice_number from system_settings
       const settings = await db.get('SELECT next_invoice_number FROM system_settings WHERE id = ?', ['global']);
-      finalInvoiceNo = (settings && settings.next_invoice_number) ? settings.next_invoice_number : 'INV001';
-      
-      // Compute the next invoice number and update system_settings
+      let candidate = (settings && settings.next_invoice_number) ? settings.next_invoice_number : 'INV001';
+
+      // Self-healing reconciliation: the counter above only ever advances when a sale is created
+      // ON THIS DEVICE. If sales were instead imported by downstream sync (e.g. pulled from the
+      // cloud into a fresh/reinstalled local database, or after a counter reset), the counter can
+      // point at a number that already exists in the local sales table, causing a UNIQUE
+      // constraint failure on insert. Keep advancing with the exact same existing
+      // generateNextInvoiceNumber() format/business rule until a genuinely free number is found,
+      // rather than trusting the stored counter blindly. This is a read against the real sales
+      // table, inside the same transaction, so it also serializes correctly against concurrent
+      // local requests.
+      let guard = 0;
+      while (guard < 100000) {
+        const collision = await db.get('SELECT 1 FROM sales WHERE invoice_no = ?', [candidate]);
+        if (!collision) break;
+        candidate = generateNextInvoiceNumber(candidate);
+        guard++;
+      }
+      finalInvoiceNo = candidate;
+
+      // Persist the number AFTER it, so the next sale starts from a known-free position too.
       const nextInv = generateNextInvoiceNumber(finalInvoiceNo);
       await db.run('UPDATE system_settings SET next_invoice_number = ? WHERE id = ?', [nextInv, 'global']);
     }
@@ -3029,7 +3283,8 @@ app.post('/api/sales', async (req, res) => {
         amount: s.total_amount,
         date: new Date(created_at).toLocaleDateString('sv-SE'),
         reference: finalInvoiceNo,
-        user_id: s.user_id
+        user_id: s.user_id,
+        payment_method: s.payment_method
       });
     }
 
@@ -3256,9 +3511,15 @@ const handleCreditPaymentInsert = async (req, res) => {
       );
 
       if (!existingTx) {
+        // Carry the customer's actual repayment method (already captured a few lines above into
+        // credit_payments.payment_method) into this ledger row too - previously this INSERT omitted
+        // the column entirely, so every credit settlement silently landed in the Cash Book as
+        // 'CASH' (the schema's column default) regardless of whether the customer actually paid by
+        // card/bank transfer, defeating the drawer cash-isolation feature for this entire category
+        // of transaction.
         await db.run(
-          'INSERT INTO transactions (id, date, description, amount, type, category, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [txId, txDate, description, amountPaid, 'income', category, invoiceNo, authorName, createdAt]
+          'INSERT INTO transactions (id, date, description, amount, type, category, reference, user_id, created_at, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [txId, txDate, description, amountPaid, 'income', category, invoiceNo, authorName, createdAt, p.payment_method || 'Cash']
         ).catch(e => console.error('Error logging credit repayment transaction:', e));
         enqueueSync(db, 'transactions', txId, 'UPSERT').catch(() => {});
         enqueueSync(db, 'cash_book', txId, 'UPSERT').catch(() => {});
@@ -3302,7 +3563,7 @@ app.get('/api/credit-settlements', async (req, res) => {
   }
 });
 
-app.delete('/api/sales/:id', async (req, res) => {
+app.delete('/api/sales/:id', requireVoidPasskey, async (req, res) => {
   const { id } = req.params;
   let txn = null;
   try {
@@ -3315,6 +3576,9 @@ app.delete('/api/sales/:id', async (req, res) => {
     } else {
       await db.run('DELETE FROM sales WHERE id = ?', [id]);
     }
+    // Previously this hard-delete never synced at all: the sale would disappear locally but stay
+    // permanently "live" in the cloud/web portal forever. Now propagated like every other mutation.
+    enqueueSync(db, 'sales', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => {});
     res.json({ success: true });
   } catch (err) {
     if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
@@ -3322,7 +3586,7 @@ app.delete('/api/sales/:id', async (req, res) => {
   }
 });
 
-app.post('/api/sales/:id/void', async (req, res) => {
+app.post('/api/sales/:id/void', requireVoidPasskey, async (req, res) => {
   const { id } = req.params;
   const { user_email } = req.body;
   try {
@@ -3340,6 +3604,7 @@ app.post('/api/sales/:id/void', async (req, res) => {
     }
 
     await db.run("UPDATE sales SET status = 'cancelled' WHERE id = ?", [id]);
+    enqueueSync(db, 'sales', id, 'UPSERT').catch(() => {});
 
     const items = JSON.parse(sale.items);
     for (const item of items) {
@@ -3349,6 +3614,7 @@ app.post('/api/sales/:id/void', async (req, res) => {
         'UPDATE products SET stock = stock + ? WHERE id = ?',
         [baseQtyRestock, item.productId]
       );
+      enqueueSync(db, 'products', item.productId, 'UPSERT').catch(() => {});
     }
 
     const auditId = 'al_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
@@ -3357,10 +3623,18 @@ app.post('/api/sales/:id/void', async (req, res) => {
       [auditId, user_email || 'System', 'VOID_INVOICE', `Voided invoice ${sale.invoice_no} (Total: Rs. ${sale.total_amount})`]
     );
 
+    const orphanedTxRows = await db.all(
+      "SELECT id FROM transactions WHERE reference = ? OR reference = ? OR description LIKE ?",
+      [sale.invoice_no, id, `%${sale.invoice_no}%`]
+    );
+    for (const row of orphanedTxRows) {
+      enqueueSync(db, 'transactions', row.id, 'DELETE').catch(() => {});
+    }
     await db.run("DELETE FROM transactions WHERE reference = ? OR reference = ? OR description LIKE ?", [sale.invoice_no, id, `%${sale.invoice_no}%`]);
     await removeRuntimeTransactionsForSale(sale.invoice_no);
 
     await db.run('COMMIT');
+    runSyncCycle(db).catch(() => {});
     res.json({ success: true });
   } catch (err) {
     await safeRollback(db);
@@ -3765,7 +4039,7 @@ app.post('/api/sales/returns', async (req, res) => {
   }
 });
 
-app.post('/api/sales/returns/:id/void', async (req, res) => {
+app.post('/api/sales/returns/:id/void', requireVoidPasskey, async (req, res) => {
   const { id } = req.params;
   const { userEmail, user_email, reason } = req.body;
   const user = userEmail || user_email || 'system';
@@ -4936,7 +5210,10 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
             const unpaid = Math.max(0, totalAmt - currentReceived);
             const settleAmt = Math.min(unpaid, remainingToSettle);
             const newReceived = currentReceived + settleAmt;
-            const newStatus = newReceived >= totalAmt ? 'paid' : 'pending';
+            // Same 'Paid'/'Non Paid' convention used everywhere else in the app (Sales.tsx,
+            // Customers.tsx, the overdue-reminder cron) - this cheque-clearing code previously wrote
+            // lowercase 'paid'/'pending', which no other status comparison in the app ever matches.
+            const newStatus = newReceived >= totalAmt ? 'Paid' : 'Non Paid';
 
             await db.run(
               'UPDATE sales SET payment_received = ?, status = ? WHERE id = ?',
@@ -4974,9 +5251,9 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
         // If there's still remaining amount to settle and customer is known, apply to other unpaid sales
         if (remainingToSettle > 0 && (cheque.party_id || cheque.party_name)) {
           const pendingSales = await db.all(
-            `SELECT * FROM sales 
-             WHERE (customer_id = ? OR customer_name = ?) 
-               AND (status != 'paid' OR payment_received < total_amount) 
+            `SELECT * FROM sales
+             WHERE (customer_id = ? OR customer_name = ?)
+               AND (status != 'Paid' OR payment_received < total_amount)
              ORDER BY created_at ASC`,
             [cheque.party_id || '', cheque.party_name || '']
           );
@@ -4989,7 +5266,7 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
             if (unpaid > 0) {
               const settleAmt = Math.min(unpaid, remainingToSettle);
               const newReceived = currentReceived + settleAmt;
-              const newStatus = newReceived >= totalAmt ? 'paid' : 'pending';
+              const newStatus = newReceived >= totalAmt ? 'Paid' : 'Non Paid';
 
               await db.run(
                 'UPDATE sales SET payment_received = ?, status = ? WHERE id = ?',
@@ -5839,7 +6116,7 @@ async function executeUndoChequeStatus({ cheque_id, revert_to, user_email }) {
           if (linkedSale) {
             const currentReceived = Number(linkedSale.payment_received || 0);
             const newReceived = Math.max(0, currentReceived - chqAmt);
-            const newStatus = newReceived <= 0 ? 'pending' : (newReceived < linkedSale.total_amount ? 'pending' : 'paid');
+            const newStatus = newReceived <= 0 ? 'Non Paid' : (newReceived < linkedSale.total_amount ? 'Non Paid' : 'Paid');
             await db.run(
               'UPDATE sales SET payment_received = ?, status = ? WHERE id = ?',
               [newReceived, newStatus, linkedSale.id]
@@ -6200,6 +6477,20 @@ app.post('/api/rpc/:functionName', async (req, res) => {
 app.get('/api/settings', async (req, res) => {
   try {
     const settings = await getRuntimeSettingsSnapshot();
+    // GET /api/settings is intentionally reachable pre-login (the login screen fetches shop
+    // branding before a user has a session - see PUBLIC_GET_API_PATHS/authenticate). Previously
+    // this returned the FULL row, including return_passkey/void_passkey (the PIN that authorizes
+    // voiding/deleting a sale) to anyone, unauthenticated. Only return the safe branding subset
+    // unless a valid session is present.
+    if (!req.authUser) {
+      return res.json({
+        shop_name: settings.shop_name,
+        address: settings.address,
+        phone: settings.phone,
+        currency: settings.currency,
+        logo_path: settings.logo_path
+      });
+    }
     res.json({
       ...settings,
       backup_enabled: settings.backup_enabled === 1,
@@ -6210,7 +6501,7 @@ app.get('/api/settings', async (req, res) => {
   }
 });
 
-app.put('/api/settings', async (req, res) => {
+app.put('/api/settings', requireAdmin, async (req, res) => {
   const s = req.body;
   try {
     const updated = await setRuntimeSettings(s);
@@ -6462,7 +6753,7 @@ app.get('/api/settings/smtp-config', async (req, res) => {
 });
 
 // POST SMTP CONFIGURATION (SAVES TO APPDATA .ENV)
-app.post('/api/settings/smtp-config', async (req, res) => {
+app.post('/api/settings/smtp-config', requireAdmin, async (req, res) => {
   try {
     const { gmail_user, gmail_pass, smtp_host, smtp_port, smtp_user, smtp_pass } = req.body || {};
     const updates = {};
@@ -6544,7 +6835,7 @@ Muthuwadige Hardware ERP System`;
 });
 
 // SAFE TRANSACTIONAL DATABASE RESTORE UTILITY
-app.post('/api/settings/restore', async (req, res) => {
+app.post('/api/settings/restore', requireAdmin, async (req, res) => {
   const payload = req.body;
   try {
     await db.run('BEGIN TRANSACTION');
@@ -6591,8 +6882,13 @@ app.post('/api/settings/restore', async (req, res) => {
             s.items || s["Sold Items (JSON)"] || '[]',
             Number(s.subtotal || s["Subtotal (Rs.)"] || 0),
             Number(s.discount || s["Discount (Rs.)"] || 0),
-            Number(s.tax || s["Tax Amount (Rs.)"] || 0),
-            Number(s.tax_rate || s.taxRate || parseFloat(s["Tax Rate (%)"]) || 0),
+            // TAX REMOVED: this was the one genuinely functional tax pathway in the whole app -
+            // every other write path already hardcodes tax to 0, but this Excel-restore importer
+            // previously read real values straight from a "Tax Amount (Rs.)"/"Tax Rate (%)" column
+            // (matching Backup Template.xlsx) with no override, so a restored backup could silently
+            // reintroduce a working tax feature. Tax is not a supported feature; always store 0.
+            0,
+            0,
             Number(s.total_amount || s["Total Amount (Rs.)"] || 0),
             s.status || s["Payment Status"] || 'Paid',
             s.user_id || s["Logged Cashier"] || '---',
@@ -6674,6 +6970,11 @@ app.post('/api/settings/restore', async (req, res) => {
     if (payload.profiles && Array.isArray(payload.profiles)) {
       await db.run('DELETE FROM profiles');
       for (const pr of payload.profiles) {
+        // A restored backup could otherwise reintroduce a plaintext password (e.g. an older Excel
+        // export made before password hashing existed) straight into the live profiles table -
+        // hash it here too, same as every other password write path, unless it's already a hash.
+        const restoredPassword = pr.password || pr["User Password"] || '123456';
+        const hashedRestoredPassword = isBcryptHash(restoredPassword) ? restoredPassword : await bcrypt.hash(restoredPassword, 10);
         await db.run(
           `INSERT INTO profiles (id, name, email, role, avatar, password, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -6683,7 +6984,7 @@ app.post('/api/settings/restore', async (req, res) => {
             pr.email || pr["User Email"],
             pr.role || (pr["Access Privilege Level"] ? pr["Access Privilege Level"].toLowerCase() : 'cashier'),
             pr.avatar || pr["Profile Avatar"] || '',
-            pr.password || pr["User Password"] || '123456',
+            hashedRestoredPassword,
             pr.created_at || pr["Created Date"] || new Date().toISOString()
           ]
         );
@@ -6703,7 +7004,7 @@ app.post('/api/settings/restore', async (req, res) => {
             set.phone || set["Phone"] || '',
             set.email || set["Email"] || '',
             set.currency || set["Currency"] || 'Rs.',
-            Number(set.tax_rate || set["Tax Rate (%)"] || 8),
+            0, // TAX REMOVED: tax_rate is not a supported feature - see the sales-restore fix above
             set.backup_email || set["Backup Email"] || '',
             (set.backup_enabled === 1 || set.backup_enabled === true || set["Weekly Auto-Backup"] === 'ENABLED') ? 1 : 0,
             set.logo_path || set["Logo Path Base64"] || '',
@@ -6871,17 +7172,25 @@ app.get('/api/profiles', async (req, res) => {
 app.get('/api/profiles/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const user = await db.get('SELECT id, email, role, full_name, username FROM profiles WHERE id = ?', [id]);
+    // NOTE: 'profiles' has no 'full_name' or 'username' column (schema: id, name, email, role,
+    // avatar, password, created_at) - selecting them threw SQLITE_ERROR/SQL_INPUT_ERROR on every
+    // call, both locally and on the Turso-backed cloud API, which silently broke the active-session
+    // validation check in App.tsx (it only inspects res.status===404; a 500 was never treated as
+    // "profile deleted", so a revoked account was never force-logged-out).
+    const user = await db.get(
+      'SELECT id, email, role, name, avatar, permissions, custom_permissions, created_at FROM profiles WHERE id = ?',
+      [id]
+    );
     if (!user) {
       return res.status(404).json({ error: 'User profile not found' });
     }
-    res.json(user);
+    res.json({ ...user, full_name: user.name });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.put('/api/profiles/:id', async (req, res) => {
+app.put('/api/profiles/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
   const p = req.body;
   try {
@@ -6908,7 +7217,7 @@ app.put('/api/profiles/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/profiles/:id', async (req, res) => {
+app.delete('/api/profiles/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
   try {
     await db.run('DELETE FROM profiles WHERE id = ?', [id]);
@@ -6922,8 +7231,22 @@ app.delete('/api/profiles/:id', async (req, res) => {
 app.put('/api/profiles/:id/password', async (req, res) => {
   const { id } = req.params;
   const { password } = req.body;
+  // A user may change their own password; changing someone else's requires an admin role.
+  if (req.authUser.id !== id && !isAdminRole(req.authUser.role)) {
+    return res.status(403).json({ error: 'You can only change your own password.' });
+  }
   try {
-    await db.run('UPDATE profiles SET password = ? WHERE id = ?', [password, id]);
+    const hashedPassword = await bcrypt.hash(password, 10);
+    await db.run('UPDATE profiles SET password = ? WHERE id = ?', [hashedPassword, id]);
+    // This IS a deliberate, user-initiated password change (self-service or admin reset via the
+    // Users & Roles page), unlike the silent format-migration on login - it must propagate. Fetch
+    // the full current row and mark it so pushUpstreamChanges knows to include the new password
+    // (see its 'profiles' handling); every other profiles UPSERT leaves the receiving side's
+    // password untouched by default.
+    const updatedProfile = await db.get('SELECT * FROM profiles WHERE id = ?', [id]);
+    if (updatedProfile) {
+      enqueueSync(db, 'profiles', id, 'UPSERT', { ...updatedProfile, __sync_password_change: true }).catch(() => {});
+    }
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -6944,7 +7267,7 @@ app.get('/api/permissions', async (req, res) => {
   }
 });
 
-app.put('/api/permissions', async (req, res) => {
+app.put('/api/permissions', requireAdmin, async (req, res) => {
   const perms = req.body;
   try {
     await db.run('BEGIN TRANSACTION');
@@ -7203,10 +7526,13 @@ app.put('/api/quotations/:id', async (req, res) => {
     discount_value,
     discount_amount,
     transportation_fee,
-    tax_amount,
     total,
     status
   } = req.body;
+  // TAX REMOVED: this route previously accepted and stored a client-supplied tax_amount with no
+  // override (unlike the POST /api/quotations route, which already hardcoded 0). It is unreachable
+  // from the shipped frontend, but remains a live API surface - tax_amount is intentionally no
+  // longer settable through it at all.
 
   try {
     await db.run(
@@ -7222,7 +7548,6 @@ app.put('/api/quotations/:id', async (req, res) => {
         discount_value = COALESCE(?, discount_value),
         discount_amount = COALESCE(?, discount_amount),
         transportation_fee = COALESCE(?, transportation_fee),
-        tax_amount = COALESCE(?, tax_amount),
         total = COALESCE(?, total),
         status = COALESCE(?, status)
       WHERE id = ?`,
@@ -7238,7 +7563,6 @@ app.put('/api/quotations/:id', async (req, res) => {
         discount_value !== undefined ? Number(discount_value) : undefined,
         discount_amount !== undefined ? Number(discount_amount) : undefined,
         transportation_fee !== undefined ? Number(transportation_fee) : undefined,
-        tax_amount !== undefined ? Number(tax_amount) : undefined,
         total !== undefined ? Number(total) : undefined,
         status,
         id

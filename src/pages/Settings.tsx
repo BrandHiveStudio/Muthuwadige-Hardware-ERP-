@@ -72,7 +72,9 @@ export function Settings() {
   const [backupEnabled, setBackupEnabled] = useState(false);
   const [backupIntervalHours, setBackupIntervalHours] = useState<number | string>(6);
   const [backupIntervalError, setBackupIntervalError] = useState<string | null>(null);
-  const [taxRate, setTaxRate] = useState(0);
+  // TAX REMOVED: tax is not a supported feature. This state was never actually rendered as an
+  // input anywhere in this page (confirmed by an exhaustive search) - it only ever got set to 0
+  // and sent back as 0, so removing it changes no visible behavior.
   const [threshold, setThreshold] = useState(10);
   const [settingsId, setSettingsId] = useState<string>('global');
   const [nextInvoiceNumber, setNextInvoiceNumber] = useState('INV001');
@@ -317,7 +319,6 @@ export function Settings() {
         } catch (e) { }
       }
 
-      setTaxRate(0);
       if (settingData.currency) {
         const cur = settingData.currency === 'Rs.' ? 'LKR' : settingData.currency;
         setCurrency(cur);
@@ -518,7 +519,6 @@ export function Settings() {
       phone: shopPhone.trim(),
       email: shopEmail.trim(),
       currency,
-      tax_rate: 0,
       backup_email: backupEmail.trim(),
       backup_enabled: backupEnabled ? 1 : 0,
       backup_interval_hours: Number(backupIntervalHours) || 6,

@@ -27,7 +27,6 @@ export const ReceiptTemplate: React.FC<ReceiptTemplateProps> = ({ invoice, isSin
 
   const subtotal = Number(invoice.subtotal || items.reduce((sum, it) => sum + (Number(it.qty || 1) * Number(it.price || 0)), 0));
   const discount = Number(invoice.discount || 0);
-  const tax = Number(invoice.tax || 0);
   const transportFee = Number(invoice.transportation_fee || invoice.transportationFee || 0);
   const customerName = invoice.customerName || invoice.customer_name || 'Guest Customer';
   const invoiceNo = invoice.invoiceNo || invoice.invoice_no || `INV-${Date.now()}`;
@@ -138,13 +137,6 @@ export const ReceiptTemplate: React.FC<ReceiptTemplateProps> = ({ invoice, isSin
             <span className="font-mono">{currencySymbol} {transportFee.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
           </div>
         )}
-        {tax > 0 && (
-          <div className="flex justify-between">
-            <span>Tax:</span>
-            <span className="font-mono">{currencySymbol} {tax.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-          </div>
-        )}
-
         <div className="divider my-1.5 border-dashed border-b border-slate-400" />
 
         <div className="currency-prefix text-right font-mono flex justify-between items-center text-sm font-black text-slate-950 pt-0.5">

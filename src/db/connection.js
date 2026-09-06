@@ -65,15 +65,16 @@ function resolveLocalDbPath() {
   return workspaceDb;
 }
 
-export const FALLBACK_TURSO_DATABASE_URL = 'libsql://mwhardware-db-sanoj-hardware.aws-ap-south-1.turso.io';
-export const FALLBACK_TURSO_AUTH_TOKEN = 'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODg0NTg4MjQsImlkIjoiMDFhMDY3Y2YtZWQwMS03MDYzLWE3MjQtNmIyZTE1ZjJmZWU5Iiwia2lkIjoiSUNBcmxEQWtuSmRPOVBfalA3WG03dDlvdE91NGI1SjFTbWpmY281b1dJayIsInJpZCI6IjQzNzRjMmFjLThiZjQtNDczNi05NzllLTdlYTUyNTk1MWVjNiJ9.Gz4XtMMKAAEGHQN2uEO4tTN3ZRaIWMBU7QrXkHkxRae-1nkw35-old6H_o_S6BioJPtiPvncMxVdP4uN_yOyAQ';
-
-if (!process.env.TURSO_DATABASE_URL) process.env.TURSO_DATABASE_URL = FALLBACK_TURSO_DATABASE_URL;
-if (!process.env.TURSO_AUTH_TOKEN) process.env.TURSO_AUTH_TOKEN = FALLBACK_TURSO_AUTH_TOKEN;
+// SECURITY: no hardcoded fallback credential. TURSO_DATABASE_URL / TURSO_AUTH_TOKEN must come
+// from environment variables (Vercel project env vars in the cloud, a real .env locally). A prior
+// version of this file hardcoded a live read-write Turso credential here and force-wrote it into
+// process.env - that credential must be treated as compromised and rotated via the Turso
+// dashboard/CLI. When credentials are absent, getTursoClient()/initDb() correctly fall back to
+// local-SQLite-only / a clear startup error rather than silently using a baked-in secret.
 
 export function getTursoClient() {
-  let tursoUrl = process.env.TURSO_DATABASE_URL || FALLBACK_TURSO_DATABASE_URL;
-  const tursoToken = process.env.TURSO_AUTH_TOKEN || FALLBACK_TURSO_AUTH_TOKEN;
+  let tursoUrl = process.env.TURSO_DATABASE_URL;
+  const tursoToken = process.env.TURSO_AUTH_TOKEN;
 
   if (tursoUrl && tursoUrl.startsWith('libsql://')) {
     tursoUrl = tursoUrl.replace('libsql://', 'https://');
@@ -91,8 +92,8 @@ export function getTursoClient() {
 
 export async function initDb(customDbPath) {
   const isWebEnvironment = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.DATABASE_ENGINE === 'turso';
-  let tursoUrl = process.env.TURSO_DATABASE_URL || FALLBACK_TURSO_DATABASE_URL;
-  const tursoToken = process.env.TURSO_AUTH_TOKEN || FALLBACK_TURSO_AUTH_TOKEN;
+  let tursoUrl = process.env.TURSO_DATABASE_URL;
+  const tursoToken = process.env.TURSO_AUTH_TOKEN;
 
   if (tursoUrl && tursoUrl.startsWith('libsql://')) {
     tursoUrl = tursoUrl.replace('libsql://', 'https://');

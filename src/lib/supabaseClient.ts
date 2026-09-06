@@ -233,6 +233,12 @@ export const supabase: any = {
         sessionStorage.setItem('erp_user', JSON.stringify(data.user));
         sessionStorage.setItem('hardware_erp_user', JSON.stringify(data.user));
         sessionStorage.setItem('hardware_erp_auth', 'true');
+        // Server-issued session token - required on every subsequent request (see getAuthHeaders
+        // in lib/api.ts). Without this, the backend now rejects all privileged/API calls with 401.
+        if (data.token) {
+          sessionStorage.setItem('erp_session_token', data.token);
+          localStorage.setItem('erp_session_token', data.token);
+        }
         const customPerms = data.user?.custom_permissions || data.user?.permissions;
         if (customPerms) {
           sessionStorage.setItem('custom_permissions', JSON.stringify(customPerms));
@@ -261,10 +267,12 @@ export const supabase: any = {
       localStorage.removeItem('erp_user');
       localStorage.removeItem('hardware_erp_user');
       localStorage.removeItem('hardware_erp_auth');
+      localStorage.removeItem('erp_session_token');
       sessionStorage.removeItem('erp_user');
       sessionStorage.removeItem('hardware_erp_user');
       sessionStorage.removeItem('hardware_erp_auth');
       sessionStorage.removeItem('custom_permissions');
+      sessionStorage.removeItem('erp_session_token');
       return { error: null };
     }
   },
