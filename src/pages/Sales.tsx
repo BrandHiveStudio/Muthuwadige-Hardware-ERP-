@@ -2946,9 +2946,6 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   };
 
   const handleVoidOrder = async (orderId: string, voidPasskey: string) => {
-    if (!window.confirm(t("Are you sure you want to void this invoice? This will restore product stock levels and cancel the sale transaction.", "මෙම ඉන්වොයිසිය අවලංගු කිරීමට ඔබට විශ්වාසද? මෙමඟින් නිෂ්පාදන තොග මට්ටම් නැවත යථා තත්ත්වයට පත් කර විකුණුම් ගනුදෙනුව අවලංගු කරනු ඇත."))) {
-      return;
-    }
     try {
       setIsLoading(true);
       const { data: { user } } = await supabase.auth.getUser();

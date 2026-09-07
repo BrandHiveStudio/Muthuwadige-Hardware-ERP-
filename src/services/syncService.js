@@ -324,7 +324,7 @@ export async function runSyncCycle(localDb) {
 export async function pullDownstreamChanges(localDb, tursoClient) {
   if (!localDb || !tursoClient) return;
 
-  const syncAndPruneEntity = async (tableName, selectSql = null, excludeClause = '', idCol = 'id') => {
+  const syncAndPruneEntity = async (tableName, selectSql = null, excludeClause = '', idCol = 'id', useSafeUpsert = false) => {
     try {
       const tableExists = await localDb.get(
         "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
@@ -343,10 +343,28 @@ export async function pullDownstreamChanges(localDb, tursoClient) {
           const colNames = cols.map(c => `"${c}"`).join(', ');
           const placeholders = cols.map(() => '?').join(', ');
           const args = cols.map(c => row[c] !== undefined ? row[c] : null);
-          await localDb.run(
-            `INSERT OR REPLACE INTO "${tableName}" (${colNames}) VALUES (${placeholders})`,
-            args
-          );
+          if (useSafeUpsert) {
+            // INSERT OR REPLACE is a DELETE+INSERT at the SQLite engine level, which re-fires
+            // this table's "AFTER INSERT" change-tracking trigger (trg_sync_*_insert) on every
+            // downstream refresh of an already-existing row - even though nothing changed -
+            // causing the row to be perpetually re-queued in sync_queue. ON CONFLICT DO UPDATE
+            // performs a genuine UPDATE for existing rows (no AFTER INSERT trigger fire), while
+            // still inserting normally the first time a record is pulled.
+            const updateCols = cols.filter(c => c !== idCol);
+            const conflictClause = updateCols.length > 0
+              ? `DO UPDATE SET ${updateCols.map(c => `"${c}" = excluded."${c}"`).join(', ')}`
+              : 'DO NOTHING';
+            await localDb.run(
+              `INSERT INTO "${tableName}" (${colNames}) VALUES (${placeholders})
+               ON CONFLICT("${idCol}") ${conflictClause}`,
+              args
+            );
+          } else {
+            await localDb.run(
+              `INSERT OR REPLACE INTO "${tableName}" (${colNames}) VALUES (${placeholders})`,
+              args
+            );
+          }
         }
       }
 
@@ -410,9 +428,12 @@ export async function pullDownstreamChanges(localDb, tursoClient) {
     // desktop's local database, and a voided/deleted sale (see the void/delete routes in server.js,
     // now correctly enqueued - see enqueueSync calls added there) never had anywhere to sync FROM
     // even if it had synced up. Same pattern/limit as the other high-volume entities above.
-    syncAndPruneEntity('sales', 'SELECT * FROM sales ORDER BY created_at DESC LIMIT 1000'),
+    // useSafeUpsert=true: 'sales' has an "AFTER INSERT" change-tracking trigger (trg_sync_sales_insert)
+    // that must not re-fire when this pull simply refreshes an already-existing row.
+    syncAndPruneEntity('sales', 'SELECT * FROM sales ORDER BY created_at DESC LIMIT 1000', '', 'id', true),
     // 10. Sales Returns & Sales Return Items
-    syncAndPruneEntity('sales_returns', 'SELECT * FROM sales_returns ORDER BY created_at DESC LIMIT 1000'),
+    // useSafeUpsert=true: same reasoning as 'sales' above (trg_sync_sales_returns_insert).
+    syncAndPruneEntity('sales_returns', 'SELECT * FROM sales_returns ORDER BY created_at DESC LIMIT 1000', '', 'id', true),
     syncAndPruneEntity('sales_return_items', 'SELECT * FROM sales_return_items'),
     // 11. Cheque Registry
     syncAndPruneEntity('cheque_registry', 'SELECT * FROM cheque_registry ORDER BY created_at DESC LIMIT 1000'),
