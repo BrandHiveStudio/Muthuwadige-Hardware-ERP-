@@ -1506,10 +1506,32 @@ async function initializeDatabase() {
     `);
   } catch(e) {}
 
-  // Change Tracking Triggers for Offline-First Replication
+  // Inbound-sync guard: while a Turso->local downstream pull is writing rows into this database,
+  // the change-tracking triggers below must stay silent - those writes are a cloud READ result,
+  // not a new local business mutation, and must never be re-queued for outbound push (this is
+  // exactly what corrupted 9 production 'sales' rows: a first-time pull inserted rows that are
+  // "new" to an empty/catching-up local table, the AFTER INSERT trigger fired anyway, and its
+  // partial column snapshot got pushed straight back to Turso, truncating the real row). Presence
+  // of a row here (set only by pullDownstreamChanges, see syncService.js) means "an inbound cloud
+  // sync write is in progress right now" - every trigger below checks it stays absent before firing.
   try {
     await db.exec(`
-      CREATE TRIGGER IF NOT EXISTS trg_sync_sales_insert AFTER INSERT ON sales
+      CREATE TABLE IF NOT EXISTS sync_pull_marker (
+        id INTEGER PRIMARY KEY CHECK (id = 1)
+      )
+    `);
+  } catch (e) {}
+
+  // Change Tracking Triggers for Offline-First Replication
+  // DROP+CREATE (not just "IF NOT EXISTS") because these triggers already exist in every database
+  // that ran the prior version of this code - including production Turso, since this same startup
+  // routine runs there too - so a plain "CREATE IF NOT EXISTS" would silently keep the old,
+  // unguarded definition forever. The WHEN clause is the actual fix: see sync_pull_marker above.
+  try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_sales_insert'); } catch (_) {}
+  try {
+    await db.exec(`
+      CREATE TRIGGER trg_sync_sales_insert AFTER INSERT ON sales
+      WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
       BEGIN
         INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
         VALUES (
@@ -1525,9 +1547,11 @@ async function initializeDatabase() {
     `);
   } catch (_) {}
 
+  try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_sales_returns_insert'); } catch (_) {}
   try {
     await db.exec(`
-      CREATE TRIGGER IF NOT EXISTS trg_sync_sales_returns_insert AFTER INSERT ON sales_returns
+      CREATE TRIGGER trg_sync_sales_returns_insert AFTER INSERT ON sales_returns
+      WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
       BEGIN
         INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
         VALUES (
@@ -1543,9 +1567,11 @@ async function initializeDatabase() {
     `);
   } catch (_) {}
 
+  try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_credit_payments_insert'); } catch (_) {}
   try {
     await db.exec(`
-      CREATE TRIGGER IF NOT EXISTS trg_sync_credit_payments_insert AFTER INSERT ON credit_payments
+      CREATE TRIGGER trg_sync_credit_payments_insert AFTER INSERT ON credit_payments
+      WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
       BEGIN
         INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
         VALUES (
@@ -1561,9 +1587,11 @@ async function initializeDatabase() {
     `);
   } catch (_) {}
 
+  try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_stock_adj_insert'); } catch (_) {}
   try {
     await db.exec(`
-      CREATE TRIGGER IF NOT EXISTS trg_sync_stock_adj_insert AFTER INSERT ON stock_adjustments
+      CREATE TRIGGER trg_sync_stock_adj_insert AFTER INSERT ON stock_adjustments
+      WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
       BEGIN
         INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
         VALUES (
@@ -2262,6 +2290,10 @@ app.post('/api/auth/register', requireAdmin, async (req, res) => {
       'INSERT INTO profiles (id, name, email, role, avatar, password, permissions, custom_permissions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       [id, effectiveName, email, normalizedRole, email.charAt(0).toUpperCase(), hashedPassword, permsStr, permsStr]
     );
+    // New staff profile must reach Turso the same way every other profile mutation does (see the
+    // sibling PUT/DELETE/password-change handlers below), otherwise the account only exists on
+    // this device and other devices' logins fail with "User profile not found".
+    enqueueSync(db, 'profiles', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
     res.json({
       success: true,
       user: {

@@ -139,6 +139,16 @@ export async function enqueueSync(db, tableName, recordId, action = 'INSERT', pa
  */
 export async function pushUpstreamChanges(localDb, tursoClient) {
   if (!localDb || !tursoClient) return;
+  // On the web/Vercel deployment, `localDb` and `tursoClient` are the SAME database (see
+  // src/db/connection.js - there is no separate local SQLite there). enqueueSync() already
+  // skips writing to sync_queue in that environment for this exact reason (see its isWebClient
+  // check above), but several route handlers below also call pushUpstreamChanges(db, tursoClient)
+  // directly as an "instant push" optimization, unconditionally. Without this guard, a genuine
+  // INSERT on the web portal (e.g. a sale) fires this table's AFTER INSERT trigger *on Turso
+  // itself*, queuing a partial-column snapshot there, and this same request's own "push" call
+  // would immediately read that phantom queue entry back and overwrite the row it just correctly
+  // inserted with that partial snapshot - the same corruption bug, entirely within the cloud side.
+  if (isWebClient) return;
   const nowIso = new Date().toISOString();
 
   const pendingItems = await localDb.all(
@@ -324,6 +334,28 @@ export async function runSyncCycle(localDb) {
 export async function pullDownstreamChanges(localDb, tursoClient) {
   if (!localDb || !tursoClient) return;
 
+  // Mark "an inbound cloud sync write is in progress" for the duration of this whole pull batch.
+  // The change-tracking triggers (trg_sync_sales_insert etc., see their WHEN clause in server.js)
+  // check for this marker's absence before firing, so a row this pull inserts - which is a cloud
+  // READ result, not a new local business mutation - never gets re-queued and pushed straight back
+  // to Turso. Without this, a row that is genuinely new to this local device (e.g. the first-ever
+  // pull into a freshly set-up/empty local table) would fire the AFTER INSERT trigger, which only
+  // captures a partial column snapshot, and pushing that back overwrites/truncates the real cloud
+  // row - exactly what happened to 9 production 'sales' rows.
+  try {
+    await localDb.run('INSERT OR IGNORE INTO sync_pull_marker (id) VALUES (1)');
+  } catch (_) {}
+
+  try {
+    await pullDownstreamChangesInner(localDb, tursoClient);
+  } finally {
+    try {
+      await localDb.run('DELETE FROM sync_pull_marker WHERE id = 1');
+    } catch (_) {}
+  }
+}
+
+async function pullDownstreamChangesInner(localDb, tursoClient) {
   const syncAndPruneEntity = async (tableName, selectSql = null, excludeClause = '', idCol = 'id', useSafeUpsert = false) => {
     try {
       const tableExists = await localDb.get(
