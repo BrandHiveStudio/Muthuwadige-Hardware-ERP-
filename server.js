@@ -1154,6 +1154,10 @@ async function initializeDatabase() {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  // Cloud parity: the Turso copy of this table carries unit_price. Without it here the downstream
+  // pull aborts for this entity ("table quotation_items has no column named unit_price") and
+  // quotation lines never reach this device. Additive only - no existing column or value changes.
+  try { await db.exec("ALTER TABLE quotation_items ADD COLUMN unit_price REAL DEFAULT 0"); } catch (e) {}
 
   // 14. Create Delivery Notes Table
   await db.exec(`
@@ -1386,6 +1390,14 @@ async function initializeDatabase() {
     )
   `);
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN difference_payment_method TEXT DEFAULT 'Cash'"); } catch (e) {}
+  // These two must be applied HERE, after the table exists. is_credit was previously only added
+  // inside the GET /api/sales/returns handler, so on a fresh database POST /api/sales/returns
+  // failed with "no such column: is_credit" unless the list endpoint happened to be called first.
+  // cashier is added earlier in this function too (see the ALTER near the top), but that runs
+  // before this CREATE TABLE and is therefore swallowed on a fresh database - which also aborted
+  // the downstream pull for this entity ("no column named cashier"). Additive only.
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN is_credit INTEGER DEFAULT 0"); } catch (e) {}
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN cashier TEXT"); } catch (e) {}
 
   // 17.5 Create Sales Return Items Table
   await db.exec(`
@@ -3677,33 +3689,9 @@ app.post('/api/sales/:id/void', requireVoidPasskey, async (req, res) => {
 // SALES RETURNS API
 app.get('/api/sales/returns', async (req, res) => {
   try {
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS sales_returns (
-        id TEXT PRIMARY KEY,
-        return_no TEXT,
-        invoice_no TEXT,
-        customer_name TEXT,
-        customer_phone TEXT,
-        returned_items TEXT,
-        exchange_items TEXT,
-        return_method TEXT,
-        return_amount REAL DEFAULT 0,
-        exchange_amount REAL DEFAULT 0,
-        balance_amount REAL DEFAULT 0,
-        total_refunded REAL DEFAULT 0,
-        customer_paid REAL DEFAULT 0,
-        change_given REAL DEFAULT 0,
-        credit_note_no TEXT,
-        user_id TEXT,
-        status TEXT DEFAULT 'active',
-        reason TEXT,
-        created_at TEXT,
-        is_credit INTEGER DEFAULT 0,
-        difference_payment_method TEXT DEFAULT 'Cash'
-      )
-    `);
-    try { await db.exec("ALTER TABLE sales_returns ADD COLUMN is_credit INTEGER DEFAULT 0"); } catch (e) {}
-    try { await db.exec("ALTER TABLE sales_returns ADD COLUMN difference_payment_method TEXT DEFAULT 'Cash'"); } catch (e) {}
+    // Schema for this table (including is_credit) is created and migrated in initializeDatabase().
+    // It used to be defined here as well, which meant a fresh database only gained the is_credit
+    // column once this list endpoint had been called at least once.
     const returns = await db.all('SELECT * FROM sales_returns ORDER BY created_at DESC');
     const mapped = returns.map(r => ({
       id: r.id,
