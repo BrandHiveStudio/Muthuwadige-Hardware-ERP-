@@ -2614,33 +2614,58 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-app.post('/api/auth/register', requireAdmin, async (req, res) => {
+app.post(['/api/auth/register', '/api/users'], requireAdmin, async (req, res) => {
   const { email, password, name, full_name, role, permissions, custom_permissions } = req.body;
+  if (!email || !String(email).trim()) {
+    return res.status(400).json({ error: 'Email is required to create a user account.' });
+  }
+  const cleanEmail = String(email).trim().toLowerCase();
   try {
     // Filter out super_admin / Admin when evaluating staff quota limit (3 max additional staff)
     const countRow = await db.get("SELECT COUNT(*) as count FROM profiles WHERE LOWER(role) NOT IN ('super_admin', 'super admin', 'superadmin') AND email != 'admin@hardware.com'");
     if (countRow && countRow.count >= 3) {
       return res.status(400).json({ error: 'Staff quota limit reached. Maximum 3 staff accounts allowed.' });
     }
-    const id = 'u_' + Date.now();
+    const id = req.body.id || ('u_' + Date.now());
     const normalizedRole = role ? (role.charAt(0).toUpperCase() + role.slice(1).toLowerCase()) : 'Cashier';
     const effectivePerms = custom_permissions !== undefined ? custom_permissions : permissions;
     const permsStr = effectivePerms ? (typeof effectivePerms === 'string' ? effectivePerms : JSON.stringify(effectivePerms)) : null;
     const effectiveName = name || full_name || 'Staff User';
     const hashedPassword = await bcrypt.hash(password || '123456', 10);
+
+    // 1. Insert into profiles table
     await db.run(
-      'INSERT INTO profiles (id, name, email, role, avatar, password, permissions, custom_permissions) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, effectiveName, email, normalizedRole, email.charAt(0).toUpperCase(), hashedPassword, permsStr, permsStr]
+      `INSERT OR REPLACE INTO profiles (id, name, email, role, avatar, password, permissions, custom_permissions, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+      [id, effectiveName, cleanEmail, normalizedRole, cleanEmail.charAt(0).toUpperCase(), hashedPassword, permsStr, permsStr]
     );
-    // New staff profile must reach Turso the same way every other profile mutation does (see the
-    // sibling PUT/DELETE/password-change handlers below), otherwise the account only exists on
-    // this device and other devices' logins fail with "User profile not found".
+
+    // 2. Insert into users table for direct auth checks across Turso Cloud and local SQLite
+    try {
+      await db.run(
+        `INSERT OR REPLACE INTO users (id, email, password, role, name, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [id, cleanEmail, hashedPassword, normalizedRole, effectiveName]
+      );
+    } catch (_) {
+      try {
+        await db.run(
+          `INSERT OR REPLACE INTO users (id, email, password, role, name)
+           VALUES (?, ?, ?, ?, ?)`,
+          [id, cleanEmail, hashedPassword, normalizedRole, effectiveName]
+        );
+      } catch (_) {}
+    }
+
+    // Propagate changes upstream/downstream
+    enqueueSync(db, 'users', id, 'UPSERT').catch(() => {});
     enqueueSync(db, 'profiles', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
+
     res.json({
       success: true,
       user: {
         id,
-        email,
+        email: cleanEmail,
         role: normalizedRole,
         full_name: effectiveName,
         name: effectiveName,
@@ -2649,6 +2674,7 @@ app.post('/api/auth/register', requireAdmin, async (req, res) => {
       }
     });
   } catch (err) {
+    console.error('Error creating user account:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -3155,6 +3181,7 @@ app.post('/api/products', async (req, res) => {
   const p = Array.isArray(req.body) ? (req.body[0] || {}) : (req.body || {});
   const user_email = req.headers['x-user-email'] || p.user_email || 'system';
   try {
+    await ensureBulkImportColumns(db);
     let finalSupplier = p.supplier ? p.supplier.trim() : '';
     let finalSupplierPhone = p.supplier_phone !== undefined ? p.supplier_phone : (p.supplierPhone || '');
 
@@ -3375,14 +3402,23 @@ app.post('/api/customers', async (req, res) => {
   const credit_balance = Number(c.credit_balance || c.current_credit || 0);
   const current_credit = Number(c.current_credit || c.credit_balance || 0);
 
+  const credit_limit = Number(c.credit_limit || c.creditLimit || 0);
+  const credit_period = Number(c.credit_period || c.creditPeriod || 30);
+  const type = String(c.type || 'registered');
+
   try {
+    await ensureBulkImportColumns(db);
     await db.run(
-      `INSERT INTO customers (id, name, email, phone, address, nic, loyalty_points, total_purchases, join_date, credit_balance, current_credit)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, name, email, phone, address, nic, loyalty_points, total_purchases, join_date, credit_balance, current_credit]
+      `INSERT OR REPLACE INTO customers (
+        id, name, email, phone, address, nic, credit_limit, credit_period, type,
+        loyalty_points, total_purchases, join_date, credit_balance, current_credit, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+      [id, name, email, phone, address, nic, credit_limit, credit_period, type, loyalty_points, total_purchases, join_date, credit_balance, current_credit]
     );
     enqueueSync(db, 'customers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
+    res.json({ success: true, id });
   } catch (err) {
+    console.error('Error saving customer:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -8137,11 +8173,11 @@ app.post('/api/settings/restore', requireAdmin, async (req, res) => {
   }
 });
 
-// PROFILES (All staff users)
-app.get('/api/profiles', async (req, res) => {
+// PROFILES & USERS (All staff users)
+app.get(['/api/profiles', '/api/users'], async (req, res) => {
   try {
     const profiles = await db.all('SELECT * FROM profiles ORDER BY created_at DESC');
-    const mapped = profiles.map(pr => {
+    const mapped = (profiles || []).map(pr => {
       const rawPerms = pr.custom_permissions || pr.permissions;
       let parsedPerms = undefined;
       if (rawPerms) {
@@ -8165,14 +8201,9 @@ app.get('/api/profiles', async (req, res) => {
   }
 });
 
-app.get('/api/profiles/:id', async (req, res) => {
+app.get(['/api/profiles/:id', '/api/users/:id'], async (req, res) => {
   const { id } = req.params;
   try {
-    // NOTE: 'profiles' has no 'full_name' or 'username' column (schema: id, name, email, role,
-    // avatar, password, created_at) - selecting them threw SQLITE_ERROR/SQL_INPUT_ERROR on every
-    // call, both locally and on the Turso-backed cloud API, which silently broke the active-session
-    // validation check in App.tsx (it only inspects res.status===404; a 500 was never treated as
-    // "profile deleted", so a revoked account was never force-logged-out).
     const user = await db.get(
       'SELECT id, email, role, name, avatar, permissions, custom_permissions, created_at FROM profiles WHERE id = ?',
       [id]
@@ -8186,7 +8217,7 @@ app.get('/api/profiles/:id', async (req, res) => {
   }
 });
 
-app.put('/api/profiles/:id', requireAdmin, async (req, res) => {
+app.put(['/api/profiles/:id', '/api/users/:id'], requireAdmin, async (req, res) => {
   const { id } = req.params;
   const p = req.body;
   try {
@@ -8197,34 +8228,47 @@ app.put('/api/profiles/:id', requireAdmin, async (req, res) => {
     }
     if (effectivePerms !== undefined) {
       await db.run(
-        'UPDATE profiles SET name = ?, role = ?, avatar = ?, permissions = ?, custom_permissions = ? WHERE id = ?',
+        'UPDATE profiles SET name = ?, role = ?, avatar = ?, permissions = ?, custom_permissions = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
         [p.name, p.role, p.avatar, permsVal, permsVal, id]
       );
     } else {
       await db.run(
-        'UPDATE profiles SET name = ?, role = ?, avatar = ? WHERE id = ?',
+        'UPDATE profiles SET name = ?, role = ?, avatar = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
         [p.name, p.role, p.avatar, id]
       );
     }
+
+    try {
+      await db.run(
+        'UPDATE users SET name = ?, role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        [p.name, p.role, id]
+      );
+    } catch (_) {}
+
     enqueueSync(db, 'profiles', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'users', id, 'UPSERT').catch(() => {});
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.delete('/api/profiles/:id', requireAdmin, async (req, res) => {
+app.delete(['/api/profiles/:id', '/api/users/:id'], requireAdmin, async (req, res) => {
   const { id } = req.params;
   try {
     await db.run('DELETE FROM profiles WHERE id = ?', [id]);
+    try {
+      await db.run('DELETE FROM users WHERE id = ?', [id]);
+    } catch (_) {}
     enqueueSync(db, 'profiles', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'users', id, 'DELETE').catch(() => {});
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.put('/api/profiles/:id/password', async (req, res) => {
+app.put(['/api/profiles/:id/password', '/api/users/:id/password'], async (req, res) => {
   const { id } = req.params;
   const { password } = req.body;
   // A user may change their own password; changing someone else's requires an admin role.
@@ -8233,15 +8277,15 @@ app.put('/api/profiles/:id/password', async (req, res) => {
   }
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    await db.run('UPDATE profiles SET password = ? WHERE id = ?', [hashedPassword, id]);
-    // This IS a deliberate, user-initiated password change (self-service or admin reset via the
-    // Users & Roles page), unlike the silent format-migration on login - it must propagate. Fetch
-    // the full current row and mark it so pushUpstreamChanges knows to include the new password
-    // (see its 'profiles' handling); every other profiles UPSERT leaves the receiving side's
-    // password untouched by default.
+    await db.run('UPDATE profiles SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [hashedPassword, id]);
+    try {
+      await db.run('UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [hashedPassword, id]);
+    } catch (_) {}
+
     const updatedProfile = await db.get('SELECT * FROM profiles WHERE id = ?', [id]);
     if (updatedProfile) {
       enqueueSync(db, 'profiles', id, 'UPSERT', { ...updatedProfile, __sync_password_change: true }).catch(() => {});
+      enqueueSync(db, 'users', id, 'UPSERT').catch(() => {});
     }
     res.json({ success: true });
   } catch (err) {

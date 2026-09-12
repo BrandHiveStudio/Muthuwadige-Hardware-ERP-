@@ -49,19 +49,28 @@ let activeTursoTxn: Transaction | null = null;
 let isTursoActive = false;
 
 function normalizeParams(params: any[]): any {
-  if (params.length === 0) return [];
-  if (params.length === 1) {
-    const p = params[0];
-    if (p === undefined || p === null) return [];
-    if (Array.isArray(p)) return p;
-    if (typeof p === 'object') return p;
-    return [p];
+  if (!params || params.length === 0) return [];
+  let p = params;
+  if (params.length === 1 && (Array.isArray(params[0]) || (typeof params[0] === 'object' && params[0] !== null))) {
+    p = params[0];
   }
-  return params;
+  if (Array.isArray(p)) {
+    return p.map(v => (v === undefined ? null : v));
+  }
+  if (typeof p === 'object' && p !== null) {
+    const sanitized: Record<string, any> = {};
+    for (const [k, v] of Object.entries(p)) {
+      sanitized[k] = v === undefined ? null : v;
+    }
+    return sanitized;
+  }
+  return p === undefined ? [null] : [p];
 }
 
 function resolveLocalDbPath(): string {
-  if (process.env.VERCEL) return '/tmp/hardware.db';
+  if (process.env.VERCEL || process.env.APP_ROLE === 'web' || process.env.DATABASE_ENGINE === 'turso') {
+    throw new Error('Local SQLite is disabled in web/serverless environment. All database operations must target Turso Cloud.');
+  }
   const isNodeInElectron = process.env.ELECTRON_RUN_AS_NODE === '1';
   const isProduction = process.env.NODE_ENV === 'production';
   let userDataPath = process.env.USER_DATA_PATH || '';
@@ -125,19 +134,11 @@ export async function initDb(customDbPath?: string): Promise<UnifiedDatabase> {
       throw new Error('Vercel serverless environment detected, but TURSO_DATABASE_URL or TURSO_AUTH_TOKEN environment variable is missing.');
     }
     console.log('⚡ [DualEngine] Web environment detected. Primary: Turso Cloud libSQL (HTTPS Transport).');
-    const globalForTurso = globalThis as unknown as { __tursoClientSingleton?: Client; __tursoClient?: Client };
-    if (!globalForTurso.__tursoClientSingleton && !globalForTurso.__tursoClient) {
-      const client = createClient({
-        url: tursoUrl,
-        authToken: tursoToken
-      });
-      globalForTurso.__tursoClientSingleton = client;
-      globalForTurso.__tursoClient = client;
-      if (typeof global !== 'undefined') {
-        (global as any).__tursoClient = client;
-      }
-    }
-    tursoClient = (globalForTurso.__tursoClient || globalForTurso.__tursoClientSingleton) as Client;
+    const client = getTursoClient() || createClient({
+      url: tursoUrl,
+      authToken: tursoToken
+    });
+    tursoClient = client;
     isTursoActive = true;
     console.log(`✅ [DualEngine] Connected to Turso Cloud at: ${tursoUrl}`);
   } else {
@@ -170,22 +171,40 @@ export async function initDb(customDbPath?: string): Promise<UnifiedDatabase> {
 }
 
 export async function getDb(): Promise<UnifiedDatabase> {
-  if (!tursoClient && !localSqliteDb) {
+  if (isTurso()) {
+    if (!tursoClient) {
+      tursoClient = getTursoClient();
+    }
+    if (!tursoClient) {
+      await initDb();
+    }
+    isTursoActive = true;
+    return db;
+  }
+  if (!localSqliteDb) {
     await initDb();
   }
   return db;
 }
 
 export function isTurso(): boolean {
-  return isTursoActive;
+  return Boolean(
+    isTursoActive ||
+    process.env.VERCEL ||
+    process.env.APP_ROLE === 'web' ||
+    process.env.DATABASE_ENGINE === 'turso' ||
+    (process.env.TURSO_DATABASE_URL && process.env.TURSO_AUTH_TOKEN && !localSqliteDb)
+  );
 }
 
 export async function all<T = any>(sql: string, ...params: any[]): Promise<T[]> {
   await getDb();
   const normalized = normalizeParams(params);
 
-  if (isTursoActive && tursoClient) {
-    const executor = activeTursoTxn || tursoClient;
+  if (isTurso()) {
+    const client = tursoClient || getTursoClient();
+    if (!client) throw new Error('Turso client is not initialized in web mode.');
+    const executor = activeTursoTxn || client;
     const res = await executor.execute({ sql, args: normalized });
     return (res.rows || []) as unknown as T[];
   }
@@ -204,8 +223,10 @@ export async function get<T = any>(sql: string, ...params: any[]): Promise<T | u
   await getDb();
   const normalized = normalizeParams(params);
 
-  if (isTursoActive && tursoClient) {
-    const executor = activeTursoTxn || tursoClient;
+  if (isTurso()) {
+    const client = tursoClient || getTursoClient();
+    if (!client) throw new Error('Turso client is not initialized in web mode.');
+    const executor = activeTursoTxn || client;
     const res = await executor.execute({ sql, args: normalized });
     if (res.rows && res.rows.length > 0) {
       return res.rows[0] as unknown as T;
@@ -227,19 +248,29 @@ export async function run(sql: string, ...params: any[]): Promise<RunResult> {
   await getDb();
   const trimmed = sql.trim().toUpperCase();
 
-  if (isTursoActive && tursoClient) {
+  if (isTurso()) {
+    const client = tursoClient || getTursoClient();
+    if (!client) throw new Error('Turso client is not initialized in web mode.');
+
     // Intercept transactions transparently for Turso Cloud over HTTP
     if (trimmed === 'BEGIN' || trimmed === 'BEGIN TRANSACTION') {
       if (!activeTursoTxn) {
-        activeTursoTxn = await tursoClient.transaction('write');
+        try {
+          activeTursoTxn = await client.transaction('write');
+        } catch (_) {
+          activeTursoTxn = null;
+        }
       }
       return { changes: 0, rowsAffected: 0 };
     }
 
-    if (trimmed === 'COMMIT' || trimmed === 'END TRANSACTION') {
+    if (trimmed === 'COMMIT' || trimmed === 'COMMIT TRANSACTION' || trimmed === 'END TRANSACTION' || trimmed === 'END') {
       if (activeTursoTxn) {
-        await activeTursoTxn.commit();
-        activeTursoTxn = null;
+        try {
+          await activeTursoTxn.commit();
+        } finally {
+          activeTursoTxn = null;
+        }
       }
       return { changes: 0, rowsAffected: 0 };
     }
@@ -248,8 +279,7 @@ export async function run(sql: string, ...params: any[]): Promise<RunResult> {
       if (activeTursoTxn) {
         try {
           await activeTursoTxn.rollback();
-        } catch {
-          // Ignore rollback errors if already aborted
+        } catch (_) {
         } finally {
           activeTursoTxn = null;
         }
@@ -258,19 +288,19 @@ export async function run(sql: string, ...params: any[]): Promise<RunResult> {
     }
 
     // Safely skip SQLite-only WAL pragmas on remote cloud databases
-    if (trimmed.startsWith('PRAGMA WAL_CHECKPOINT') || trimmed.startsWith('PRAGMA JOURNAL_MODE')) {
+    if (trimmed.startsWith('PRAGMA WAL_CHECKPOINT') || trimmed.startsWith('PRAGMA JOURNAL_MODE') || trimmed.startsWith('PRAGMA BUSY_TIMEOUT') || trimmed.startsWith('PRAGMA SYNCHRONOUS')) {
       return { changes: 0, rowsAffected: 0 };
     }
 
     const normalized = normalizeParams(params);
-    const executor = activeTursoTxn || tursoClient;
+    const executor = activeTursoTxn || client;
     const res = await executor.execute({ sql, args: normalized });
 
     return {
-      changes: res.rowsAffected,
-      rowsAffected: res.rowsAffected,
-      lastID: res.lastInsertRowid !== undefined ? Number(res.lastInsertRowid) : undefined,
-      lastInsertRowid: res.lastInsertRowid
+      changes: Number(res?.rowsAffected || 0),
+      rowsAffected: Number(res?.rowsAffected || 0),
+      lastID: res?.lastInsertRowid !== undefined ? Number(res.lastInsertRowid) : undefined,
+      lastInsertRowid: res?.lastInsertRowid
     };
   }
 
@@ -298,12 +328,14 @@ export async function run(sql: string, ...params: any[]): Promise<RunResult> {
 export async function exec(sql: string): Promise<void> {
   await getDb();
 
-  if (isTursoActive && tursoClient) {
+  if (isTurso()) {
+    const client = tursoClient || getTursoClient();
+    if (!client) throw new Error('Turso client is not initialized in web mode.');
     const trimmed = sql.trim().toUpperCase();
-    if (trimmed.startsWith('PRAGMA WAL_CHECKPOINT') || trimmed.startsWith('PRAGMA JOURNAL_MODE')) {
+    if (trimmed.startsWith('PRAGMA WAL_CHECKPOINT') || trimmed.startsWith('PRAGMA JOURNAL_MODE') || trimmed.startsWith('PRAGMA BUSY_TIMEOUT') || trimmed.startsWith('PRAGMA SYNCHRONOUS')) {
       return;
     }
-    await tursoClient.executeMultiple(sql);
+    await client.executeMultiple(sql);
     return;
   }
 
