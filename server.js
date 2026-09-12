@@ -3099,13 +3099,13 @@ app.post(['/api/products/bulk-import', '/api/products/bulk', '/api/products/impo
       const stock = parseFloat(rawStock !== '' ? rawStock : (row.stock_quantity || row.stock || 0)) || 0;
 
       const rawMin = getValue(row, [
-        'min stock', 'min_stock', 'reorder level', 'reorder_level', 'min', 'stock alert', 'stock_alert', 'minstock'
+        'min stock', 'min_stock', 'reorder level', 'reorder_level', 'min', 'stock alert', 'stock_alert', 'minstock', 'min_stock_alert'
       ]);
-      const minStock = parseInt(rawMin !== '' ? rawMin : (row.min_stock || row.minStock || 5)) || 5;
+      const minStock = parseInt(rawMin !== '' ? rawMin : (row.min_stock_alert || row.min_stock || row.minStock || 5)) || 5;
 
       const supplierInput = getValue(row, [
         'supplier', 'supplier_name', 'supplier name', 'vendor', 'vendor_name', 'vendor name'
-      ]) || row.supplier || '';
+      ]) || row.supplier_name || row.supplier || '';
 
       let supplierPhone = getValue(row, [
         'supplier number', 'supplier phone', 'supplier_phone', 'supplierphone', 'mobile', 'phone', 'contact'

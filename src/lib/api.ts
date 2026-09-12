@@ -54,7 +54,7 @@ export const getAuthHeaders = (): Record<string, string> => {
   // an admin.
   const headers: Record<string, string> = {};
   try {
-    const token = sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token');
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token') || localStorage.getItem('auth_token') || sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token');
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -251,7 +251,7 @@ export const api = {
       return res.json();
     },
     bulkImport: async (products: any[]) => {
-      const token = sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token') || '';
+      const token = localStorage.getItem('token') || sessionStorage.getItem('token') || localStorage.getItem('auth_token') || sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token') || '';
       const res = await fetchWithTimeout(`${API_URL}/products/bulk-import`, {
         method: 'POST',
         headers: {
@@ -291,7 +291,7 @@ export const api = {
       return res.json();
     },
     bulkImport: async (customers: any[]) => {
-      const token = sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token') || '';
+      const token = localStorage.getItem('token') || sessionStorage.getItem('token') || localStorage.getItem('auth_token') || sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token') || '';
       const res = await fetchWithTimeout(`${API_URL}/customers/bulk-import`, {
         method: 'POST',
         headers: {
@@ -324,7 +324,7 @@ export const api = {
       return res.json();
     },
     bulkImport: async (suppliers: any[]) => {
-      const token = sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token') || '';
+      const token = localStorage.getItem('token') || sessionStorage.getItem('token') || localStorage.getItem('auth_token') || sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token') || '';
       const res = await fetchWithTimeout(`${API_URL}/suppliers/bulk-import`, {
         method: 'POST',
         headers: {

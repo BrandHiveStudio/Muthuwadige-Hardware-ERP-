@@ -123,6 +123,25 @@ export function Inventory() {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const cachedProducts = getCachedData<Product[]>('products');
+  const cachedSuppliers = getCachedData<any[]>('suppliers');
+
+  const [products, setProducts] = useState<Product[]>(cachedProducts || []);
+  const [isLoading, setIsLoading] = useState(!cachedProducts);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [toastState, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const toast = {
+    success: (message: string) => {
+      setToast({ type: 'success', message });
+      setTimeout(() => setToast(null), 5000);
+    },
+    error: (message: string) => {
+      setToast({ type: 'error', message });
+      setTimeout(() => setToast(null), 5000);
+    }
+  };
+
   const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -136,162 +155,173 @@ export function Inventory() {
       const rawRows = XLSX.utils.sheet_to_json(ws) as any[];
 
       if (!rawRows || rawRows.length === 0) {
-        setToast({ type: 'error', message: "The uploaded Excel file has no records." });
-        setTimeout(() => setToast(null), 5000);
+        toast.error("The uploaded Excel file has no records.");
         setIsLoading(false);
         if (e.target) e.target.value = '';
         return;
       }
 
-      const { data: { user } } = await supabase.auth.getUser();
+      let user: any = null;
+      try {
+        const { data } = await supabase.auth.getUser();
+        user = data?.user;
+      } catch (_) {}
 
       const cleanKey = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-        const getValueByKeys = (rowObj: any, possibleKeys: string[]) => {
-          if (!rowObj || typeof rowObj !== 'object') return '';
-          const keys = Object.keys(rowObj);
-          for (const pKey of possibleKeys) {
-            const targetClean = cleanKey(pKey);
-            const matchedKey = keys.find((k) => cleanKey(k) === targetClean);
-            if (matchedKey && rowObj[matchedKey] !== undefined && rowObj[matchedKey] !== null) {
-              const val = String(rowObj[matchedKey]).trim();
-              if (val !== '' && val !== 'null' && val !== 'undefined' && val !== '—' && val !== '-') {
-                return val;
-              }
+      const getValueByKeys = (rowObj: any, possibleKeys: string[]) => {
+        if (!rowObj || typeof rowObj !== 'object') return '';
+        const keys = Object.keys(rowObj);
+        for (const pKey of possibleKeys) {
+          const targetClean = cleanKey(pKey);
+          const matchedKey = keys.find((k) => cleanKey(k) === targetClean);
+          if (matchedKey && rowObj[matchedKey] !== undefined && rowObj[matchedKey] !== null) {
+            const val = String(rowObj[matchedKey]).trim();
+            if (val !== '' && val !== 'null' && val !== 'undefined' && val !== '—' && val !== '-') {
+              return val;
             }
           }
-          return '';
-        };
+        }
+        return '';
+      };
 
+      const suppliersMap = new Map<string, any>();
+      try {
         const { data: currentSuppliers } = await supabase.from('suppliers').select('*');
-        const suppliersMap = new Map<string, any>();
         (currentSuppliers || []).forEach((sup: any) => {
           if (sup && sup.name) {
             suppliersMap.set(String(sup.name).trim().toLowerCase(), sup);
           }
         });
+      } catch (_) {}
 
-        const batchPayload: any[] = [];
+      const formattedItems: any[] = [];
 
-        for (let idx = 0; idx < rawRows.length; idx++) {
-          const row = rawRows[idx];
+      for (let idx = 0; idx < rawRows.length; idx++) {
+        const row = rawRows[idx];
 
-          let name = getValueByKeys(row, [
-            'product name', 'product_name', 'product', 'item', 'item_name', 'item name',
-            'description', 'name', 'title'
-          ]);
-          if (!name) {
-            name = `Product #${idx + 1}`;
-          }
-
-          let sku = getValueByKeys(row, [
-            'sku', 'item code', 'item_code', 'code', 'barcode', 'product_sku', 'product sku', 'item_number'
-          ]);
-          if (!sku) {
-            sku = `SKU-${Date.now().toString().slice(-4)}-${idx + 1}`;
-          }
-
-          const category = getValueByKeys(row, ['category', 'product_category', 'product category', 'type']) || 'Power Tools';
-          const unit = getValueByKeys(row, ['unit', 'uom', 'unit_of_measure', 'measurement']) || 'pcs';
-
-          const rawPrice = getValueByKeys(row, [
-            'price', 'selling price', 'selling_price', 'retail price', 'retail_price',
-            'unit price', 'unit_price', 'price (rs.)'
-          ]);
-          const price = parseFloat(rawPrice) || 0;
-
-          const rawCost = getValueByKeys(row, [
-            'cost', 'cost price', 'cost_price', 'buying price', 'buying_price',
-            'purchase price', 'purchase_price', 'cost (rs.)'
-          ]);
-          const costPrice = parseFloat(rawCost) || 0;
-
-          const rawStock = getValueByKeys(row, [
-            'stock', 'qty', 'quantity', 'current stock', 'current_stock', 'units_in_stock', 'stock_qty'
-          ]);
-          const stock = isDecimalUnit(unit) ? parseFloat(rawStock) || 0 : parseInt(rawStock) || 0;
-
-          const rawMin = getValueByKeys(row, [
-            'min stock', 'min_stock', 'reorder level', 'reorder_level', 'min', 'stock alert', 'stock_alert', 'minstock'
-          ]);
-          const minStock = parseInt(rawMin) || 5;
-
-          const supplierInput = getValueByKeys(row, [
-            'supplier', 'supplier_name', 'supplier name', 'vendor', 'vendor_name', 'vendor name'
-          ]);
-          const excelSupplierPhone = getValueByKeys(row, [
-            'supplier number', 'supplier number', 'supplier phone', 'supplier_phone',
-            'supplierphone', 'mobile', 'phone', 'contact'
-          ]);
-          const excelSupplierEmail = getValueByKeys(row, ['supplier email', 'supplier_email', 'email']);
-          const excelSupplierAddress = getValueByKeys(row, ['supplier address', 'supplier_address', 'address', 'location']);
-
-          const barcode = getValueByKeys(row, ['barcode', 'barcode_number', 'upc', 'ean']) || sku;
-          const expiryDateVal = getValueByKeys(row, ['expiry date', 'expiry_date', 'expirydate', 'expiry']);
-
-          let finalSupplierName = '';
-          let finalSupplierPhone = '';
-          let finalSupplierId = '';
-
-          if (supplierInput) {
-            const existingSup = suppliersMap.get(supplierInput.trim().toLowerCase());
-
-            if (existingSup) {
-              finalSupplierName = existingSup.name;
-              finalSupplierPhone = existingSup.phone || excelSupplierPhone || '';
-              finalSupplierId = existingSup.id;
-            } else {
-              finalSupplierName = supplierInput.trim();
-              finalSupplierPhone = excelSupplierPhone || '';
-            }
-          }
-
-          const dbPayload: any = {
-            name,
-            sku,
-            category,
-            price,
-            selling_price: price,
-            cost_price: costPrice,
-            stock,
-            stock_quantity: stock,
-            min_stock: minStock,
-            supplier: finalSupplierName,
-            supplier_phone: finalSupplierPhone,
-            supplierPhone: finalSupplierPhone,
-            unit,
-            barcode,
-            expiry_date: expiryDateVal
-          };
-          if (user?.id) {
-            dbPayload.user_id = user.id;
-          }
-
-          if (finalSupplierId) {
-            dbPayload.supplier_id = finalSupplierId;
-          }
-
-          batchPayload.push(dbPayload);
+        let name = getValueByKeys(row, [
+          'product', 'product name', 'product_name', 'item', 'item_name', 'item name',
+          'description', 'name', 'title'
+        ]);
+        if (!name) {
+          name = `Product #${idx + 1}`;
         }
 
-        const res = await api.products.bulkImport(batchPayload);
-        const imported = res?.count || res?.imported || batchPayload.length;
+        let sku = getValueByKeys(row, [
+          'sku', 'item code', 'item_code', 'code', 'barcode', 'product_sku', 'product sku', 'item_number'
+        ]);
+        if (!sku) {
+          sku = `SKU-${Date.now().toString().slice(-4)}-${idx + 1}`;
+        }
 
-        setToast({
-          type: 'success',
-          message: `Successfully imported/updated ${imported} products!`
-        });
-        setTimeout(() => setToast(null), 5000);
+        const category = getValueByKeys(row, ['category', 'product_category', 'product category', 'type']) || 'Power Tools';
+        const unit = getValueByKeys(row, ['unit', 'uom', 'unit_of_measure', 'measurement']) || 'pcs';
 
-        await fetchProducts();
-        window.dispatchEvent(new CustomEvent('refresh-inventory'));
-      } catch (err: any) {
-        setToast({ type: 'error', message: "Excel import error: " + err.message });
-        setTimeout(() => setToast(null), 5000);
-      } finally {
-        setIsLoading(false);
-        if (e.target) e.target.value = '';
+        const rawPrice = getValueByKeys(row, [
+          'price (rs.)', 'price (rs)', 'price', 'selling price', 'selling_price', 'retail price', 'retail_price',
+          'unit price', 'unit_price', 'price rs'
+        ]);
+        const price = parseFloat(rawPrice) || 0;
+
+        const rawCost = getValueByKeys(row, [
+          'cost (rs.)', 'cost (rs)', 'cost', 'cost price', 'cost_price', 'buying price', 'buying_price',
+          'purchase price', 'purchase_price', 'cost rs'
+        ]);
+        const costPrice = parseFloat(rawCost) || 0;
+
+        const rawStock = getValueByKeys(row, [
+          'stock', 'qty', 'quantity', 'current stock', 'current_stock', 'units_in_stock', 'stock_qty', 'stock_quantity'
+        ]);
+        const stock = isDecimalUnit(unit) ? parseFloat(rawStock) || 0 : parseInt(rawStock) || 0;
+
+        const rawMin = getValueByKeys(row, [
+          'min', 'min stock', 'min_stock', 'min_stock_alert', 'reorder level', 'reorder_level', 'stock alert', 'stock_alert', 'minstock'
+        ]);
+        const minStock = parseInt(rawMin) || 5;
+
+        const supplierInput = getValueByKeys(row, [
+          'supplier', 'supplier_name', 'supplier name', 'vendor', 'vendor_name', 'vendor name'
+        ]);
+        const excelSupplierPhone = getValueByKeys(row, [
+          'supplier number', 'supplier_number', 'supplier phone', 'supplier_phone',
+          'supplierphone', 'mobile', 'phone', 'contact'
+        ]);
+
+        const barcode = getValueByKeys(row, ['barcode', 'barcode_number', 'upc', 'ean']) || sku;
+        const expiryDateVal = getValueByKeys(row, ['expiry date', 'expiry_date', 'expirydate', 'expiry']);
+
+        let finalSupplierName = '';
+        let finalSupplierPhone = '';
+        let finalSupplierId = '';
+
+        if (supplierInput) {
+          const existingSup = suppliersMap.get(supplierInput.trim().toLowerCase());
+          if (existingSup) {
+            finalSupplierName = existingSup.name;
+            finalSupplierPhone = existingSup.phone || excelSupplierPhone || '';
+            finalSupplierId = existingSup.id;
+          } else {
+            finalSupplierName = supplierInput.trim();
+            finalSupplierPhone = excelSupplierPhone || '';
+          }
+        }
+
+        const itemPayload: any = {
+          sku,
+          barcode,
+          name,
+          category,
+          selling_price: price,
+          price,
+          cost_price: costPrice,
+          costPrice,
+          stock_quantity: stock,
+          stock,
+          min_stock_alert: minStock,
+          min_stock: minStock,
+          minStock,
+          supplier_name: finalSupplierName,
+          supplier: finalSupplierName,
+          supplier_phone: finalSupplierPhone,
+          supplierPhone: finalSupplierPhone,
+          unit,
+          expiry_date: expiryDateVal
+        };
+
+        if (user?.id) {
+          itemPayload.user_id = user.id;
+        }
+
+        if (finalSupplierId) {
+          itemPayload.supplier_id = finalSupplierId;
+        }
+
+        formattedItems.push(itemPayload);
       }
+
+      // Crucial: Do NOT call setProducts(parsedRows) before the API response returns.
+      // Explicitly await the API call and refetch from database upon confirmed persistence
+      try {
+        const res = await api.products.bulkImport(formattedItems);
+        if (res?.success || (res?.count !== undefined && res.count > 0)) {
+          await fetchProducts(); // Refetch directly from database
+          toast.success(`Successfully imported ${res.count || formattedItems.length} products`);
+          window.dispatchEvent(new CustomEvent('refresh-inventory'));
+        } else {
+          toast.error(res?.error || 'Failed to import products');
+        }
+      } catch (err: any) {
+        console.error('Bulk import error:', err);
+        toast.error(`Import failed: ${err.message}`);
+      }
+    } catch (err: any) {
+      console.error('Excel parse error:', err);
+      toast.error(`Excel parse error: ${err.message}`);
+    } finally {
+      setIsLoading(false);
+      if (e.target) e.target.value = '';
+    }
   }; 
 
   const handleExportExcel = () => {
@@ -387,13 +417,7 @@ export function Inventory() {
     }
   };
 
-  const cachedProducts = getCachedData<Product[]>('products');
-  const cachedSuppliers = getCachedData<any[]>('suppliers');
-
-  const [products, setProducts] = useState<Product[]>(cachedProducts || []);
-  const [isLoading, setIsLoading] = useState(!cachedProducts);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  // State previously declared here is now initialized at top of component
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -1515,20 +1539,20 @@ export function Inventory() {
       </Modal>
 
       {/* Floating Toast Notification Card */}
-      {toast && (
+      {toastState && (
         <div className={`fixed top-5 right-5 z-[9999] max-w-sm w-full bg-white/95 backdrop-blur-md rounded-2xl border p-4 shadow-2xl flex items-start gap-3.5 transition-all duration-300 animate-in slide-in-from-top-5 ${
-          toast.type === 'success' ? 'border-[#DAA520]/30 shadow-[#DAA520]/5' : 'border-red-200 shadow-red-200/5'
+          toastState.type === 'success' ? 'border-[#DAA520]/30 shadow-[#DAA520]/5' : 'border-red-200 shadow-red-200/5'
         }`}>
           <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-            toast.type === 'success' ? 'bg-[#DAA520]/10 text-[#DAA520]' : 'bg-red-50 text-red-500'
+            toastState.type === 'success' ? 'bg-[#DAA520]/10 text-[#DAA520]' : 'bg-red-50 text-red-500'
           }`}>
-            {toast.type === 'success' ? <CheckCircleIcon className="w-5 h-5" /> : <AlertTriangleIcon className="w-5 h-5" />}
+            {toastState.type === 'success' ? <CheckCircleIcon className="w-5 h-5" /> : <AlertTriangleIcon className="w-5 h-5" />}
           </div>
           <div className="flex-1 min-w-0">
-            <p className={`text-xs font-black uppercase tracking-widest ${toast.type === 'success' ? 'text-[#DAA520]' : 'text-red-500'}`}>
-              {toast.type === 'success' ? t('Success', 'සාර්ථකයි') : t('Notification', 'විදහා දැක්වීම')}
+            <p className={`text-xs font-black uppercase tracking-widest ${toastState.type === 'success' ? 'text-[#DAA520]' : 'text-red-500'}`}>
+              {toastState.type === 'success' ? t('Success', 'සාර්ථකයි') : t('Notification', 'දැනුම් දීමක්')}
             </p>
-            <p className="text-sm text-[#464646] font-bold mt-1 leading-relaxed">{toast.message}</p>
+            <p className="text-sm text-[#464646] font-bold mt-1 leading-relaxed">{toastState.message}</p>
           </div>
           <button onClick={() => setToast(null)} className="text-gray-400 hover:text-gray-600 transition-colors p-1 hover:bg-gray-50 rounded-lg">
             <XIcon className="w-4 h-4" />
