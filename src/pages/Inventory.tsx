@@ -23,6 +23,8 @@ import { getCachedData, setCachedData } from '../services/dataCache';
 import type { Product } from '../types';
 import { formatStock } from '../utils/formatters';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
+import { OfflineSyncWarningModal } from '../components/OfflineSyncWarningModal';
+import { useOfflineSyncWarning } from '../hooks/useOfflineSyncWarning';
 
 const categories = [
   'All',
@@ -458,6 +460,14 @@ export function Inventory() {
   const [isCustomCategory, setIsCustomCategory] = useState<boolean>(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
 
+  const {
+    isOpen: isSyncWarningOpen,
+    isSyncing: isWarningSyncing,
+    checkSyncAndExecute,
+    handleClose: handleWarningClose,
+    handleSyncNow: handleWarningSyncNow
+  } = useOfflineSyncWarning();
+
   const fetchSuppliers = async () => {
     try {
       const { data } = await supabase.from('suppliers').select('*');
@@ -582,10 +592,12 @@ export function Inventory() {
   const uniqueCategories = useMemo(() => [...new Set(products.map((p) => p.category))].length, [products]);
 
   const openAdd = () => {
-    setEditingProduct(null);
-    setFormData(emptyProduct);
-    setIsCustomCategory(false);
-    setShowAddModal(true);
+    checkSyncAndExecute(() => {
+      setEditingProduct(null);
+      setFormData(emptyProduct);
+      setIsCustomCategory(false);
+      setShowAddModal(true);
+    });
   };
 
   const openEdit = (product: Product) => {
@@ -1564,6 +1576,14 @@ export function Inventory() {
           </button>
         </div>
       )}
+
+      {/* Master Data Offline Sync Warning Modal */}
+      <OfflineSyncWarningModal
+        isOpen={isSyncWarningOpen}
+        onClose={handleWarningClose}
+        onSyncNow={handleWarningSyncNow}
+        isSyncing={isWarningSyncing}
+      />
     </div>
   );
 }

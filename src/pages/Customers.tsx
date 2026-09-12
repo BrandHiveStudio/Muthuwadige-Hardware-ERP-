@@ -24,6 +24,8 @@ import { calculateSaleAccounting, isCreditSaleRecord } from '../utils/accounting
 import { openExternalUrl, formatWhatsAppUrl } from '../utils/openExternalUrl';
 import { recordCreditSettlement, resolveAuthorName, type CurrentUserSession } from '../services/creditService';
 import { SRI_LANKAN_BANKS } from './Sales';
+import { OfflineSyncWarningModal } from '../components/OfflineSyncWarningModal';
+import { useOfflineSyncWarning } from '../hooks/useOfflineSyncWarning';
 
 const emptyCustomer: Omit<Customer, 'id'> = {
   name: '',
@@ -199,6 +201,14 @@ export function Customers({ currentUser }: CustomersProps = {}) {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<string[]>([]);
   const [shopSettings, setShopSettings] = useState<any>(cachedSettings || null);
+
+  const {
+    isOpen: isSyncWarningOpen,
+    isSyncing: isWarningSyncing,
+    checkSyncAndExecute,
+    handleClose: handleWarningClose,
+    handleSyncNow: handleWarningSyncNow
+  } = useOfflineSyncWarning();
 
   // New Credit Ledger State Variables
   const [activeTab, setActiveTab] = useState<'registry' | 'ledger'>('registry');
@@ -1074,9 +1084,11 @@ export function Customers({ currentUser }: CustomersProps = {}) {
   }, [customers]);
 
   const openAdd = () => {
-    setEditingCustomer(null);
-    setFormData(emptyCustomer);
-    setShowAddModal(true);
+    checkSyncAndExecute(() => {
+      setEditingCustomer(null);
+      setFormData(emptyCustomer);
+      setShowAddModal(true);
+    });
   };
 
   const openEdit = (customer: Customer) => {
@@ -2397,6 +2409,14 @@ export function Customers({ currentUser }: CustomersProps = {}) {
           </div>
         </div>
       )}
+
+      {/* Master Data Offline Sync Warning Modal */}
+      <OfflineSyncWarningModal
+        isOpen={isSyncWarningOpen}
+        onClose={handleWarningClose}
+        onSyncNow={handleWarningSyncNow}
+        isSyncing={isWarningSyncing}
+      />
     </div>
   );
 }

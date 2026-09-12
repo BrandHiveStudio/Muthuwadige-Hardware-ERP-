@@ -25,6 +25,8 @@ import { api } from '../lib/api';
 import { useCurrency } from '../context/CurrencyContext';
 import { getTodaySriLankaDate } from '../utils/accounting';
 import { getCachedData, setCachedData } from '../services/dataCache';
+import { OfflineSyncWarningModal } from '../components/OfflineSyncWarningModal';
+import { useOfflineSyncWarning } from '../hooks/useOfflineSyncWarning';
 
 interface Supplier {
   id: string;
@@ -86,6 +88,14 @@ export function Suppliers() {
   const [formData, setFormData] = useState<Omit<Supplier, 'id' | 'createdAt'>>(emptySupplier);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [selectedSupplierIds, setSelectedSupplierIds] = useState<string[]>([]);
+
+  const {
+    isOpen: isSyncWarningOpen,
+    isSyncing: isWarningSyncing,
+    checkSyncAndExecute,
+    handleClose: handleWarningClose,
+    handleSyncNow: handleWarningSyncNow
+  } = useOfflineSyncWarning();
 
   // Settle / Payment Modal State
   const [settlingSupplier, setSettlingSupplier] = useState<Supplier | null>(null);
@@ -200,9 +210,11 @@ export function Suppliers() {
   }, [purchaseOrders]);
 
   const openAdd = () => {
-    setEditingSupplier(null);
-    setFormData(emptySupplier);
-    setShowAddModal(true);
+    checkSyncAndExecute(() => {
+      setEditingSupplier(null);
+      setFormData(emptySupplier);
+      setShowAddModal(true);
+    });
   };
 
   const openEdit = (supplier: Supplier) => {
@@ -1106,6 +1118,14 @@ export function Suppliers() {
           </div>
         </div>
       )}
+
+      {/* Master Data Offline Sync Warning Modal */}
+      <OfflineSyncWarningModal
+        isOpen={isSyncWarningOpen}
+        onClose={handleWarningClose}
+        onSyncNow={handleWarningSyncNow}
+        isSyncing={isWarningSyncing}
+      />
     </div>
   );
 }

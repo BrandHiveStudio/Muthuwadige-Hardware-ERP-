@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import cron from 'node-cron';
 import nodemailer from 'nodemailer';
 import XLSX from 'xlsx-js-style';
-import { createMailTransporter, sendResetEmail as mailerSendResetEmail, sendNotificationEmail as mailerSendNotificationEmail, sendBackupEmail as mailerSendBackupEmail } from './src/utils/mailer.js';
+import { createMailTransporter, sendResetEmail as mailerSendResetEmail, sendNotificationEmail as mailerSendNotificationEmail, sendBackupEmail as mailerSendBackupEmail, sendFactoryResetOtpEmail as mailerSendFactoryResetOtpEmail } from './src/utils/mailer.js';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import { exec, execSync, spawn } from 'child_process';
@@ -15,7 +15,7 @@ import os from 'os';
 import https from 'https';
 import selfsigned from 'selfsigned';
 import dbAdapter, { initDb, isTurso, getTursoClient } from './src/db/connection.js';
-import { startBackgroundSyncWorker, getSyncStatus, runSyncCycle, enqueueSync, pullDownstreamChanges, reconcileLocalCatalogWithCloud, pushUpstreamChanges } from './src/services/syncService.js';
+import { startBackgroundSyncWorker, getSyncStatus, runSyncCycle, enqueueSync, pullDownstreamChanges, reconcileLocalCatalogWithCloud, pushUpstreamChanges, pingTurso } from './src/services/syncService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -789,6 +789,17 @@ async function initializeDatabase() {
       role TEXT NOT NULL,
       avatar TEXT,
       password TEXT DEFAULT '123456',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT UNIQUE,
+      password TEXT,
+      role TEXT,
+      name TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -1685,6 +1696,20 @@ async function initializeDatabase() {
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN user_id TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE profiles ADD COLUMN permissions TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE profiles ADD COLUMN custom_permissions TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE products ADD COLUMN updated_at TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE products ADD COLUMN selling_price REAL"); } catch(e) {}
+  try { await db.exec("ALTER TABLE products ADD COLUMN stock_quantity REAL"); } catch(e) {}
+  try { await db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE suppliers ADD COLUMN updated_at TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE profiles ADD COLUMN updated_at TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE users ADD COLUMN updated_at TEXT"); } catch(e) {}
+  try { await db.exec("UPDATE products SET selling_price = price WHERE selling_price IS NULL"); } catch(e) {}
+  try { await db.exec("UPDATE products SET stock_quantity = stock WHERE stock_quantity IS NULL"); } catch(e) {}
+  try { await db.exec("UPDATE products SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch(e) {}
+  try { await db.exec("UPDATE customers SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch(e) {}
+  try { await db.exec("UPDATE suppliers SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch(e) {}
+  try { await db.exec("UPDATE profiles SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch(e) {}
+  try { await db.exec("UPDATE users SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch(e) {}
 
   await seedInitialData();
 
@@ -1783,6 +1808,24 @@ async function seedInitialData() {
     );
   }
 
+  // Ensure key, value, and system_wipe_timestamp columns exist on system_settings
+  try {
+    const settingsCols = await db.all('PRAGMA table_info(system_settings)');
+    if (settingsCols && settingsCols.length > 0) {
+      if (!settingsCols.some(c => c.name === 'key')) {
+        await db.run('ALTER TABLE system_settings ADD COLUMN key TEXT;');
+      }
+      if (!settingsCols.some(c => c.name === 'value')) {
+        await db.run('ALTER TABLE system_settings ADD COLUMN value TEXT;');
+      }
+      if (!settingsCols.some(c => c.name === 'system_wipe_timestamp')) {
+        await db.run('ALTER TABLE system_settings ADD COLUMN system_wipe_timestamp TEXT;');
+      }
+    }
+  } catch (colsErr) {
+    console.warn('[Startup] Notice verifying system_settings columns:', colsErr.message);
+  }
+
   // Seed custom permissions if empty
   try {
     const permCheck = await db.get('SELECT COUNT(*) as count FROM custom_permissions');
@@ -1869,6 +1912,11 @@ const sendNotificationEmail = async (subject, text, targetEmail = null) => {
 const sendResetEmail = async (toEmail, code) => {
   const settings = await getRuntimeSettingsSnapshot();
   return mailerSendResetEmail(toEmail, code, settings);
+};
+
+const sendFactoryResetOtp = async (toEmail, code) => {
+  const settings = await getRuntimeSettingsSnapshot();
+  return mailerSendFactoryResetOtpEmail(toEmail, code, settings);
 };
 
 async function checkAndEmailLowStockAlerts(productIds = []) {
@@ -2184,70 +2232,254 @@ app.get('/api/trigger-backup', async (req, res) => {
 
 // AUTHENTICATION
 app.post('/api/auth/login', async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password } = req.body || {};
   const cleanEmail = email ? email.trim() : '';
 
+  if (!cleanEmail) {
+    return res.status(400).json({ error: 'Email is required.' });
+  }
+
   try {
-    let profile = await db.get('SELECT * FROM profiles WHERE LOWER(email) = LOWER(?)', [cleanEmail]);
+    // Step A: Check Local SQLite First (0ms Offline Path)
+    let localProfile = null;
+    try {
+      localProfile = await db.get('SELECT * FROM profiles WHERE LOWER(email) = LOWER(?)', [cleanEmail]);
+    } catch (_) {}
 
-    // Fallback: If user is not found locally AND Turso Cloud is reachable, query Turso
-    if (!profile) {
-      try {
-        const tursoClient = getTursoClient();
-        if (tursoClient) {
-          const cloudResult = await tursoClient.execute({
-            sql: 'SELECT * FROM profiles WHERE LOWER(email) = LOWER(?)',
-            args: [cleanEmail]
-          });
+    let localUser = null;
+    try {
+      localUser = await db.get('SELECT * FROM users WHERE LOWER(email) = LOWER(?)', [cleanEmail]);
+    } catch (_) {}
 
-          if (cloudResult?.rows?.[0]) {
-            const cloudProfile = cloudResult.rows[0];
+    const localAccount = localProfile || (localUser ? {
+      id: localUser.id,
+      email: localUser.email,
+      name: localUser.name,
+      role: localUser.role,
+      password: localUser.password,
+      created_at: localUser.created_at
+    } : null);
 
-            // Verify password (bcrypt-aware, with legacy-plaintext fallback)
-            let cloudPasswordOk = true;
-            if (cloudProfile.password) {
-              cloudPasswordOk = isBcryptHash(cloudProfile.password)
-                ? await bcrypt.compare(password || '', cloudProfile.password)
-                : cloudProfile.password === password;
-            }
-            if (!cloudPasswordOk) {
-              return res.status(400).json({ error: 'Incorrect password.' });
-            }
+    if (localAccount) {
+      // User exists locally: verify password against local record, return session token, and proceed as normal
+      const passwordOk = await verifyAndMigratePassword(localAccount, password);
+      if (!passwordOk) {
+        return res.status(401).json({ error: 'Incorrect password.' });
+      }
 
-            // Password is valid! Immediately insert/cache profile into local SQLite database for offline access
-            try {
-              const cols = Object.keys(cloudProfile);
-              const colNames = cols.map(c => `"${c}"`).join(', ');
-              const placeholders = cols.map(() => '?').join(', ');
-              const args = cols.map(c => cloudProfile[c] !== undefined ? cloudProfile[c] : null);
-              await db.run(
-                `INSERT OR REPLACE INTO profiles (${colNames}) VALUES (${placeholders})`,
-                args
-              );
-              console.log(`[Auth] Cached remote user profile into local SQLite for offline access: ${cleanEmail}`);
-            } catch (cacheErr) {
-              console.warn('[Auth] Notice caching cloud profile into SQLite:', cacheErr.message);
-            }
-
-            profile = cloudProfile;
+      const rawPerms = localAccount.custom_permissions || localAccount.permissions;
+      let parsedPermissions = undefined;
+      if (rawPerms) {
+        try {
+          parsedPermissions = typeof rawPerms === 'string' ? JSON.parse(rawPerms) : rawPerms;
+        } catch (_) {
+          if (typeof rawPerms === 'string') {
+            parsedPermissions = rawPerms.split(',').map(p => p.trim());
           }
         }
-      } catch (cloudErr) {
-        console.warn('[Auth] Cloud login check notice:', cloudErr.message);
+      }
+
+      const session = await createSession(localAccount);
+
+      return res.json({
+        token: session.token,
+        expiresAt: session.expiresAt,
+        user: {
+          id: localAccount.id,
+          email: localAccount.email,
+          full_name: localAccount.name,
+          name: localAccount.name,
+          role: localAccount.role,
+          avatar: localAccount.avatar,
+          custom_permissions: parsedPermissions,
+          permissions: parsedPermissions
+        }
+      });
+    }
+
+    // Step B & C: Cloud Fallback on Local Miss (Bootstrap Path)
+    // 1. Check if Turso Cloud is reachable
+    let tursoClient = null;
+    let isCloudReachable = false;
+    try {
+      tursoClient = getTursoClient();
+      if (tursoClient) {
+        isCloudReachable = await pingTurso(tursoClient);
+      }
+    } catch (_) {
+      isCloudReachable = false;
+    }
+
+    // Step C: Offline Handling on Local Miss
+    if (!isCloudReachable || !tursoClient) {
+      return res.status(401).json({
+        error: 'Account not cached on this device. Please connect to the internet for the first login setup.'
+      });
+    }
+
+    // Step B.2: Query Turso Cloud via HTTPS REST
+    let cloudUserRow = null;
+    let cloudProfileRow = null;
+    let cloudPermsRow = null;
+
+    try {
+      const userRes = await tursoClient.execute({
+        sql: 'SELECT id, email, password, role, name FROM users WHERE LOWER(email) = ?',
+        args: [cleanEmail.toLowerCase()]
+      });
+      if (userRes?.rows?.[0]) {
+        cloudUserRow = userRes.rows[0];
+      }
+    } catch (_) {
+      // Table users might not exist on cloud, fallback to profiles
+    }
+
+    try {
+      const profileRes = await tursoClient.execute({
+        sql: 'SELECT * FROM profiles WHERE LOWER(email) = ?',
+        args: [cleanEmail.toLowerCase()]
+      });
+      if (profileRes?.rows?.[0]) {
+        cloudProfileRow = profileRes.rows[0];
+      }
+    } catch (_) {}
+
+    const resolvedUserId = (cloudUserRow && cloudUserRow.id) || (cloudProfileRow && cloudProfileRow.id);
+    const resolvedRole = (cloudUserRow && cloudUserRow.role) || (cloudProfileRow && cloudProfileRow.role);
+
+    if (resolvedUserId) {
+      try {
+        const permsRes = await tursoClient.execute({
+          sql: 'SELECT * FROM custom_permissions WHERE user_id = ?',
+          args: [resolvedUserId]
+        });
+        if (permsRes?.rows?.[0]) {
+          cloudPermsRow = permsRes.rows[0];
+        }
+      } catch (_) {
+        // Table custom_permissions might be keyed by role or missing user_id column
+        try {
+          if (resolvedRole) {
+            const rolePermsRes = await tursoClient.execute({
+              sql: 'SELECT * FROM custom_permissions WHERE role = ?',
+              args: [resolvedRole]
+            });
+            if (rolePermsRes?.rows?.[0]) {
+              cloudPermsRow = rolePermsRes.rows[0];
+            }
+          }
+        } catch (_) {}
       }
     }
 
-    if (!profile) {
-      return res.status(400).json({ error: 'User profile not found. Try: sanojhardware@gmail.com' });
-    }
-    
-    // Validate password (bcrypt-aware, with transparent legacy-plaintext migration)
-    const passwordOk = await verifyAndMigratePassword(profile, password);
-    if (!passwordOk) {
-      return res.status(400).json({ error: 'Incorrect password.' });
+    const resolvedUser = cloudUserRow || (cloudProfileRow ? {
+      id: cloudProfileRow.id,
+      email: cloudProfileRow.email,
+      password: cloudProfileRow.password,
+      role: cloudProfileRow.role,
+      name: cloudProfileRow.name
+    } : null);
+
+    const resolvedProfile = cloudProfileRow || (cloudUserRow ? {
+      id: cloudUserRow.id,
+      email: cloudUserRow.email,
+      role: cloudUserRow.role,
+      name: cloudUserRow.name,
+      password: cloudUserRow.password,
+      avatar: null,
+      permissions: null,
+      custom_permissions: null
+    } : null);
+
+    // Step B.4: If user is missing from Turso Cloud
+    if (!resolvedUser || !resolvedProfile) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
     }
 
-    const rawPerms = profile.custom_permissions || profile.permissions;
+    // Step B.4: Verify password
+    const remotePassword = resolvedUser.password || resolvedProfile.password;
+    let passwordMatches = false;
+    if (remotePassword) {
+      passwordMatches = isBcryptHash(remotePassword)
+        ? await bcrypt.compare(password || '', remotePassword)
+        : remotePassword === password;
+    } else {
+      passwordMatches = true;
+    }
+
+    if (!passwordMatches) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    // Step B.3: User exists in Turso Cloud and the password matches!
+    // Insert/Upsert into local SQLite `users`
+    try {
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS users (
+          id TEXT PRIMARY KEY,
+          email TEXT UNIQUE,
+          password TEXT,
+          role TEXT,
+          name TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+      await db.run(
+        'INSERT OR REPLACE INTO users (id, email, password, role, name, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+        [resolvedUser.id, resolvedUser.email, resolvedUser.password, resolvedUser.role, resolvedUser.name]
+      );
+    } catch (userErr) {
+      console.warn('[Auth] Notice caching cloud user into SQLite users table:', userErr.message);
+    }
+
+    // Insert/Upsert into local SQLite `profiles` (preserving password so future offline logins work 100%)
+    try {
+      await db.run(
+        'INSERT OR REPLACE INTO profiles (id, email, role, name, password, avatar, permissions, custom_permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+        [
+          resolvedProfile.id,
+          resolvedProfile.email,
+          resolvedProfile.role,
+          resolvedProfile.name,
+          resolvedProfile.password,
+          resolvedProfile.avatar || null,
+          resolvedProfile.permissions || null,
+          resolvedProfile.custom_permissions || null
+        ]
+      );
+    } catch (profileErr) {
+      try {
+        await db.run(
+          'INSERT OR REPLACE INTO profiles (id, email, role, name, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)',
+          [resolvedProfile.id, resolvedProfile.email, resolvedProfile.role, resolvedProfile.name]
+        );
+      } catch (_) {}
+    }
+
+    // If permissions exist, insert/upsert into local SQLite `custom_permissions`
+    if (cloudPermsRow) {
+      try {
+        const cols = Object.keys(cloudPermsRow);
+        const colNames = cols.map(c => `"${c}"`).join(', ');
+        const placeholders = cols.map(() => '?').join(', ');
+        const args = cols.map(c => cloudPermsRow[c] !== undefined ? cloudPermsRow[c] : null);
+        await db.run(
+          `INSERT OR REPLACE INTO custom_permissions (${colNames}) VALUES (${placeholders})`,
+          args
+        );
+      } catch (permErr) {
+        console.warn('[Auth] Notice caching custom_permissions into SQLite:', permErr.message);
+      }
+    }
+
+    // Trigger a non-blocking background catalog sync
+    pullDownstreamChanges(db, tursoClient).catch(console.error);
+
+    // Issue session token and return HTTP 200 with user object
+    const finalProfile = (await db.get('SELECT * FROM profiles WHERE id = ?', [resolvedProfile.id])) || resolvedProfile;
+    const session = await createSession(finalProfile);
+
+    const rawPerms = finalProfile.custom_permissions || finalProfile.permissions;
     let parsedPermissions = undefined;
     if (rawPerms) {
       try {
@@ -2259,22 +2491,16 @@ app.post('/api/auth/login', async (req, res) => {
       }
     }
 
-    // Issue a server-side session token - see `authenticate` middleware. Every subsequent request
-    // must present this token; role checks server-side are always resolved from this session
-    // record, never trusted from a client-supplied header.
-    const session = await createSession(profile);
-
-    // Return standard payload resembling Supabase structure with custom_permissions
-    res.json({
+    return res.json({
       token: session.token,
       expiresAt: session.expiresAt,
       user: {
-        id: profile.id,
-        email: profile.email,
-        full_name: profile.name,
-        name: profile.name,
-        role: profile.role,
-        avatar: profile.avatar,
+        id: finalProfile.id,
+        email: finalProfile.email,
+        full_name: finalProfile.name,
+        name: finalProfile.name,
+        role: finalProfile.role,
+        avatar: finalProfile.avatar,
         custom_permissions: parsedPermissions,
         permissions: parsedPermissions
       }
@@ -2398,6 +2624,236 @@ app.post('/api/auth/reset-password', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// 🚨 ROOT ADMIN SECURE FACTORY RESET (TWO-FACTOR OTP + PASSWORD)
+// ---------------------------------------------------------------------------
+let activeFactoryResetOtp = null;
+
+app.post('/api/admin/request-factory-reset-otp', async (req, res) => {
+  try {
+    const caller = req.authUser;
+    if (!caller) {
+      return res.status(401).json({ error: 'Authentication required. Please log in.' });
+    }
+
+    const cleanEmail = (caller.email || '').toLowerCase().trim();
+    if (cleanEmail !== 'sanojhardware@gmail.com' || !isAdminRole(caller.role)) {
+      return res.status(403).json({ error: 'Access denied. Only the Root Admin (sanojhardware@gmail.com) can request factory reset verification.' });
+    }
+
+    // Generate secure 6-digit OTP (5-minute TTL)
+    const otpCode = crypto.randomInt(100000, 999999).toString();
+    const expiresAt = Date.now() + 5 * 60 * 1000;
+
+    activeFactoryResetOtp = {
+      code: otpCode,
+      email: 'sanojhardware@gmail.com',
+      expiresAt
+    };
+
+    // Store in-memory and in system_settings as fallback
+    try {
+      await db.run(
+        `INSERT OR REPLACE INTO system_settings (id, key, value, updated_at) VALUES ('FACTORY_RESET_OTP', 'FACTORY_RESET_OTP', ?, CURRENT_TIMESTAMP)`,
+        [JSON.stringify({ code: otpCode, expiresAt })]
+      );
+    } catch (_) {}
+
+    console.log(`[Factory Reset] Generated OTP for Root Admin (sanojhardware@gmail.com): ${otpCode}`);
+
+    const emailResult = await sendFactoryResetOtp('sanojhardware@gmail.com', otpCode);
+    await logAudit('sanojhardware@gmail.com', 'FACTORY_RESET_OTP_REQUESTED', 'Factory reset OTP verification code requested by Root Admin.');
+
+    return res.json({
+      success: true,
+      message: 'Factory reset verification code has been dispatched to sanojhardware@gmail.com.',
+      emailDelivered: Boolean(emailResult.transmitted),
+      simulated: Boolean(emailResult.simulated),
+      expiresInSeconds: 300
+    });
+  } catch (err) {
+    console.error('[Factory Reset] Error requesting OTP:', err);
+    return res.status(500).json({ error: 'Failed to generate factory reset OTP: ' + err.message });
+  }
+});
+
+app.post('/api/admin/execute-factory-reset', async (req, res) => {
+  try {
+    const caller = req.authUser;
+    if (!caller) {
+      return res.status(401).json({ error: 'Authentication required. Please log in.' });
+    }
+
+    const cleanEmail = (caller.email || '').toLowerCase().trim();
+    if (cleanEmail !== 'sanojhardware@gmail.com' || !isAdminRole(caller.role)) {
+      return res.status(403).json({ error: 'Access denied. Only the Root Admin (sanojhardware@gmail.com) can execute a factory reset.' });
+    }
+
+    const { otp_code, password } = req.body || {};
+    const cleanOtp = (otp_code || '').toString().trim();
+    const cleanPassword = (password || '').toString();
+
+    if (!cleanOtp) {
+      return res.status(400).json({ error: 'Verification OTP code is required.' });
+    }
+    if (!cleanPassword) {
+      return res.status(400).json({ error: 'Root Admin password is required.' });
+    }
+
+    // 1. Validate OTP
+    let validOtp = false;
+    if (activeFactoryResetOtp && activeFactoryResetOtp.code === cleanOtp) {
+      if (Date.now() <= activeFactoryResetOtp.expiresAt) {
+        validOtp = true;
+      } else {
+        return res.status(400).json({ error: 'Verification OTP code has expired. Please request a new code.' });
+      }
+    } else {
+      try {
+        const stored = await db.get("SELECT value FROM system_settings WHERE key = 'FACTORY_RESET_OTP' OR id = 'FACTORY_RESET_OTP'");
+        if (stored?.value) {
+          const parsed = JSON.parse(stored.value);
+          if (parsed.code === cleanOtp && Date.now() <= parsed.expiresAt) {
+            validOtp = true;
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (!validOtp) {
+      return res.status(400).json({ error: 'Invalid verification OTP code.' });
+    }
+
+    // 2. Validate Root Admin Password
+    let rootProfile = null;
+    try {
+      rootProfile = await db.get('SELECT * FROM profiles WHERE LOWER(email) = ?', ['sanojhardware@gmail.com']);
+    } catch (_) {}
+    if (!rootProfile) {
+      try {
+        rootProfile = await db.get('SELECT * FROM users WHERE LOWER(email) = ?', ['sanojhardware@gmail.com']);
+      } catch (_) {}
+    }
+
+    let passwordValid = false;
+    if (rootProfile) {
+      passwordValid = await verifyAndMigratePassword(rootProfile, cleanPassword);
+    } else {
+      // Check Turso Cloud
+      const tursoClient = getTursoClient();
+      if (tursoClient) {
+        try {
+          const cloudRes = await tursoClient.execute({
+            sql: 'SELECT password FROM profiles WHERE LOWER(email) = ?',
+            args: ['sanojhardware@gmail.com']
+          });
+          const cloudPw = cloudRes?.rows?.[0]?.password;
+          if (cloudPw) {
+            passwordValid = isBcryptHash(cloudPw) ? await bcrypt.compare(cleanPassword, cloudPw) : cloudPw === cleanPassword;
+          }
+        } catch (_) {}
+      }
+    }
+
+    if (!passwordValid) {
+      return res.status(401).json({ error: 'Incorrect Root Admin password. Factory reset aborted.' });
+    }
+
+    console.log('🚨 [FACTORY RESET] Authorization verified. Executing nuclear system reset...');
+
+    const wipeTimestamp = Math.floor(Date.now() / 1000).toString();
+
+    // 3. Action on Turso Cloud
+    const tursoClient = getTursoClient();
+    let cloudWiped = false;
+    if (tursoClient) {
+      try {
+        // Ensure columns exist on cloud
+        try { await tursoClient.execute('ALTER TABLE system_settings ADD COLUMN key TEXT;'); } catch (_) {}
+        try { await tursoClient.execute('ALTER TABLE system_settings ADD COLUMN value TEXT;'); } catch (_) {}
+        try { await tursoClient.execute('ALTER TABLE system_settings ADD COLUMN system_wipe_timestamp TEXT;'); } catch (_) {}
+
+        await tursoClient.batch([
+          'DELETE FROM sales;',
+          'DELETE FROM sale_items;',
+          'DELETE FROM sales_returns;',
+          'DELETE FROM sales_return_items;',
+          'DELETE FROM transactions;',
+          'DELETE FROM credit_payments;',
+          'DELETE FROM cheque_registry;',
+          'DELETE FROM purchase_orders;',
+          'DELETE FROM purchase_order_items;',
+          'DELETE FROM quotations;',
+          'DELETE FROM quotation_items;',
+          'DELETE FROM customers;',
+          'DELETE FROM suppliers;',
+          'DELETE FROM products;',
+          'DELETE FROM categories;',
+          "DELETE FROM users WHERE LOWER(email) != 'sanojhardware@gmail.com';",
+          "DELETE FROM profiles WHERE LOWER(email) != 'sanojhardware@gmail.com';",
+          "DELETE FROM custom_permissions WHERE user_id NOT IN (SELECT id FROM users WHERE LOWER(email) = 'sanojhardware@gmail.com');",
+          `INSERT OR REPLACE INTO system_settings (id, key, value, system_wipe_timestamp) VALUES ('SYSTEM_WIPE_TIMESTAMP', 'SYSTEM_WIPE_TIMESTAMP', '${wipeTimestamp}', '${wipeTimestamp}');`
+        ], 'write');
+        cloudWiped = true;
+        console.log('✅ [FACTORY RESET] Turso Cloud nuclear reset statements successfully executed.');
+      } catch (cloudErr) {
+        console.error('❌ [FACTORY RESET] Error wiping Turso Cloud:', cloudErr.message);
+      }
+    }
+
+    // 4. Action on Local SQLite
+    const localStatements = [
+      'DELETE FROM sales;',
+      'DELETE FROM sale_items;',
+      'DELETE FROM sales_returns;',
+      'DELETE FROM sales_return_items;',
+      'DELETE FROM transactions;',
+      'DELETE FROM credit_payments;',
+      'DELETE FROM cheque_registry;',
+      'DELETE FROM purchase_orders;',
+      'DELETE FROM purchase_order_items;',
+      'DELETE FROM quotations;',
+      'DELETE FROM quotation_items;',
+      'DELETE FROM customers;',
+      'DELETE FROM suppliers;',
+      'DELETE FROM products;',
+      'DELETE FROM categories;',
+      "DELETE FROM users WHERE LOWER(email) != 'sanojhardware@gmail.com';",
+      "DELETE FROM profiles WHERE LOWER(email) != 'sanojhardware@gmail.com';",
+      "DELETE FROM custom_permissions WHERE user_id NOT IN (SELECT id FROM users WHERE LOWER(email) = 'sanojhardware@gmail.com');",
+      'DELETE FROM sync_queue;',
+      `INSERT OR REPLACE INTO system_settings (id, key, value, system_wipe_timestamp) VALUES ('SYSTEM_WIPE_TIMESTAMP', 'SYSTEM_WIPE_TIMESTAMP', '${wipeTimestamp}', '${wipeTimestamp}');`
+    ];
+
+    for (const sql of localStatements) {
+      try {
+        await db.run(sql);
+      } catch (sqlErr) {
+        console.warn(`[FACTORY RESET] Local SQLite notice (${sql.slice(0, 30)}...):`, sqlErr.message);
+      }
+    }
+
+    // 5. Invalidate OTP & audit log
+    activeFactoryResetOtp = null;
+    try {
+      await db.run("DELETE FROM system_settings WHERE id = 'FACTORY_RESET_OTP'");
+    } catch (_) {}
+
+    await logAudit('sanojhardware@gmail.com', 'FACTORY_RESET_EXECUTED', `System was factory-reset by Root Admin. Wipe timestamp: ${wipeTimestamp}.`);
+    console.log('✅ [FACTORY RESET] System factory reset completed successfully.');
+
+    return res.json({
+      success: true,
+      message: 'System was factory-reset by Root Admin. Terminal re-initialized.',
+      cloudWiped,
+      wipeTimestamp
+    });
+  } catch (err) {
+    console.error('🔴 [FACTORY RESET] Execution error:', err);
+    return res.status(500).json({ error: 'Failed to execute factory reset: ' + err.message });
+  }
+});
+
 // PRODUCTS API
 app.get('/api/products', async (req, res) => {
   try {
@@ -2429,8 +2885,7 @@ app.get('/api/products', async (req, res) => {
 });
 
 app.post('/api/products', async (req, res) => {
-  const p = req.body;
-  const id = 'p_' + Date.now();
+  const p = req.body || {};
   const user_email = req.headers['x-user-email'] || p.user_email || 'system';
   try {
     let finalSupplier = p.supplier ? p.supplier.trim() : '';
@@ -2451,31 +2906,81 @@ app.post('/api/products', async (req, res) => {
       } catch (e) {}
     }
 
+    const price = Number(p.price !== undefined ? p.price : (p.selling_price || 0));
+    const costPrice = Number(p.cost_price !== undefined ? p.cost_price : (p.costPrice || 0));
+    const stock = Number(p.stock !== undefined ? p.stock : (p.stock_quantity || 0));
+    const minStock = Number(p.min_stock !== undefined ? p.min_stock : (p.minStock || 5));
+    const cleanBarcode = p.barcode ? String(p.barcode).trim() : '';
+    const cleanSku = p.sku ? String(p.sku).trim() : ('SKU-' + Date.now());
+
+    // Deduplication check on barcode if barcode is non-empty
+    let existingByBarcode = null;
+    if (cleanBarcode) {
+      try {
+        existingByBarcode = await db.get(
+          "SELECT id, sku FROM products WHERE barcode = ? AND barcode != '' AND sku != ?",
+          [cleanBarcode, cleanSku]
+        );
+      } catch (_) {}
+    }
+
+    const effectiveId = existingByBarcode ? existingByBarcode.id : ('p_' + Date.now());
+    const effectiveSku = existingByBarcode ? existingByBarcode.sku : cleanSku;
+
     await db.run(
-      'INSERT INTO products (id, name, sku, category, price, cost_price, stock, min_stock, supplier, unit, barcode, brand, serial_no, batch_code, expiry_date, supplier_phone, measure_details) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      `INSERT INTO products (
+        id, name, sku, category, price, selling_price, cost_price, stock, stock_quantity,
+        min_stock, supplier, unit, barcode, brand, serial_no, batch_code, expiry_date,
+        supplier_phone, measure_details, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(sku) DO UPDATE SET
+        name = excluded.name,
+        category = excluded.category,
+        price = excluded.price,
+        selling_price = excluded.selling_price,
+        cost_price = excluded.cost_price,
+        stock = excluded.stock,
+        stock_quantity = excluded.stock_quantity,
+        min_stock = excluded.min_stock,
+        supplier = excluded.supplier,
+        unit = excluded.unit,
+        barcode = COALESCE(NULLIF(excluded.barcode, ''), products.barcode),
+        brand = excluded.brand,
+        serial_no = excluded.serial_no,
+        batch_code = excluded.batch_code,
+        expiry_date = excluded.expiry_date,
+        supplier_phone = excluded.supplier_phone,
+        measure_details = excluded.measure_details,
+        updated_at = CURRENT_TIMESTAMP`,
       [
-        id, 
-        p.name, 
-        p.sku, 
-        p.category, 
-        p.price, 
-        p.cost_price !== undefined ? p.cost_price : p.costPrice, 
-        p.stock || 0, 
-        p.min_stock !== undefined ? p.min_stock : p.minStock || 5, 
-        finalSupplier, 
-        p.unit || 'pcs', 
-        p.barcode, 
+        effectiveId,
+        p.name,
+        effectiveSku,
+        p.category || '',
+        price,
+        price,
+        costPrice,
+        stock,
+        stock,
+        minStock,
+        finalSupplier,
+        p.unit || 'pcs',
+        cleanBarcode,
         p.brand || '',
-        p.serial_no !== undefined ? p.serial_no : p.serialNo || '',
-        p.batch_code !== undefined ? p.batch_code : p.batchCode || '',
-        p.expiry_date !== undefined ? p.expiry_date : p.expiryDate || '',
+        p.serial_no !== undefined ? p.serial_no : (p.serialNo || ''),
+        p.batch_code !== undefined ? p.batch_code : (p.batchCode || ''),
+        p.expiry_date !== undefined ? p.expiry_date : (p.expiryDate || ''),
         finalSupplierPhone,
-        p.measure_details !== undefined ? p.measure_details : p.measureDetails || ''
+        p.measure_details !== undefined ? p.measure_details : (p.measureDetails || '')
       ]
     );
-    await logAudit(user_email, 'PRODUCT_CREATED', `Product ${p.name} (SKU: ${p.sku}) was added to the inventory.`);
-    enqueueSync(db, 'products', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
-    res.json({ success: true, id });
+
+    const finalRecord = await db.get('SELECT id FROM products WHERE sku = ?', [effectiveSku]);
+    const finalId = finalRecord ? finalRecord.id : effectiveId;
+
+    await logAudit(user_email, 'PRODUCT_CREATED', `Product ${p.name} (SKU: ${effectiveSku}) was added/updated in the inventory.`);
+    enqueueSync(db, 'products', finalId, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
+    res.json({ success: true, id: finalId });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -6572,10 +7077,24 @@ app.all(['/api/sync/pull', '/api/sync/downstream'], async (req, res) => {
   try {
     const tursoClient = getTursoClient();
     if (tursoClient) {
-      await pullDownstreamChanges(db, tursoClient);
+      const isOnline = await pingTurso(tursoClient);
+      if (isOnline) {
+        const pullPromise = pullDownstreamChanges(db, tursoClient);
+        const timeoutPromise = new Promise(resolve => setTimeout(resolve, 3000));
+        await Promise.race([pullPromise, timeoutPromise]);
+      }
     }
     const status = await getSyncStatus(db);
-    res.json({ success: true, ...status });
+    const wipeDetected = Boolean(globalThis.__systemWipeDetected);
+    if (wipeDetected) {
+      globalThis.__systemWipeDetected = false;
+    }
+    res.json({
+      success: true,
+      ...status,
+      factoryResetDetected: wipeDetected,
+      pulledAt: new Date().toISOString()
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -8299,9 +8818,20 @@ if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
           console.warn('[Startup] Turso schema sync notice:', tursoInitErr.message);
         }
 
-        pullDownstreamChanges(db, tursoClient)
-          .then(() => console.log('✅ [Startup Sync] Initial downstream sync complete.'))
-          .catch(err => console.warn('[Startup Sync] Notice:', err.message));
+        const isOnline = await pingTurso(tursoClient);
+        if (isOnline) {
+          console.log('🔄 [Startup Sync] Online: Running startup catalog pull gate (max 3s timeout)...');
+          try {
+            const pullPromise = pullDownstreamChanges(db, tursoClient);
+            const timeoutPromise = new Promise(resolve => setTimeout(resolve, 3000));
+            await Promise.race([pullPromise, timeoutPromise]);
+            console.log('✅ [Startup Sync] Startup catalog pull completed.');
+          } catch (gateErr) {
+            console.warn('[Startup Sync] Notice during catalog pull gate:', gateErr.message);
+          }
+        } else {
+          console.log('⚡ [Startup Sync] Offline: Skipping startup cloud pull (0ms local cache ready).');
+        }
       }
 
       // 1. HTTP Server for desktop app and fast local REST API

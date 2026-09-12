@@ -22,7 +22,7 @@ import { ROLE_PERMISSIONS, hasPermission, hasUserPermission } from './utils/perm
 import { api, API_URL, fetchWithTimeout } from './lib/api';
 import type { User, PageName } from './types';
 import { Notifications, notify } from './components/Notifications';
-import { Trash2, AlertTriangle, CheckCircle, HelpCircle, MessageSquare } from 'lucide-react';
+import { Trash2, AlertTriangle, CheckCircle, HelpCircle, MessageSquare, RotateCw } from 'lucide-react';
 import { supabase } from './lib/supabaseClient';
 import { Modal } from './components/Modal';
 import { openExternalUrl, formatWhatsAppUrl } from './utils/openExternalUrl';
@@ -53,6 +53,37 @@ export function App() {
   const [salesTab, setSalesTab] = useState<'new' | 'history' | 'credit' | 'credit_history' | 'quotes'>('new');
   const [notifications, setNotifications] = useState<any[]>([]);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
+  const [isCatalogRefreshing, setIsCatalogRefreshing] = useState(false);
+
+  const runStartupCatalogPullGate = async () => {
+    try {
+      setIsCatalogRefreshing(true);
+      // High-priority downstream pull with max 3-second timeout fallback
+      const pullPromise = api.sync.pullDownstream();
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000));
+      const res: any = await Promise.race([pullPromise, timeoutPromise]);
+      if (res?.factoryResetDetected) {
+        window.dispatchEvent(new CustomEvent('system-factory-reset'));
+      }
+      window.dispatchEvent(new Event('catalog-refreshed'));
+      window.dispatchEvent(new Event('sync-completed'));
+    } catch (e) {
+      console.warn('[CatalogGate] Downstream pull timed out or offline, falling back to local cache:', e);
+    } finally {
+      setIsCatalogRefreshing(false);
+    }
+  };
+
+  // Factory reset detection listener: force logout and show alert
+  useEffect(() => {
+    const handleSystemFactoryReset = () => {
+      handleLogout();
+      notify('System was factory-reset by Root Admin. Terminal re-initialized.', 'Muthuwadige Hardware ERP', 'error');
+      alert('System was factory-reset by Root Admin. Terminal re-initialized.');
+    };
+    window.addEventListener('system-factory-reset', handleSystemFactoryReset);
+    return () => window.removeEventListener('system-factory-reset', handleSystemFactoryReset);
+  }, []);
 
   const [, setPermissionsTick] = useState(0);
   useEffect(() => {
@@ -289,9 +320,9 @@ export function App() {
     setCurrentUser(user);
     setIsAuthenticated(true);
 
-    // Trigger immediate bidirectional sync cycle on successful login
+    // Trigger startup catalog pull gate and immediate bidirectional sync cycle on successful login
+    runStartupCatalogPullGate();
     api.sync.triggerSync().catch(() => {});
-    api.sync.pullDownstream().catch(() => {});
     
     const roleStr = (user.role || '').toLowerCase();
     if (roleStr === 'admin' || roleStr === 'manager' || roleStr === 'super_admin') {
@@ -300,6 +331,13 @@ export function App() {
       setCurrentPage('sales'); 
     }
   };
+
+  // On boot (once splash closes or if already authenticated), trigger startup catalog pull gate
+  useEffect(() => {
+    if (isAuthenticated && currentUser && !showSplash) {
+      runStartupCatalogPullGate();
+    }
+  }, [isAuthenticated, showSplash]);
 
   const handleLogout = () => {
     sessionStorage.removeItem('hardware_erp_user');
@@ -488,7 +526,7 @@ export function App() {
       case 'reports': return <Reports currentUser={currentUser} />;
       case 'users': return <Users />;
       case 'database': return <Database />;
-      case 'settings': return <Settings />;
+      case 'settings': return <Settings currentUser={currentUser} />;
       case 'finance': return <Finance currentUser={currentUser} />;
       case 'audit_logs': return <AuditLogs />;
       case 'barcode-print':
@@ -524,6 +562,12 @@ export function App() {
         />
 
         <div className="flex-1 flex flex-col min-w-0 h-full relative overflow-hidden">
+          {isCatalogRefreshing && (
+            <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-2.5 px-4 py-2 bg-slate-900/90 backdrop-blur-md text-white rounded-full shadow-2xl border border-amber-500/40 text-xs font-semibold tracking-wide pointer-events-none animate-in fade-in slide-in-from-top-2 duration-300">
+              <RotateCw className="w-3.5 h-3.5 animate-spin text-[#DAA520]" />
+              <span>Refreshing latest catalog...</span>
+            </div>
+          )}
           <Header
             currentPage={currentPage}
             currentUser={currentUser}

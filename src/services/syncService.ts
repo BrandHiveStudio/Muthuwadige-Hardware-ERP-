@@ -44,6 +44,7 @@ if (
 }
 
 export const TABLES_TO_SYNC = [
+  'users',
   'profiles',
   'products',
   'customers',
@@ -107,10 +108,29 @@ export async function ensureSyncSchema(db: any): Promise<void> {
       );
     `);
     try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status, created_at);"); } catch {}
+    try {
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS users (
+          id TEXT PRIMARY KEY,
+          email TEXT UNIQUE,
+          password TEXT,
+          role TEXT,
+          name TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+    } catch {}
     try { await db.exec("ALTER TABLE system_settings ADD COLUMN last_counter_sync_timestamp TEXT;"); } catch {}
     try { await db.exec("ALTER TABLE system_settings ADD COLUMN last_sync_timestamp TEXT;"); } catch {}
     try { await db.exec("ALTER TABLE system_settings ADD COLUMN counter_sync_status TEXT DEFAULT 'IDLE';"); } catch {}
     try { await db.exec("ALTER TABLE system_settings ADD COLUMN counter_pending_count INTEGER DEFAULT 0;"); } catch {}
+    try { await db.exec("ALTER TABLE products ADD COLUMN updated_at TEXT;"); } catch {}
+    try { await db.exec("ALTER TABLE products ADD COLUMN selling_price REAL;"); } catch {}
+    try { await db.exec("ALTER TABLE products ADD COLUMN stock_quantity REAL;"); } catch {}
+    try { await db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT;"); } catch {}
+    try { await db.exec("ALTER TABLE suppliers ADD COLUMN updated_at TEXT;"); } catch {}
+    try { await db.exec("ALTER TABLE profiles ADD COLUMN updated_at TEXT;"); } catch {}
+    try { await db.exec("ALTER TABLE users ADD COLUMN updated_at TEXT;"); } catch {}
     schemaEnsured = true;
   } catch {}
 }
@@ -202,6 +222,82 @@ export async function pushUpstreamChanges(localDb: any, tursoClient: Client | nu
         statements.push({
           sql: `DELETE FROM "${targetTable}" WHERE id = ?`,
           args: [item.record_id]
+        });
+        successfulIds.push(item.id);
+      } else if (row && typeof row === 'object' && targetTable === 'products') {
+        // Enforce Cloud Wins (LWW) on Master Data:
+        // Never allow an unmodified local product row to push up and overwrite newer cloud prices or stock counts.
+        let cloudProd: any = null;
+        try {
+          const cRes = await executeWithTimeout(tursoClient, {
+            sql: 'SELECT id, sku, price, selling_price, cost_price, stock, stock_quantity, updated_at, created_at FROM products WHERE id = ? OR sku = ? LIMIT 1',
+            args: [item.record_id, row.sku || item.record_id]
+          }, 3000);
+          if (cRes?.rows?.[0]) cloudProd = cRes.rows[0];
+        } catch {}
+
+        if (cloudProd) {
+          const cloudPrice = Number(cloudProd.price !== undefined ? cloudProd.price : cloudProd.selling_price);
+          const localPrice = Number(row.price !== undefined ? row.price : row.selling_price);
+          const cloudCost = Number(cloudProd.cost_price !== undefined ? cloudProd.cost_price : 0);
+          const localCost = Number(row.cost_price !== undefined ? row.cost_price : 0);
+          const cloudStock = Number(cloudProd.stock !== undefined ? cloudProd.stock : cloudProd.stock_quantity);
+          const localStock = Number(row.stock !== undefined ? row.stock : row.stock_quantity);
+
+          const cloudUpdated = cloudProd.updated_at || cloudProd.created_at;
+          const localUpdated = row.updated_at || row.created_at;
+          const cloudTime = cloudUpdated ? new Date(cloudUpdated).getTime() : 0;
+          const localTime = localUpdated ? new Date(localUpdated).getTime() : 0;
+
+          // 1. If cloud product is newer, cloud wins! Do not push stale local data up.
+          if (cloudTime > localTime) {
+            console.log(`[BackgroundSync] Cloud Wins (LWW): Cloud product ${cloudProd.sku || item.record_id} is newer (${cloudUpdated} > ${localUpdated}). Skipping upstream push.`);
+            try {
+              await localDb.run(
+                'UPDATE products SET price = ?, selling_price = ?, cost_price = ?, stock = ?, stock_quantity = ?, updated_at = ? WHERE id = ?',
+                [cloudPrice, cloudPrice, cloudCost, cloudStock, cloudStock, cloudUpdated, row.id || item.record_id]
+              );
+            } catch {}
+            successfulIds.push(item.id);
+            continue;
+          }
+
+          // 2. If unmodified local product (identical price, cost_price, and stock), skip upstream push
+          if (cloudPrice === localPrice && cloudCost === localCost && cloudStock === localStock) {
+            console.log(`[BackgroundSync] Skipping upstream push for unmodified product ${row.sku || item.record_id}.`);
+            successfulIds.push(item.id);
+            continue;
+          }
+        }
+
+        const cleanRow = { ...row };
+        if (cleanRow.price !== undefined && cleanRow.selling_price === undefined) {
+          cleanRow.selling_price = cleanRow.price;
+        } else if (cleanRow.selling_price !== undefined && cleanRow.price === undefined) {
+          cleanRow.price = cleanRow.selling_price;
+        }
+        if (cleanRow.stock !== undefined && cleanRow.stock_quantity === undefined) {
+          cleanRow.stock_quantity = cleanRow.stock;
+        } else if (cleanRow.stock_quantity !== undefined && cleanRow.stock === undefined) {
+          cleanRow.stock = cleanRow.stock_quantity;
+        }
+        cleanRow.updated_at = cleanRow.updated_at || new Date().toISOString();
+
+        const columns = Object.keys(cleanRow);
+        const colNames = columns.map(c => `"${c}"`).join(', ');
+        const placeholders = columns.map(() => '?').join(', ');
+        const args = columns.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
+
+        statements.push({
+          sql: `INSERT INTO "products" (${colNames}) VALUES (${placeholders})
+                ON CONFLICT("sku") DO UPDATE SET
+                  "stock" = excluded."stock",
+                  "stock_quantity" = excluded."stock_quantity",
+                  "price" = excluded."price",
+                  "selling_price" = excluded."selling_price",
+                  "cost_price" = excluded."cost_price",
+                  "updated_at" = excluded."updated_at"`,
+          args
         });
         successfulIds.push(item.id);
       } else if (row && typeof row === 'object') {
@@ -300,6 +396,85 @@ export async function runSyncCycle(localDb: any): Promise<void> {
 export async function pullDownstreamChanges(localDb: any, tursoClient: Client | null): Promise<void> {
   if (!localDb || !tursoClient) return;
 
+  // 1. Factory Reset Detection on Turso Cloud
+  try {
+    let cloudWipeTimestamp = 0;
+    const wipeCheck = await executeWithTimeout(
+      tursoClient,
+      "SELECT value, system_wipe_timestamp FROM system_settings WHERE key = 'SYSTEM_WIPE_TIMESTAMP' OR id = 'SYSTEM_WIPE_TIMESTAMP' OR id = 'global'",
+      5000
+    );
+    if (wipeCheck?.rows && wipeCheck.rows.length > 0) {
+      for (const r of wipeCheck.rows) {
+        const raw = (r as any).value || (r as any).system_wipe_timestamp;
+        if (raw) {
+          const parsed = Number(raw) || new Date(raw).getTime();
+          if (parsed > cloudWipeTimestamp) {
+            cloudWipeTimestamp = parsed;
+          }
+        }
+      }
+    }
+
+    if (cloudWipeTimestamp > 0) {
+      let localWipeTimestamp = 0;
+      try {
+        const localCheck = await localDb.get(
+          "SELECT value, system_wipe_timestamp FROM system_settings WHERE key = 'SYSTEM_WIPE_TIMESTAMP' OR id = 'SYSTEM_WIPE_TIMESTAMP' OR id = 'global'"
+        );
+        if (localCheck) {
+          const raw = localCheck.value || localCheck.system_wipe_timestamp;
+          if (raw) {
+            localWipeTimestamp = Number(raw) || new Date(raw).getTime();
+          }
+        }
+      } catch {}
+
+      if (cloudWipeTimestamp > localWipeTimestamp) {
+        console.warn(`🚨 [SyncEngine] Cloud SYSTEM_WIPE_TIMESTAMP (${cloudWipeTimestamp}) > local (${localWipeTimestamp}). Executing Terminal Factory Reset...`);
+
+        const tablesToWipe = [
+          'sales', 'sale_items', 'sales_returns', 'sales_return_items',
+          'transactions', 'credit_payments', 'cheque_registry',
+          'purchase_orders', 'purchase_order_items', 'quotations', 'quotation_items',
+          'customers', 'suppliers', 'products', 'categories'
+        ];
+
+        for (const t of tablesToWipe) {
+          try {
+            await localDb.run(`DELETE FROM "${t}";`);
+          } catch {}
+        }
+
+        // Clear local sync_queue completely
+        try {
+          await localDb.run('DELETE FROM sync_queue;');
+        } catch {}
+
+        // Delete all non-root users from local SQLite
+        try {
+          await localDb.run("DELETE FROM users WHERE LOWER(email) != 'sanojhardware@gmail.com';");
+          await localDb.run("DELETE FROM profiles WHERE LOWER(email) != 'sanojhardware@gmail.com';");
+          await localDb.run("DELETE FROM custom_permissions WHERE user_id NOT IN (SELECT id FROM users WHERE LOWER(email) = 'sanojhardware@gmail.com');");
+        } catch {}
+
+        // Record wipe timestamp in local SQLite system_settings
+        try {
+          await localDb.run(
+            "INSERT OR REPLACE INTO system_settings (id, key, value, system_wipe_timestamp) VALUES ('SYSTEM_WIPE_TIMESTAMP', 'SYSTEM_WIPE_TIMESTAMP', ?, ?)",
+            [String(cloudWipeTimestamp), String(cloudWipeTimestamp)]
+          );
+        } catch {}
+
+        (globalThis as any).__systemWipeDetected = true;
+        (globalThis as any).__systemWipeTimestamp = cloudWipeTimestamp;
+        console.log('✅ [SyncEngine] Terminal factory reset wipe completed successfully.');
+      }
+    }
+  } catch (wipeErr: any) {
+    console.warn('[SyncEngine] Notice checking SYSTEM_WIPE_TIMESTAMP:', wipeErr.message);
+  }
+
   const syncAndPruneEntity = async (tableName: string, selectSql?: string, excludeClause = '', idCol = 'id') => {
     try {
       const tableExists = await localDb.get(
@@ -308,6 +483,9 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
       );
       if (!tableExists) return;
 
+      const MASTER_TABLES = new Set(['products', 'categories', 'customers', 'suppliers', 'users', 'profiles']);
+      const isMasterTable = MASTER_TABLES.has(tableName);
+
       const res = await executeWithTimeout(tursoClient, selectSql || `SELECT * FROM "${tableName}"`, 5000);
       const activeCloudIds: string[] = [];
       if (res?.rows && res.rows.length > 0) {
@@ -315,15 +493,100 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
           if ((row as any)[idCol] !== undefined && (row as any)[idCol] !== null) {
             activeCloudIds.push(String((row as any)[idCol]));
           }
-          const cols = Object.keys(row);
-          const colNames = cols.map(c => `"${c}"`).join(', ');
-          const placeholders = cols.map(() => '?').join(', ');
-          const args = cols.map(c => (row as any)[c] !== undefined ? (row as any)[c] : null);
-          await localDb.run(
-            `INSERT OR REPLACE INTO "${tableName}" (${colNames}) VALUES (${placeholders})`,
-            args
-          );
+
+          // LWW & Conflict Resolution for Master Data
+          if (isMasterTable) {
+            let localRow: any = null;
+            try {
+              localRow = await localDb.get(`SELECT * FROM "${tableName}" WHERE "${idCol}" = ?`, [(row as any)[idCol]]);
+              if (!localRow && tableName === 'products' && (row as any).sku) {
+                localRow = await localDb.get(`SELECT * FROM products WHERE sku = ?`, [(row as any).sku]);
+              }
+            } catch {}
+
+            if (localRow) {
+              let pendingOutbox: any = null;
+              try {
+                pendingOutbox = await localDb.get(
+                  `SELECT id FROM sync_queue WHERE table_name = ? AND (record_id = ? OR record_id = ?) AND status = 'PENDING'`,
+                  [tableName, String((row as any)[idCol]), String(localRow[idCol])]
+                );
+              } catch {}
+
+              const cloudUpdated = (row as any).updated_at || (row as any).created_at;
+              const localUpdated = localRow.updated_at || localRow.created_at;
+              const cloudTime = cloudUpdated ? new Date(cloudUpdated).getTime() : 0;
+              const localTime = localUpdated ? new Date(localUpdated).getTime() : 0;
+              const isCloudNewerOrEqual = cloudTime >= localTime;
+
+              // If local record has pending outbox changes AND local is newer, keep local; otherwise Cloud Wins!
+              if (pendingOutbox && !isCloudNewerOrEqual) {
+                continue;
+              }
+            }
+          }
+
+          if (tableName === 'products') {
+            const cleanRow = { ...row as any };
+            if (cleanRow.price !== undefined && cleanRow.selling_price === undefined) {
+              cleanRow.selling_price = cleanRow.price;
+            } else if (cleanRow.selling_price !== undefined && cleanRow.price === undefined) {
+              cleanRow.price = cleanRow.selling_price;
+            }
+            if (cleanRow.stock !== undefined && cleanRow.stock_quantity === undefined) {
+              cleanRow.stock_quantity = cleanRow.stock;
+            } else if (cleanRow.stock_quantity !== undefined && cleanRow.stock === undefined) {
+              cleanRow.stock = cleanRow.stock_quantity;
+            }
+
+            const pCols = Object.keys(cleanRow);
+            const pColNames = pCols.map(c => `"${c}"`).join(', ');
+            const pPlaceholders = pCols.map(() => '?').join(', ');
+            const pArgs = pCols.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
+
+            await localDb.run(
+              `INSERT INTO "products" (${pColNames}) VALUES (${pPlaceholders})
+               ON CONFLICT("sku") DO UPDATE SET
+                 "name" = excluded."name",
+                 "price" = excluded."price",
+                 "selling_price" = excluded."selling_price",
+                 "cost_price" = excluded."cost_price",
+                 "stock" = excluded."stock",
+                 "stock_quantity" = excluded."stock_quantity",
+                 "category" = excluded."category",
+                 "min_stock" = excluded."min_stock",
+                 "supplier" = excluded."supplier",
+                 "unit" = excluded."unit",
+                 "barcode" = excluded."barcode",
+                 "brand" = excluded."brand",
+                 "updated_at" = excluded."updated_at"`,
+              pArgs
+            );
+          } else {
+            const cols = Object.keys(row);
+            const colNames = cols.map(c => `"${c}"`).join(', ');
+            const placeholders = cols.map(() => '?').join(', ');
+            const args = cols.map(c => (row as any)[c] !== undefined ? (row as any)[c] : null);
+            await localDb.run(
+              `INSERT OR REPLACE INTO "${tableName}" (${colNames}) VALUES (${placeholders})`,
+              args
+            );
+          }
         }
+      }
+
+      if (tableName === 'profiles') {
+        try {
+          const usersTableExists = await localDb.get("SELECT name FROM sqlite_master WHERE type='table' AND name='users'");
+          if (usersTableExists && res?.rows && res.rows.length > 0) {
+            for (const row of res.rows) {
+              await localDb.run(
+                `INSERT OR REPLACE INTO users (id, email, password, role, name, created_at) VALUES (?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))`,
+                [(row as any).id, (row as any).email, (row as any).password, (row as any).role, (row as any).name || (row as any).full_name, (row as any).created_at]
+              );
+            }
+          }
+        } catch {}
       }
 
       // Deletion pruning:
@@ -359,6 +622,8 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
 
   // Execute all entity syncs in parallel to collapse HTTP latency roundtrips
   await Promise.all([
+    // 0. Users (with super_admin / u1 protection)
+    syncAndPruneEntity('users', 'SELECT * FROM users', "AND LOWER(role) != 'super_admin' AND id != 'u1'"),
     // 1. Profiles (with super_admin / u1 protection)
     syncAndPruneEntity('profiles', 'SELECT * FROM profiles', "AND LOWER(role) != 'super_admin' AND id != 'u1'"),
     // 2. Products (catalog, stock, prices, SKUs)

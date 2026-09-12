@@ -111,10 +111,13 @@ export function Header({
     fetchSyncStatus();
     const interval = setInterval(fetchSyncStatus, 10000);
     const handleFocus = () => fetchSyncStatus();
+    const handleCatalogRefreshed = () => fetchSyncStatus();
     window.addEventListener('focus', handleFocus);
+    window.addEventListener('catalog-refreshed', handleCatalogRefreshed);
     return () => {
       clearInterval(interval);
       window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('catalog-refreshed', handleCatalogRefreshed);
     };
   }, [fetchSyncStatus]);
 
@@ -173,8 +176,9 @@ export function Header({
         document.activeElement.blur();
       }
 
-      // Trigger immediate bidirectional sync before reloading
+      // Trigger immediate downstream pull and bidirectional sync before reloading
       try {
+        await api.sync.pullDownstream().catch(() => {});
         await api.sync.triggerSync();
         window.dispatchEvent(new Event('sync-completed'));
       } catch (_) {}

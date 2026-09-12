@@ -149,9 +149,73 @@ export const sendBackupEmail = async ({ toEmail, subject, text, html, fileName, 
   }
 };
 
+/**
+ * Sends a critical Factory Reset OTP verification email.
+ *
+ * @param {string} toEmail Target recipient email address (sanojhardware@gmail.com)
+ * @param {string} code 6-digit verification OTP code
+ * @param {Object} settings Optional runtime settings
+ */
+export const sendFactoryResetOtpEmail = async (toEmail, code, settings = {}) => {
+  try {
+    const destination = toEmail || 'sanojhardware@gmail.com';
+    const transporter = createMailTransporter(settings);
+    const user = settings.smtp_user || process.env.SMTP_USER || settings.shop_email || settings.email || process.env.GMAIL_USER;
+
+    if (!transporter) {
+      console.warn(`[Factory Reset Simulation] Missing SMTP credentials. Verification code for ${destination}: ${code}`);
+      return { success: false, reason: 'GMAIL_PASS missing', simulated: true, code };
+    }
+
+    const info = await transporter.sendMail({
+      from: `"Muthuwadige Hardware Security" <${user}>`,
+      to: destination,
+      subject: 'CRITICAL: Muthuwadige Hardware ERP Factory Reset Verification Code',
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 24px; color: #1f2937; max-width: 520px; margin: 0 auto; border: 2px solid #ef4444; border-radius: 16px; background-color: #ffffff; box-shadow: 0 10px 15px -3px rgba(239, 68, 68, 0.1);">
+          <div style="text-align: center; margin-bottom: 20px;">
+            <div style="display: inline-block; background-color: #fee2e2; color: #dc2626; font-size: 13px; font-weight: 800; padding: 6px 14px; border-radius: 9999px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">
+              ⚠️ Critical Security Action
+            </div>
+            <h2 style="color: #b91c1c; margin: 0; font-size: 24px; font-weight: 900;">Factory Reset Verification</h2>
+            <p style="color: #6b7280; font-size: 13px; margin-top: 5px;">Muthuwadige Hardware Cloud ERP</p>
+          </div>
+          
+          <div style="background-color: #fef2f2; border-left: 4px solid #ef4444; padding: 14px; border-radius: 8px; margin-bottom: 20px;">
+            <p style="font-size: 13px; line-height: 1.5; color: #991b1b; margin: 0; font-weight: 600;">
+              WARNING: A factory reset request was initiated for Muthuwadige Hardware ERP. This operation will permanently wipe all sales, inventory, customers, suppliers, transactions, and non-root staff accounts across Turso Cloud and local terminals.
+            </p>
+          </div>
+
+          <p style="font-size: 14px; line-height: 1.5; color: #374151;">Use the single-use 6-digit verification code below to authorize this nuclear reset:</p>
+          
+          <div style="background-color: #111827; padding: 20px; text-align: center; font-size: 32px; font-weight: 900; letter-spacing: 8px; border-radius: 12px; margin: 24px 0; color: #ef4444; border: 1px solid #374151;">
+            ${code}
+          </div>
+
+          <p style="font-size: 13px; line-height: 1.5; color: #dc2626; text-align: center; font-weight: 700;">
+            ⏳ This code will expire in <strong>5 minutes</strong>.
+          </p>
+
+          <p style="font-size: 12px; line-height: 1.5; color: #9ca3af; margin-top: 25px; border-top: 1px solid #e5e7eb; padding-top: 15px; text-align: center;">
+            If you did not initiate this request, change your Root Admin password immediately and ensure your server is secure.
+          </p>
+        </div>
+      `
+    });
+
+    console.log(`[Factory Reset] Verification email sent to ${destination} (Message ID: ${info.messageId})`);
+    return { success: true, messageId: info.messageId, transmitted: true };
+  } catch (err) {
+    console.error('[Factory Reset] Failed to send email:', err);
+    return { success: false, error: err.message };
+  }
+};
+
 export default {
   createMailTransporter,
   sendResetEmail,
   sendNotificationEmail,
-  sendBackupEmail
+  sendBackupEmail,
+  sendFactoryResetOtpEmail
 };
