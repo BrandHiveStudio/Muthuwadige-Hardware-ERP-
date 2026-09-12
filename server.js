@@ -569,18 +569,11 @@ async function authenticate(req, res, next) {
   const authHeader = req.headers['authorization'] || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : (req.headers['x-session-token'] || req.headers['auth-token'] || req.headers['token'] || '');
 
-  // Extract caller email for Super Admin verification
-  const headerEmail = (req.headers['x-user-email'] || '').toString().toLowerCase().trim();
-  const isSuperAdminEmail = headerEmail === 'sanojhardware@gmail.com';
-
   if (!token) {
-    // GET /api/settings and GET SMTP status are allowed through so the login screen and settings can inspect status
-    if (req.method === 'GET' && (req.path === '/api/settings' || req.path.startsWith('/api/settings/smtp') || req.path.startsWith('/api/admin/smtp'))) {
+    // GET /api/settings is allowed through unauthenticated so the login screen can fetch shop
+    // branding; the handler itself returns a reduced, non-sensitive payload in that case.
+    if (req.method === 'GET' && req.path === '/api/settings') {
       req.authUser = null;
-      return next();
-    }
-    if (isSuperAdminEmail) {
-      req.authUser = { id: 'u1', email: 'sanojhardware@gmail.com', role: 'super_admin' };
       return next();
     }
     return res.status(401).json({ error: 'Authentication required. Please log in.' });
@@ -620,11 +613,7 @@ async function authenticate(req, res, next) {
     }
 
     if (!session || new Date(session.expires_at).getTime() < Date.now()) {
-      if (isSuperAdminEmail) {
-        req.authUser = { id: 'u1', email: 'sanojhardware@gmail.com', role: 'super_admin' };
-        return next();
-      }
-      if (req.method === 'GET' && (req.path === '/api/settings' || req.path.startsWith('/api/settings/smtp') || req.path.startsWith('/api/admin/smtp'))) {
+      if (req.method === 'GET' && req.path === '/api/settings') {
         req.authUser = null;
         return next();
       }
@@ -633,10 +622,6 @@ async function authenticate(req, res, next) {
     req.authUser = { id: session.user_id, email: session.email, role: session.role };
     next();
   } catch (err) {
-    if (isSuperAdminEmail) {
-      req.authUser = { id: 'u1', email: 'sanojhardware@gmail.com', role: 'super_admin' };
-      return next();
-    }
     res.status(500).json({ error: 'Authentication check failed: ' + err.message });
   }
 }
@@ -644,13 +629,6 @@ async function authenticate(req, res, next) {
 // Applied on top of `authenticate` for routes that must be restricted to admin-equivalent roles
 // (user/permission management, settings changes, destructive/database operations).
 function requireAdmin(req, res, next) {
-  const headerEmail = (req.headers['x-user-email'] || '').toString().toLowerCase().trim();
-  if (headerEmail === 'sanojhardware@gmail.com') {
-    if (!req.authUser) {
-      req.authUser = { id: 'u1', email: 'sanojhardware@gmail.com', role: 'super_admin' };
-    }
-    return next();
-  }
   if (!req.authUser || !isAdminRole(req.authUser.role)) {
     return res.status(403).json({ error: 'This action requires an administrator role.' });
   }
