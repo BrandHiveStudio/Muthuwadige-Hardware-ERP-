@@ -27,6 +27,7 @@ import { supabase } from './lib/supabaseClient';
 import { Modal } from './components/Modal';
 import { openExternalUrl, formatWhatsAppUrl } from './utils/openExternalUrl';
 import { resetAllCaches } from './services/dataCache';
+import { isElectron } from './utils/env';
 
 export function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
@@ -56,6 +57,11 @@ export function App() {
   const [isCatalogRefreshing, setIsCatalogRefreshing] = useState(false);
 
   const runStartupCatalogPullGate = async () => {
+    if (!isElectron) {
+      // On Web Portal (browser), data is queried directly from the cloud/server API
+      setIsCatalogRefreshing(false);
+      return;
+    }
     try {
       setIsCatalogRefreshing(true);
       // High-priority downstream pull with max 3-second timeout fallback
@@ -320,9 +326,11 @@ export function App() {
     setCurrentUser(user);
     setIsAuthenticated(true);
 
-    // Trigger startup catalog pull gate and immediate bidirectional sync cycle on successful login
-    runStartupCatalogPullGate();
-    api.sync.triggerSync().catch(() => {});
+    // Trigger startup catalog pull gate and immediate bidirectional sync cycle on successful login (Electron desktop only)
+    if (isElectron) {
+      runStartupCatalogPullGate();
+      api.sync.triggerSync().catch(() => {});
+    }
     
     const roleStr = (user.role || '').toLowerCase();
     if (roleStr === 'admin' || roleStr === 'manager' || roleStr === 'super_admin') {
@@ -332,9 +340,9 @@ export function App() {
     }
   };
 
-  // On boot (once splash closes or if already authenticated), trigger startup catalog pull gate
+  // On boot (once splash closes or if already authenticated), trigger startup catalog pull gate (Electron only)
   useEffect(() => {
-    if (isAuthenticated && currentUser && !showSplash) {
+    if (isAuthenticated && currentUser && !showSplash && isElectron) {
       runStartupCatalogPullGate();
     }
   }, [isAuthenticated, showSplash]);

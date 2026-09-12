@@ -463,12 +463,30 @@ export function Settings({ currentUser }: SettingsProps = {}) {
     }
 
     try {
-      const resSmtp = await fetch(`${API_URL}/settings/smtp-config`);
+      const token = localStorage.getItem('token') || sessionStorage.getItem('token') || localStorage.getItem('auth_token') || sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token');
+      const authHeaders: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (token) {
+        authHeaders['Authorization'] = `Bearer ${token}`;
+      }
+      const userStr = localStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user') || sessionStorage.getItem('erp_user') || sessionStorage.getItem('hardware_erp_user');
+      if (userStr) {
+        try {
+          const u = JSON.parse(userStr);
+          if (u?.email) authHeaders['x-user-email'] = u.email;
+        } catch (_) {}
+      }
+
+      let resSmtp = await fetch(`${API_URL}/settings/smtp`, { headers: authHeaders });
+      if (resSmtp.status === 404) {
+        resSmtp = await fetch(`${API_URL}/settings/smtp-config`, { headers: authHeaders });
+      }
       if (resSmtp.ok) {
         const smtpData = await resSmtp.json();
         if (smtpData) {
-          setSmtpUser(smtpData.gmail_user || '');
-          setSmtpPassConfigured(smtpData.gmail_pass_configured || false);
+          setSmtpUser(smtpData.gmail_user || smtpData.smtp_user || '');
+          setSmtpPassConfigured(smtpData.gmail_pass_configured || smtpData.smtp_pass_configured || false);
         }
       }
     } catch (err) {
@@ -481,14 +499,45 @@ export function Settings({ currentUser }: SettingsProps = {}) {
   const handleSaveSmtp = async () => {
     setIsSavingSmtp(true);
     try {
-      const res = await fetch(`${API_URL}/settings/smtp-config`, {
+      const token = localStorage.getItem('token') || sessionStorage.getItem('token') || localStorage.getItem('auth_token') || sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token');
+      const authHeaders: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (token) {
+        authHeaders['Authorization'] = `Bearer ${token}`;
+      }
+      const userStr = localStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user') || sessionStorage.getItem('erp_user') || sessionStorage.getItem('hardware_erp_user');
+      if (userStr) {
+        try {
+          const u = JSON.parse(userStr);
+          if (u?.email) authHeaders['x-user-email'] = u.email;
+        } catch (_) {}
+      }
+
+      let res = await fetch(`${API_URL}/settings/smtp`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify({
           gmail_user: smtpUser,
-          gmail_pass: smtpPass
+          gmail_pass: smtpPass,
+          smtp_user: smtpUser,
+          smtp_pass: smtpPass
         })
       });
+
+      if (res.status === 404) {
+        res = await fetch(`${API_URL}/settings/smtp-config`, {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            gmail_user: smtpUser,
+            gmail_pass: smtpPass,
+            smtp_user: smtpUser,
+            smtp_pass: smtpPass
+          })
+        });
+      }
+
       const result = await res.json();
       if (res.ok && result.success) {
         alert(result.message || "SMTP configuration saved successfully!");
@@ -507,9 +556,24 @@ export function Settings({ currentUser }: SettingsProps = {}) {
   const handleTestSmtpConnection = async () => {
     setIsTestingSmtp(true);
     try {
+      const token = localStorage.getItem('token') || sessionStorage.getItem('token') || localStorage.getItem('auth_token') || sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token');
+      const authHeaders: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      if (token) {
+        authHeaders['Authorization'] = `Bearer ${token}`;
+      }
+      const userStr = localStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user') || sessionStorage.getItem('erp_user') || sessionStorage.getItem('hardware_erp_user');
+      if (userStr) {
+        try {
+          const u = JSON.parse(userStr);
+          if (u?.email) authHeaders['x-user-email'] = u.email;
+        } catch (_) {}
+      }
+
       const res = await fetch(`${API_URL}/settings/test-smtp`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: authHeaders
       });
       const result = await res.json();
       if (res.ok && result.success) {

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SearchIcon, BellIcon, MenuIcon, RotateCw, RefreshCw } from 'lucide-react';
 import type { User, PageName, SyncStatus } from '../types';
 import { api } from '../lib/api';
+import { isElectron } from '../utils/env';
 
 interface HeaderProps {
   currentPage: PageName;
@@ -58,6 +59,21 @@ export function Header({
   const [searchValue, setSearchValue] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(() => {
+    if (!isElectron) {
+      // Instant (<500ms) Cloud Connected state on Web Portal
+      return {
+        isOnline: true,
+        isWebClient: true,
+        lastUpstreamSync: null,
+        lastDownstreamSync: null,
+        lastCounterSync: new Date().toISOString(),
+        lastSyncedAt: new Date().toISOString(),
+        queuedCount: 0,
+        pendingCount: 0,
+        status: 'online',
+        isSyncing: false
+      };
+    }
     try {
       if (typeof window !== 'undefined') {
         const cached = sessionStorage.getItem('erp_last_sync_status');
@@ -71,7 +87,7 @@ export function Header({
   const consecutiveFailuresRef = useRef<number>(0);
   const pageInfo = pageTitles[currentPage] || { title: 'Hardware Store ERP', breadcrumb: 'System' };
 
-  const isElectronApp = typeof window !== 'undefined' && Boolean((window as any).electronAPI);
+  const isElectronApp = isElectron;
   const isWeb = !isElectronApp || Boolean(syncStatus?.isWebClient);
 
   const fetchSyncStatus = useCallback(async () => {
@@ -79,7 +95,22 @@ export function Header({
       const data = await api.sync.getStatus();
       // Any successful response immediately resets failure counter to 0
       consecutiveFailuresRef.current = 0;
-      setSyncStatus(data);
+      if (!isElectron) {
+        setSyncStatus({
+          isOnline: true,
+          isWebClient: true,
+          lastUpstreamSync: null,
+          lastDownstreamSync: null,
+          lastCounterSync: data?.lastCounterSync || new Date().toISOString(),
+          lastSyncedAt: data?.lastSyncedAt || new Date().toISOString(),
+          queuedCount: 0,
+          pendingCount: 0,
+          status: 'online',
+          isSyncing: false
+        });
+      } else {
+        setSyncStatus(data);
+      }
       try {
         if (typeof window !== 'undefined') {
           sessionStorage.setItem('erp_last_sync_status', JSON.stringify(data));
@@ -87,8 +118,6 @@ export function Header({
       } catch (_) {}
     } catch (_) {
       consecutiveFailuresRef.current += 1;
-      const isElectron = typeof window !== 'undefined' && Boolean((window as any).electronAPI);
-
       // Only toggle status to offline after 3 consecutive failures (30 seconds sustained)
       if (consecutiveFailuresRef.current >= 3) {
         setSyncStatus(prev => prev ? { ...prev, isOnline: false, status: 'offline' } : {
@@ -239,45 +268,14 @@ export function Header({
           >
             <span>🔴 Cloud Disconnected</span>
           </div>
-        ) : (() => {
-          const counterTime = syncStatus?.lastCounterSync || syncStatus?.lastSyncedAt;
-          const queuedCount = Number(syncStatus?.queuedCount ?? syncStatus?.pendingCount ?? 0);
-
-          if (!counterTime) {
-            return (
-              <div
-                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm select-none"
-                title="Connected to cloud database. Awaiting initial counter sync."
-              >
-                <span>🟢 Cloud Connected • Synced: Never • {queuedCount} Queued</span>
-              </div>
-            );
-          }
-
-          const diffMs = Date.now() - new Date(counterTime).getTime();
-          const isStale = !isNaN(diffMs) && diffMs >= 30 * 60 * 1000;
-          const counterTimeText = formatTimeAgo(counterTime);
-
-          if (isStale) {
-            return (
-              <div
-                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 shadow-sm select-none"
-                title={`Connected to cloud database. In-store counter has been inactive for over 30 minutes.\nLast sync: ${formatTooltipTime(counterTime)}`}
-              >
-                <span>🟠 Cloud Connected • Synced: {counterTimeText} (Inactive) • {queuedCount} Queued</span>
-              </div>
-            );
-          }
-
-          return (
-            <div
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm select-none"
-              title={`Connected to cloud database. In-store counter sync active.\nLast sync: ${formatTooltipTime(counterTime)}`}
-            >
-              <span>🟢 Cloud Connected • Synced: {counterTimeText} • {queuedCount} Queued</span>
-            </div>
-          );
-        })()
+        ) : (
+          <div
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm select-none"
+            title="Directly connected to cloud database."
+          >
+            <span>🟢 Cloud Connected • 0 Queued</span>
+          </div>
+        )
       ) : (() => {
         // Offline / Desktop Electron App (In-Store POS)
         const isSyncingActive = syncStatus?.status === 'syncing' || syncStatus?.isSyncing || isManualSyncing;
