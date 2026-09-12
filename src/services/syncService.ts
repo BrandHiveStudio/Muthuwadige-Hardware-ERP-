@@ -128,6 +128,9 @@ export async function ensureSyncSchema(db: any): Promise<void> {
     try { await db.exec("ALTER TABLE products ADD COLUMN selling_price REAL;"); } catch {}
     try { await db.exec("ALTER TABLE products ADD COLUMN stock_quantity REAL;"); } catch {}
     try { await db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT;"); } catch {}
+    try { await db.exec("ALTER TABLE customers ADD COLUMN credit_limit REAL DEFAULT 0;"); } catch {}
+    try { await db.exec("ALTER TABLE customers ADD COLUMN credit_period INTEGER DEFAULT 0;"); } catch {}
+    try { await db.exec("ALTER TABLE customers ADD COLUMN type TEXT DEFAULT 'registered';"); } catch {}
     try { await db.exec("ALTER TABLE suppliers ADD COLUMN updated_at TEXT;"); } catch {}
     try { await db.exec("ALTER TABLE profiles ADD COLUMN updated_at TEXT;"); } catch {}
     try { await db.exec("ALTER TABLE users ADD COLUMN updated_at TEXT;"); } catch {}

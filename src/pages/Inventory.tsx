@@ -171,8 +171,7 @@ export function Inventory() {
           }
         });
 
-        let imported = 0;
-        let errors = 0;
+        const batchPayload: any[] = [];
 
         for (let idx = 0; idx < rawRows.length; idx++) {
           const row = rawRows[idx];
@@ -241,42 +240,9 @@ export function Inventory() {
               finalSupplierName = existingSup.name;
               finalSupplierPhone = existingSup.phone || excelSupplierPhone || '';
               finalSupplierId = existingSup.id;
-
-              const updatePayload: any = {};
-              if (!existingSup.phone && excelSupplierPhone) updatePayload.phone = excelSupplierPhone;
-              if (!existingSup.email && excelSupplierEmail) updatePayload.email = excelSupplierEmail;
-              if (!existingSup.address && excelSupplierAddress) updatePayload.address = excelSupplierAddress;
-
-              if (Object.keys(updatePayload).length > 0) {
-                try {
-                  await supabase.from('suppliers').update(updatePayload).eq('id', existingSup.id);
-                } catch (e) {}
-              }
             } else {
-              const newSupPayload = {
-                name: supplierInput.trim(),
-                email: excelSupplierEmail || '',
-                phone: excelSupplierPhone || '',
-                address: excelSupplierAddress || '',
-                credit_terms: 'Net 30',
-                payable_balance: 0,
-                nic: ''
-              };
-              const { data: newSupData, error: supErr } = await supabase.from('suppliers').insert([newSupPayload]);
-              if (!supErr) {
-                const createdSup = {
-                  id: newSupData?.[0]?.id || 'sup_' + Date.now(),
-                  name: supplierInput.trim(),
-                  phone: excelSupplierPhone || ''
-                };
-                suppliersMap.set(supplierInput.trim().toLowerCase(), createdSup);
-                finalSupplierName = createdSup.name;
-                finalSupplierPhone = createdSup.phone;
-                finalSupplierId = createdSup.id;
-              } else {
-                finalSupplierName = supplierInput.trim();
-                finalSupplierPhone = excelSupplierPhone || '';
-              }
+              finalSupplierName = supplierInput.trim();
+              finalSupplierPhone = excelSupplierPhone || '';
             }
           }
 
@@ -285,8 +251,10 @@ export function Inventory() {
             sku,
             category,
             price,
+            selling_price: price,
             cost_price: costPrice,
             stock,
+            stock_quantity: stock,
             min_stock: minStock,
             supplier: finalSupplierName,
             supplier_phone: finalSupplierPhone,
@@ -303,28 +271,19 @@ export function Inventory() {
             dbPayload.supplier_id = finalSupplierId;
           }
 
-          const { error } = await supabase.from('products').insert([dbPayload]);
-          if (error) {
-            const { error: updateError } = await supabase.from('products').update(dbPayload).eq('sku', sku);
-            if (updateError) {
-              const { error: nameError } = await supabase.from('products').update(dbPayload).eq('name', name);
-              if (nameError) errors++;
-              else imported++;
-            } else {
-              imported++;
-            }
-          } else {
-            imported++;
-          }
+          batchPayload.push(dbPayload);
         }
 
+        const res = await api.products.bulkImport(batchPayload);
+        const imported = res?.count || res?.imported || batchPayload.length;
+
         setToast({
-          type: imported > 0 ? 'success' : 'error',
-          message: `Successfully imported/updated ${imported} products! (Skipped/failed: ${errors})`
+          type: 'success',
+          message: `Successfully imported/updated ${imported} products!`
         });
         setTimeout(() => setToast(null), 5000);
 
-        fetchProducts();
+        await fetchProducts();
         window.dispatchEvent(new CustomEvent('refresh-inventory'));
       } catch (err: any) {
         setToast({ type: 'error', message: "Excel import error: " + err.message });

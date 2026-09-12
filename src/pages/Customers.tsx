@@ -152,25 +152,12 @@ export function Customers({ currentUser }: CustomersProps = {}) {
       }
 
       if (batchPayload.length > 0) {
-        try {
-          const res = await (api.customers as any).import(batchPayload);
-          imported = res?.imported || batchPayload.length;
-        } catch (bulkErr) {
-          console.warn("Bulk import endpoint failed, falling back to sequential:", bulkErr);
-          for (const item of batchPayload) {
-            try {
-              const { error } = await supabase.from('customers').insert(item);
-              if (!error) imported++;
-              else errors++;
-            } catch (_) {
-              errors++;
-            }
-          }
-        }
+        const res = await api.customers.bulkImport(batchPayload);
+        imported = res?.count || res?.imported || batchPayload.length;
       }
 
-      setToast({ message: `Successfully imported ${imported} customer profiles!${errors > 0 ? ` (Skipped: ${errors})` : ''}`, type: imported > 0 ? 'success' : 'error' });
-      fetchData();
+      setToast({ message: `Successfully imported ${imported} customer profiles!`, type: 'success' });
+      await fetchData();
       } catch (err: any) {
         setToast({ message: "Excel parse failed: " + err.message, type: 'error' });
       } finally {

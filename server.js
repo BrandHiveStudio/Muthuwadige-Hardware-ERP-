@@ -1419,6 +1419,14 @@ async function initializeDatabase() {
   } catch(e) {}
   try { await db.exec("ALTER TABLE credit_payments ADD COLUMN created_by TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE credit_payments ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP"); } catch(e) {}
+  try { await db.exec("ALTER TABLE products ADD COLUMN updated_at TEXT;"); } catch(e) {}
+  try { await db.exec("ALTER TABLE products ADD COLUMN selling_price REAL;"); } catch(e) {}
+  try { await db.exec("ALTER TABLE products ADD COLUMN stock_quantity REAL;"); } catch(e) {}
+  try { await db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT;"); } catch(e) {}
+  try { await db.exec("ALTER TABLE customers ADD COLUMN credit_limit REAL DEFAULT 0;"); } catch(e) {}
+  try { await db.exec("ALTER TABLE customers ADD COLUMN credit_period INTEGER DEFAULT 0;"); } catch(e) {}
+  try { await db.exec("ALTER TABLE customers ADD COLUMN type TEXT DEFAULT 'registered';"); } catch(e) {}
+  try { await db.exec("ALTER TABLE suppliers ADD COLUMN updated_at TEXT;"); } catch(e) {}
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN return_no TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN customer_name TEXT"); } catch(e) {}
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN customer_phone TEXT"); } catch(e) {}
@@ -2980,8 +2988,171 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
+let bulkColumnsEnsured = false;
+async function ensureBulkImportColumns(database) {
+  if (!database || isTurso() || bulkColumnsEnsured) return;
+  try { await database.exec("ALTER TABLE products ADD COLUMN updated_at TEXT;"); } catch(_) {}
+  try { await database.exec("ALTER TABLE products ADD COLUMN selling_price REAL;"); } catch(_) {}
+  try { await database.exec("ALTER TABLE products ADD COLUMN stock_quantity REAL;"); } catch(_) {}
+  try { await database.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT;"); } catch(_) {}
+  try { await database.exec("ALTER TABLE customers ADD COLUMN credit_limit REAL DEFAULT 0;"); } catch(_) {}
+  try { await database.exec("ALTER TABLE customers ADD COLUMN credit_period INTEGER DEFAULT 0;"); } catch(_) {}
+  try { await database.exec("ALTER TABLE customers ADD COLUMN type TEXT DEFAULT 'registered';"); } catch(_) {}
+  try { await database.exec("ALTER TABLE suppliers ADD COLUMN updated_at TEXT;"); } catch(_) {}
+  bulkColumnsEnsured = true;
+}
+
+// BULK PRODUCT IMPORT ROUTE (Excel / CSV)
+app.post(['/api/products/bulk-import', '/api/products/bulk', '/api/products/import'], async (req, res) => {
+  const user_email = req.headers['x-user-email'] || 'system';
+  try {
+    await ensureBulkImportColumns(db);
+    const rawItems = Array.isArray(req.body) ? req.body : (req.body?.products || req.body?.items || [req.body]);
+    if (!Array.isArray(rawItems) || rawItems.length === 0) {
+      return res.status(400).json({ error: 'No product records provided for import.' });
+    }
+
+    const cleanKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const getValue = (row, possibleKeys) => {
+      if (!row || typeof row !== 'object') return '';
+      const keys = Object.keys(row);
+      for (const pKey of possibleKeys) {
+        const targetClean = cleanKey(pKey);
+        const matched = keys.find(k => cleanKey(k) === targetClean);
+        if (matched && row[matched] !== undefined && row[matched] !== null) {
+          const val = String(row[matched]).trim();
+          if (val !== '' && val !== 'null' && val !== 'undefined' && val !== '—' && val !== '-') {
+            return val;
+          }
+        }
+      }
+      return '';
+    };
+
+    let importedCount = 0;
+    const insertedIds = [];
+
+    // Pre-cache suppliers for instant mapping
+    const existingSuppliers = await db.all("SELECT id, name, phone FROM suppliers").catch(() => []);
+    const supMap = new Map();
+    (existingSuppliers || []).forEach(s => {
+      if (s && s.name) supMap.set(s.name.trim().toLowerCase(), s);
+    });
+
+    for (let idx = 0; idx < rawItems.length; idx++) {
+      const row = rawItems[idx];
+      if (!row || typeof row !== 'object') continue;
+
+      let name = getValue(row, [
+        'product name', 'product_name', 'product', 'item', 'item_name', 'item name',
+        'description', 'name', 'title'
+      ]) || (row.name ? String(row.name).trim() : `Product #${idx + 1}`);
+
+      let sku = getValue(row, [
+        'sku', 'item code', 'item_code', 'code', 'barcode', 'product_sku', 'product sku', 'item_number'
+      ]) || (row.sku ? String(row.sku).trim() : `SKU-${Date.now()}-${idx + 1}`);
+
+      const category = getValue(row, ['category', 'product_category', 'product category', 'type']) || row.category || 'General';
+      const unit = getValue(row, ['unit', 'uom', 'unit_of_measure', 'measurement']) || row.unit || 'pcs';
+
+      const rawPrice = getValue(row, [
+        'price', 'selling price', 'selling_price', 'retail price', 'retail_price',
+        'unit price', 'unit_price', 'price (rs.)'
+      ]);
+      const price = parseFloat(rawPrice !== '' ? rawPrice : (row.selling_price || row.price || 0)) || 0;
+
+      const rawCost = getValue(row, [
+        'cost', 'cost price', 'cost_price', 'buying price', 'buying_price',
+        'purchase price', 'purchase_price', 'cost (rs.)'
+      ]);
+      const costPrice = parseFloat(rawCost !== '' ? rawCost : (row.cost_price || row.costPrice || 0)) || 0;
+
+      const rawStock = getValue(row, [
+        'stock', 'qty', 'quantity', 'current stock', 'current_stock', 'units_in_stock', 'stock_qty', 'stock_quantity'
+      ]);
+      const stock = parseFloat(rawStock !== '' ? rawStock : (row.stock_quantity || row.stock || 0)) || 0;
+
+      const rawMin = getValue(row, [
+        'min stock', 'min_stock', 'reorder level', 'reorder_level', 'min', 'stock alert', 'stock_alert', 'minstock'
+      ]);
+      const minStock = parseInt(rawMin !== '' ? rawMin : (row.min_stock || row.minStock || 5)) || 5;
+
+      const supplierInput = getValue(row, [
+        'supplier', 'supplier_name', 'supplier name', 'vendor', 'vendor_name', 'vendor name'
+      ]) || row.supplier || '';
+
+      let supplierPhone = getValue(row, [
+        'supplier number', 'supplier phone', 'supplier_phone', 'supplierphone', 'mobile', 'phone', 'contact'
+      ]) || row.supplier_phone || row.supplierPhone || '';
+
+      const barcode = getValue(row, ['barcode', 'barcode_number', 'upc', 'ean']) || row.barcode || sku;
+      const brand = getValue(row, ['brand', 'manufacturer', 'make']) || row.brand || '';
+      const serialNo = getValue(row, ['serial_no', 'serial no', 'serial']) || row.serial_no || '';
+      const batchCode = getValue(row, ['batch_code', 'batch code', 'batch']) || row.batch_code || '';
+      const expiryDate = getValue(row, ['expiry date', 'expiry_date', 'expirydate', 'expiry']) || row.expiry_date || '';
+      const measureDetails = row.measure_details || row.measureDetails || '';
+
+      // Match supplier if present
+      let finalSupplier = supplierInput;
+      if (supplierInput && supMap.has(supplierInput.trim().toLowerCase())) {
+        const matchedSup = supMap.get(supplierInput.trim().toLowerCase());
+        finalSupplier = matchedSup.name;
+        if (!supplierPhone && matchedSup.phone) {
+          supplierPhone = matchedSup.phone;
+        }
+      }
+
+      // Check if product already exists by sku or name
+      const existing = await db.get(
+        'SELECT id, sku FROM products WHERE sku = ? OR LOWER(TRIM(name)) = LOWER(TRIM(?))',
+        [sku, name]
+      ).catch(() => null);
+
+      const id = (existing && existing.id) ? existing.id : (row.id || crypto.randomUUID());
+      const finalSku = (existing && existing.sku) ? existing.sku : sku;
+
+      await db.run(
+        `INSERT OR REPLACE INTO products (
+          id, name, sku, category, price, selling_price, cost_price, stock, stock_quantity,
+          min_stock, supplier, supplier_phone, unit, barcode, brand, serial_no, batch_code,
+          expiry_date, measure_details, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+        [
+          id, name, finalSku, category, price, price, costPrice, stock, stock,
+          minStock, finalSupplier, supplierPhone, unit, barcode, brand, serialNo, batchCode,
+          expiryDate, measureDetails
+        ]
+      );
+
+      enqueueSync(db, 'products', id, 'UPSERT').catch(() => {});
+      insertedIds.push(id);
+      importedCount++;
+    }
+
+    runSyncCycle(db).catch(() => {});
+    await logAudit(user_email, 'PRODUCT_BULK_IMPORT', `Bulk imported/updated ${importedCount} product records.`);
+
+    return res.json({
+      success: true,
+      count: importedCount,
+      imported: importedCount,
+      ids: insertedIds,
+      message: `Successfully imported ${importedCount} products.`
+    });
+  } catch (err) {
+    console.error('Error bulk importing products:', err);
+    return res.status(500).json({ error: 'Bulk product import failed: ' + err.message });
+  }
+});
+
 app.post('/api/products', async (req, res) => {
-  const p = req.body || {};
+  // If array with multiple items, redirect to bulk import
+  if (Array.isArray(req.body) && req.body.length > 1) {
+    req.url = '/api/products/bulk-import';
+    return app._router.handle(req, res);
+  }
+
+  const p = Array.isArray(req.body) ? (req.body[0] || {}) : (req.body || {});
   const user_email = req.headers['x-user-email'] || p.user_email || 'system';
   try {
     let finalSupplier = p.supplier ? p.supplier.trim() : '';
@@ -3211,15 +3382,16 @@ app.post('/api/customers', async (req, res) => {
       [id, name, email, phone, address, nic, loyalty_points, total_purchases, join_date, credit_balance, current_credit]
     );
     enqueueSync(db, 'customers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
-    res.json({ success: true, id, name, email, phone, address, nic });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/customers/import', async (req, res) => {
+app.post(['/api/customers/bulk-import', '/api/customers/bulk', '/api/customers/import'], async (req, res) => {
+  const user_email = req.headers['x-user-email'] || 'system';
   try {
-    const rawItems = Array.isArray(req.body) ? req.body : (req.body.customers || req.body.items || [req.body]);
+    await ensureBulkImportColumns(db);
+    const rawItems = Array.isArray(req.body) ? req.body : (req.body?.customers || req.body?.items || [req.body]);
     if (!Array.isArray(rawItems) || rawItems.length === 0) {
       return res.status(400).json({ error: 'No customer records provided for import.' });
     }
@@ -3246,6 +3418,8 @@ app.post('/api/customers/import', async (req, res) => {
 
     for (let idx = 0; idx < rawItems.length; idx++) {
       const row = rawItems[idx];
+      if (!row || typeof row !== 'object') continue;
+
       let name = getValue(row, ['name', 'customer name', 'customer_name', 'customer', 'client', 'contactname', 'fullname']);
       if (!name) {
         name = row.name ? String(row.name).trim() : `Customer #${idx + 1}`;
@@ -3260,11 +3434,20 @@ app.post('/api/customers/import', async (req, res) => {
       const address = getValue(row, ['address', 'customer_address', 'street', 'city', 'location']) || row.address || '';
       const nic = getValue(row, ['nic', 'nic number', 'nic_number', 'national id', 'id', 'nic_no', 'identitycard']) || row.nic || '';
       
-      const rawLoyalty = getValue(row, ['loyaltypoints', 'loyalty_points', 'points', 'loyalty']) || row.loyalty_points || 0;
-      const loyaltyPoints = parseInt(rawLoyalty) || 0;
+      const rawCreditLimit = getValue(row, ['credit limit', 'credit_limit', 'limit', 'max_credit', 'creditlimit']);
+      const creditLimit = parseFloat(rawCreditLimit !== '' ? rawCreditLimit : (row.credit_limit || 0)) || 0;
 
-      const rawPurchases = getValue(row, ['totalpurchases', 'total_purchases', 'spend', 'purchases']) || row.total_purchases || 0;
-      const totalPurchases = parseFloat(rawPurchases) || 0;
+      const rawCreditPeriod = getValue(row, ['credit period', 'credit_period', 'payment terms', 'payment_terms', 'terms', 'days', 'period', 'creditperiod']);
+      const creditPeriod = parseInt(rawCreditPeriod !== '' ? rawCreditPeriod : (row.credit_period || 30)) || 30;
+
+      const rawType = getValue(row, ['type', 'customer type', 'customer_type', 'customertype']);
+      const type = rawType || row.type || 'registered';
+
+      const rawLoyalty = getValue(row, ['loyaltypoints', 'loyalty_points', 'points', 'loyalty']);
+      const loyaltyPoints = parseInt(rawLoyalty !== '' ? rawLoyalty : (row.loyalty_points || 0)) || 0;
+
+      const rawPurchases = getValue(row, ['totalpurchases', 'total_purchases', 'spend', 'purchases']);
+      const totalPurchases = parseFloat(rawPurchases !== '' ? rawPurchases : (row.total_purchases || 0)) || 0;
 
       const rawDate = getValue(row, ['joindate', 'join_date', 'date', 'createdat']) || row.join_date;
       const joinDate = rawDate ? String(rawDate).trim() : new Date().toISOString().split('T')[0];
@@ -3272,37 +3455,34 @@ app.post('/api/customers/import', async (req, res) => {
       // Check if existing customer matches phone or name
       let existing = null;
       if (phone) {
-        existing = await db.get('SELECT id FROM customers WHERE phone = ?', [phone]);
+        existing = await db.get('SELECT id FROM customers WHERE phone != "" AND phone = ?', [phone]).catch(() => null);
       }
       if (!existing && name) {
-        existing = await db.get('SELECT id FROM customers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))', [name]);
+        existing = await db.get('SELECT id FROM customers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))', [name]).catch(() => null);
       }
 
-      const id = existing ? existing.id : ('c_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6));
+      const id = (existing && existing.id) ? existing.id : (row.id || crypto.randomUUID());
 
-      if (existing) {
-        await db.run(
-          `UPDATE customers SET name = ?, email = ?, phone = ?, address = ?, nic = ?, loyalty_points = ?, total_purchases = ?, join_date = ? WHERE id = ?`,
-          [name, email, phone, address, nic, loyaltyPoints, totalPurchases, joinDate, id]
-        );
-      } else {
-        await db.run(
-          `INSERT INTO customers (id, name, email, phone, address, nic, loyalty_points, total_purchases, join_date, credit_balance, current_credit)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
-          [id, name, email, phone, address, nic, loyaltyPoints, totalPurchases, joinDate]
-        );
-      }
+      await db.run(
+        `INSERT OR REPLACE INTO customers (
+          id, name, email, phone, address, nic, credit_limit, credit_period, type,
+          loyalty_points, total_purchases, join_date, credit_balance, current_credit, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, CURRENT_TIMESTAMP)`,
+        [id, name, email, phone, address, nic, creditLimit, creditPeriod, type, loyaltyPoints, totalPurchases, joinDate]
+      );
 
-      await enqueueSync(db, 'customers', id, 'UPSERT');
+      enqueueSync(db, 'customers', id, 'UPSERT').catch(() => {});
       insertedIds.push(id);
       importedCount++;
     }
 
     // Trigger immediate upstream sync cycle asynchronously
     runSyncCycle(db).catch(() => {});
+    await logAudit(user_email, 'CUSTOMER_BULK_IMPORT', `Bulk imported/updated ${importedCount} customer records.`);
 
     res.json({
       success: true,
+      count: importedCount,
       imported: importedCount,
       ids: insertedIds,
       message: `Successfully imported and synced ${importedCount} customer profiles.`
@@ -3361,9 +3541,108 @@ app.get('/api/suppliers', async (req, res) => {
   }
 });
 
+// BULK SUPPLIER IMPORT ROUTE (Excel / CSV)
+app.post(['/api/suppliers/bulk-import', '/api/suppliers/bulk', '/api/suppliers/import'], async (req, res) => {
+  const user_email = req.headers['x-user-email'] || 'system';
+  try {
+    await ensureBulkImportColumns(db);
+    const rawItems = Array.isArray(req.body) ? req.body : (req.body?.suppliers || req.body?.items || [req.body]);
+    if (!Array.isArray(rawItems) || rawItems.length === 0) {
+      return res.status(400).json({ error: 'No supplier records provided for import.' });
+    }
+
+    const cleanKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const getValue = (row, possibleKeys) => {
+      if (!row || typeof row !== 'object') return '';
+      const keys = Object.keys(row);
+      for (const pKey of possibleKeys) {
+        const targetClean = cleanKey(pKey);
+        const matched = keys.find(k => cleanKey(k) === targetClean);
+        if (matched && row[matched] !== undefined && row[matched] !== null) {
+          const val = String(row[matched]).trim();
+          if (val !== '' && val !== 'null' && val !== 'undefined' && val !== '—' && val !== '-') {
+            return val;
+          }
+        }
+      }
+      return '';
+    };
+
+    let importedCount = 0;
+    const insertedIds = [];
+
+    for (let idx = 0; idx < rawItems.length; idx++) {
+      const row = rawItems[idx];
+      if (!row || typeof row !== 'object') continue;
+
+      let name = getValue(row, [
+        'supplier name', 'supplier_name', 'supplier', 'company', 'name', 'vendor',
+        'vendor_name', 'vendor name', 'suppliername'
+      ]) || (row.name ? String(row.name).trim() : `Supplier #${idx + 1}`);
+
+      let phone = getValue(row, [
+        'phone', 'phone number', 'phone_number', 'contact', 'contact_no', 'mobile',
+        'tel', 'telephone', 'supplierphone', 'phonenumber'
+      ]) || row.phone || '';
+      if (/^\d{9}$/.test(phone)) {
+        phone = '0' + phone;
+      }
+
+      const email = getValue(row, ['email', 'email address', 'mail', 'supplieremail', 'supplier_email']) || row.email || '';
+      const address = getValue(row, ['address', 'supplier_address', 'supplieraddress', 'location', 'city', 'street']) || row.address || '';
+      const nic = getValue(row, ['nic', 'brn', 'reg no', 'reg_no', 'registration', 'registration_no', 'nic_number', 'nicnumber', 'nationalid']) || row.nic || '';
+      const creditTerms = getValue(row, ['credit terms', 'credit_terms', 'terms', 'payment terms', 'payment_terms']) || row.credit_terms || row.creditTerms || 'Net 30';
+      
+      const rawPayable = getValue(row, ['payable balance', 'payable_balance', 'balance', 'owed', 'amount_owed']);
+      const payableBalance = parseFloat(rawPayable !== '' ? rawPayable : (row.payable_balance || row.payableBalance || 0)) || 0;
+
+      // Check if existing supplier matches name or phone
+      let existing = null;
+      if (name) {
+        existing = await db.get('SELECT id FROM suppliers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))', [name]).catch(() => null);
+      }
+      if (!existing && phone) {
+        existing = await db.get('SELECT id FROM suppliers WHERE phone != "" AND phone = ?', [phone]).catch(() => null);
+      }
+
+      const id = (existing && existing.id) ? existing.id : (row.id || crypto.randomUUID());
+
+      await db.run(
+        `INSERT OR REPLACE INTO suppliers (
+          id, name, email, phone, address, credit_terms, payable_balance, nic, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+        [id, name, email, phone, address, creditTerms, payableBalance, nic]
+      );
+
+      enqueueSync(db, 'suppliers', id, 'UPSERT').catch(() => {});
+      insertedIds.push(id);
+      importedCount++;
+    }
+
+    runSyncCycle(db).catch(() => {});
+    await logAudit(user_email, 'SUPPLIER_BULK_IMPORT', `Bulk imported/updated ${importedCount} supplier records.`);
+
+    return res.json({
+      success: true,
+      count: importedCount,
+      imported: importedCount,
+      ids: insertedIds,
+      message: `Successfully imported ${importedCount} suppliers.`
+    });
+  } catch (err) {
+    console.error('Error bulk importing suppliers:', err);
+    return res.status(500).json({ error: 'Bulk supplier import failed: ' + err.message });
+  }
+});
+
 app.post('/api/suppliers', async (req, res) => {
-  const s = req.body;
-  const id = 's_' + Date.now();
+  if (Array.isArray(req.body) && req.body.length > 1) {
+    req.url = '/api/suppliers/bulk-import';
+    return app._router.handle(req, res);
+  }
+
+  const s = Array.isArray(req.body) ? (req.body[0] || {}) : (req.body || {});
+  const id = s.id || ('s_' + Date.now());
   try {
     await db.run(
       'INSERT INTO suppliers (id, name, email, phone, address, credit_terms, payable_balance, nic) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',

@@ -400,9 +400,7 @@ export function Suppliers() {
         return;
       }
 
-      let imported = 0;
-      let failed = 0;
-
+      const batchPayload: any[] = [];
       const cleanKey = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
       const getValueByKeys = (rowObj: any, possibleKeys: string[]) => {
@@ -458,23 +456,19 @@ export function Suppliers() {
           nic
         };
 
-        const { error } = await supabase.from('suppliers').insert([dbPayload]);
-        if (error) {
-          const { error: updateError } = await supabase.from('suppliers').update(dbPayload).eq('name', name);
-          if (updateError) {
-            failed++;
-          } else {
-            imported++;
-          }
-        } else {
-          imported++;
-        }
+        batchPayload.push(dbPayload);
       }
 
-      setToast({ 
-        message: `Successfully imported/updated ${imported} suppliers! (Failed: ${failed})`, 
-        type: imported > 0 ? 'success' : 'error' 
-      });
+      if (batchPayload.length > 0) {
+        const res = await api.suppliers.bulkImport(batchPayload);
+        const imported = res?.count || res?.imported || batchPayload.length;
+        setToast({ 
+          message: `Successfully imported/updated ${imported} suppliers!`, 
+          type: 'success' 
+        });
+      } else {
+        setToast({ message: "No valid supplier records found to import.", type: 'error' });
+      }
 
       await fetchData();
       window.dispatchEvent(new CustomEvent('suppliers-updated'));

@@ -250,6 +250,19 @@ export const api = {
       if (!res.ok) await handleError(res, 'Failed to save product in local database');
       return res.json();
     },
+    bulkImport: async (products: any[]) => {
+      const token = sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token') || '';
+      const res = await fetchWithTimeout(`${API_URL}/products/bulk-import`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(products)
+      }, 45000);
+      if (!res.ok) await handleError(res, 'Failed to bulk import products');
+      return res.json();
+    },
     delete: async (id: string) => {
       const res = await fetchWithTimeout(`${API_URL}/products/${id}`, { method: 'DELETE' });
       if (!res.ok) await handleError(res, 'Failed to delete product from database');
@@ -277,14 +290,21 @@ export const api = {
       if (!res.ok) throw new Error('Failed to remove customer');
       return res.json();
     },
-    import: async (customers: any[]) => {
-      const res = await fetchWithTimeout(`${API_URL}/customers/import`, {
+    bulkImport: async (customers: any[]) => {
+      const token = sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token') || '';
+      const res = await fetchWithTimeout(`${API_URL}/customers/bulk-import`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
         body: JSON.stringify(customers)
-      });
-      if (!res.ok) throw new Error('Failed to import customers');
+      }, 45000);
+      if (!res.ok) await handleError(res, 'Failed to bulk import customers');
       return res.json();
+    },
+    import: async (customers: any[]) => {
+      return api.customers.bulkImport(customers);
     }
   },
 
@@ -301,6 +321,19 @@ export const api = {
         body: JSON.stringify(data)
       });
       if (!res.ok) throw new Error('Failed to save supplier details');
+      return res.json();
+    },
+    bulkImport: async (suppliers: any[]) => {
+      const token = sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token') || '';
+      const res = await fetchWithTimeout(`${API_URL}/suppliers/bulk-import`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(suppliers)
+      }, 45000);
+      if (!res.ok) await handleError(res, 'Failed to bulk import suppliers');
       return res.json();
     },
     delete: async (id: string) => {
