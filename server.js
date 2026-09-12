@@ -2684,9 +2684,9 @@ app.post('/api/admin/request-factory-reset-otp', async (req, res) => {
       return res.status(403).json({ error: 'Access denied. Only the Root Admin (sanojhardware@gmail.com) can request factory reset verification.' });
     }
 
-    // Generate secure 6-digit OTP (5-minute TTL)
+    // Generate secure 6-digit OTP (strictly 60-second TTL)
     const otpCode = crypto.randomInt(100000, 999999).toString();
-    const expiresAt = Date.now() + 5 * 60 * 1000;
+    const expiresAt = Date.now() + 60 * 1000;
 
     activeFactoryResetOtp = {
       code: otpCode,
@@ -2702,7 +2702,7 @@ app.post('/api/admin/request-factory-reset-otp', async (req, res) => {
       );
     } catch (_) {}
 
-    console.log(`[Factory Reset] Generated OTP for Root Admin (sanojhardware@gmail.com): ${otpCode}`);
+    console.log(`[Factory Reset] Generated OTP for Root Admin (sanojhardware@gmail.com): ${otpCode} (expires in 60s)`);
 
     const emailResult = await sendFactoryResetOtp('sanojhardware@gmail.com', otpCode);
     await logAudit('sanojhardware@gmail.com', 'FACTORY_RESET_OTP_REQUESTED', 'Factory reset OTP verification code requested by Root Admin.');
@@ -2712,7 +2712,7 @@ app.post('/api/admin/request-factory-reset-otp', async (req, res) => {
       message: 'Factory reset verification code has been dispatched to sanojhardware@gmail.com.',
       emailDelivered: Boolean(emailResult.transmitted),
       simulated: Boolean(emailResult.simulated),
-      expiresInSeconds: 300
+      expiresInSeconds: 60
     });
   } catch (err) {
     console.error('[Factory Reset] Error requesting OTP:', err);

@@ -183,7 +183,7 @@ export const sendFactoryResetOtpEmail = async (toEmail, code, settings = {}) => 
           
           <div style="background-color: #fef2f2; border-left: 4px solid #ef4444; padding: 14px; border-radius: 8px; margin-bottom: 20px;">
             <p style="font-size: 13px; line-height: 1.5; color: #991b1b; margin: 0; font-weight: 600;">
-              WARNING: A factory reset request was initiated for Muthuwadige Hardware ERP. This operation will permanently wipe all sales, inventory, customers, suppliers, transactions, and non-root staff accounts across Turso Cloud and local terminals.
+              WARNING: A factory reset request was initiated for Muthuwadige Hardware ERP. This operation will permanently wipe all sales, inventory, customers, suppliers, transactions, and non-root staff accounts across cloud and local system terminals.
             </p>
           </div>
 
@@ -194,7 +194,7 @@ export const sendFactoryResetOtpEmail = async (toEmail, code, settings = {}) => 
           </div>
 
           <p style="font-size: 13px; line-height: 1.5; color: #dc2626; text-align: center; font-weight: 700;">
-            ⏳ This code will expire in <strong>5 minutes</strong>.
+            ⏳ This code will expire in <strong>60 seconds</strong>.
           </p>
 
           <p style="font-size: 12px; line-height: 1.5; color: #9ca3af; margin-top: 25px; border-top: 1px solid #e5e7eb; padding-top: 15px; text-align: center;">
