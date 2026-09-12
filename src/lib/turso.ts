@@ -13,16 +13,26 @@ if (dbUrl.startsWith('libsql://')) {
 }
 
 const globalForTurso = globalThis as unknown as {
-  turso: Client | undefined;
+  turso?: Client;
+  __tursoClient?: Client;
+  __tursoClientSingleton?: Client;
 };
 
 export const turso: Client =
+  globalForTurso.__tursoClient ??
+  globalForTurso.__tursoClientSingleton ??
   globalForTurso.turso ??
+  (typeof global !== 'undefined' && (global as any).__tursoClient) ??
   createClient({
     url: dbUrl,
     authToken: process.env.TURSO_AUTH_TOKEN,
   });
 
-if (process.env.NODE_ENV !== 'production') globalForTurso.turso = turso;
+globalForTurso.turso = turso;
+globalForTurso.__tursoClient = turso;
+globalForTurso.__tursoClientSingleton = turso;
+if (typeof global !== 'undefined') {
+  (global as any).__tursoClient = turso;
+}
 
 export default turso;

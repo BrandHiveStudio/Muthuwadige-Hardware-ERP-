@@ -141,15 +141,23 @@ export function Auth({ onLogin }: AuthProps) {
 
   useEffect(() => {
     let isMounted = true;
-    // Pre-auth background sync: Flush pending mutations and pull newly created staff profiles from cloud on startup
-    api.sync.triggerSync().catch(() => {});
-    api.sync.pullDownstream().catch(() => {});
+    const isElectronEnv = typeof window !== 'undefined' && (
+      Boolean((window as any).electronAPI) || 
+      window.location.protocol === 'file:' || 
+      (typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron'))
+    );
+
+    // Pre-auth background sync: Flush pending mutations and pull newly created staff profiles on desktop counter
+    if (isElectronEnv) {
+      api.sync.triggerSync().catch(() => {});
+      api.sync.pullDownstream().catch(() => {});
+    }
 
     const fetchSettings = async () => {
       const activeBaseUrl = getBaseUrl();
       try {
-        // Pre-flight health check to verify server connectivity (20s cold start tolerance)
-        const healthRes = await fetchWithTimeout(`${activeBaseUrl}/health`, {}, 20000).catch(() => null);
+        // Pre-flight health check to verify server connectivity (25s cold start tolerance)
+        const healthRes = await fetchWithTimeout(`${activeBaseUrl}/health`, {}, 25000).catch(() => null);
         if (healthRes && healthRes.ok && isMounted) {
           setConnectionError(false);
         }
@@ -163,17 +171,12 @@ export function Auth({ onLogin }: AuthProps) {
       } catch (err) {
         console.warn('[Connection Check] Database check notice:', err);
         if (isMounted) {
-          const isElectron = typeof window !== 'undefined' && (
-            Boolean((window as any).electronAPI) || 
-            window.location.protocol === 'file:' || 
-            (typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron'))
-          );
           const hostname = typeof window !== 'undefined' ? (window.location.hostname || '') : '';
-          const isLiveWebDomain = !isElectron && Boolean(hostname && hostname !== 'localhost' && hostname !== '127.0.0.1');
+          const isLiveWebDomain = !isElectronEnv && Boolean(hostname && hostname !== 'localhost' && hostname !== '127.0.0.1');
 
           if (isLiveWebDomain) {
             try {
-              const check = await fetchWithTimeout(`${activeBaseUrl}/health`, {}, 20000);
+              const check = await fetchWithTimeout(`${activeBaseUrl}/health`, {}, 25000);
               if (check.ok) {
                 setConnectionError(false);
                 return;

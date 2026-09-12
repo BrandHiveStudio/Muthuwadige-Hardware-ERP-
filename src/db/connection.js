@@ -81,10 +81,15 @@ export function getTursoClient() {
   }
 
   if (tursoUrl && tursoToken) {
-    if (!globalThis.__tursoClientSingleton) {
-      globalThis.__tursoClientSingleton = createClient({ url: tursoUrl, authToken: tursoToken });
+    if (!globalThis.__tursoClientSingleton && !globalThis.__tursoClient) {
+      const client = createClient({ url: tursoUrl, authToken: tursoToken });
+      globalThis.__tursoClientSingleton = client;
+      globalThis.__tursoClient = client;
+      if (typeof global !== 'undefined') {
+        global.__tursoClient = client;
+      }
     }
-    tursoClient = globalThis.__tursoClientSingleton;
+    tursoClient = globalThis.__tursoClient || globalThis.__tursoClientSingleton;
     return tursoClient;
   }
   return null;
@@ -104,13 +109,18 @@ export async function initDb(customDbPath) {
       throw new Error('Vercel serverless environment detected, but TURSO_DATABASE_URL or TURSO_AUTH_TOKEN environment variable is missing.');
     }
     console.log('⚡ [DualEngine] Web environment detected. Primary: Turso Cloud libSQL (HTTPS Transport).');
-    if (!globalThis.__tursoClientSingleton) {
-      globalThis.__tursoClientSingleton = createClient({
+    if (!globalThis.__tursoClientSingleton && !globalThis.__tursoClient) {
+      const client = createClient({
         url: tursoUrl,
         authToken: tursoToken
       });
+      globalThis.__tursoClientSingleton = client;
+      globalThis.__tursoClient = client;
+      if (typeof global !== 'undefined') {
+        global.__tursoClient = client;
+      }
     }
-    tursoClient = globalThis.__tursoClientSingleton;
+    tursoClient = globalThis.__tursoClient || globalThis.__tursoClientSingleton;
     isTursoActive = true;
     console.log(`✅ [DualEngine] Connected to Turso Cloud at: ${tursoUrl}`);
   } else {

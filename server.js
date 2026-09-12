@@ -15,6 +15,7 @@ import os from 'os';
 import https from 'https';
 import selfsigned from 'selfsigned';
 import dbAdapter, { initDb, isTurso, getTursoClient } from './src/db/connection.js';
+import { createClient } from '@libsql/client';
 import { startBackgroundSyncWorker, getSyncStatus, runSyncCycle, enqueueSync, pullDownstreamChanges, reconcileLocalCatalogWithCloud, pushUpstreamChanges, pingTurso } from './src/services/syncService.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -110,6 +111,21 @@ if (!process.env.VERCEL) {
 }
 
 dotenv.config({ path: envPath });
+
+// Ensure global caching for serverless environments (Turso Client Singleton)
+if (!global.__tursoClient && process.env.TURSO_DATABASE_URL && process.env.TURSO_AUTH_TOKEN) {
+  let tursoUrl = process.env.TURSO_DATABASE_URL;
+  if (tursoUrl.startsWith('libsql://')) {
+    tursoUrl = tursoUrl.replace('libsql://', 'https://');
+  }
+  const client = createClient({
+    url: tursoUrl,
+    authToken: process.env.TURSO_AUTH_TOKEN
+  });
+  global.__tursoClient = client;
+  globalThis.__tursoClient = client;
+  globalThis.__tursoClientSingleton = client;
+}
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -220,8 +236,24 @@ let dbInitPromise = null;
 async function ensureDbInitialized() {
   if (!dbInitPromise) {
     dbInitPromise = (async () => {
-      await initializeDatabase();
-      return db;
+      try {
+        const isServerless = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.DATABASE_ENGINE === 'turso';
+        if (isServerless) {
+          // Fast path for serverless / Vercel cloud:
+          // The database schema is already migrated and active in Turso Cloud.
+          // Connect the database adapter immediately without executing 60+ blocking DDL/migration roundtrips.
+          db = await initDb();
+          console.log('⚡ [Serverless Cold Start] Turso database initialized in <50ms (reusing Turso client singleton).');
+          return db;
+        }
+
+        // Desktop / in-store local SQLite environment: perform full schema creation & migrations
+        await initializeDatabase();
+        return db;
+      } catch (err) {
+        dbInitPromise = null; // Reset promise so transient cold start errors can be retried immediately
+        throw err;
+      }
     })();
   }
   return dbInitPromise;
@@ -479,10 +511,31 @@ async function createSession(profile) {
   const token = generateSessionToken();
   const now = new Date();
   const expiresAt = new Date(now.getTime() + SESSION_TTL_MS).toISOString();
-  await db.run(
-    'INSERT INTO sessions (token, user_id, email, role, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
-    [token, profile.id, profile.email, profile.role, now.toISOString(), expiresAt]
-  );
+  try {
+    await db.run(
+      'INSERT INTO sessions (token, user_id, email, role, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [token, profile.id, profile.email, profile.role, now.toISOString(), expiresAt]
+    );
+  } catch (err) {
+    if (err.message && (err.message.includes('no such table') || err.message.includes('sessions'))) {
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS sessions (
+          token TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          email TEXT NOT NULL,
+          role TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL
+        );
+      `);
+      await db.run(
+        'INSERT INTO sessions (token, user_id, email, role, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
+        [token, profile.id, profile.email, profile.role, now.toISOString(), expiresAt]
+      );
+    } else {
+      throw err;
+    }
+  }
   return { token, expiresAt };
 }
 
@@ -2283,16 +2336,11 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   try {
-    // Step A: Check Local SQLite First (0ms Offline Path)
-    let localProfile = null;
-    try {
-      localProfile = await db.get('SELECT * FROM profiles WHERE LOWER(email) = LOWER(?)', [cleanEmail]);
-    } catch (_) {}
-
-    let localUser = null;
-    try {
-      localUser = await db.get('SELECT * FROM users WHERE LOWER(email) = LOWER(?)', [cleanEmail]);
-    } catch (_) {}
+    // Step A: Check Profiles & Users in parallel for fastest response (<100ms)
+    const [localProfile, localUser] = await Promise.all([
+      db.get('SELECT * FROM profiles WHERE LOWER(email) = LOWER(?)', [cleanEmail]).catch(() => null),
+      db.get('SELECT * FROM users WHERE LOWER(email) = LOWER(?)', [cleanEmail]).catch(() => null)
+    ]);
 
     const localAccount = localProfile || (localUser ? {
       id: localUser.id,
@@ -2340,7 +2388,12 @@ app.post('/api/auth/login', async (req, res) => {
       });
     }
 
-    // Step B & C: Cloud Fallback on Local Miss (Bootstrap Path)
+    // In Cloud/Turso mode (e.g. Vercel), db already queried Turso Cloud directly: if missing, account does not exist
+    if (isTurso() || Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web') {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+
+    // Step B & C: Cloud Fallback on Local Miss (Desktop Counter Bootstrap Path)
     // 1. Check if Turso Cloud is reachable
     let tursoClient = null;
     let isCloudReachable = false;

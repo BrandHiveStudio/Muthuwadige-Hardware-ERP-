@@ -72,7 +72,7 @@ export const getAuthHeaders = (): Record<string, string> => {
 };
 
 // Robust fetch helper with configurable timeout & automatic abort controller handling
-export async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 20000): Promise<Response> {
+export async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 30000): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -153,7 +153,7 @@ export const api = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
-      }, 20000);
+      }, 35000);
       if (!res.ok) {
         let message = 'Authentication failed';
         try {

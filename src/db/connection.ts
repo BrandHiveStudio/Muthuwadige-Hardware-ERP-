@@ -96,11 +96,16 @@ export function getTursoClient(): Client | null {
   }
 
   if (tursoUrl && tursoToken) {
-    const globalForTurso = globalThis as unknown as { __tursoClientSingleton?: Client };
-    if (!globalForTurso.__tursoClientSingleton) {
-      globalForTurso.__tursoClientSingleton = createClient({ url: tursoUrl, authToken: tursoToken });
+    const globalForTurso = globalThis as unknown as { __tursoClientSingleton?: Client; __tursoClient?: Client };
+    if (!globalForTurso.__tursoClientSingleton && !globalForTurso.__tursoClient) {
+      const client = createClient({ url: tursoUrl, authToken: tursoToken });
+      globalForTurso.__tursoClientSingleton = client;
+      globalForTurso.__tursoClient = client;
+      if (typeof global !== 'undefined') {
+        (global as any).__tursoClient = client;
+      }
     }
-    tursoClient = globalForTurso.__tursoClientSingleton;
+    tursoClient = (globalForTurso.__tursoClient || globalForTurso.__tursoClientSingleton) as Client;
     return tursoClient;
   }
   return null;
@@ -120,14 +125,19 @@ export async function initDb(customDbPath?: string): Promise<UnifiedDatabase> {
       throw new Error('Vercel serverless environment detected, but TURSO_DATABASE_URL or TURSO_AUTH_TOKEN environment variable is missing.');
     }
     console.log('⚡ [DualEngine] Web environment detected. Primary: Turso Cloud libSQL (HTTPS Transport).');
-    const globalForTurso = globalThis as unknown as { __tursoClientSingleton?: Client };
-    if (!globalForTurso.__tursoClientSingleton) {
-      globalForTurso.__tursoClientSingleton = createClient({
+    const globalForTurso = globalThis as unknown as { __tursoClientSingleton?: Client; __tursoClient?: Client };
+    if (!globalForTurso.__tursoClientSingleton && !globalForTurso.__tursoClient) {
+      const client = createClient({
         url: tursoUrl,
         authToken: tursoToken
       });
+      globalForTurso.__tursoClientSingleton = client;
+      globalForTurso.__tursoClient = client;
+      if (typeof global !== 'undefined') {
+        (global as any).__tursoClient = client;
+      }
     }
-    tursoClient = globalForTurso.__tursoClientSingleton;
+    tursoClient = (globalForTurso.__tursoClient || globalForTurso.__tursoClientSingleton) as Client;
     isTursoActive = true;
     console.log(`✅ [DualEngine] Connected to Turso Cloud at: ${tursoUrl}`);
   } else {
