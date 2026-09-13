@@ -1777,6 +1777,7 @@ async function initializeDatabase() {
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN discount_type TEXT DEFAULT 'fixed';"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN discount_value REAL DEFAULT 0;"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN discount_amount REAL DEFAULT 0;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN transportation_fee REAL DEFAULT 0;"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN net_total REAL DEFAULT 0;"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN original_total REAL;"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_code TEXT;"); } catch (e) { }
@@ -6283,11 +6284,13 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
     }
   }
 
+  const transportationFee = Math.max(0, Number(po.transportation_fee !== undefined && po.transportation_fee !== null ? po.transportation_fee : (po.transportationFee !== undefined && po.transportationFee !== null ? po.transportationFee : 0)));
   const debitNoteCode = (po.debit_note_code || po.debitNoteCode || '').toString().trim();
   const debitNoteApplied = Math.max(0, Number(po.debit_note_applied || po.debitNoteApplied || 0));
   const originalTotal = Number(po.original_total !== undefined ? po.original_total : (po.originalTotal !== undefined ? po.originalTotal : subtotal));
   const afterDiscount = Math.max(0, Math.round((subtotal - discountAmount) * 100) / 100);
-  const netTotal = Math.max(0, Math.round((afterDiscount - debitNoteApplied) * 100) / 100);
+  const totalWithTransport = Math.max(0, Math.round((afterDiscount + transportationFee) * 100) / 100);
+  const netTotal = Math.max(0, Math.round((totalWithTransport - debitNoteApplied) * 100) / 100);
 
   let txn = null;
   try {
@@ -6315,15 +6318,37 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
     await db.run(
       `INSERT INTO purchase_orders (
         id, po_number, supplier_name, items, total,
-        subtotal, discount_type, discount_value, discount_amount, net_total,
+        subtotal, discount_type, discount_value, discount_amount, transportation_fee, net_total,
         original_total, debit_note_code, debit_note_applied, status, due_date, user_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id, po.po_number, po.supplier_name, JSON.stringify(items), netTotal,
-        subtotal, discountType, discountValue, discountAmount, netTotal,
+        subtotal, discountType, discountValue, discountAmount, transportationFee, netTotal,
         originalTotal, debitNoteCode || null, debitNoteApplied, po.status || 'pending', po.due_date, po.user_id, created_at
       ]
     );
+
+    // If transportation fee > 0, log an expense entry so it deducts from total profit in Reports
+    if (transportationFee > 0) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const txId = 'tx_trans_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      await db.run(
+        `INSERT INTO transactions (
+          id, type, category, description, amount, date, reference, user_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          txId,
+          'expense',
+          'Transportation',
+          `Transportation Fee for PO #${po.po_number || id} (${po.supplier_name || 'Vendor'})`,
+          transportationFee,
+          todayStr,
+          po.po_number || id,
+          po.user_id || 'u1',
+          created_at
+        ]
+      );
+    }
 
     // If created directly in received status:
     if (po.status === 'received') {
@@ -7481,6 +7506,33 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
     const netAfterLines = Math.max(0, poSubtotal - totalLineDisc);
     const orderDiscountAmount = Math.max(0, poDiscountAmount - totalLineDisc);
     const poOrderDiscountRatio = netAfterLines > 0 ? (orderDiscountAmount / netAfterLines) : 0;
+
+    const transportFee = Math.max(0, Number(po.transportation_fee || po.transportationFee || 0));
+    if (transportFee > 0) {
+      const existingTx = await db.get(
+        'SELECT id FROM transactions WHERE reference = ? AND category = ?',
+        [po.po_number || po.po_no || po.id, 'Transportation']
+      );
+      if (!existingTx) {
+        const txId = 'tx_trans_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        await db.run(
+          `INSERT INTO transactions (
+            id, type, category, description, amount, date, reference, user_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            txId,
+            'expense',
+            'Transportation',
+            `Transportation Fee for PO #${po.po_number || po.po_no} (${supplierName})`,
+            transportFee,
+            todayStr,
+            po.po_number || po.po_no || po.id,
+            staffUser,
+            nowIso
+          ]
+        );
+      }
+    }
 
     let updatedPoItems = [];
     if (Array.isArray(poItems)) {
@@ -10246,6 +10298,7 @@ if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.
             "ALTER TABLE purchase_orders ADD COLUMN discount_type TEXT DEFAULT 'fixed';",
             "ALTER TABLE purchase_orders ADD COLUMN discount_value REAL DEFAULT 0;",
             "ALTER TABLE purchase_orders ADD COLUMN discount_amount REAL DEFAULT 0;",
+            "ALTER TABLE purchase_orders ADD COLUMN transportation_fee REAL DEFAULT 0;",
             "ALTER TABLE purchase_orders ADD COLUMN net_total REAL DEFAULT 0;",
             "ALTER TABLE purchase_orders ADD COLUMN original_total REAL;",
             "ALTER TABLE purchase_orders ADD COLUMN debit_note_code TEXT;",

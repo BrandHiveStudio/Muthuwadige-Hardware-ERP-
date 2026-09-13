@@ -109,6 +109,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
   const [selectedPoIds, setSelectedPoIds] = useState<string[]>([]);
   const [selectedDebitNoteCode, setSelectedDebitNoteCode] = useState<string>('');
   const [debitNoteApplied, setDebitNoteApplied] = useState<number>(0);
+  const [transportationFee, setTransportationFee] = useState<number>(0);
 
   // Purchase Returns State
   const [returnSearch, setReturnSearch] = useState<string>('');
@@ -284,21 +285,28 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
   // Backward compatibility alias for poDiscountAmount
   const poDiscountAmount = poTotalDiscount;
 
-  // Total After All Discounts (before applying debit note)
+  // Total After All Discounts (before transport & debit note)
   const poAfterDiscount = useMemo(() => {
     return Math.max(0, Math.round((poGrossSubtotal - poTotalDiscount) * 100) / 100);
   }, [poGrossSubtotal, poTotalDiscount]);
 
-  const poTotal = poAfterDiscount;
+  const numTransportFee = Math.max(0, Number(transportationFee) || 0);
+
+  // Total with Transport Fee: (Subtotal - Discounts) + Transportation Fee
+  const poTotalWithTransport = useMemo(() => {
+    return Math.max(0, Math.round((poAfterDiscount + numTransportFee) * 100) / 100);
+  }, [poAfterDiscount, numTransportFee]);
+
+  const poTotal = poTotalWithTransport;
 
   const finalDebitNoteApplied = useMemo(() => {
-    return Math.min(debitNoteApplied, poAfterDiscount);
-  }, [debitNoteApplied, poAfterDiscount]);
+    return Math.min(debitNoteApplied, poTotalWithTransport);
+  }, [debitNoteApplied, poTotalWithTransport]);
 
-  // NET TOTAL PAYABLE: grossSubtotal - totalDiscount - debitNoteAmount
+  // NET TOTAL PAYABLE: (Subtotal - Discounts) + Transportation Fee - Debit Note
   const netTotalPayable = useMemo(() => {
-    return Math.max(0, Math.round((poAfterDiscount - finalDebitNoteApplied) * 100) / 100);
-  }, [poAfterDiscount, finalDebitNoteApplied]);
+    return Math.max(0, Math.round((poTotalWithTransport - finalDebitNoteApplied) * 100) / 100);
+  }, [poTotalWithTransport, finalDebitNoteApplied]);
 
   // Active Debit Notes for Selected Supplier in New PO
   const availableSupplierDebitNotes = useMemo(() => {
@@ -445,8 +453,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
         const hasDisc = itemData.discount > 0 && itemData.lineDiscountTotal > 0;
         const discStr = hasDisc
           ? (itemData.discountType === 'percent'
-              ? `${itemData.discount}% (-${symbol} ${convert(itemData.lineDiscountTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`
-              : `-${symbol} ${convert(itemData.lineDiscountTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+              ? `${itemData.discount}%`
+              : `${symbol} ${convert(itemData.discount).toLocaleString(undefined, { minimumFractionDigits: 2 })} / unit`)
           : '—';
 
         return [
@@ -490,6 +498,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
     const subtotalVal = Number(order.subtotal || order.original_total || order.originalTotal || computedGross);
     const discountVal = Number(order.discount_amount || order.discountAmount || computedLineDisc);
+    const transportVal = Number((order as any).transportation_fee || (order as any).transportationFee || 0);
     const debitVal = Number(order.debit_note_applied || order.debitNoteApplied || 0);
     const netTotalVal = Number(order.net_total !== undefined && order.net_total !== null ? order.net_total : order.total);
 
@@ -498,14 +507,21 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
     doc.setTextColor(80, 80, 80);
-    doc.text("Gross Subtotal:", summaryXText, curY);
+    doc.text("Subtotal:", summaryXText, curY);
     doc.text(`${symbol} ${convert(subtotalVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
     curY += 6;
 
     if (discountVal > 0) {
       doc.setTextColor(220, 38, 38);
-      doc.text("Supplier Discount:", summaryXText, curY);
+      doc.text("Discount:", summaryXText, curY);
       doc.text(`-${symbol} ${convert(discountVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
+      curY += 6;
+    }
+
+    if (transportVal > 0) {
+      doc.setTextColor(37, 99, 235);
+      doc.text("Transport:", summaryXText, curY);
+      doc.text(`+${symbol} ${convert(transportVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
       curY += 6;
     }
 
@@ -798,8 +814,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       }
     }
 
-    const finalDebitNoteApplied = Math.min(debitNoteApplied, poAfterDiscount);
-    const finalPayable = Math.max(0, Math.round((poAfterDiscount - finalDebitNoteApplied) * 100) / 100);
+    const finalDebitNoteApplied = Math.min(debitNoteApplied, poTotalWithTransport);
+    const finalPayable = Math.max(0, Math.round((poTotalWithTransport - finalDebitNoteApplied) * 100) / 100);
 
     if (finalDebitNoteApplied > 0 && selectedDebitNoteCode.trim()) {
       const q = selectedDebitNoteCode.trim().toUpperCase();
@@ -840,6 +856,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
         discount_type: discountType,
         discount_value: discountValue,
         discount_amount: poDiscountAmount,
+        transportation_fee: numTransportFee,
+        transportationFee: numTransportFee,
         net_total: finalPayable,
         original_total: poGrossSubtotal,
         debit_note_code: finalDebitNoteApplied > 0 ? selectedDebitNoteCode.trim().toUpperCase() : null,
@@ -853,6 +871,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       setPoItems([]);
       setDiscountType('fixed');
       setDiscountValue(0);
+      setTransportationFee(0);
       setSelectedDebitNoteCode('');
       setDebitNoteApplied(0);
       setTab('history');
@@ -1096,6 +1115,22 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
           status: 'PENDING',
           notes: receiveNotes.trim() || `Issued for Purchase Order #${receivingOrder.poNumber}`
         });
+      }
+
+      // Log Transport Fee as expense in fallback if not already recorded
+      const transportFee = Math.max(0, Number(receivingOrder.transportation_fee || (receivingOrder as any).transportationFee || 0));
+      if (transportFee > 0) {
+        try {
+          await supabase.from('transactions').insert([{
+            type: 'expense',
+            category: 'Transportation',
+            description: `Transportation Fee for PO #${receivingOrder.poNumber} (${receivingOrder.supplierName})`,
+            amount: transportFee,
+            date: receivePaymentDate || getTodaySriLankaDate(),
+            reference: receivingOrder.poNumber,
+            user_id: user?.id || null
+          }]);
+        } catch (_txErr) {}
       }
 
       alert(`✅ Purchase Order #${receivingOrder.poNumber} received & restocked successfully (${receiveSettlementMode})!`);
@@ -1697,6 +1732,43 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                       </div>
                     </div>
                   </div>
+
+                  {/* Plain Transportation Fee Input */}
+                  <div className="mt-3 p-4 rounded-2xl border border-slate-200 bg-white flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-sm">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-blue-50 border border-blue-200/60 flex items-center justify-center text-blue-600 shadow-sm">
+                        <TruckIcon className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-black uppercase tracking-wider text-slate-800">
+                          Transportation Fee
+                        </div>
+                        <div className="text-[11px] font-medium text-slate-400">
+                          Added to net payable (product cost remains untouched)
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="relative w-full md:w-48">
+                      <input
+                        type="number"
+                        min={0}
+                        step="any"
+                        placeholder="0.00"
+                        value={transportationFee === 0 ? '' : transportationFee}
+                        onFocus={(e) => e.target.select()}
+                        onChange={(e) => {
+                          const valStr = e.target.value;
+                          const val = valStr === '' ? 0 : Math.max(0, parseFloat(valStr) || 0);
+                          setTransportationFee(val);
+                        }}
+                        className="w-full pl-9 pr-3 py-2 border border-slate-200 bg-slate-50/50 rounded-xl font-black text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none text-right text-sm shadow-sm"
+                      />
+                      <span className="absolute left-2.5 top-2.5 text-xs font-black text-blue-600">
+                        Rs.
+                      </span>
+                    </div>
+                  </div>
                 </>
               ) : (
                 <div className="py-12 text-center text-gray-400">
@@ -1849,6 +1921,13 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                         <div className="flex justify-between text-xs text-red-500 font-bold uppercase tracking-wider">
                           <span>Discount:</span>
                           <span className="font-mono">-{symbol} {convert(poTotalDiscount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        </div>
+                      )}
+
+                      {numTransportFee > 0 && (
+                        <div className="flex justify-between text-xs text-blue-600 font-bold uppercase tracking-wider">
+                          <span>Transport:</span>
+                          <span className="font-mono">+{symbol} {convert(numTransportFee).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
                       )}
 
@@ -2724,7 +2803,9 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                         <td className="py-4 text-center font-semibold text-xs">
                           {hasDiscount ? (
                             <span className="text-red-500 font-bold">
-                              {item.discount} {item.discountType === 'percent' ? '%' : 'Rs.'} ({symbol} {convert(itemData.lineDiscountTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+                              {itemData.discountType === 'percent'
+                                ? `${itemData.discount}%`
+                                : `Rs. ${convert(itemData.discount).toLocaleString(undefined, { minimumFractionDigits: 2 })} / unit`}
                             </span>
                           ) : (
                             <span className="text-slate-300 font-bold">—</span>
@@ -2738,7 +2819,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
               </table>
             </div>
 
-            {/* Identical Summary Breakdown */}
+            {/* Summary Breakdown */}
             {(() => {
               const orderItems = viewOrder.items || [];
               const computedGross = orderItems.reduce((sum, it) => {
@@ -2753,6 +2834,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
               const grossVal = Number(viewOrder.subtotal || viewOrder.original_total || viewOrder.originalTotal || computedGross);
               const totalDiscVal = Number(viewOrder.discount_amount || viewOrder.discountAmount || computedLineDiscounts);
+              const transportVal = Number((viewOrder as any).transportation_fee || (viewOrder as any).transportationFee || 0);
               const debitVal = Number(viewOrder.debit_note_applied || viewOrder.debitNoteApplied || 0);
               const netTotalVal = Number(viewOrder.net_total !== undefined && viewOrder.net_total !== null ? viewOrder.net_total : viewOrder.total);
 
@@ -2760,26 +2842,32 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                 <div className="space-y-4">
                   <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-2 text-xs">
                     <div className="flex justify-between font-bold text-slate-600 uppercase tracking-wider">
-                      <span>Gross Subtotal:</span>
+                      <span>Subtotal:</span>
                       <span className="font-black text-slate-800 font-mono">{symbol} {convert(grossVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                     {totalDiscVal > 0 && (
                       <div className="flex justify-between font-bold text-red-500 uppercase tracking-wider">
-                        <span>Supplier Discount:</span>
-                        <span className="font-black font-mono">- {symbol} {convert(totalDiscVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        <span>Discount:</span>
+                        <span className="font-black font-mono">-{symbol} {convert(totalDiscVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+                    )}
+                    {transportVal > 0 && (
+                      <div className="flex justify-between font-bold text-blue-600 uppercase tracking-wider">
+                        <span>Transport:</span>
+                        <span className="font-black font-mono">+{symbol} {convert(transportVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                       </div>
                     )}
                     {debitVal > 0 && (
                       <div className="flex justify-between font-bold text-indigo-600 uppercase tracking-wider">
                         <span>Debit Note Applied:</span>
-                        <span className="font-black font-mono">- {symbol} {convert(debitVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        <span className="font-black font-mono">-{symbol} {convert(debitVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                       </div>
                     )}
                   </div>
 
                   <div className="bg-[#464646] text-white p-6 rounded-[28px] shadow-2xl relative overflow-hidden flex justify-between items-center">
                     <div className="absolute top-0 right-0 w-48 h-48 bg-[#DAA520]/20 rounded-full -mr-16 -mt-16 blur-3xl"></div>
-                    <span className="font-black text-gray-300 uppercase tracking-widest text-xs relative z-10">Total Purchase Commitment</span>
+                    <span className="font-black text-gray-300 uppercase tracking-widest text-xs relative z-10">Net Total Payable</span>
                     <span className="text-3xl font-black text-[#DAA520] drop-shadow-lg relative z-10 font-mono">{symbol} {convert(netTotalVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                 </div>

@@ -156,6 +156,8 @@ export interface PurchaseOrder {
   debitNoteCode?: string;
   debit_note_applied?: number;
   debitNoteApplied?: number;
+  transportation_fee?: number;
+  transportationFee?: number;
   status: 'received' | 'pending' | 'cancelled';
   date: string;
   dueDate: string;
