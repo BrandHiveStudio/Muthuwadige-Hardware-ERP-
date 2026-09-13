@@ -83,13 +83,26 @@ function resolveLocalDbPath() {
 
 export function getTursoClient() {
   let tursoUrl = process.env.TURSO_DATABASE_URL;
-  const tursoToken = process.env.TURSO_AUTH_TOKEN;
+  let tursoToken = process.env.TURSO_AUTH_TOKEN;
 
-  if (tursoUrl && tursoUrl.startsWith('libsql://')) {
-    tursoUrl = tursoUrl.replace('libsql://', 'https://');
+  if (typeof tursoUrl === 'string') {
+    tursoUrl = tursoUrl.trim().replace(/^["']|["']$/g, '');
+    if (tursoUrl.includes('mhardware-db-sanoj-hardware') && !tursoUrl.includes('mwhardware-db-sanoj-hardware')) {
+      tursoUrl = tursoUrl.replace('mhardware-db-sanoj-hardware', 'mwhardware-db-sanoj-hardware');
+    }
+    if (tursoUrl.includes('mydb-user.turso.io')) {
+      tursoUrl = 'https://mwhardware-db-sanoj-hardware.aws-ap-south-1.turso.io';
+    }
+    if (tursoUrl.startsWith('libsql://')) {
+      tursoUrl = tursoUrl.replace('libsql://', 'https://');
+    }
   }
 
-  if (tursoUrl && tursoToken) {
+  if (typeof tursoToken === 'string') {
+    tursoToken = tursoToken.trim().replace(/^["']|["']$/g, '');
+  }
+
+  if (tursoUrl && tursoToken && tursoToken !== '<valid_token>') {
     if (!globalThis.__tursoClientSingleton && !globalThis.__tursoClient) {
       const client = createClient({ url: tursoUrl, authToken: tursoToken });
       globalThis.__tursoClientSingleton = client;
@@ -107,10 +120,23 @@ export function getTursoClient() {
 export async function initDb(customDbPath) {
   const isWebEnvironment = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.DATABASE_ENGINE === 'turso';
   let tursoUrl = process.env.TURSO_DATABASE_URL;
-  const tursoToken = process.env.TURSO_AUTH_TOKEN;
+  let tursoToken = process.env.TURSO_AUTH_TOKEN;
 
-  if (tursoUrl && tursoUrl.startsWith('libsql://')) {
-    tursoUrl = tursoUrl.replace('libsql://', 'https://');
+  if (typeof tursoUrl === 'string') {
+    tursoUrl = tursoUrl.trim().replace(/^["']|["']$/g, '');
+    if (tursoUrl.includes('mhardware-db-sanoj-hardware') && !tursoUrl.includes('mwhardware-db-sanoj-hardware')) {
+      tursoUrl = tursoUrl.replace('mhardware-db-sanoj-hardware', 'mwhardware-db-sanoj-hardware');
+    }
+    if (tursoUrl.includes('mydb-user.turso.io')) {
+      tursoUrl = 'https://mwhardware-db-sanoj-hardware.aws-ap-south-1.turso.io';
+    }
+    if (tursoUrl.startsWith('libsql://')) {
+      tursoUrl = tursoUrl.replace('libsql://', 'https://');
+    }
+  }
+
+  if (typeof tursoToken === 'string') {
+    tursoToken = tursoToken.trim().replace(/^["']|["']$/g, '');
   }
 
   if (isWebEnvironment || (tursoUrl && tursoToken && (process.env.VERCEL || process.env.APP_ROLE === 'web'))) {

@@ -58,11 +58,24 @@ export async function pingTurso(tursoClient) {
   try {
     const pingPromise = tursoClient.execute('SELECT 1 as ping');
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Turso ping timeout')), 3000)
+      setTimeout(() => reject(new Error('Turso ping timeout')), 3500)
     );
     await Promise.race([pingPromise, timeoutPromise]);
     return true;
   } catch (err) {
+    // Cloud web endpoint fallback ping
+    try {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 3000);
+      const res = await fetch('https://erp.mhardware.lk/api/sync/status', {
+        signal: controller.signal,
+        headers: { 'Accept': 'application/json' }
+      }).catch(() => null);
+      clearTimeout(t);
+      if (res && res.ok) {
+        return true;
+      }
+    } catch (_) {}
     return false;
   }
 }
@@ -828,12 +841,14 @@ export async function getSyncStatus(localDb) {
     }
 
     return {
+      status: 'ok',
+      online: true,
+      synced: true,
       isWebClient: true,
       lastUpstreamSync: null,
       lastDownstreamSync: null,
       lastCounterSync: webLastSync,
       queuedCount: counterQueued,
-      status: 'online',
       isOnline: true,
       lastSyncedAt: webLastSync,
       pendingCount: counterQueued,
@@ -863,12 +878,14 @@ export async function getSyncStatus(localDb) {
   const currentStatus = isSyncing ? 'syncing' : (isOnline ? 'online' : 'offline');
 
   return {
+    status: currentStatus,
+    online: isOnline,
+    synced: isOnline && pendingCount === 0,
     isWebClient: false,
     lastUpstreamSync: lastUpstreamSync || lastCounterSync,
     lastDownstreamSync: lastDownstreamSync || lastCounterSync,
     lastCounterSync: lastCounterSync,
     queuedCount: pendingCount,
-    status: currentStatus,
     isOnline,
     lastSyncedAt: lastCounterSync || lastUpstreamSync,
     pendingCount,
