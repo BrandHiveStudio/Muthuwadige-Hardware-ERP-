@@ -9,6 +9,12 @@ interface AuthProps {
 }
 
 export function Auth({ onLogin }: AuthProps) {
+  const isElectron = typeof window !== 'undefined' && Boolean(
+    (window as any).electron || 
+    (window as any).electronAPI || 
+    navigator.userAgent.toLowerCase().includes('electron')
+  );
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -629,19 +635,28 @@ export function Auth({ onLogin }: AuthProps) {
               </form>
             )}
 
-            <div className="mt-8 text-center pt-6 border-t border-gray-100 flex flex-col items-center gap-2">
-              <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                {localStorage.getItem('erp_host_address') ? '📡 Connected to Remote Host' : '🔒 SECURE LOCAL DATABASE ACTIVE'}
+            {isElectron ? (
+              <div className="mt-8 text-center pt-6 border-t border-gray-100 flex flex-col items-center gap-2">
+                <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                  {localStorage.getItem('erp_host_address') ? '📡 Connected to Remote Host' : '🔒 SECURE LOCAL DATABASE ACTIVE'}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowConnectionSettings(true)}
+                  className="text-[10px] font-black text-[#DAA520] hover:text-[#B8860B] uppercase tracking-wider transition-colors hover:underline flex items-center gap-1"
+                >
+                  <SettingsIcon className="w-3.5 h-3.5" />
+                  Connection Settings
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowConnectionSettings(true)}
-                className="text-[10px] font-black text-[#DAA520] hover:text-[#B8860B] uppercase tracking-wider transition-colors hover:underline flex items-center gap-1"
-              >
-                <SettingsIcon className="w-3.5 h-3.5" />
-                Connection Settings
-              </button>
-            </div>
+            ) : (
+              <div className="mt-8 text-center pt-6 border-t border-gray-100 flex flex-col items-center gap-1">
+                <div className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest flex items-center justify-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  Cloud Enterprise Cluster Active
+                </div>
+              </div>
+            )}
             
           </div>
         </div>

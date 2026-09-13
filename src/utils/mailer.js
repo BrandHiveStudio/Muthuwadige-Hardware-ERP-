@@ -28,7 +28,10 @@ export const createMailTransporter = (settings = {}) => {
     },
     tls: {
       rejectUnauthorized: false
-    }
+    },
+    connectionTimeout: 5000,
+    greetingTimeout: 5000,
+    socketTimeout: 8000
   });
 };
 

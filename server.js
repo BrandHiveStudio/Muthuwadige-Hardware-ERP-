@@ -9285,7 +9285,7 @@ if (!process.env.VERCEL) {
 
 // Express server launch hook listening on all network interfaces (HTTP & HTTPS)
 // Only start standalone HTTP/HTTPS listeners if not running as a Vercel Serverless Function
-if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.APP_ROLE !== 'web') {
   (async () => {
     try {
       console.log('[Startup] Initializing Database & Schema...');
