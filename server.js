@@ -53,7 +53,7 @@ if (!process.env.VERCEL) {
     if (!fs.existsSync(USER_DATA_PATH)) {
       try {
         fs.mkdirSync(USER_DATA_PATH, { recursive: true });
-      } catch (_) {}
+      } catch (_) { }
     }
 
     DB_FILE = path.join(USER_DATA_PATH, 'hardware.db');
@@ -63,7 +63,7 @@ if (!process.env.VERCEL) {
     if (!fs.existsSync(backupsDir)) {
       try {
         fs.mkdirSync(backupsDir, { recursive: true });
-      } catch (_) {}
+      } catch (_) { }
     }
 
     console.log('📂 Production Electron database path:', DB_FILE);
@@ -309,14 +309,14 @@ async function rollbackTxn(database, txn) {
   try {
     if (database) await database.run('ROLLBACK');
     console.log(`[DB] [ROLLBACK #${txn?.id || 0}] Transaction rolled back: ${txn?.label || ''} | Duration: ${Date.now() - (txn?.start || Date.now())}ms`);
-  } catch (err) {}
+  } catch (err) { }
 }
 
 // Helper to safely rollback transactions without throwing uncaught exceptions
 async function safeRollback(database) {
   try {
     if (database) await database.run('ROLLBACK');
-  } catch (_) {}
+  } catch (_) { }
 }
 
 const isDecimalUnit = (unit) => {
@@ -434,7 +434,7 @@ async function logAudit(userEmail, action, details) {
       'INSERT INTO audit_logs (id, user_email, action, details, timestamp) VALUES (?, ?, ?, ?, ?)',
       [id, userEmail || 'system', action, details, timestamp]
     );
-    enqueueSync(db, 'audit_logs', id, 'UPSERT').catch(() => {});
+    enqueueSync(db, 'audit_logs', id, 'UPSERT').catch(() => { });
   } catch (err) {
     console.error('Failed to log audit:', err);
   }
@@ -576,7 +576,7 @@ async function verifyAndMigratePassword(profile, plainPassword) {
     try {
       const newHash = await bcrypt.hash(plainPassword, 10);
       await db.run('UPDATE profiles SET password = ?, password_hash = ? WHERE id = ?', [newHash, newHash, profile.id]);
-      await db.run('UPDATE users SET password = ?, password_hash = ? WHERE id = ?', [newHash, newHash, profile.id]).catch(() => {});
+      await db.run('UPDATE users SET password = ?, password_hash = ? WHERE id = ?', [newHash, newHash, profile.id]).catch(() => { });
     } catch (migrateErr) {
       console.warn('[Auth] Notice: could not migrate legacy plaintext password to a hash:', migrateErr.message);
     }
@@ -650,7 +650,7 @@ async function authenticate(req, res, next) {
 
   try {
     let session = await db.get('SELECT * FROM sessions WHERE token = ?', [token]);
-    
+
     // If not found in local db (e.g. desktop fresh PC or web portal serverless cold-start), check Turso Cloud
     if (!session || new Date(session.expires_at).getTime() < Date.now()) {
       try {
@@ -675,10 +675,10 @@ async function authenticate(req, res, next) {
                 'INSERT OR REPLACE INTO sessions (token, user_id, email, role, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
                 [session.token, session.user_id, session.email, session.role, new Date().toISOString(), session.expires_at]
               );
-            } catch (_) {}
+            } catch (_) { }
           }
         }
-      } catch (_) {}
+      } catch (_) { }
     }
 
     if (!session || new Date(session.expires_at).getTime() < Date.now()) {
@@ -828,7 +828,7 @@ async function replaceRuntimeTransactionByDescription(description, payload) {
     if (tursoClient) {
       pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Runtime Txn Sync Notice]:', err.message));
     }
-  } catch (_) {}
+  } catch (_) { }
 }
 
 async function removeRuntimeTransactionsForSale(invoiceNo) {
@@ -840,7 +840,7 @@ async function removeRuntimeTransactionsForSale(invoiceNo) {
     [invoiceNo, `POS Sale ${invoiceNo}`, `POS Credit Payment ${invoiceNo}`]
   );
   for (const row of rows) {
-    enqueueSync(db, 'transactions', row.id, 'DELETE').catch(() => {});
+    enqueueSync(db, 'transactions', row.id, 'DELETE').catch(() => { });
   }
   await db.run(
     "DELETE FROM transactions WHERE reference = ? AND (description = ? OR description = ?)",
@@ -889,7 +889,7 @@ async function initializeDatabase() {
       await db.exec("PRAGMA busy_timeout = 15000;");
       await db.exec("PRAGMA journal_mode = WAL;");
       await db.exec("PRAGMA synchronous = NORMAL;");
-    } catch (_) {}
+    } catch (_) { }
   }
 
   // 1. Create Profiles/Users Table
@@ -1053,7 +1053,7 @@ async function initializeDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status, created_at);"); } catch(_) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status, created_at);"); } catch (_) { }
 
   // 7. Create Persistent Employees Table
   await db.exec(`
@@ -1091,7 +1091,7 @@ async function initializeDatabase() {
   // Auto-migrate historical Sales Return transactions from 'expense' to 'contra_revenue'
   try {
     await db.run("UPDATE transactions SET type = 'contra_revenue' WHERE (category = 'Sales Return' OR category = 'Exchange Refund' OR category LIKE 'Sales Return%') AND type = 'expense'");
-    
+
     // Backfill contra_revenue transactions for credit sale returns/exchanges if missing
     const creditReturns = await db.all("SELECT * FROM sales_returns WHERE status = 'active' AND (is_credit = 1 OR return_method IN ('Return', 'Exchange'))");
     for (const r of creditReturns) {
@@ -1110,7 +1110,7 @@ async function initializeDatabase() {
         }
       }
     }
-  } catch (e) {}
+  } catch (e) { }
 
   // 9. Create Suppliers Table
   await db.exec(`
@@ -1280,7 +1280,7 @@ async function initializeDatabase() {
   // Cloud parity: the Turso copy of this table carries unit_price. Without it here the downstream
   // pull aborts for this entity ("table quotation_items has no column named unit_price") and
   // quotation lines never reach this device. Additive only - no existing column or value changes.
-  try { await db.exec("ALTER TABLE quotation_items ADD COLUMN unit_price REAL DEFAULT 0"); } catch (e) {}
+  try { await db.exec("ALTER TABLE quotation_items ADD COLUMN unit_price REAL DEFAULT 0"); } catch (e) { }
 
   // 14. Create Delivery Notes Table
   await db.exec(`
@@ -1338,128 +1338,128 @@ async function initializeDatabase() {
   `);
 
   // Auto-migrate column additions for author & cashier identity
-  try { await db.exec('ALTER TABLE sales ADD COLUMN cashier TEXT;'); } catch (_) {}
-  try { await db.exec('ALTER TABLE sales ADD COLUMN user_email TEXT;'); } catch (_) {}
-  try { await db.exec('ALTER TABLE sales ADD COLUMN user_name TEXT;'); } catch (_) {}
-  try { await db.exec('ALTER TABLE credit_payments ADD COLUMN cashier TEXT;'); } catch (_) {}
-  try { await db.exec('ALTER TABLE credit_payments ADD COLUMN user_email TEXT;'); } catch (_) {}
-  try { await db.exec('ALTER TABLE sales_returns ADD COLUMN cashier TEXT;'); } catch (_) {}
+  try { await db.exec('ALTER TABLE sales ADD COLUMN cashier TEXT;'); } catch (_) { }
+  try { await db.exec('ALTER TABLE sales ADD COLUMN user_email TEXT;'); } catch (_) { }
+  try { await db.exec('ALTER TABLE sales ADD COLUMN user_name TEXT;'); } catch (_) { }
+  try { await db.exec('ALTER TABLE credit_payments ADD COLUMN cashier TEXT;'); } catch (_) { }
+  try { await db.exec('ALTER TABLE credit_payments ADD COLUMN user_email TEXT;'); } catch (_) { }
+  try { await db.exec('ALTER TABLE sales_returns ADD COLUMN cashier TEXT;'); } catch (_) { }
 
   // Dynamic migration: Ensure new columns exist on existing DB files
   try {
     await db.exec("ALTER TABLE profiles ADD COLUMN password TEXT DEFAULT '123456'");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE profiles ADD COLUMN permissions TEXT");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE profiles ADD COLUMN reset_token TEXT");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE profiles ADD COLUMN reset_token_expiry TEXT");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE customers ADD COLUMN nic TEXT");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE customers ADD COLUMN credit_balance REAL DEFAULT 0");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE customers ADD COLUMN current_credit REAL DEFAULT 0");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE transactions ADD COLUMN payment_method TEXT DEFAULT 'CASH'");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE suppliers ADD COLUMN nic TEXT");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE products ADD COLUMN brand TEXT DEFAULT ''");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE products ADD COLUMN serial_no TEXT DEFAULT ''");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE products ADD COLUMN batch_code TEXT DEFAULT ''");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE products ADD COLUMN expiry_date TEXT");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE sales ADD COLUMN payment_method TEXT DEFAULT 'Cash'");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE sales ADD COLUMN due_date TEXT");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE sales ADD COLUMN credit_period_days INTEGER DEFAULT 0");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE sales ADD COLUMN payment_received REAL DEFAULT 0");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE products ADD COLUMN supplier_phone TEXT");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE products ADD COLUMN measure_details TEXT");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE products ADD COLUMN barcode TEXT");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE system_settings ADD COLUMN next_invoice_number TEXT DEFAULT 'INV001'");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE system_settings ADD COLUMN return_passkey TEXT DEFAULT '1234'");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE system_settings ADD COLUMN void_passkey TEXT DEFAULT '1234'");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE system_settings ADD COLUMN backup_interval_hours INTEGER DEFAULT 6");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE system_settings ADD COLUMN label_printer_settings TEXT");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE system_settings ADD COLUMN last_counter_sync_timestamp TEXT");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE system_settings ADD COLUMN counter_sync_status TEXT DEFAULT 'IDLE'");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE sales ADD COLUMN transportation_fee REAL DEFAULT 0");
-  } catch(e) {}
+  } catch (e) { }
   try {
     await db.exec("ALTER TABLE bill_holds ADD COLUMN transportation_fee REAL DEFAULT 0");
-  } catch(e) {}
-  try { await db.exec("ALTER TABLE credit_payments ADD COLUMN created_by TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE credit_payments ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP"); } catch(e) {}
-  try { await db.exec("ALTER TABLE products ADD COLUMN updated_at TEXT;"); } catch(e) {}
-  try { await db.exec("ALTER TABLE products ADD COLUMN selling_price REAL;"); } catch(e) {}
-  try { await db.exec("ALTER TABLE products ADD COLUMN stock_quantity REAL;"); } catch(e) {}
-  try { await db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT;"); } catch(e) {}
-  try { await db.exec("ALTER TABLE customers ADD COLUMN credit_limit REAL DEFAULT 0;"); } catch(e) {}
-  try { await db.exec("ALTER TABLE customers ADD COLUMN credit_period INTEGER DEFAULT 0;"); } catch(e) {}
-  try { await db.exec("ALTER TABLE customers ADD COLUMN type TEXT DEFAULT 'registered';"); } catch(e) {}
-  try { await db.exec("ALTER TABLE suppliers ADD COLUMN updated_at TEXT;"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN return_no TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN customer_name TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN customer_phone TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN exchange_items TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN return_amount REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN exchange_amount REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN balance_amount REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN customer_paid REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN change_given REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN credit_note_no TEXT"); } catch(e) {}
+  } catch (e) { }
+  try { await db.exec("ALTER TABLE credit_payments ADD COLUMN created_by TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE credit_payments ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP"); } catch (e) { }
+  try { await db.exec("ALTER TABLE products ADD COLUMN updated_at TEXT;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE products ADD COLUMN selling_price REAL;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE products ADD COLUMN stock_quantity REAL;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE customers ADD COLUMN credit_limit REAL DEFAULT 0;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE customers ADD COLUMN credit_period INTEGER DEFAULT 0;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE customers ADD COLUMN type TEXT DEFAULT 'registered';"); } catch (e) { }
+  try { await db.exec("ALTER TABLE suppliers ADD COLUMN updated_at TEXT;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN return_no TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN customer_name TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN customer_phone TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN exchange_items TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN return_amount REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN exchange_amount REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN balance_amount REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN customer_paid REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN change_given REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN credit_note_no TEXT"); } catch (e) { }
 
-  try { await db.exec("ALTER TABLE sales ADD COLUMN credit_note_applied REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales ADD COLUMN credit_note_code TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales ADD COLUMN customer_phone TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales ADD COLUMN customer_address TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales ADD COLUMN client_tx_id TEXT"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_client_tx_id ON sales(client_tx_id)"); } catch(e) {}
+  try { await db.exec("ALTER TABLE sales ADD COLUMN credit_note_applied REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales ADD COLUMN credit_note_code TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales ADD COLUMN customer_phone TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales ADD COLUMN customer_address TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales ADD COLUMN client_tx_id TEXT"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_client_tx_id ON sales(client_tx_id)"); } catch (e) { }
 
   await db.exec(`
     CREATE TABLE IF NOT EXISTS credit_notes (
@@ -1520,15 +1520,15 @@ async function initializeDatabase() {
       difference_payment_method TEXT DEFAULT 'Cash'
     )
   `);
-  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN difference_payment_method TEXT DEFAULT 'Cash'"); } catch (e) {}
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN difference_payment_method TEXT DEFAULT 'Cash'"); } catch (e) { }
   // These two must be applied HERE, after the table exists. is_credit was previously only added
   // inside the GET /api/sales/returns handler, so on a fresh database POST /api/sales/returns
   // failed with "no such column: is_credit" unless the list endpoint happened to be called first.
   // cashier is added earlier in this function too (see the ALTER near the top), but that runs
   // before this CREATE TABLE and is therefore swallowed on a fresh database - which also aborted
   // the downstream pull for this entity ("no column named cashier"). Additive only.
-  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN is_credit INTEGER DEFAULT 0"); } catch (e) {}
-  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN cashier TEXT"); } catch (e) {}
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN is_credit INTEGER DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN cashier TEXT"); } catch (e) { }
 
   // 17.5 Create Sales Return Items Table
   await db.exec(`
@@ -1569,8 +1569,8 @@ async function initializeDatabase() {
   `);
 
   // Financial Views for cash_book and cheques
-  try { await db.exec(`CREATE VIEW IF NOT EXISTS cash_book AS SELECT * FROM transactions;`); } catch (_) {}
-  try { await db.exec(`CREATE VIEW IF NOT EXISTS cheques AS SELECT * FROM cheque_registry;`); } catch (_) {}
+  try { await db.exec(`CREATE VIEW IF NOT EXISTS cash_book AS SELECT * FROM transactions;`); } catch (_) { }
+  try { await db.exec(`CREATE VIEW IF NOT EXISTS cheques AS SELECT * FROM cheque_registry;`); } catch (_) { }
 
   // 19. Create Purchase Returns Table
   await db.exec(`
@@ -1603,38 +1603,38 @@ async function initializeDatabase() {
   `);
 
   // Performance Indexes for fast barcode, invoice, and customer lookups
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_invoice_no ON sales(invoice_no)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_customer_id ON sales(customer_id)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales(created_at)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_credit_notes_no ON credit_notes(credit_note_no)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_returns_inv ON sales_returns(invoice_no)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_invoice_no ON sales(invoice_no)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_customer_id ON sales(customer_id)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales(created_at)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_credit_notes_no ON credit_notes(credit_note_no)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_returns_inv ON sales_returns(invoice_no)"); } catch (e) { }
 
   // Cheque Registry & Purchase Return Indexes
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_cheque_registry_number ON cheque_registry(cheque_number)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_cheque_registry_status ON cheque_registry(status)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_cheque_registry_direction ON cheque_registry(direction)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_cheque_registry_party_id ON cheque_registry(party_id)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_cheque_registry_date ON cheque_registry(cheque_date)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_purchase_returns_return_no ON purchase_returns(return_number)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_purchase_returns_supplier_id ON purchase_returns(supplier_id)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_purchase_returns_po_id ON purchase_returns(purchase_order_id)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_purchase_return_items_return_id ON purchase_return_items(return_id)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_purchase_return_items_product_id ON purchase_return_items(product_id)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_cheque_registry_number ON cheque_registry(cheque_number)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_cheque_registry_status ON cheque_registry(status)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_cheque_registry_direction ON cheque_registry(direction)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_cheque_registry_party_id ON cheque_registry(party_id)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_cheque_registry_date ON cheque_registry(cheque_date)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_purchase_returns_return_no ON purchase_returns(return_number)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_purchase_returns_supplier_id ON purchase_returns(supplier_id)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_purchase_returns_po_id ON purchase_returns(purchase_order_id)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_purchase_return_items_return_id ON purchase_return_items(return_id)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_purchase_return_items_product_id ON purchase_return_items(product_id)"); } catch (e) { }
 
   // Phase 2A: Performance optimization indexes
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(email)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_status ON sales(status)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_credit_notes_status ON credit_notes(status)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_audit_logs_action_date ON audit_logs(action, timestamp)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales(created_at)"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales ADD COLUMN cashier_name TEXT"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_cashier ON sales(cashier_name)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_cashier_raw ON sales(cashier)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_po_created_at ON purchase_orders(created_at)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at)"); } catch(e) {}
-  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_credit_payments_created_at ON credit_payments(created_at)"); } catch(e) {}
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(email)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_status ON sales(status)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_credit_notes_status ON credit_notes(status)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_audit_logs_action_date ON audit_logs(action, timestamp)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales(created_at)"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales ADD COLUMN cashier_name TEXT"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_cashier ON sales(cashier_name)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_cashier_raw ON sales(cashier)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_po_created_at ON purchase_orders(created_at)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_credit_payments_created_at ON credit_payments(created_at)"); } catch (e) { }
 
   // Database Engine Level Constraint Trigger: Prevent negative stock
   try {
@@ -1647,7 +1647,7 @@ async function initializeDatabase() {
         SELECT RAISE(ABORT, 'Database Constraint Violation: Stock cannot drop below 0');
       END;
     `);
-  } catch(e) {}
+  } catch (e) { }
 
   // Inbound-sync guard: while a Turso->local downstream pull is writing rows into this database,
   // the change-tracking triggers below must stay silent - those writes are a cloud READ result,
@@ -1663,14 +1663,14 @@ async function initializeDatabase() {
         id INTEGER PRIMARY KEY CHECK (id = 1)
       )
     `);
-  } catch (e) {}
+  } catch (e) { }
 
   // Change Tracking Triggers for Offline-First Replication
   // DROP+CREATE (not just "IF NOT EXISTS") because these triggers already exist in every database
   // that ran the prior version of this code - including production Turso, since this same startup
   // routine runs there too - so a plain "CREATE IF NOT EXISTS" would silently keep the old,
   // unguarded definition forever. The WHEN clause is the actual fix: see sync_pull_marker above.
-  try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_sales_insert'); } catch (_) {}
+  try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_sales_insert'); } catch (_) { }
   try {
     await db.exec(`
       CREATE TRIGGER trg_sync_sales_insert AFTER INSERT ON sales
@@ -1688,9 +1688,9 @@ async function initializeDatabase() {
         );
       END;
     `);
-  } catch (_) {}
+  } catch (_) { }
 
-  try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_sales_returns_insert'); } catch (_) {}
+  try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_sales_returns_insert'); } catch (_) { }
   try {
     await db.exec(`
       CREATE TRIGGER trg_sync_sales_returns_insert AFTER INSERT ON sales_returns
@@ -1708,9 +1708,9 @@ async function initializeDatabase() {
         );
       END;
     `);
-  } catch (_) {}
+  } catch (_) { }
 
-  try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_credit_payments_insert'); } catch (_) {}
+  try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_credit_payments_insert'); } catch (_) { }
   try {
     await db.exec(`
       CREATE TRIGGER trg_sync_credit_payments_insert AFTER INSERT ON credit_payments
@@ -1728,9 +1728,9 @@ async function initializeDatabase() {
         );
       END;
     `);
-  } catch (_) {}
+  } catch (_) { }
 
-  try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_stock_adj_insert'); } catch (_) {}
+  try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_stock_adj_insert'); } catch (_) { }
   try {
     await db.exec(`
       CREATE TRIGGER trg_sync_stock_adj_insert AFTER INSERT ON stock_adjustments
@@ -1748,88 +1748,88 @@ async function initializeDatabase() {
         );
       END;
     `);
-  } catch (_) {}
+  } catch (_) { }
 
-  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN credit_note_no TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN code TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN invoice_no TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN customer_id TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN customer_name TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN customer_phone TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN items TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN amount REAL"); } catch(e) {}
-  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN value REAL"); } catch(e) {}
-  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN balance_remaining REAL"); } catch(e) {}
-  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN status TEXT DEFAULT 'active'"); } catch(e) {}
-  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN reason TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN user_id TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN created_at TEXT"); } catch(e) {}
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN credit_note_no TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN code TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN invoice_no TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN customer_id TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN customer_name TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN customer_phone TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN items TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN amount REAL"); } catch (e) { }
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN value REAL"); } catch (e) { }
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN balance_remaining REAL"); } catch (e) { }
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN status TEXT DEFAULT 'active'"); } catch (e) { }
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN reason TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN user_id TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE credit_notes ADD COLUMN created_at TEXT"); } catch (e) { }
 
-  try { await db.exec("ALTER TABLE quotations ADD COLUMN customer_phone TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE quotations ADD COLUMN customer_address TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE quotations ADD COLUMN validity_period TEXT DEFAULT '30 Days'"); } catch(e) {}
-  try { await db.exec("ALTER TABLE quotations ADD COLUMN subtotal REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE quotations ADD COLUMN discount_type TEXT DEFAULT 'amount'"); } catch(e) {}
-  try { await db.exec("ALTER TABLE quotations ADD COLUMN discount_value REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE quotations ADD COLUMN discount_amount REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE quotations ADD COLUMN transportation_fee REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE quotations ADD COLUMN tax_amount REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE quotations ADD COLUMN status TEXT DEFAULT 'Active'"); } catch(e) {}
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN customer_phone TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN customer_address TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN validity_period TEXT DEFAULT '30 Days'"); } catch (e) { }
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN subtotal REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN discount_type TEXT DEFAULT 'amount'"); } catch (e) { }
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN discount_value REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN discount_amount REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN transportation_fee REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN tax_amount REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE quotations ADD COLUMN status TEXT DEFAULT 'Active'"); } catch (e) { }
 
   // Safe Non-Destructive Schema Migrations for Excel Import & Universal Operations
-  try { await db.exec("ALTER TABLE products ADD COLUMN min_stock INTEGER DEFAULT 5"); } catch(e) {}
-  try { await db.exec("ALTER TABLE customers ADD COLUMN total_purchases REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE customers ADD COLUMN join_date TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE suppliers ADD COLUMN credit_terms TEXT DEFAULT '30 Days'"); } catch(e) {}
-  try { await db.exec("ALTER TABLE suppliers ADD COLUMN payable_balance REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE employees ADD COLUMN department TEXT DEFAULT 'General'"); } catch(e) {}
-  try { await db.exec("ALTER TABLE employees ADD COLUMN attendance REAL DEFAULT 100"); } catch(e) {}
-  try { await db.exec("ALTER TABLE employees ADD COLUMN join_date TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE employees ADD COLUMN user_id TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE stock_adjustments ADD COLUMN old_qty REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE stock_adjustments ADD COLUMN new_qty REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE stock_adjustments ADD COLUMN user_email TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales ADD COLUMN user_id TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN due_date TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN user_id TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN po_no TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN received_at TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN updated_at TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN created_by TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN status TEXT DEFAULT 'ACTIVE'"); } catch(e) {}
-  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN void_reason TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN updated_at DATETIME"); } catch(e) {}
-  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN balance_remaining REAL"); } catch(e) {}
-  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN redeemed_amount REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN redeemed_in_po_number TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN original_total REAL"); } catch(e) {}
-  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_code TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_applied REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("UPDATE purchase_returns SET balance_remaining = total_returned_cost WHERE balance_remaining IS NULL AND (status IS NULL OR status = 'ACTIVE')"); } catch(e) {}
-  try { await db.exec("ALTER TABLE products ADD COLUMN parent_product_id TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE products ADD COLUMN is_batch INTEGER DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE products ADD COLUMN batch_number INTEGER"); } catch(e) {}
-  try { await db.exec("ALTER TABLE cheque_registry ADD COLUMN updated_at DATETIME"); } catch(e) {}
-  try { await db.exec("ALTER TABLE cheque_registry ADD COLUMN processed_by TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN return_method TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN total_refunded REAL DEFAULT 0"); } catch(e) {}
-  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN user_id TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE profiles ADD COLUMN permissions TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE profiles ADD COLUMN custom_permissions TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE products ADD COLUMN updated_at TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE products ADD COLUMN selling_price REAL"); } catch(e) {}
-  try { await db.exec("ALTER TABLE products ADD COLUMN stock_quantity REAL"); } catch(e) {}
-  try { await db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE suppliers ADD COLUMN updated_at TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE profiles ADD COLUMN updated_at TEXT"); } catch(e) {}
-  try { await db.exec("ALTER TABLE users ADD COLUMN updated_at TEXT"); } catch(e) {}
-  try { await db.exec("UPDATE products SET selling_price = price WHERE selling_price IS NULL"); } catch(e) {}
-  try { await db.exec("UPDATE products SET stock_quantity = stock WHERE stock_quantity IS NULL"); } catch(e) {}
-  try { await db.exec("UPDATE products SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch(e) {}
-  try { await db.exec("UPDATE customers SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch(e) {}
-  try { await db.exec("UPDATE suppliers SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch(e) {}
-  try { await db.exec("UPDATE profiles SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch(e) {}
-  try { await db.exec("UPDATE users SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch(e) {}
+  try { await db.exec("ALTER TABLE products ADD COLUMN min_stock INTEGER DEFAULT 5"); } catch (e) { }
+  try { await db.exec("ALTER TABLE customers ADD COLUMN total_purchases REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE customers ADD COLUMN join_date TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE suppliers ADD COLUMN credit_terms TEXT DEFAULT '30 Days'"); } catch (e) { }
+  try { await db.exec("ALTER TABLE suppliers ADD COLUMN payable_balance REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE employees ADD COLUMN department TEXT DEFAULT 'General'"); } catch (e) { }
+  try { await db.exec("ALTER TABLE employees ADD COLUMN attendance REAL DEFAULT 100"); } catch (e) { }
+  try { await db.exec("ALTER TABLE employees ADD COLUMN join_date TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE employees ADD COLUMN user_id TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE stock_adjustments ADD COLUMN old_qty REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE stock_adjustments ADD COLUMN new_qty REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE stock_adjustments ADD COLUMN user_email TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales ADD COLUMN user_id TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN due_date TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN user_id TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN po_no TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN received_at TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN updated_at TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN created_by TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN status TEXT DEFAULT 'ACTIVE'"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN void_reason TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN updated_at DATETIME"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN balance_remaining REAL"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN redeemed_amount REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN redeemed_in_po_number TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN original_total REAL"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_code TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_applied REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("UPDATE purchase_returns SET balance_remaining = total_returned_cost WHERE balance_remaining IS NULL AND (status IS NULL OR status = 'ACTIVE')"); } catch (e) { }
+  try { await db.exec("ALTER TABLE products ADD COLUMN parent_product_id TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE products ADD COLUMN is_batch INTEGER DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE products ADD COLUMN batch_number INTEGER"); } catch (e) { }
+  try { await db.exec("ALTER TABLE cheque_registry ADD COLUMN updated_at DATETIME"); } catch (e) { }
+  try { await db.exec("ALTER TABLE cheque_registry ADD COLUMN processed_by TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN return_method TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN total_refunded REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN user_id TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE profiles ADD COLUMN permissions TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE profiles ADD COLUMN custom_permissions TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE products ADD COLUMN updated_at TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE products ADD COLUMN selling_price REAL"); } catch (e) { }
+  try { await db.exec("ALTER TABLE products ADD COLUMN stock_quantity REAL"); } catch (e) { }
+  try { await db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE suppliers ADD COLUMN updated_at TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE profiles ADD COLUMN updated_at TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE users ADD COLUMN updated_at TEXT"); } catch (e) { }
+  try { await db.exec("UPDATE products SET selling_price = price WHERE selling_price IS NULL"); } catch (e) { }
+  try { await db.exec("UPDATE products SET stock_quantity = stock WHERE stock_quantity IS NULL"); } catch (e) { }
+  try { await db.exec("UPDATE products SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch (e) { }
+  try { await db.exec("UPDATE customers SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch (e) { }
+  try { await db.exec("UPDATE suppliers SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch (e) { }
+  try { await db.exec("UPDATE profiles SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch (e) { }
+  try { await db.exec("UPDATE users SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch (e) { }
 
   await seedInitialData();
 
@@ -1878,7 +1878,7 @@ async function initializeDatabase() {
                     convRate = (prodUnit === 'cube' && rawVal > 0 && rawVal < 1) ? (1 / rawVal) : rawVal;
                   }
                 }
-              } catch (e) {}
+              } catch (e) { }
             }
           }
 
@@ -1917,7 +1917,7 @@ async function initializeDatabase() {
 async function seedInitialData() {
   await ensureSuperAdminProfile();
   await cleanupLegacyProducts();
-  
+
   // Seed settings if empty
   const hasSettings = await db.get('SELECT * FROM system_settings WHERE id = ?', ['global']);
   if (!hasSettings) {
@@ -2012,7 +2012,7 @@ async function seedInitialData() {
               await db.run('UPDATE custom_permissions SET pages = ? WHERE role = ?', [JSON.stringify(pages), row.role]);
             }
           }
-        } catch (e) {}
+        } catch (e) { }
       }
     }
   } catch (err) {
@@ -2051,7 +2051,7 @@ async function checkAndEmailLowStockAlerts(productIds = []) {
 
     if (lowStockProducts.length > 0) {
       console.log(`[Stock Check] Low stock detected for: ${lowStockProducts.map(p => p.name).join(', ')}`);
-      
+
       const emailText = `Dear Admin,
 
 The following products have fallen below their minimum stock thresholds:
@@ -2089,8 +2089,8 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
   if (fromDate) args.push('--fromDate', fromDate);
   if (toDate) args.push('--toDate', toDate);
 
-  const workerEnv = { 
-    ...process.env, 
+  const workerEnv = {
+    ...process.env,
     ELECTRON_RUN_AS_NODE: '1',
     DB_FILE: DB_FILE,
     BACKUPS_DIR: backupsDir,
@@ -2487,7 +2487,7 @@ app.post('/api/auth/login', async (req, res) => {
       if (profileRes?.rows?.[0]) {
         cloudProfileRow = profileRes.rows[0];
       }
-    } catch (_) {}
+    } catch (_) { }
 
     const resolvedUserId = (cloudUserRow && cloudUserRow.id) || (cloudProfileRow && cloudProfileRow.id);
     const resolvedRole = (cloudUserRow && cloudUserRow.role) || (cloudProfileRow && cloudProfileRow.role);
@@ -2513,7 +2513,7 @@ app.post('/api/auth/login', async (req, res) => {
               cloudPermsRow = rolePermsRes.rows[0];
             }
           }
-        } catch (_) {}
+        } catch (_) { }
       }
     }
 
@@ -2598,7 +2598,7 @@ app.post('/api/auth/login', async (req, res) => {
           'INSERT OR REPLACE INTO profiles (id, email, role, name, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)',
           [resolvedProfile.id, resolvedProfile.email, resolvedProfile.role, resolvedProfile.name]
         );
-      } catch (_) {}
+      } catch (_) { }
     }
 
     // If permissions exist, insert/upsert into local SQLite `custom_permissions`
@@ -2696,12 +2696,12 @@ app.post(['/api/auth/register', '/api/users'], requireAdmin, async (req, res) =>
            VALUES (?, ?, ?, ?, ?)`,
           [id, cleanEmail, hashedPassword, normalizedRole, effectiveName]
         );
-      } catch (_) {}
+      } catch (_) { }
     }
 
     // Propagate changes upstream/downstream
-    enqueueSync(db, 'users', id, 'UPSERT').catch(() => {});
-    enqueueSync(db, 'profiles', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'users', id, 'UPSERT').catch(() => { });
+    enqueueSync(db, 'profiles', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
 
     res.json({
       success: true,
@@ -2740,27 +2740,27 @@ app.post('/api/auth/forgot-password', async (req, res) => {
 
     const emailResult = await sendResetEmail(email, resetCode);
     if (emailResult.success) {
-      return res.json({ 
-        success: true, 
+      return res.json({
+        success: true,
         message: 'Password reset code has been sent to your email address.',
         emailDelivered: true,
-        messageId: emailResult.messageId 
+        messageId: emailResult.messageId
       });
     }
 
     if (emailResult.reason === 'GMAIL_PASS missing' || emailResult.error === 'SMTP credentials missing') {
       console.warn(`[Reset Password Simulation] Missing SMTP credentials. Reset code for ${email} is ${resetCode}`);
-      return res.json({ 
-        success: true, 
+      return res.json({
+        success: true,
         message: 'SMTP credentials not configured. Reset code generated and logged to console.',
         emailDelivered: false,
-        simulated: true 
+        simulated: true
       });
     }
 
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: `Failed to transmit password reset email via SMTP: ${emailResult.error || 'Transport error'}`,
-      emailDelivered: false 
+      emailDelivered: false
     });
   } catch (err) {
     res.status(500).json({ error: err.message, emailDelivered: false });
@@ -2829,7 +2829,7 @@ app.post('/api/admin/request-factory-reset-otp', async (req, res) => {
         `INSERT OR REPLACE INTO system_settings (id, key, value, updated_at) VALUES ('FACTORY_RESET_OTP', 'FACTORY_RESET_OTP', ?, CURRENT_TIMESTAMP)`,
         [JSON.stringify({ code: otpCode, expiresAt })]
       );
-    } catch (_) {}
+    } catch (_) { }
 
     console.log(`[Factory Reset] Generated OTP for Root Admin (sanojhardware@gmail.com): ${otpCode} (expires in 60s)`);
 
@@ -2889,7 +2889,7 @@ app.post('/api/admin/execute-factory-reset', async (req, res) => {
             validOtp = true;
           }
         }
-      } catch (_) {}
+      } catch (_) { }
     }
 
     if (!validOtp) {
@@ -2900,11 +2900,11 @@ app.post('/api/admin/execute-factory-reset', async (req, res) => {
     let rootProfile = null;
     try {
       rootProfile = await db.get('SELECT * FROM profiles WHERE LOWER(email) = ?', ['sanojhardware@gmail.com']);
-    } catch (_) {}
+    } catch (_) { }
     if (!rootProfile) {
       try {
         rootProfile = await db.get('SELECT * FROM users WHERE LOWER(email) = ?', ['sanojhardware@gmail.com']);
-      } catch (_) {}
+      } catch (_) { }
     }
 
     let passwordValid = false;
@@ -2923,7 +2923,7 @@ app.post('/api/admin/execute-factory-reset', async (req, res) => {
           if (cloudPw) {
             passwordValid = isBcryptHash(cloudPw) ? await bcrypt.compare(cleanPassword, cloudPw) : cloudPw === cleanPassword;
           }
-        } catch (_) {}
+        } catch (_) { }
       }
     }
 
@@ -2941,9 +2941,9 @@ app.post('/api/admin/execute-factory-reset', async (req, res) => {
     if (tursoClient) {
       try {
         // Ensure columns exist on cloud
-        try { await tursoClient.execute('ALTER TABLE system_settings ADD COLUMN key TEXT;'); } catch (_) {}
-        try { await tursoClient.execute('ALTER TABLE system_settings ADD COLUMN value TEXT;'); } catch (_) {}
-        try { await tursoClient.execute('ALTER TABLE system_settings ADD COLUMN system_wipe_timestamp TEXT;'); } catch (_) {}
+        try { await tursoClient.execute('ALTER TABLE system_settings ADD COLUMN key TEXT;'); } catch (_) { }
+        try { await tursoClient.execute('ALTER TABLE system_settings ADD COLUMN value TEXT;'); } catch (_) { }
+        try { await tursoClient.execute('ALTER TABLE system_settings ADD COLUMN system_wipe_timestamp TEXT;'); } catch (_) { }
 
         await tursoClient.batch([
           'DELETE FROM sales;',
@@ -3009,7 +3009,7 @@ app.post('/api/admin/execute-factory-reset', async (req, res) => {
     activeFactoryResetOtp = null;
     try {
       await db.run("DELETE FROM system_settings WHERE id = 'FACTORY_RESET_OTP'");
-    } catch (_) {}
+    } catch (_) { }
 
     await logAudit('sanojhardware@gmail.com', 'FACTORY_RESET_EXECUTED', `System was factory-reset by Root Admin. Wipe timestamp: ${wipeTimestamp}.`);
     console.log('✅ [FACTORY RESET] System factory reset completed successfully.');
@@ -3029,20 +3029,29 @@ app.post('/api/admin/execute-factory-reset', async (req, res) => {
 // PRODUCTS API
 app.get('/api/products', async (req, res) => {
   try {
-    const data = await db.all('SELECT * FROM products ORDER BY name ASC');
-    // Map backend snake_case column names back to frontend camelCase
-    const mapped = data.map(p => ({
-      id: p.id,
-      name: p.name,
-      sku: p.sku,
-      category: p.category,
-      price: p.price,
-      costPrice: p.cost_price,
-      stock: p.stock,
-      minStock: p.min_stock,
-      supplier: p.supplier,
-      unit: p.unit,
-      barcode: p.barcode,
+    const activeDb = typeof getDb === 'function' ? await getDb() : db;
+    let data = [];
+
+    const turso = getTursoClient();
+    if (turso && (isTurso() || Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web')) {
+      const rs = await turso.execute('SELECT * FROM products ORDER BY name ASC');
+      data = rs.rows || [];
+    } else if (activeDb) {
+      data = await activeDb.all('SELECT * FROM products ORDER BY name ASC');
+    }
+
+    const mapped = (data || []).map(p => ({
+      id: String(p.id),
+      name: p.name || '',
+      sku: p.sku || '',
+      category: p.category || 'General',
+      price: Number(p.price !== undefined ? p.price : (p.selling_price || 0)),
+      costPrice: Number(p.cost_price !== undefined ? p.cost_price : (p.costPrice || 0)),
+      stock: Number(p.stock !== undefined ? p.stock : (p.stock_quantity || 0)),
+      minStock: Number(p.min_stock !== undefined ? p.min_stock : (p.minStock || 5)),
+      supplier: p.supplier || '',
+      unit: p.unit || 'pcs',
+      barcode: p.barcode || p.sku || '',
       brand: p.brand || '',
       serialNo: p.serial_no || '',
       batchCode: p.batch_code || '',
@@ -3050,8 +3059,10 @@ app.get('/api/products', async (req, res) => {
       supplierPhone: p.supplier_phone || '',
       measureDetails: p.measure_details || ''
     }));
+
     res.json(mapped);
   } catch (err) {
+    console.error('Error fetching products:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -3059,14 +3070,14 @@ app.get('/api/products', async (req, res) => {
 let bulkColumnsEnsured = false;
 async function ensureBulkImportColumns(database) {
   if (!database || isTurso() || bulkColumnsEnsured) return;
-  try { await database.exec("ALTER TABLE products ADD COLUMN updated_at TEXT;"); } catch(_) {}
-  try { await database.exec("ALTER TABLE products ADD COLUMN selling_price REAL;"); } catch(_) {}
-  try { await database.exec("ALTER TABLE products ADD COLUMN stock_quantity REAL;"); } catch(_) {}
-  try { await database.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT;"); } catch(_) {}
-  try { await database.exec("ALTER TABLE customers ADD COLUMN credit_limit REAL DEFAULT 0;"); } catch(_) {}
-  try { await database.exec("ALTER TABLE customers ADD COLUMN credit_period INTEGER DEFAULT 0;"); } catch(_) {}
-  try { await database.exec("ALTER TABLE customers ADD COLUMN type TEXT DEFAULT 'registered';"); } catch(_) {}
-  try { await database.exec("ALTER TABLE suppliers ADD COLUMN updated_at TEXT;"); } catch(_) {}
+  try { await database.exec("ALTER TABLE products ADD COLUMN updated_at TEXT;"); } catch (_) { }
+  try { await database.exec("ALTER TABLE products ADD COLUMN selling_price REAL;"); } catch (_) { }
+  try { await database.exec("ALTER TABLE products ADD COLUMN stock_quantity REAL;"); } catch (_) { }
+  try { await database.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT;"); } catch (_) { }
+  try { await database.exec("ALTER TABLE customers ADD COLUMN credit_limit REAL DEFAULT 0;"); } catch (_) { }
+  try { await database.exec("ALTER TABLE customers ADD COLUMN credit_period INTEGER DEFAULT 0;"); } catch (_) { }
+  try { await database.exec("ALTER TABLE customers ADD COLUMN type TEXT DEFAULT 'registered';"); } catch (_) { }
+  try { await database.exec("ALTER TABLE suppliers ADD COLUMN updated_at TEXT;"); } catch (_) { }
   bulkColumnsEnsured = true;
 }
 
@@ -3225,14 +3236,14 @@ app.post(['/api/products/bulk-import', '/api/products/bulk', '/api/products/impo
       try {
         for (const s of preparedStatements) {
           await activeDb.run(s.sql, s.args);
-          enqueueSync(activeDb, 'products', s.id, 'UPSERT').catch(() => {});
+          enqueueSync(activeDb, 'products', s.id, 'UPSERT').catch(() => { });
         }
         await activeDb.run('COMMIT');
       } catch (txnErr) {
-        await activeDb.run('ROLLBACK').catch(() => {});
+        await activeDb.run('ROLLBACK').catch(() => { });
         throw txnErr;
       }
-      runSyncCycle(activeDb).catch(() => {});
+      runSyncCycle(activeDb).catch(() => { });
     }
 
     await logAudit(user_email, 'PRODUCT_BULK_IMPORT', `Bulk imported/updated ${preparedStatements.length} product records.`);
@@ -3277,7 +3288,7 @@ app.post('/api/products', async (req, res) => {
             finalSupplierPhone = existingSup.phone;
           }
         }
-      } catch (e) {}
+      } catch (e) { }
     }
 
     const price = Number(p.price !== undefined ? p.price : (p.selling_price || 0));
@@ -3295,7 +3306,7 @@ app.post('/api/products', async (req, res) => {
           "SELECT id, sku FROM products WHERE barcode = ? AND barcode != '' AND sku != ?",
           [cleanBarcode, cleanSku]
         );
-      } catch (_) {}
+      } catch (_) { }
     }
 
     const effectiveId = existingByBarcode ? existingByBarcode.id : ('p_' + Date.now());
@@ -3353,7 +3364,7 @@ app.post('/api/products', async (req, res) => {
     const finalId = finalRecord ? finalRecord.id : effectiveId;
 
     await logAudit(user_email, 'PRODUCT_CREATED', `Product ${p.name} (SKU: ${effectiveSku}) was added/updated in the inventory.`);
-    enqueueSync(db, 'products', finalId, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'products', finalId, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
     res.json({ success: true, id: finalId });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3376,7 +3387,7 @@ app.put('/api/products/:id', async (req, res) => {
     const sku = p.sku !== undefined ? p.sku : existing.sku;
     const category = p.category !== undefined ? p.category : existing.category;
     const price = p.price !== undefined ? p.price : existing.price;
-    
+
     let cost_price = existing.cost_price;
     if (p.cost_price !== undefined) cost_price = p.cost_price;
     else if (p.costPrice !== undefined) cost_price = p.costPrice;
@@ -3409,7 +3420,7 @@ app.put('/api/products/:id', async (req, res) => {
             supplier_phone = existingSup.phone;
           }
         }
-      } catch (e) {}
+      } catch (e) { }
     }
 
     await db.run(
@@ -3417,7 +3428,7 @@ app.put('/api/products/:id', async (req, res) => {
       [name, sku, category, price, cost_price, stock, min_stock, supplier, unit, barcode, brand, serial_no, batch_code, expiry_date, supplier_phone, measure_details, targetId]
     );
     await logAudit(user_email, 'PRODUCT_UPDATED', `Product ${name} (SKU: ${sku}) details were updated.`);
-    enqueueSync(db, 'products', targetId, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'products', targetId, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3433,7 +3444,7 @@ app.delete('/api/products/:id', async (req, res) => {
     const prodSku = existing ? existing.sku : '';
     await db.run('DELETE FROM products WHERE id = ?', [id]);
     await logAudit(user_email, 'PRODUCT_DELETED', `Product ${prodName} (SKU: ${prodSku}) was deleted.`);
-    enqueueSync(db, 'products', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'products', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3495,7 +3506,7 @@ app.post('/api/customers', async (req, res) => {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
       [id, name, email, phone, address, nic, credit_limit, credit_period, type, loyalty_points, total_purchases, join_date, credit_balance, current_credit]
     );
-    enqueueSync(db, 'customers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'customers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
     res.json({ success: true, id });
   } catch (err) {
     console.error('Error saving customer:', err);
@@ -3549,7 +3560,7 @@ app.post(['/api/customers/bulk-import', '/api/customers/bulk', '/api/customers/i
       const email = getValue(row, ['email', 'email address', 'mail']) || row.email || '';
       const address = getValue(row, ['address', 'customer_address', 'street', 'city', 'location']) || row.address || '';
       const nic = getValue(row, ['nic', 'nic number', 'nic_number', 'national id', 'id', 'nic_no', 'identitycard']) || row.nic || '';
-      
+
       const rawCreditLimit = getValue(row, ['credit limit', 'credit_limit', 'limit', 'max_credit', 'creditlimit']);
       const creditLimit = parseFloat(rawCreditLimit !== '' ? rawCreditLimit : (row.credit_limit || 0)) || 0;
 
@@ -3587,13 +3598,13 @@ app.post(['/api/customers/bulk-import', '/api/customers/bulk', '/api/customers/i
         [id, name, email, phone, address, nic, creditLimit, creditPeriod, type, loyaltyPoints, totalPurchases, joinDate]
       );
 
-      enqueueSync(db, 'customers', id, 'UPSERT').catch(() => {});
+      enqueueSync(db, 'customers', id, 'UPSERT').catch(() => { });
       insertedIds.push(id);
       importedCount++;
     }
 
     // Trigger immediate upstream sync cycle asynchronously
-    runSyncCycle(db).catch(() => {});
+    runSyncCycle(db).catch(() => { });
     await logAudit(user_email, 'CUSTOMER_BULK_IMPORT', `Bulk imported/updated ${importedCount} customer records.`);
 
     res.json({
@@ -3618,7 +3629,7 @@ app.put('/api/customers/:id', async (req, res) => {
       [c.name, c.email, c.phone, c.address, c.nic, c.loyalty_points !== undefined ? c.loyalty_points : c.loyaltyPoints, c.total_purchases !== undefined ? c.total_purchases : c.totalPurchases, c.join_date !== undefined ? c.join_date : c.joinDate, id]
     );
     await logAudit(c.user_email || 'system', 'CUSTOMER_UPDATED', `Customer ${c.name} details were updated.`);
-    enqueueSync(db, 'customers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'customers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3629,7 +3640,7 @@ app.delete('/api/customers/:id', async (req, res) => {
   const { id } = req.params;
   try {
     await db.run('DELETE FROM customers WHERE id = ?', [id]);
-    enqueueSync(db, 'customers', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'customers', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3708,7 +3719,7 @@ app.post(['/api/suppliers/bulk-import', '/api/suppliers/bulk', '/api/suppliers/i
       const address = getValue(row, ['address', 'supplier_address', 'supplieraddress', 'location', 'city', 'street']) || row.address || '';
       const nic = getValue(row, ['nic', 'brn', 'reg no', 'reg_no', 'registration', 'registration_no', 'nic_number', 'nicnumber', 'nationalid']) || row.nic || '';
       const creditTerms = getValue(row, ['credit terms', 'credit_terms', 'terms', 'payment terms', 'payment_terms']) || row.credit_terms || row.creditTerms || 'Net 30';
-      
+
       const rawPayable = getValue(row, ['payable balance', 'payable_balance', 'balance', 'owed', 'amount_owed']);
       const payableBalance = parseFloat(rawPayable !== '' ? rawPayable : (row.payable_balance || row.payableBalance || 0)) || 0;
 
@@ -3730,12 +3741,12 @@ app.post(['/api/suppliers/bulk-import', '/api/suppliers/bulk', '/api/suppliers/i
         [id, name, email, phone, address, creditTerms, payableBalance, nic]
       );
 
-      enqueueSync(db, 'suppliers', id, 'UPSERT').catch(() => {});
+      enqueueSync(db, 'suppliers', id, 'UPSERT').catch(() => { });
       insertedIds.push(id);
       importedCount++;
     }
 
-    runSyncCycle(db).catch(() => {});
+    runSyncCycle(db).catch(() => { });
     await logAudit(user_email, 'SUPPLIER_BULK_IMPORT', `Bulk imported/updated ${importedCount} supplier records.`);
 
     return res.json({
@@ -3764,7 +3775,7 @@ app.post('/api/suppliers', async (req, res) => {
       'INSERT INTO suppliers (id, name, email, phone, address, credit_terms, payable_balance, nic) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       [id, s.name, s.email, s.phone, s.address, s.creditTerms || s.credit_terms, s.payableBalance !== undefined ? s.payableBalance : s.payable_balance || 0, s.nic]
     );
-    enqueueSync(db, 'suppliers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'suppliers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
     res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3785,7 +3796,7 @@ app.put('/api/suppliers/:id', async (req, res) => {
     const phone = s.phone !== undefined ? s.phone : existing.phone;
     const address = s.address !== undefined ? s.address : existing.address;
     const nic = s.nic !== undefined ? s.nic : existing.nic;
-    
+
     let credit_terms = existing.credit_terms;
     if (s.creditTerms !== undefined) credit_terms = s.creditTerms;
     else if (s.credit_terms !== undefined) credit_terms = s.credit_terms;
@@ -3812,7 +3823,7 @@ app.put('/api/suppliers/:id', async (req, res) => {
     }
 
     await logAudit(s.user_email || 'system', 'SUPPLIER_UPDATED', `Supplier ${name} details were updated.`);
-    enqueueSync(db, 'suppliers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'suppliers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3823,7 +3834,7 @@ app.delete('/api/suppliers/:id', async (req, res) => {
   const { id } = req.params;
   try {
     await db.run('DELETE FROM suppliers WHERE id = ?', [id]);
-    enqueueSync(db, 'suppliers', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'suppliers', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -3880,7 +3891,7 @@ app.get('/api/sales', async (req, res) => {
 app.get(['/api/reports/summary', '/api/sales/summary'], async (req, res) => {
   try {
     const { from_date, to_date, from, to } = req.query;
-    
+
     // Consistent timezone (Asia/Colombo UTC+05:30) date bounds in YYYY-MM-DD
     const nowColombo = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Colombo' }).format(new Date());
     const startDate = from_date || from || nowColombo;
@@ -3921,9 +3932,9 @@ app.get(['/api/reports/summary', '/api/sales/summary'], async (req, res) => {
         const subtotal = Number(s.subtotal !== undefined ? s.subtotal : total);
         const disc = Number(s.discount_amount || s.discount || 0);
         const delFee = Number(
-          s.transportation_fee !== undefined && s.transportation_fee !== null ? s.transportation_fee : 
-          (s.delivery_fee !== undefined && s.delivery_fee !== null ? s.delivery_fee : 
-          (s.deliveryFee || 0))
+          s.transportation_fee !== undefined && s.transportation_fee !== null ? s.transportation_fee :
+            (s.delivery_fee !== undefined && s.delivery_fee !== null ? s.delivery_fee :
+              (s.deliveryFee || 0))
         );
 
         grossStickerSales += (subtotal > 0 ? subtotal : total);
@@ -3940,7 +3951,7 @@ app.get(['/api/reports/summary', '/api/sales/summary'], async (req, res) => {
         let items = [];
         try {
           items = typeof s.items === 'string' ? JSON.parse(s.items) : (s.items || []);
-        } catch (_) {}
+        } catch (_) { }
 
         if (Array.isArray(items)) {
           for (const it of items) {
@@ -3974,7 +3985,7 @@ app.get(['/api/reports/summary', '/api/sales/summary'], async (req, res) => {
         let retItems = [];
         try {
           retItems = typeof r.returned_items === 'string' ? JSON.parse(r.returned_items) : (r.returned_items || r.items || []);
-        } catch (_) {}
+        } catch (_) { }
 
         if (Array.isArray(retItems)) {
           for (const it of retItems) {
@@ -4013,21 +4024,21 @@ app.get(['/api/reports/summary', '/api/sales/summary'], async (req, res) => {
 
 function generateNextInvoiceNumber(currentInvoiceNumber) {
   if (!currentInvoiceNumber) return 'INV001';
-  
+
   // Extract trailing digits
   const match = currentInvoiceNumber.match(/^(.*?)(\d+)$/);
   if (!match) {
     // If no trailing numbers, e.g. "INV", append "001"
     return currentInvoiceNumber + '001';
   }
-  
+
   const prefix = match[1];
   const numStr = match[2];
   const nextNum = parseInt(numStr, 10) + 1;
-  
+
   // Pad the incremented number to match the original width
   const paddedNum = String(nextNum).padStart(numStr.length, '0');
-  
+
   return prefix + paddedNum;
 }
 
@@ -4068,10 +4079,10 @@ app.post('/api/sales', async (req, res) => {
   const creditNoteApplied = Number(s.credit_note_applied || s.creditNoteApplied || 0);
   const creditNoteCode = s.credit_note_code || s.creditNoteCode || '';
   const transportationFeeVal = Number(
-    s.transportation_fee !== undefined ? s.transportation_fee : 
-    (s.transportationFee !== undefined ? s.transportationFee : 
-    (s.delivery_fee !== undefined ? s.delivery_fee : 
-    (s.deliveryFee !== undefined ? s.deliveryFee : 0)))
+    s.transportation_fee !== undefined ? s.transportation_fee :
+      (s.transportationFee !== undefined ? s.transportationFee :
+        (s.delivery_fee !== undefined ? s.delivery_fee :
+          (s.deliveryFee !== undefined ? s.deliveryFee : 0)))
   );
   const customerNameVal = s.customer_name !== undefined ? s.customer_name : (s.customerName !== undefined ? s.customerName : (s.customer_id ? '' : 'Guest Customer'));
   const customerPhoneVal = s.customer_phone || s.customerPhone || '';
@@ -4154,7 +4165,7 @@ app.post('/api/sales', async (req, res) => {
     const enrichedItems = rawItemsArr.map(item => {
       const prod = productsMap.get(item.productId || item.product_id);
       const baseCostPrice = prod ? Number(prod.cost_price !== undefined ? prod.cost_price : (prod.costPrice || 0)) : 0;
-      
+
       let convRate = Number(item.conversionRate) || 1;
       const itemUnit = (item.unit || '').toLowerCase().trim();
       const prodUnit = prod ? (prod.unit || '').toLowerCase().trim() : '';
@@ -4175,7 +4186,7 @@ app.post('/api/sales', async (req, res) => {
                 }
               }
             }
-          } catch (e) {}
+          } catch (e) { }
         }
       }
 
@@ -4349,21 +4360,21 @@ app.post('/api/sales', async (req, res) => {
         for (const item of enrichedItems) {
           const prodId = item.productId || item.product_id;
           if (prodId) {
-            enqueueSync(db, 'products', prodId, 'UPSERT').catch(() => {});
+            enqueueSync(db, 'products', prodId, 'UPSERT').catch(() => { });
           }
         }
       }
       if (s.customer_id) {
-        enqueueSync(db, 'customers', s.customer_id, 'UPSERT').catch(() => {});
+        enqueueSync(db, 'customers', s.customer_id, 'UPSERT').catch(() => { });
       }
       // Immediate non-blocking upstream sync push to Turso Cloud (1-2 second latency)
       const tursoClient = getTursoClient();
       if (tursoClient) {
         pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Checkout Immediate Push Notice]:', err.message));
       } else {
-        runSyncCycle(db).catch(() => {});
+        runSyncCycle(db).catch(() => { });
       }
-    } catch (_) {}
+    } catch (_) { }
 
     // Return mock database record resembling database insertion output
     res.json({
@@ -4424,9 +4435,9 @@ app.put('/api/sales/:id', async (req, res) => {
   const { status, payment_received } = req.body;
   try {
     const existing = await db.get('SELECT * FROM sales WHERE id = ?', [id]);
-    
+
     const finalStatus = status ? (status === 'paid' ? 'Paid' : status) : undefined;
-    
+
     if (existing && (finalStatus === 'Paid' || finalStatus === 'paid') && existing.status !== 'Paid' && existing.status !== 'paid') {
       await replaceRuntimeTransactionByDescription(`POS Credit Payment ${existing.invoice_no}`, {
         type: 'income',
@@ -4458,9 +4469,9 @@ app.put('/api/sales/:id', async (req, res) => {
         if (tursoClient) {
           pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Sales Update Sync Push Notice]:', err.message));
         }
-      } catch (_) {}
+      } catch (_) { }
     }
-    
+
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4507,8 +4518,8 @@ const handleCreditPaymentInsert = async (req, res) => {
     p.amount_paid !== undefined
       ? p.amount_paid
       : p.amount !== undefined
-      ? p.amount
-      : 0
+        ? p.amount
+        : 0
   );
   const remainingBalance = Number(p.remaining_balance || 0);
   const invoiceNo = p.invoice_no || p.invoice_id || 'INV';
@@ -4561,20 +4572,20 @@ const handleCreditPaymentInsert = async (req, res) => {
           'INSERT INTO transactions (id, date, description, amount, type, category, reference, user_id, created_at, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [txId, txDate, description, amountPaid, 'income', category, invoiceNo, authorName, createdAt, p.payment_method || 'Cash']
         ).catch(e => console.error('Error logging credit repayment transaction:', e));
-        enqueueSync(db, 'transactions', txId, 'UPSERT').catch(() => {});
-        enqueueSync(db, 'cash_book', txId, 'UPSERT').catch(() => {});
+        enqueueSync(db, 'transactions', txId, 'UPSERT').catch(() => { });
+        enqueueSync(db, 'cash_book', txId, 'UPSERT').catch(() => { });
       }
     }
 
-    enqueueSync(db, 'credit_payments', id, 'UPSERT').catch(() => {});
+    enqueueSync(db, 'credit_payments', id, 'UPSERT').catch(() => { });
     if (p.customer_id) {
-      enqueueSync(db, 'customers', p.customer_id, 'UPSERT').catch(() => {});
+      enqueueSync(db, 'customers', p.customer_id, 'UPSERT').catch(() => { });
     }
     const tursoClient = getTursoClient();
     if (tursoClient) {
-      pushUpstreamChanges(db, tursoClient).catch(() => {});
+      pushUpstreamChanges(db, tursoClient).catch(() => { });
     } else {
-      runSyncCycle(db).catch(() => {});
+      runSyncCycle(db).catch(() => { });
     }
 
     res.json({ success: true, id, authorName });
@@ -4618,7 +4629,7 @@ app.delete('/api/sales/:id', requireVoidPasskey, async (req, res) => {
     }
     // Previously this hard-delete never synced at all: the sale would disappear locally but stay
     // permanently "live" in the cloud/web portal forever. Now propagated like every other mutation.
-    enqueueSync(db, 'sales', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'sales', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
@@ -4644,7 +4655,7 @@ app.post('/api/sales/:id/void', requireVoidPasskey, async (req, res) => {
     }
 
     await db.run("UPDATE sales SET status = 'cancelled' WHERE id = ?", [id]);
-    enqueueSync(db, 'sales', id, 'UPSERT').catch(() => {});
+    enqueueSync(db, 'sales', id, 'UPSERT').catch(() => { });
 
     const items = JSON.parse(sale.items);
     for (const item of items) {
@@ -4654,7 +4665,7 @@ app.post('/api/sales/:id/void', requireVoidPasskey, async (req, res) => {
         'UPDATE products SET stock = stock + ? WHERE id = ?',
         [baseQtyRestock, item.productId]
       );
-      enqueueSync(db, 'products', item.productId, 'UPSERT').catch(() => {});
+      enqueueSync(db, 'products', item.productId, 'UPSERT').catch(() => { });
     }
 
     const auditId = 'al_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
@@ -4668,13 +4679,13 @@ app.post('/api/sales/:id/void', requireVoidPasskey, async (req, res) => {
       [sale.invoice_no, id, `%${sale.invoice_no}%`]
     );
     for (const row of orphanedTxRows) {
-      enqueueSync(db, 'transactions', row.id, 'DELETE').catch(() => {});
+      enqueueSync(db, 'transactions', row.id, 'DELETE').catch(() => { });
     }
     await db.run("DELETE FROM transactions WHERE reference = ? OR reference = ? OR description LIKE ?", [sale.invoice_no, id, `%${sale.invoice_no}%`]);
     await removeRuntimeTransactionsForSale(sale.invoice_no);
 
     await db.run('COMMIT');
-    runSyncCycle(db).catch(() => {});
+    runSyncCycle(db).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     await safeRollback(db);
@@ -4724,15 +4735,15 @@ app.get('/api/sales/returns', async (req, res) => {
 });
 
 app.post('/api/sales/returns', async (req, res) => {
-  const { 
-    invoiceNo, 
-    returnedItems = [], 
-    exchangeItems = [], 
-    returnMethod = 'Cash Refund', 
+  const {
+    invoiceNo,
+    returnedItems = [],
+    exchangeItems = [],
+    returnMethod = 'Cash Refund',
     returnAmount = 0,
     exchangeAmount = 0,
     balanceAmount = 0,
-    totalRefunded = 0, 
+    totalRefunded = 0,
     customerPaid = 0,
     changeGiven = 0,
     creditNoteNo = '',
@@ -4740,8 +4751,8 @@ app.post('/api/sales/returns', async (req, res) => {
     customerPhone = '',
     differencePaymentMethod,
     difference_payment_method,
-    userEmail = 'system', 
-    reason = '' 
+    userEmail = 'system',
+    reason = ''
   } = req.body;
 
   const timestamp = Date.now();
@@ -4765,7 +4776,7 @@ app.post('/api/sales/returns', async (req, res) => {
 
     const originalItems = safeParseJson(sale.items, []);
     const activeReturns = await db.all('SELECT returned_items FROM sales_returns WHERE invoice_no = ? AND status = ?', [invoiceNo, 'active']);
-    
+
     // Map cumulative returned quantities per unique invoice line item (invoiceNo + lineId or lineIndex)
     const getInvoiceLineKey = (i, defaultIdx) => {
       if (i.lineId || i.line_id) return `${invoiceNo}_${i.lineId || i.line_id}`;
@@ -4794,8 +4805,8 @@ app.post('/api/sales/returns', async (req, res) => {
       const origItem = (item.lineIndex !== undefined && originalItems[item.lineIndex])
         ? originalItems[item.lineIndex]
         : (originalItems.find(i => (i.lineId && (i.lineId === item.lineId || i.lineId === item.line_id))) ||
-           originalItems.find(i => (i.productId || i.id || i.product_id) === pId && (i.unit || '').toLowerCase().trim() === uKey) ||
-           originalItems.find(i => (i.productId || i.id || i.product_id) === pId));
+          originalItems.find(i => (i.productId || i.id || i.product_id) === pId && (i.unit || '').toLowerCase().trim() === uKey) ||
+          originalItems.find(i => (i.productId || i.id || i.product_id) === pId));
 
       if (!origItem) {
         await safeRollback(db);
@@ -4808,8 +4819,8 @@ app.post('/api/sales/returns', async (req, res) => {
 
       if (Number(item.qty || 0) > remainingQty + 0.0001) {
         await safeRollback(db);
-        return res.status(400).json({ 
-          error: `Cannot return ${item.qty} ${item.unit || ''} of ${item.productName}. Maximum remaining returnable quantity for this invoice line is ${remainingQty}.` 
+        return res.status(400).json({
+          error: `Cannot return ${item.qty} ${item.unit || ''} of ${item.productName}. Maximum remaining returnable quantity for this invoice line is ${remainingQty}.`
         });
       }
     }
@@ -4881,7 +4892,7 @@ app.post('/api/sales/returns', async (req, res) => {
       const item = returnedItems[idx];
       const pId = item.productId || item.product_id || item.id || '';
       const uKey = (item.unit || '').toLowerCase().trim();
-      const origItem = originalItems.find(i => 
+      const origItem = originalItems.find(i =>
         (i.lineId && (i.lineId === item.lineId || i.lineId === item.line_id)) ||
         ((i.productId || i.id || i.product_id) === pId && (i.unit || '').toLowerCase().trim() === uKey)
       ) || originalItems.find(i => (i.productId || i.id || i.product_id) === pId);
@@ -4905,7 +4916,7 @@ app.post('/api/sales/returns', async (req, res) => {
     for (const item of returnedItems) {
       const pId = item.productId || item.product_id;
       const uKey = (item.unit || '').toLowerCase().trim();
-      const origItem = originalItems.find(i => 
+      const origItem = originalItems.find(i =>
         (i.lineId && (i.lineId === item.lineId || i.lineId === item.line_id)) ||
         ((i.productId || i.id || i.product_id) === pId && (i.unit || '').toLowerCase().trim() === uKey)
       ) || originalItems.find(i => (i.productId || i.id || i.product_id) === pId);
@@ -4925,7 +4936,7 @@ app.post('/api/sales/returns', async (req, res) => {
       for (const exItem of exchangeItems) {
         const exProdId = exItem.productId || exItem.product_id;
         const prod = await db.get('SELECT id, name, sku, stock FROM products WHERE id = ? OR sku = ?', [exProdId, exProdId]);
-        
+
         if (!prod) {
           throw new Error(`Replacement product (ID/SKU: ${exProdId}) not found in inventory.`);
         }
@@ -5039,17 +5050,17 @@ app.post('/api/sales/returns', async (req, res) => {
       pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Sales Return Immediate Sync Push Notice]:', err.message));
     }
 
-    res.json({ 
-      success: true, 
-      id, 
-      returnNo: return_no, 
+    res.json({
+      success: true,
+      id,
+      returnNo: return_no,
       return_no,
-      invoice_no: invoiceNo, 
+      invoice_no: invoiceNo,
       totalRefunded: finalTotalRefunded,
       creditNoteNo: finalCreditNoteNo
     });
   } catch (err) {
-    try { await db.run('ROLLBACK'); } catch (e) {}
+    try { await db.run('ROLLBACK'); } catch (e) { }
     console.error('Error processing sales return:', err);
     res.status(500).json({ error: err.message });
   }
@@ -5467,21 +5478,21 @@ app.post('/api/credit-notes/refund-cash', async (req, res) => {
     await db.run('COMMIT');
     res.json({ success: true, message: `Successfully refunded Rs. ${prevBal} cash for Credit Note ${cn.credit_note_no || code}`, refundedAmount: prevBal });
   } catch (err) {
-    try { await db.run('ROLLBACK'); } catch(e) {}
+    try { await db.run('ROLLBACK'); } catch (e) { }
     res.status(500).json({ error: err.message });
   }
 });
 
 app.post('/api/sales/credit-notes', async (req, res) => {
-  const { 
-    invoiceNo = '', 
-    customerId = '', 
-    customerName = '', 
-    customerPhone = '', 
-    items = [], 
-    amount = 0, 
-    reason = '', 
-    userEmail = 'system' 
+  const {
+    invoiceNo = '',
+    customerId = '',
+    customerName = '',
+    customerPhone = '',
+    items = [],
+    amount = 0,
+    reason = '',
+    userEmail = 'system'
   } = req.body;
 
   const timestamp = Date.now();
@@ -5742,7 +5753,7 @@ app.post('/api/purchase-orders', async (req, res) => {
     );
 
     await commitTxn(db, txn);
-    enqueueSync(db, 'purchase_orders', id, 'INSERT').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'purchase_orders', id, 'INSERT').then(() => runSyncCycle(db)).catch(() => { });
     res.json({ success: true, id, netTotal, originalTotal, debitNoteApplied });
   } catch (err) {
     if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
@@ -5817,7 +5828,7 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
     }
 
     await db.run('COMMIT');
-    enqueueSync(db, 'purchase_orders', id, 'UPDATE').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'purchase_orders', id, 'UPDATE').then(() => runSyncCycle(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     await safeRollback(db);
@@ -5838,7 +5849,7 @@ app.delete('/api/purchase-orders/:id', async (req, res) => {
     } else {
       await db.run('DELETE FROM purchase_orders WHERE id = ?', [id]);
     }
-    enqueueSync(db, 'purchase_orders', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'purchase_orders', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
@@ -5952,7 +5963,7 @@ app.delete(['/api/transactions/:id', '/api/finance/ledger/:id', '/api/cash-book/
 app.get('/api/cheques', async (req, res) => {
   try {
     const { direction, status, party_id, start_date, end_date } = req.query;
-    
+
     let query = 'SELECT * FROM cheque_registry WHERE 1=1';
     const params = [];
 
@@ -6211,97 +6222,44 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
             );
           }
 
-        // 3. Settle linked sale invoice or distribute across customer's pending credit sales
-        let remainingToSettle = Number(cheque.amount || 0);
+          // 3. Settle linked sale invoice or distribute across customer's pending credit sales
+          let remainingToSettle = Number(cheque.amount || 0);
 
-        if (cheque.reference_id) {
-          const linkedSale = await db.get(
-            'SELECT * FROM sales WHERE invoice_no = ? OR id = ?',
-            [cheque.reference_id, cheque.reference_id]
-          );
-
-          if (linkedSale) {
-            const currentReceived = Number(linkedSale.payment_received || 0);
-            const totalAmt = Number(linkedSale.total_amount || 0);
-            const unpaid = Math.max(0, totalAmt - currentReceived);
-            const settleAmt = Math.min(unpaid, remainingToSettle);
-            const newReceived = currentReceived + settleAmt;
-            // Same 'Paid'/'Non Paid' convention used everywhere else in the app (Sales.tsx,
-            // Customers.tsx, the overdue-reminder cron) - this cheque-clearing code previously wrote
-            // lowercase 'paid'/'pending', which no other status comparison in the app ever matches.
-            const newStatus = newReceived >= totalAmt ? 'Paid' : 'Non Paid';
-
-            await db.run(
-              'UPDATE sales SET payment_received = ?, status = ? WHERE id = ?',
-              [newReceived, newStatus, linkedSale.id]
+          if (cheque.reference_id) {
+            const linkedSale = await db.get(
+              'SELECT * FROM sales WHERE invoice_no = ? OR id = ?',
+              [cheque.reference_id, cheque.reference_id]
             );
 
-            const cpId = 'cp_chq_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-            await db.run(
-              `INSERT INTO credit_payments (
-                id, sale_id, invoice_no, customer_id, customer_name,
-                amount_paid, remaining_balance, payment_method, payment_date,
-                recorded_by, created_by, notes, created_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [
-                cpId,
-                linkedSale.id,
-                linkedSale.invoice_no,
-                linkedSale.customer_id || cheque.party_id || null,
-                linkedSale.customer_name || cheque.party_name || 'Customer',
-                settleAmt,
-                Math.max(0, totalAmt - newReceived),
-                isCashBearer ? 'Cheque (Encashed)' : 'Cheque (Cleared Bank)',
-                todayStr,
-                staffUser,
-                staffUser,
-                `Cheque #${cheque.cheque_number} Cleared`,
-                new Date().toISOString()
-              ]
-            );
-
-            remainingToSettle -= settleAmt;
-          }
-        }
-
-        // If there's still remaining amount to settle and customer is known, apply to other unpaid sales
-        if (remainingToSettle > 0 && (cheque.party_id || cheque.party_name)) {
-          const pendingSales = await db.all(
-            `SELECT * FROM sales
-             WHERE (customer_id = ? OR customer_name = ?)
-               AND (status != 'Paid' OR payment_received < total_amount)
-             ORDER BY created_at ASC`,
-            [cheque.party_id || '', cheque.party_name || '']
-          );
-
-          for (const s of pendingSales) {
-            if (remainingToSettle <= 0) break;
-            const currentReceived = Number(s.payment_received || 0);
-            const totalAmt = Number(s.total_amount || 0);
-            const unpaid = Math.max(0, totalAmt - currentReceived);
-            if (unpaid > 0) {
+            if (linkedSale) {
+              const currentReceived = Number(linkedSale.payment_received || 0);
+              const totalAmt = Number(linkedSale.total_amount || 0);
+              const unpaid = Math.max(0, totalAmt - currentReceived);
               const settleAmt = Math.min(unpaid, remainingToSettle);
               const newReceived = currentReceived + settleAmt;
+              // Same 'Paid'/'Non Paid' convention used everywhere else in the app (Sales.tsx,
+              // Customers.tsx, the overdue-reminder cron) - this cheque-clearing code previously wrote
+              // lowercase 'paid'/'pending', which no other status comparison in the app ever matches.
               const newStatus = newReceived >= totalAmt ? 'Paid' : 'Non Paid';
 
               await db.run(
                 'UPDATE sales SET payment_received = ?, status = ? WHERE id = ?',
-                [newReceived, newStatus, s.id]
+                [newReceived, newStatus, linkedSale.id]
               );
 
               const cpId = 'cp_chq_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
               await db.run(
                 `INSERT INTO credit_payments (
-                  id, sale_id, invoice_no, customer_id, customer_name,
-                  amount_paid, remaining_balance, payment_method, payment_date,
-                  recorded_by, created_by, notes, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                id, sale_id, invoice_no, customer_id, customer_name,
+                amount_paid, remaining_balance, payment_method, payment_date,
+                recorded_by, created_by, notes, created_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
                   cpId,
-                  s.id,
-                  s.invoice_no,
-                  s.customer_id || cheque.party_id || null,
-                  s.customer_name || cheque.party_name || 'Customer',
+                  linkedSale.id,
+                  linkedSale.invoice_no,
+                  linkedSale.customer_id || cheque.party_id || null,
+                  linkedSale.customer_name || cheque.party_name || 'Customer',
                   settleAmt,
                   Math.max(0, totalAmt - newReceived),
                   isCashBearer ? 'Cheque (Encashed)' : 'Cheque (Cleared Bank)',
@@ -6316,9 +6274,62 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
               remainingToSettle -= settleAmt;
             }
           }
+
+          // If there's still remaining amount to settle and customer is known, apply to other unpaid sales
+          if (remainingToSettle > 0 && (cheque.party_id || cheque.party_name)) {
+            const pendingSales = await db.all(
+              `SELECT * FROM sales
+             WHERE (customer_id = ? OR customer_name = ?)
+               AND (status != 'Paid' OR payment_received < total_amount)
+             ORDER BY created_at ASC`,
+              [cheque.party_id || '', cheque.party_name || '']
+            );
+
+            for (const s of pendingSales) {
+              if (remainingToSettle <= 0) break;
+              const currentReceived = Number(s.payment_received || 0);
+              const totalAmt = Number(s.total_amount || 0);
+              const unpaid = Math.max(0, totalAmt - currentReceived);
+              if (unpaid > 0) {
+                const settleAmt = Math.min(unpaid, remainingToSettle);
+                const newReceived = currentReceived + settleAmt;
+                const newStatus = newReceived >= totalAmt ? 'Paid' : 'Non Paid';
+
+                await db.run(
+                  'UPDATE sales SET payment_received = ?, status = ? WHERE id = ?',
+                  [newReceived, newStatus, s.id]
+                );
+
+                const cpId = 'cp_chq_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+                await db.run(
+                  `INSERT INTO credit_payments (
+                  id, sale_id, invoice_no, customer_id, customer_name,
+                  amount_paid, remaining_balance, payment_method, payment_date,
+                  recorded_by, created_by, notes, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                  [
+                    cpId,
+                    s.id,
+                    s.invoice_no,
+                    s.customer_id || cheque.party_id || null,
+                    s.customer_name || cheque.party_name || 'Customer',
+                    settleAmt,
+                    Math.max(0, totalAmt - newReceived),
+                    isCashBearer ? 'Cheque (Encashed)' : 'Cheque (Cleared Bank)',
+                    todayStr,
+                    staffUser,
+                    staffUser,
+                    `Cheque #${cheque.cheque_number} Cleared`,
+                    new Date().toISOString()
+                  ]
+                );
+
+                remainingToSettle -= settleAmt;
+              }
+            }
+          }
         }
-      }
-    } else if (direction === 'OUTWARD') {
+      } else if (direction === 'OUTWARD') {
         // Outward cheque payment realization / bank deduction
         const txId = 't_chq_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
         await db.run(
@@ -6946,7 +6957,7 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
     );
 
     await commitTxn(db, txn);
-    enqueueSync(db, 'purchase_orders', po.id, 'UPDATE').then(() => runSyncCycle(db)).catch(() => {});
+    enqueueSync(db, 'purchase_orders', po.id, 'UPDATE').then(() => runSyncCycle(db)).catch(() => { });
 
     res.json({
       success: true,
@@ -7495,7 +7506,7 @@ app.get('/api/settings', async (req, res) => {
     let settings = null;
     try {
       settings = await getRuntimeSettingsSnapshot();
-    } catch (_) {}
+    } catch (_) { }
 
     if (!settings) {
       settings = { ...DEFAULT_RUNTIME_SETTINGS, id: 'global' };
@@ -7642,7 +7653,7 @@ const getBackupLogsHandler = async (req, res) => {
     `);
 
     let logs = await db.all('SELECT * FROM backup_logs ORDER BY timestamp DESC');
-    
+
     // Auto-reconcile physical backup files in candidate directories with DB logs
     const candidateDirs = [
       backupsDir,
@@ -7662,10 +7673,10 @@ const getBackupLogsHandler = async (req, res) => {
           if (!loggedNames.has(file)) {
             const filePath = path.join(bDir, file);
             let stats = { mtimeMs: Date.now(), mtime: new Date() };
-            try { stats = await fs.promises.stat(filePath); } catch (e) {}
+            try { stats = await fs.promises.stat(filePath); } catch (e) { }
             const logId = `b_${Math.floor(stats.mtimeMs || Date.now())}`;
             const timestamp = stats.mtime ? stats.mtime.toISOString() : new Date().toISOString();
-            
+
             await db.run(
               'INSERT INTO backup_logs (id, file_name, file_path, status, type, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
               [logId, file, filePath, 'Success', 'Manual', timestamp]
@@ -7765,7 +7776,7 @@ const updateEnvCredentials = async (newEnvObj) => {
     try {
       await fs.promises.access(envPath);
       content = await fs.promises.readFile(envPath, 'utf8');
-    } catch (e) {}
+    } catch (e) { }
 
     let lines = content.split(/\r?\n/);
 
@@ -7789,7 +7800,7 @@ const updateEnvCredentials = async (newEnvObj) => {
     const envDir = path.dirname(envPath);
     try {
       await fs.promises.mkdir(envDir, { recursive: true });
-    } catch (e) {}
+    } catch (e) { }
 
     await fs.promises.writeFile(envPath, newContent, 'utf8');
     console.log('✅ AppData .env configuration updated successfully at:', envPath);
@@ -7863,7 +7874,7 @@ const saveSmtpConfigHandler = async (req, res) => {
           ALTER TABLE system_settings ADD COLUMN gmail_user TEXT;
           ALTER TABLE system_settings ADD COLUMN gmail_pass TEXT;
         `);
-      } catch (_) {}
+      } catch (_) { }
 
       const currentSettings = await getRuntimeSettingsSnapshot();
       const finalUser = effectiveUser || currentSettings.smtp_user || currentSettings.gmail_user || '';
@@ -7898,7 +7909,7 @@ const saveSmtpConfigHandler = async (req, res) => {
             WHERE id = 'global'`,
             args: [finalUser, finalPass, finalUser, finalPass, effectiveHost, effectivePort, new Date().toISOString()]
           });
-        } catch (_) {}
+        } catch (_) { }
       }
     } catch (dbErr) {
       console.warn('[SMTP] Database persistence warning:', dbErr.message);
@@ -8315,7 +8326,7 @@ app.get(['/api/profiles/:id', '/api/users/:id'], async (req, res) => {
         'SELECT id, email, role, name, avatar, permissions, custom_permissions, created_at FROM profiles WHERE id = ?',
         [id]
       );
-    } catch (_) {}
+    } catch (_) { }
 
     if (!user) {
       try {
@@ -8323,7 +8334,7 @@ app.get(['/api/profiles/:id', '/api/users/:id'], async (req, res) => {
         if (u) {
           user = { ...u, avatar: '', permissions: null, custom_permissions: null };
         }
-      } catch (_) {}
+      } catch (_) { }
     }
 
     if (!user) {
@@ -8361,10 +8372,10 @@ app.put(['/api/profiles/:id', '/api/users/:id'], requireAdmin, async (req, res) 
         'UPDATE users SET name = ?, role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
         [p.name, p.role, id]
       );
-    } catch (_) {}
+    } catch (_) { }
 
-    enqueueSync(db, 'profiles', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => {});
-    enqueueSync(db, 'users', id, 'UPSERT').catch(() => {});
+    enqueueSync(db, 'profiles', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'users', id, 'UPSERT').catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -8377,9 +8388,9 @@ app.delete(['/api/profiles/:id', '/api/users/:id'], requireAdmin, async (req, re
     await db.run('DELETE FROM profiles WHERE id = ?', [id]);
     try {
       await db.run('DELETE FROM users WHERE id = ?', [id]);
-    } catch (_) {}
-    enqueueSync(db, 'profiles', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => {});
-    enqueueSync(db, 'users', id, 'DELETE').catch(() => {});
+    } catch (_) { }
+    enqueueSync(db, 'profiles', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'users', id, 'DELETE').catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -8398,12 +8409,12 @@ app.put(['/api/profiles/:id/password', '/api/users/:id/password'], async (req, r
     await db.run('UPDATE profiles SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [hashedPassword, id]);
     try {
       await db.run('UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [hashedPassword, id]);
-    } catch (_) {}
+    } catch (_) { }
 
     const updatedProfile = await db.get('SELECT * FROM profiles WHERE id = ?', [id]);
     if (updatedProfile) {
-      enqueueSync(db, 'profiles', id, 'UPSERT', { ...updatedProfile, __sync_password_change: true }).catch(() => {});
-      enqueueSync(db, 'users', id, 'UPSERT').catch(() => {});
+      enqueueSync(db, 'profiles', id, 'UPSERT', { ...updatedProfile, __sync_password_change: true }).catch(() => { });
+      enqueueSync(db, 'users', id, 'UPSERT').catch(() => { });
     }
     res.json({ success: true });
   } catch (err) {
@@ -8446,7 +8457,7 @@ app.put('/api/permissions', requireAdmin, async (req, res) => {
 // SYSTEM DATA RESET ENDPOINT
 app.post('/api/system/reset-data', async (req, res) => {
   const { mode, user_email, passkey } = req.body;
-  
+
   try {
     const settings = await db.get("SELECT * FROM system_settings WHERE id = 'global'");
     const validPasskey = settings?.void_passkey || settings?.return_passkey || '1234';
@@ -8550,7 +8561,7 @@ app.get('/api/quotations/next-number', async (req, res) => {
     const rows = await db.all('SELECT quote_no FROM quotations');
     let maxNum = 0;
     let prefix = 'Q-';
-    
+
     rows.forEach(r => {
       if (r.quote_no) {
         const match = r.quote_no.match(/^(.*?)(\d+)$/);
@@ -8870,11 +8881,11 @@ app.post('/api/stock_adjustments', async (req, res) => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [adjId, product_id, product_name, old_qty || 0, new_qty || 0, reason || '', type || 'Adjustment', user_email || '', timestamp]
     );
-    enqueueSync(db, 'stock_adjustments', adjId, 'UPSERT').catch(() => {});
+    enqueueSync(db, 'stock_adjustments', adjId, 'UPSERT').catch(() => { });
     if (product_id) {
-      enqueueSync(db, 'products', product_id, 'UPSERT').catch(() => {});
+      enqueueSync(db, 'products', product_id, 'UPSERT').catch(() => { });
     }
-    runSyncCycle(db).catch(() => {});
+    runSyncCycle(db).catch(() => { });
 
     res.json({ success: true, id: adjId });
   } catch (err) {
@@ -8933,7 +8944,7 @@ app.get('/api/system/network-info', (req, res) => {
   try {
     const interfaces = os.networkInterfaces();
     const addresses = [];
-    
+
     for (const name of Object.keys(interfaces)) {
       for (const iface of interfaces[name]) {
         // Skip internal loopback and non-IPv4 addresses
@@ -8945,7 +8956,7 @@ app.get('/api/system/network-info', (req, res) => {
         }
       }
     }
-    
+
     res.json({
       addresses,
       port: PORT
@@ -8970,8 +8981,8 @@ app.post('/api/open-url', (req, res) => {
   const cmd = process.platform === 'win32'
     ? `start "" "${url.replace(/"/g, '""')}"`
     : process.platform === 'darwin'
-    ? `open "${url}"`
-    : `xdg-open "${url}"`;
+      ? `open "${url}"`
+      : `xdg-open "${url}"`;
 
   exec(cmd, (err) => {
     if (err) {
@@ -9054,7 +9065,7 @@ function notifySessionClientsChanged(sessionId) {
     sessionSet.forEach((clientRes) => {
       try {
         clientRes.write(`data: ${payload}\n\n`);
-      } catch (_) {}
+      } catch (_) { }
     });
   }
 
@@ -9063,7 +9074,7 @@ function notifySessionClientsChanged(sessionId) {
     allSubscribers.forEach((clientRes) => {
       try {
         clientRes.write(`data: ${payload}\n\n`);
-      } catch (_) {}
+      } catch (_) { }
     });
   }
 }
@@ -9110,7 +9121,7 @@ async function getOrCreateSslCertificate() {
       if (cert && key) {
         return { cert, key };
       }
-    } catch (e) {}
+    } catch (e) { }
   }
 
   const { addresses } = getLocalNetworkAddresses();
@@ -9311,7 +9322,7 @@ app.post('/api/scanner/broadcast', (req, res) => {
       try {
         client.write(`data: ${payload}\n\n`);
         deliveredCount++;
-      } catch (_) {}
+      } catch (_) { }
     });
   }
 
