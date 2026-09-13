@@ -3072,13 +3072,17 @@ async function ensureBulkImportColumns(database) {
 
 // BULK PRODUCT IMPORT ROUTE (Excel / CSV)
 app.post(['/api/products/bulk-import', '/api/products/bulk', '/api/products/import'], async (req, res) => {
-  const user_email = req.headers['x-user-email'] || 'system';
+  const user_email = req.headers['x-user-email'] || req.authUser?.email || 'system';
   try {
-    await ensureBulkImportColumns(db);
+    const activeDb = typeof getDb === 'function' ? await getDb() : db;
+    await ensureBulkImportColumns(activeDb);
+
     const rawItems = Array.isArray(req.body) ? req.body : (req.body?.products || req.body?.items || [req.body]);
     if (!Array.isArray(rawItems) || rawItems.length === 0) {
       return res.status(400).json({ error: 'No product records provided for import.' });
     }
+
+    console.log(`[BULK IMPORT] Received ${rawItems.length} items from ${user_email}`);
 
     const cleanKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const getValue = (row, possibleKeys) => {
@@ -3097,15 +3101,26 @@ app.post(['/api/products/bulk-import', '/api/products/bulk', '/api/products/impo
       return '';
     };
 
-    let importedCount = 0;
-    const insertedIds = [];
+    // Pre-cache suppliers & existing products in parallel for instantaneous batch mapping (<50ms)
+    const [existingSuppliers, existingProducts] = await Promise.all([
+      activeDb.all("SELECT id, name, phone FROM suppliers").catch(() => []),
+      activeDb.all("SELECT id, sku, LOWER(TRIM(name)) as clean_name FROM products").catch(() => [])
+    ]);
 
-    // Pre-cache suppliers for instant mapping
-    const existingSuppliers = await db.all("SELECT id, name, phone FROM suppliers").catch(() => []);
     const supMap = new Map();
     (existingSuppliers || []).forEach(s => {
-      if (s && s.name) supMap.set(s.name.trim().toLowerCase(), s);
+      if (s && s.name) supMap.set(String(s.name).trim().toLowerCase(), s);
     });
+
+    const skuMap = new Map();
+    const nameMap = new Map();
+    (existingProducts || []).forEach(p => {
+      if (p.sku) skuMap.set(String(p.sku).trim(), p.id);
+      if (p.clean_name) nameMap.set(String(p.clean_name).trim(), p.id);
+    });
+
+    const preparedStatements = [];
+    const insertedIds = [];
 
     for (let idx = 0; idx < rawItems.length; idx++) {
       const row = rawItems[idx];
@@ -3170,42 +3185,65 @@ app.post(['/api/products/bulk-import', '/api/products/bulk', '/api/products/impo
         }
       }
 
-      // Check if product already exists by sku or name
-      const existing = await db.get(
-        'SELECT id, sku FROM products WHERE sku = ? OR LOWER(TRIM(name)) = LOWER(TRIM(?))',
-        [sku, name]
-      ).catch(() => null);
+      const existingId = skuMap.get(sku) || nameMap.get(name.toLowerCase().trim());
+      const id = existingId || row.id || crypto.randomUUID();
 
-      const id = (existing && existing.id) ? existing.id : (row.id || crypto.randomUUID());
-      const finalSku = (existing && existing.sku) ? existing.sku : sku;
+      const args = [
+        id, name, sku, category, price, price, costPrice, stock, stock,
+        minStock, finalSupplier, supplierPhone, unit, barcode, brand, serialNo, batchCode,
+        expiryDate, measureDetails
+      ];
 
-      await db.run(
-        `INSERT OR REPLACE INTO products (
+      preparedStatements.push({
+        id,
+        sql: `INSERT OR REPLACE INTO products (
           id, name, sku, category, price, selling_price, cost_price, stock, stock_quantity,
           min_stock, supplier, supplier_phone, unit, barcode, brand, serial_no, batch_code,
           expiry_date, measure_details, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-        [
-          id, name, finalSku, category, price, price, costPrice, stock, stock,
-          minStock, finalSupplier, supplierPhone, unit, barcode, brand, serialNo, batchCode,
-          expiryDate, measureDetails
-        ]
-      );
-
-      enqueueSync(db, 'products', id, 'UPSERT').catch(() => {});
+        args
+      });
       insertedIds.push(id);
-      importedCount++;
     }
 
-    runSyncCycle(db).catch(() => {});
-    await logAudit(user_email, 'PRODUCT_BULK_IMPORT', `Bulk imported/updated ${importedCount} product records.`);
+    if (preparedStatements.length === 0) {
+      return res.status(400).json({ error: 'No valid products could be processed from the payload.' });
+    }
+
+    // High-performance batch execution:
+    // When connected to Turso Cloud (Web / Vercel), execute statements via atomic pipeline batches of 50
+    const turso = getTursoClient();
+    if (turso && isTurso()) {
+      const BATCH_SIZE = 50;
+      for (let i = 0; i < preparedStatements.length; i += BATCH_SIZE) {
+        const slice = preparedStatements.slice(i, i + BATCH_SIZE);
+        await turso.batch(slice.map(s => ({ sql: s.sql, args: s.args })));
+      }
+    } else {
+      // Local SQLite / Desktop mode: execute within a single transaction
+      await activeDb.run('BEGIN TRANSACTION');
+      try {
+        for (const s of preparedStatements) {
+          await activeDb.run(s.sql, s.args);
+          enqueueSync(activeDb, 'products', s.id, 'UPSERT').catch(() => {});
+        }
+        await activeDb.run('COMMIT');
+      } catch (txnErr) {
+        await activeDb.run('ROLLBACK').catch(() => {});
+        throw txnErr;
+      }
+      runSyncCycle(activeDb).catch(() => {});
+    }
+
+    await logAudit(user_email, 'PRODUCT_BULK_IMPORT', `Bulk imported/updated ${preparedStatements.length} product records.`);
+    console.log(`[BULK IMPORT] Successfully persisted ${preparedStatements.length} items to database.`);
 
     return res.json({
       success: true,
-      count: importedCount,
-      imported: importedCount,
+      count: preparedStatements.length,
+      imported: preparedStatements.length,
       ids: insertedIds,
-      message: `Successfully imported ${importedCount} products.`
+      message: `Successfully imported ${preparedStatements.length} products.`
     });
   } catch (err) {
     console.error('Error bulk importing products:', err);

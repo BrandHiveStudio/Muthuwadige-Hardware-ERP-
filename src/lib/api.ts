@@ -54,8 +54,9 @@ export const getAuthHeaders = (): Record<string, string> => {
   // an admin.
   const headers: Record<string, string> = {};
   try {
-    const token = localStorage.getItem('token') || sessionStorage.getItem('token') || localStorage.getItem('auth_token') || sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token');
+    let token = localStorage.getItem('token') || sessionStorage.getItem('token') || localStorage.getItem('auth_token') || sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token');
     if (token) {
+      token = token.replace(/^Bearer\s+/i, '').trim();
       headers['Authorization'] = `Bearer ${token}`;
     }
     const userStr = localStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user') || sessionStorage.getItem('erp_user') || sessionStorage.getItem('hardware_erp_user');
@@ -251,15 +252,15 @@ export const api = {
       return res.json();
     },
     bulkImport: async (products: any[]) => {
-      const token = localStorage.getItem('token') || sessionStorage.getItem('token') || localStorage.getItem('auth_token') || sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token') || '';
+      const authHeaders = getAuthHeaders();
       const res = await fetchWithTimeout(`${API_URL}/products/bulk-import`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          ...authHeaders
         },
         body: JSON.stringify(products)
-      }, 45000);
+      }, 60000);
       if (!res.ok) await handleError(res, 'Failed to bulk import products');
       return res.json();
     },
