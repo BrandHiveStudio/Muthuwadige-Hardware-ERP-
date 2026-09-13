@@ -7,7 +7,7 @@
  * - Zero Cashier Interruption: Network drops are tracked silently without UI alerts.
  */
 
-import { getTursoClient } from '../db/connection.js';
+import { getTursoClient, isTurso } from '../db/connection.js';
 
 let isOnline = true;
 let isSyncing = false;
@@ -400,6 +400,8 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
  * Execute a complete bidirectional synchronization cycle
  */
 export async function runSyncCycle(localDb) {
+  const isWeb = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.IS_WEB_CLIENT === '1' || (typeof isTurso === 'function' && isTurso());
+  if (isWeb) return;
   if (isSyncing || !localDb) return;
   await ensureSyncSchema(localDb);
   const tursoClient = getTursoClient();
@@ -444,6 +446,11 @@ export async function runSyncCycle(localDb) {
  * UNIVERSAL DELETION PRUNING: Automatically drops any local record deleted on Cloud.
  */
 export async function pullDownstreamChanges(localDb, tursoClient) {
+  // CRITICAL: Never execute downstream pull or prune on Vercel Serverless or in Cloud Web mode
+  const isWebClient = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.IS_WEB_CLIENT === '1' || (typeof isTurso === 'function' && isTurso());
+  if (isWebClient) {
+    return { success: true, pulled: 0, message: 'Web environment: sync pull bypassed.' };
+  }
   if (!localDb || !tursoClient) return;
 
   // Mark "an inbound cloud sync write is in progress" for the duration of this whole pull batch.
@@ -777,7 +784,8 @@ export async function triggerPush(localDb) {
  * Start automated background sync worker (runs every 30 seconds fallback with immediate event-driven checkout pushes)
  */
 export function startBackgroundSyncWorker(localDb, intervalMs = 30000) {
-  if (isWebClient) {
+  const isWeb = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.IS_WEB_CLIENT === '1' || (typeof isTurso === 'function' && isTurso()) || isWebClient;
+  if (isWeb) {
     console.log('🌐 [BackgroundSync] Web client environment detected. Background worker disabled (direct cloud queries).');
     return;
   }

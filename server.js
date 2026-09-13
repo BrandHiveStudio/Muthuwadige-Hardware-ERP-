@@ -2617,8 +2617,10 @@ app.post('/api/auth/login', async (req, res) => {
       }
     }
 
-    // Trigger a non-blocking background catalog sync
-    pullDownstreamChanges(db, tursoClient).catch(console.error);
+    // Trigger a non-blocking background catalog sync only on local desktop
+    if (!process.env.VERCEL && process.env.APP_ROLE !== 'web' && !isTurso()) {
+      pullDownstreamChanges(db, tursoClient).catch(console.error);
+    }
 
     // Issue session token and return HTTP 200 with user object
     const finalProfile = (await db.get('SELECT * FROM profiles WHERE id = ?', [resolvedProfile.id])) || resolvedProfile;

@@ -1,4 +1,4 @@
-import { getTursoClient } from '../db/connection.ts';
+import { getTursoClient, isTurso } from '../db/connection.ts';
 import type { Database } from 'sqlite';
 import type { Client } from '@libsql/client';
 
@@ -354,6 +354,8 @@ export async function pushUpstreamChanges(localDb: any, tursoClient: Client | nu
 }
 
 export async function runSyncCycle(localDb: any): Promise<void> {
+  const isWeb = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.IS_WEB_CLIENT === '1' || (typeof isTurso === 'function' && isTurso());
+  if (isWeb) return;
   if (isSyncing || !localDb) return;
   await ensureSyncSchema(localDb);
   const tursoClient = getTursoClient();
@@ -396,7 +398,12 @@ export async function runSyncCycle(localDb: any): Promise<void> {
  * permissions, and pricing rules.
  * UNIVERSAL DELETION PRUNING: Automatically drops any local record deleted on Cloud.
  */
-export async function pullDownstreamChanges(localDb: any, tursoClient: Client | null): Promise<void> {
+export async function pullDownstreamChanges(localDb: any, tursoClient: Client | null): Promise<any> {
+  // CRITICAL: Never execute downstream pull or prune on Vercel Serverless or in Cloud Web mode
+  const isWebClient = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.IS_WEB_CLIENT === '1' || (typeof isTurso === 'function' && isTurso());
+  if (isWebClient) {
+    return { success: true, pulled: 0, message: 'Web environment: sync pull bypassed.' };
+  }
   if (!localDb || !tursoClient) return;
 
   // 1. Factory Reset Detection on Turso Cloud
@@ -682,7 +689,8 @@ export async function triggerPush(localDb: any): Promise<void> {
 }
 
 export function startBackgroundSyncWorker(localDb: any, intervalMs = 30000): any {
-  if (isWebClient) return null;
+  const isWeb = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.IS_WEB_CLIENT === '1' || (typeof isTurso === 'function' && isTurso()) || isWebClient;
+  if (isWeb) return null;
 
   if (syncIntervalId) {
     clearInterval(syncIntervalId);
