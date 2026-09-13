@@ -38,6 +38,72 @@ process.on('unhandledRejection', (reason) => {
   }
 });
 
+// Default Turso Cloud credentials for new client installations
+const DEFAULT_TURSO_DATABASE_URL = 'libsql://mwhardware-db-sanoj-hardware.aws-ap-south-1.turso.io';
+const DEFAULT_TURSO_AUTH_TOKEN = 'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODkyNTY3MzAsImlkIjoiMDFhMDY3Y2YtZWQwMS03MDYzLWE3MjQtNmIyZTE1ZjJmZWU5Iiwia2lkIjoiSUNBcmxEQWtuSmRPOVBfalA3WG03dDlvdE91NGI1SjFTbWpmY281b1dJayIsInJpZCI6IjQzNzRjMmFjLThiZjQtNDczNi05NzllLTdlYTUyNTk1MWVjNiJ9.Rhr2wtm6EDBOJC959E4ZL_Ta7vp1brzJ6FsEcriblyAKYvbd3b3a2HBryb12qHxfKUEQ7o-QfOvabsukXFwICw';
+const DEFAULT_JWT_SECRET = 'muthuwadige_static_production_secret_key_2026';
+
+// Ensure default Turso cloud credentials and JWT secret exist in %APPDATA%\Muthuwadige Hardware ERP\.env
+function seedDefaultEnv(userDataPath) {
+  try {
+    if (!userDataPath) return;
+    const envFile = path.join(userDataPath, '.env');
+    if (!fs.existsSync(envFile)) {
+      let bundledEnvContent = '';
+      const bundledPaths = [
+        path.join(app.getAppPath ? app.getAppPath() : __dirname, '.env'),
+        path.join(__dirname, '.env')
+      ];
+      for (const bp of bundledPaths) {
+        if (fs.existsSync(bp)) {
+          bundledEnvContent = fs.readFileSync(bp, 'utf-8');
+          break;
+        }
+      }
+
+      if (bundledEnvContent && bundledEnvContent.includes('TURSO_DATABASE_URL=')) {
+        if (!bundledEnvContent.includes('JWT_SECRET=')) {
+          bundledEnvContent += `\nJWT_SECRET=${DEFAULT_JWT_SECRET}\n`;
+        }
+        fs.writeFileSync(envFile, bundledEnvContent, 'utf-8');
+        console.log('✅ Seeded AppData .env from bundled .env');
+      } else {
+        const defaultEnv = [
+          '# Turso Cloud libSQL Database Credentials',
+          `TURSO_DATABASE_URL=${DEFAULT_TURSO_DATABASE_URL}`,
+          `TURSO_AUTH_TOKEN=${DEFAULT_TURSO_AUTH_TOKEN}`,
+          `JWT_SECRET=${DEFAULT_JWT_SECRET}`,
+          ''
+        ].join('\n');
+        fs.writeFileSync(envFile, defaultEnv, 'utf-8');
+        console.log('✅ Default Turso cloud credentials seeded into', envFile);
+      }
+    } else {
+      const content = fs.readFileSync(envFile, 'utf-8');
+      let updated = content;
+      let needUpdate = false;
+      if (!content.includes('TURSO_DATABASE_URL=')) {
+        updated += `\nTURSO_DATABASE_URL=${DEFAULT_TURSO_DATABASE_URL}\n`;
+        needUpdate = true;
+      }
+      if (!content.includes('TURSO_AUTH_TOKEN=')) {
+        updated += `\nTURSO_AUTH_TOKEN=${DEFAULT_TURSO_AUTH_TOKEN}\n`;
+        needUpdate = true;
+      }
+      if (!content.includes('JWT_SECRET=')) {
+        updated += `\nJWT_SECRET=${DEFAULT_JWT_SECRET}\n`;
+        needUpdate = true;
+      }
+      if (needUpdate) {
+        fs.writeFileSync(envFile, updated, 'utf-8');
+        console.log('✅ Appended default credentials & JWT secret to', envFile);
+      }
+    }
+  } catch (err) {
+    console.error('❌ Failed to seed default .env in AppData:', err);
+  }
+}
+
 // Ensure consistent production AppData directory path resolution
 let USER_DATA_PATH = '';
 try {
@@ -48,6 +114,7 @@ try {
   if (!fs.existsSync(USER_DATA_PATH)) {
     fs.mkdirSync(USER_DATA_PATH, { recursive: true });
   }
+  seedDefaultEnv(USER_DATA_PATH);
 } catch (e) {
   console.error('Error configuring userData path:', e);
 }
@@ -64,7 +131,10 @@ function startBackendServer() {
 
   const serverEnv = {
     ...process.env,
-    NODE_ENV: isPackaged ? 'production' : (process.env.NODE_ENV || 'development')
+    NODE_ENV: isPackaged ? 'production' : (process.env.NODE_ENV || 'development'),
+    TURSO_DATABASE_URL: process.env.TURSO_DATABASE_URL || DEFAULT_TURSO_DATABASE_URL,
+    TURSO_AUTH_TOKEN: process.env.TURSO_AUTH_TOKEN || DEFAULT_TURSO_AUTH_TOKEN,
+    JWT_SECRET: process.env.JWT_SECRET || DEFAULT_JWT_SECRET
   };
 
   if (USER_DATA_PATH) {

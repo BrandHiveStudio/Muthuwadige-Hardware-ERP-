@@ -499,6 +499,11 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
     if (cloudWipeTimestamp > 0) {
       let localWipeTimestamp = 0;
       try {
+        try { await localDb.run('ALTER TABLE system_settings ADD COLUMN key TEXT;'); } catch (_) {}
+        try { await localDb.run('ALTER TABLE system_settings ADD COLUMN value TEXT;'); } catch (_) {}
+        try { await localDb.run('ALTER TABLE system_settings ADD COLUMN system_wipe_timestamp TEXT;'); } catch (_) {}
+        try { await localDb.exec('CREATE TABLE IF NOT EXISTS system_meta (key TEXT PRIMARY KEY, value TEXT);'); } catch (_) {}
+
         const localCheck = await localDb.get(
           "SELECT value, system_wipe_timestamp FROM system_settings WHERE key = 'SYSTEM_WIPE_TIMESTAMP' OR id = 'SYSTEM_WIPE_TIMESTAMP' OR id = 'global'"
         );
@@ -506,6 +511,13 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
           const raw = localCheck.value || localCheck.system_wipe_timestamp;
           if (raw) {
             localWipeTimestamp = Number(raw) || new Date(raw).getTime();
+          }
+        }
+        const metaCheck = await localDb.get("SELECT value FROM system_meta WHERE key = 'SYSTEM_WIPE_TIMESTAMP'");
+        if (metaCheck?.value) {
+          const metaTs = Number(metaCheck.value) || new Date(metaCheck.value).getTime();
+          if (metaTs > localWipeTimestamp) {
+            localWipeTimestamp = metaTs;
           }
         }
       } catch (_) {}
@@ -538,11 +550,15 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
           await localDb.run("DELETE FROM custom_permissions WHERE user_id NOT IN (SELECT id FROM users WHERE LOWER(email) = 'sanojhardware@gmail.com');");
         } catch (_) {}
 
-        // Record wipe timestamp in local SQLite system_settings
+        // Record wipe timestamp in local SQLite system_settings and system_meta
         try {
           await localDb.run(
             "INSERT OR REPLACE INTO system_settings (id, key, value, system_wipe_timestamp) VALUES ('SYSTEM_WIPE_TIMESTAMP', 'SYSTEM_WIPE_TIMESTAMP', ?, ?)",
             [String(cloudWipeTimestamp), String(cloudWipeTimestamp)]
+          );
+          await localDb.run(
+            "INSERT OR REPLACE INTO system_meta (key, value) VALUES ('SYSTEM_WIPE_TIMESTAMP', ?)",
+            [String(cloudWipeTimestamp)]
           );
         } catch (_) {}
 

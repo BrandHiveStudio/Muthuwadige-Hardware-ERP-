@@ -15,7 +15,7 @@ import bcrypt from 'bcryptjs';
 import os from 'os';
 import https from 'https';
 import selfsigned from 'selfsigned';
-import dbAdapter, { initDb, isTurso, getTursoClient, getDb } from './src/db/connection.js';
+import dbAdapter, { initDb, isTurso, getTursoClient, getDb, DEFAULT_TURSO_DATABASE_URL, DEFAULT_TURSO_AUTH_TOKEN } from './src/db/connection.js';
 import { createClient } from '@libsql/client';
 import { startBackgroundSyncWorker, getSyncStatus, runSyncCycle, enqueueSync, pullDownstreamChanges, reconcileLocalCatalogWithCloud, pushUpstreamChanges, pingTurso } from './src/services/syncService.js';
 
@@ -83,16 +83,27 @@ if (!process.env.VERCEL) {
         const bundledEnv = path.join(__dirname, '.env');
         if (fs.existsSync(bundledEnv)) {
           existingEnv = fs.readFileSync(bundledEnv, 'utf-8');
-          fs.writeFileSync(envPath, existingEnv);
+        } else {
+          existingEnv = [
+            '# Turso Cloud libSQL Database Credentials',
+            `TURSO_DATABASE_URL=${DEFAULT_TURSO_DATABASE_URL}`,
+            `TURSO_AUTH_TOKEN=${DEFAULT_TURSO_AUTH_TOKEN}`,
+            ''
+          ].join('\n');
         }
+        fs.writeFileSync(envPath, existingEnv, 'utf-8');
+        console.log('✅ Default Turso cloud credentials seeded into AppData .env:', envPath);
       }
 
       if (existingEnv) {
         dotenv.config({ path: envPath, override: false });
       }
 
-      if (!process.env.TURSO_DATABASE_URL || !process.env.TURSO_AUTH_TOKEN) {
-        console.warn('⚠️  No TURSO_DATABASE_URL/TURSO_AUTH_TOKEN configured for this installation - cloud sync is disabled. Local operation is unaffected.');
+      if (!process.env.TURSO_DATABASE_URL) {
+        process.env.TURSO_DATABASE_URL = DEFAULT_TURSO_DATABASE_URL;
+      }
+      if (!process.env.TURSO_AUTH_TOKEN) {
+        process.env.TURSO_AUTH_TOKEN = DEFAULT_TURSO_AUTH_TOKEN;
       }
     } catch (err) {
       console.warn('Notice ensuring .env in AppData path:', err.message);
@@ -112,6 +123,13 @@ if (!process.env.VERCEL) {
 }
 
 dotenv.config({ path: envPath });
+
+if (!process.env.TURSO_DATABASE_URL) {
+  process.env.TURSO_DATABASE_URL = DEFAULT_TURSO_DATABASE_URL;
+}
+if (!process.env.TURSO_AUTH_TOKEN) {
+  process.env.TURSO_AUTH_TOKEN = DEFAULT_TURSO_AUTH_TOKEN;
+}
 
 // Ensure global caching for serverless environments (Turso Client Singleton)
 if (!global.__tursoClient && process.env.TURSO_DATABASE_URL && process.env.TURSO_AUTH_TOKEN) {
@@ -523,19 +541,55 @@ function normalizeRuntimeSettings(payload = {}) {
 // convention (case-insensitive 'admin' / 'super_admin' / 'super admin').
 // ---------------------------------------------------------------------------
 
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const JWT_SECRET = process.env.JWT_SECRET || 'muthuwadige_static_production_secret_key_2026';
+
+function signJwt(payload, expiresInMs = SESSION_TTL_MS) {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const now = Math.floor(Date.now() / 1000);
+  const exp = now + Math.floor(expiresInMs / 1000);
+  const claims = { ...payload, iat: now, exp };
+  const body = Buffer.from(JSON.stringify(claims)).toString('base64url');
+  const signature = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+  return `${header}.${body}.${signature}`;
+}
+
+function verifyJwt(token) {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [headerB64, bodyB64, signature] = parts;
+  try {
+    const expectedSig = crypto.createHmac('sha256', JWT_SECRET).update(`${headerB64}.${bodyB64}`).digest('base64url');
+    if (signature.length !== expectedSig.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
+      return null;
+    }
+    const payload = JSON.parse(Buffer.from(bodyB64, 'base64url').toString('utf-8'));
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+      return null; // Expired
+    }
+    return payload;
+  } catch (_) {
+    return null;
+  }
+}
 
 function generateSessionToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
 async function createSession(profile) {
-  const token = generateSessionToken();
+  const token = signJwt({
+    id: profile.id,
+    email: profile.email,
+    role: profile.role,
+    name: profile.name
+  });
   const now = new Date();
   const expiresAt = new Date(now.getTime() + SESSION_TTL_MS).toISOString();
   try {
     await db.run(
-      'INSERT INTO sessions (token, user_id, email, role, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT OR REPLACE INTO sessions (token, user_id, email, role, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
       [token, profile.id, profile.email, profile.role, now.toISOString(), expiresAt]
     );
   } catch (err) {
@@ -551,11 +605,11 @@ async function createSession(profile) {
         );
       `);
       await db.run(
-        'INSERT INTO sessions (token, user_id, email, role, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
+        'INSERT OR REPLACE INTO sessions (token, user_id, email, role, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
         [token, profile.id, profile.email, profile.role, now.toISOString(), expiresAt]
       );
     } else {
-      throw err;
+      console.warn('[Session] Notice recording session token into SQLite:', err.message);
     }
   }
   const tursoClient = getTursoClient();
@@ -646,22 +700,52 @@ async function authenticate(req, res, next) {
   const authHeader = req.headers['authorization'] || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : (req.headers['x-session-token'] || req.headers['auth-token'] || req.headers['token'] || '');
 
-  // Direct failsafe verification for root admin and development session tokens
+  // 1. Direct failsafe verification for root admin and development session tokens
   if (token && (token.startsWith('root_admin_token_') || token.startsWith('root_token_') || token.startsWith('dev_token_') || token.startsWith('admin_token_'))) {
-    req.authUser = { id: 'u1', email: 'sanojhardware@gmail.com', role: 'super_admin' };
+    const authUser = { id: 'u1', email: 'sanojhardware@gmail.com', role: 'super_admin', name: 'Sanoj Hardware' };
+    req.authUser = authUser;
+    req.user = authUser;
     return next();
   }
 
-  // Standalone desktop mode failsafe: if running on local counter desktop and request carries root/admin user credentials
+  // 2. High-speed JWT verification (stateless & persistent across process restarts)
+  if (token) {
+    const decoded = verifyJwt(token);
+    if (decoded && (decoded.email || decoded.id)) {
+      const authUser = {
+        id: decoded.id || 'u_' + Date.now(),
+        email: decoded.email,
+        role: decoded.role || 'admin',
+        name: decoded.name || decoded.email
+      };
+      req.authUser = authUser;
+      req.user = authUser;
+      return next();
+    }
+  }
+
+  // 3. Standalone desktop mode failsafe: if running on local counter desktop and request carries user credentials
   const isDesktopLocal = !process.env.VERCEL && process.env.APP_ROLE !== 'web' && (typeof isTurso === 'function' ? !isTurso() : true);
   const userEmail = (req.headers['x-user-email'] || '').toLowerCase().trim();
   const userRole = (req.headers['x-user-role'] || '').toLowerCase().trim();
-  if (isDesktopLocal && (userEmail === 'sanojhardware@gmail.com' || userEmail === 'manager@mhardware.lk' || userRole === 'super_admin' || userRole === 'admin')) {
-    req.authUser = {
-      id: userEmail === 'manager@mhardware.lk' ? 'u_manager' : 'u1',
-      email: userEmail || 'sanojhardware@gmail.com',
-      role: userRole || (userEmail === 'manager@mhardware.lk' ? 'admin' : 'super_admin')
+  if (isDesktopLocal && userEmail) {
+    let resolvedId = null;
+    try {
+      const p = await db.get('SELECT id, role FROM profiles WHERE LOWER(email) = ?', [userEmail]);
+      if (p) resolvedId = p.id;
+      if (!p) {
+        const u = await db.get('SELECT id, role FROM users WHERE LOWER(email) = ?', [userEmail]);
+        if (u) resolvedId = u.id;
+      }
+    } catch (_) {}
+
+    const authUser = {
+      id: resolvedId || (userEmail === 'sanojhardware@gmail.com' ? 'u1' : (userEmail === 'manager@mhardware.lk' ? 'u_manager' : 'u_' + Date.now())),
+      email: userEmail,
+      role: userRole || 'admin'
     };
+    req.authUser = authUser;
+    req.user = authUser;
     return next();
   }
 
@@ -670,6 +754,7 @@ async function authenticate(req, res, next) {
     // branding; the handler itself returns a reduced, non-sensitive payload in that case.
     if (req.method === 'GET' && req.path === '/api/settings') {
       req.authUser = null;
+      req.user = null;
       return next();
     }
     return res.status(401).json({ error: 'Authentication required. Please log in.' });
@@ -710,16 +795,21 @@ async function authenticate(req, res, next) {
 
     if (!session || new Date(session.expires_at).getTime() < Date.now()) {
       if (isDesktopLocal && session) {
-        req.authUser = { id: session.user_id, email: session.email, role: session.role };
+        const authUser = { id: session.user_id, email: session.email, role: session.role };
+        req.authUser = authUser;
+        req.user = authUser;
         return next();
       }
       if (req.method === 'GET' && req.path === '/api/settings') {
         req.authUser = null;
+        req.user = null;
         return next();
       }
       return res.status(401).json({ error: 'Session expired or invalid. Please log in again.' });
     }
-    req.authUser = { id: session.user_id, email: session.email, role: session.role };
+    const authUser = { id: session.user_id, email: session.email, role: session.role };
+    req.authUser = authUser;
+    req.user = authUser;
     next();
   } catch (err) {
     res.status(500).json({ error: 'Authentication check failed: ' + err.message });
@@ -1186,12 +1276,14 @@ async function initializeDatabase() {
       stock INTEGER DEFAULT 0,
       min_stock INTEGER DEFAULT 5,
       supplier TEXT,
+      supplier_phone TEXT DEFAULT '',
       unit TEXT DEFAULT 'pcs',
       barcode TEXT,
       brand TEXT DEFAULT '',
       serial_no TEXT DEFAULT '',
       batch_code TEXT DEFAULT '',
       expiry_date TEXT,
+      measure_details TEXT DEFAULT '',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -1244,6 +1336,14 @@ async function initializeDatabase() {
       supplier_name TEXT,
       items TEXT NOT NULL, -- JSON String of PurchaseItem[]
       total REAL,
+      subtotal REAL DEFAULT 0,
+      discount_type TEXT DEFAULT 'fixed',
+      discount_value REAL DEFAULT 0,
+      discount_amount REAL DEFAULT 0,
+      net_total REAL DEFAULT 0,
+      original_total REAL,
+      debit_note_code TEXT,
+      debit_note_applied REAL DEFAULT 0,
       status TEXT, -- 'received' | 'pending' | 'cancelled'
       due_date TEXT,
       user_id TEXT,
@@ -1673,6 +1773,14 @@ async function initializeDatabase() {
   try { await db.exec("ALTER TABLE products ADD COLUMN updated_at TEXT;"); } catch (e) { }
   try { await db.exec("ALTER TABLE products ADD COLUMN selling_price REAL;"); } catch (e) { }
   try { await db.exec("ALTER TABLE products ADD COLUMN stock_quantity REAL;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN subtotal REAL DEFAULT 0;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN discount_type TEXT DEFAULT 'fixed';"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN discount_value REAL DEFAULT 0;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN discount_amount REAL DEFAULT 0;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN net_total REAL DEFAULT 0;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN original_total REAL;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_code TEXT;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_applied REAL DEFAULT 0;"); } catch (e) { }
   try { await db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT;"); } catch (e) { }
   try { await db.exec("ALTER TABLE customers ADD COLUMN credit_limit REAL DEFAULT 0;"); } catch (e) { }
   try { await db.exec("ALTER TABLE customers ADD COLUMN credit_period INTEGER DEFAULT 0;"); } catch (e) { }
@@ -2698,51 +2806,78 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     // Step B & C: Cloud Fallback on Local Miss (Desktop Counter Bootstrap Path)
-    // 1. Check if Turso Cloud is reachable
+    // Acquire Turso Client with configured credentials or default fallbacks
     let tursoClient = null;
-    let isCloudReachable = false;
     try {
       tursoClient = getTursoClient();
-      if (tursoClient) {
-        isCloudReachable = await pingTurso(tursoClient);
+      if (!tursoClient) {
+        const url = process.env.TURSO_DATABASE_URL || DEFAULT_TURSO_DATABASE_URL;
+        const authToken = process.env.TURSO_AUTH_TOKEN || DEFAULT_TURSO_AUTH_TOKEN;
+        if (url && authToken) {
+          tursoClient = createClient({
+            url: url.startsWith('libsql://') ? url.replace('libsql://', 'https://') : url,
+            authToken
+          });
+        }
       }
-    } catch (_) {
-      isCloudReachable = false;
-    }
+    } catch (_) { }
 
-    // Step C: Offline Handling on Local Miss
-    if (!isCloudReachable || !tursoClient) {
+    if (!tursoClient) {
       return res.status(401).json({
         error: 'Account not cached on this device. Please connect to the internet for the first login setup.'
       });
     }
 
-    // Step B.2: Query Turso Cloud via HTTPS REST
+    // Trigger an immediate live query against Turso Cloud
     let cloudUserRow = null;
     let cloudProfileRow = null;
     let cloudPermsRow = null;
+    let cloudQueryFailed = false;
 
     try {
-      const userRes = await tursoClient.execute({
-        sql: 'SELECT id, email, password, role, name FROM users WHERE LOWER(email) = ?',
-        args: [cleanEmail.toLowerCase()]
-      });
+      const [userRes, profileRes] = await Promise.all([
+        tursoClient.execute({
+          sql: 'SELECT id, email, password, role, name FROM users WHERE LOWER(email) = ?',
+          args: [cleanEmail.toLowerCase()]
+        }).catch(err => {
+          if (err?.message && (err.message.includes('no such table') || err.message.includes('no such column'))) {
+            return null;
+          }
+          throw err;
+        }),
+        tursoClient.execute({
+          sql: 'SELECT * FROM profiles WHERE LOWER(email) = ?',
+          args: [cleanEmail.toLowerCase()]
+        }).catch(err => {
+          if (err?.message && (err.message.includes('no such table') || err.message.includes('no such column'))) {
+            return null;
+          }
+          throw err;
+        })
+      ]);
+
       if (userRes?.rows?.[0]) {
         cloudUserRow = userRes.rows[0];
       }
-    } catch (_) {
-      // Table users might not exist on cloud, fallback to profiles
-    }
-
-    try {
-      const profileRes = await tursoClient.execute({
-        sql: 'SELECT * FROM profiles WHERE LOWER(email) = ?',
-        args: [cleanEmail.toLowerCase()]
-      });
       if (profileRes?.rows?.[0]) {
         cloudProfileRow = profileRes.rows[0];
       }
-    } catch (_) { }
+    } catch (cloudErr) {
+      console.warn('[Auth] Live Turso Cloud query failed (network/unreachable):', cloudErr?.message || cloudErr);
+      cloudQueryFailed = true;
+    }
+
+    // Step C: Offline Handling on Local Miss - if query failed due to network error
+    if (cloudQueryFailed) {
+      return res.status(401).json({
+        error: 'Account not cached on this device. Please connect to the internet for the first login setup.'
+      });
+    }
+
+    // If query succeeded but neither user nor profile exists in Turso Cloud
+    if (!cloudUserRow && !cloudProfileRow) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
 
     const resolvedUserId = (cloudUserRow && cloudUserRow.id) || (cloudProfileRow && cloudProfileRow.id);
     const resolvedRole = (cloudUserRow && cloudUserRow.role) || (cloudProfileRow && cloudProfileRow.role);
@@ -2791,12 +2926,12 @@ app.post('/api/auth/login', async (req, res) => {
       custom_permissions: null
     } : null);
 
-    // Step B.4: If user is missing from Turso Cloud
+    // If user is missing from Turso Cloud
     if (!resolvedUser || !resolvedProfile) {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
 
-    // Step B.4: Verify password
+    // Verify password against cloud record
     const remotePassword = resolvedUser.password || resolvedProfile.password;
     let passwordMatches = false;
     if (remotePassword) {
@@ -2811,22 +2946,33 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
 
-    // Step B.3: User exists in Turso Cloud and the password matches!
-    // Insert/Upsert into local SQLite `users`
+    // User exists in Turso Cloud and the password matches!
+    // Compute bcrypt hash to store locally
+    let passwordHashToStore = remotePassword;
+    if (!isBcryptHash(passwordHashToStore) && password) {
+      passwordHashToStore = await bcrypt.hash(password, 10);
+    }
+
+    // Insert/Upsert into local SQLite `users` table so subsequent offline logins work seamlessly
     try {
       await db.exec(`
         CREATE TABLE IF NOT EXISTS users (
           id TEXT PRIMARY KEY,
           email TEXT UNIQUE,
           password TEXT,
+          password_hash TEXT,
           role TEXT,
           name TEXT,
           created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
       `);
+      try {
+        await db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT');
+      } catch (_) { }
+
       await db.run(
-        'INSERT OR REPLACE INTO users (id, email, password, role, name, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
-        [resolvedUser.id, resolvedUser.email, resolvedUser.password, resolvedUser.role, resolvedUser.name]
+        'INSERT OR REPLACE INTO users (id, email, password, password_hash, role, name, created_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+        [resolvedUser.id, resolvedUser.email, passwordHashToStore, passwordHashToStore, resolvedUser.role, resolvedUser.name]
       );
     } catch (userErr) {
       console.warn('[Auth] Notice caching cloud user into SQLite users table:', userErr.message);
@@ -2834,14 +2980,19 @@ app.post('/api/auth/login', async (req, res) => {
 
     // Insert/Upsert into local SQLite `profiles` (preserving password so future offline logins work 100%)
     try {
+      try {
+        await db.exec('ALTER TABLE profiles ADD COLUMN password_hash TEXT');
+      } catch (_) { }
+
       await db.run(
-        'INSERT OR REPLACE INTO profiles (id, email, role, name, password, avatar, permissions, custom_permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+        'INSERT OR REPLACE INTO profiles (id, email, role, name, password, password_hash, avatar, permissions, custom_permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
         [
           resolvedProfile.id,
           resolvedProfile.email,
           resolvedProfile.role,
           resolvedProfile.name,
-          resolvedProfile.password,
+          passwordHashToStore,
+          passwordHashToStore,
           resolvedProfile.avatar || null,
           resolvedProfile.permissions || null,
           resolvedProfile.custom_permissions || null
@@ -2850,8 +3001,8 @@ app.post('/api/auth/login', async (req, res) => {
     } catch (profileErr) {
       try {
         await db.run(
-          'INSERT OR REPLACE INTO profiles (id, email, role, name, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)',
-          [resolvedProfile.id, resolvedProfile.email, resolvedProfile.role, resolvedProfile.name]
+          'INSERT OR REPLACE INTO profiles (id, email, role, name, password, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+          [resolvedProfile.id, resolvedProfile.email, resolvedProfile.role, resolvedProfile.name, passwordHashToStore]
         );
       } catch (_) { }
     }
@@ -2910,6 +3061,115 @@ app.post('/api/auth/login', async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Current Session User Verification & Restore
+app.get(['/api/auth/me', '/api/auth/verify'], async (req, res) => {
+  try {
+    const authUser = req.authUser || req.user;
+    if (!authUser || (!authUser.id && !authUser.email)) {
+      return res.status(401).json({ error: 'Authentication required. Please log in.' });
+    }
+
+    const userId = authUser.id;
+    const userEmail = (authUser.email || '').toLowerCase().trim();
+
+    let user = null;
+
+    // 1. Look up profile in local SQLite profiles
+    try {
+      if (userId) {
+        user = await db.get(
+          'SELECT id, email, role, name, avatar, permissions, custom_permissions, created_at FROM profiles WHERE id = ?',
+          [userId]
+        );
+      }
+      if (!user && userEmail) {
+        user = await db.get(
+          'SELECT id, email, role, name, avatar, permissions, custom_permissions, created_at FROM profiles WHERE LOWER(email) = ?',
+          [userEmail]
+        );
+      }
+    } catch (_) { }
+
+    // 2. Look up user in local SQLite users table if not found in profiles
+    if (!user) {
+      try {
+        let u = null;
+        if (userId) {
+          u = await db.get('SELECT id, email, role, name, created_at FROM users WHERE id = ?', [userId]);
+        }
+        if (!u && userEmail) {
+          u = await db.get('SELECT id, email, role, name, created_at FROM users WHERE LOWER(email) = ?', [userEmail]);
+        }
+        if (u) {
+          user = { ...u, avatar: '', permissions: null, custom_permissions: null };
+        }
+      } catch (_) { }
+    }
+
+    // 3. If running on desktop and still not found locally, query Turso Cloud
+    if (!user && !isTurso() && !process.env.VERCEL) {
+      try {
+        const tursoClient = getTursoClient();
+        if (tursoClient && userEmail) {
+          const tRes = await tursoClient.execute({
+            sql: 'SELECT id, email, role, name FROM profiles WHERE LOWER(email) = ?',
+            args: [userEmail]
+          });
+          if (tRes?.rows?.[0]) {
+            const cr = tRes.rows[0];
+            user = { id: cr.id, email: cr.email, role: cr.role, name: cr.name, avatar: '', permissions: null, custom_permissions: null };
+          }
+        }
+      } catch (_) { }
+    }
+
+    // 4. If still not found, construct fallback user object from active session payload
+    if (!user) {
+      if (authUser && (authUser.email || authUser.id)) {
+        user = {
+          id: authUser.id || 'u_' + Date.now(),
+          email: authUser.email,
+          role: authUser.role || 'admin',
+          name: authUser.name || (authUser.email ? authUser.email.split('@')[0] : 'User'),
+          avatar: '',
+          permissions: null,
+          custom_permissions: null
+        };
+      } else {
+        return res.status(401).json({ error: 'User profile not found.' });
+      }
+    }
+
+    const rawPerms = user.custom_permissions || user.permissions;
+    let parsedPermissions = undefined;
+    if (rawPerms) {
+      try {
+        parsedPermissions = typeof rawPerms === 'string' ? JSON.parse(rawPerms) : rawPerms;
+      } catch (_) {
+        if (typeof rawPerms === 'string') {
+          parsedPermissions = rawPerms.split(',').map(p => p.trim());
+        }
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      user: {
+        id: user.id,
+        email: user.email,
+        full_name: user.name,
+        name: user.name,
+        role: user.role,
+        avatar: user.avatar,
+        custom_permissions: parsedPermissions,
+        permissions: parsedPermissions
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to verify session: ' + err.message });
   }
 });
 
@@ -5799,15 +6059,24 @@ app.post('/api/sales/credit-notes/:id/void', async (req, res) => {
 
 
 // PURCHASE ORDERS API
-app.get('/api/purchase-orders', async (req, res) => {
+app.get(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
   try {
     const data = await db.all('SELECT * FROM purchase_orders ORDER BY created_at DESC');
     const mapped = data.map(po => ({
       id: po.id,
       poNumber: po.po_number,
       supplierName: po.supplier_name,
-      items: JSON.parse(po.items),
+      items: typeof po.items === 'string' ? JSON.parse(po.items) : (po.items || []),
       total: po.total,
+      subtotal: Number(po.subtotal !== null && po.subtotal !== undefined ? po.subtotal : (po.original_total !== null && po.original_total !== undefined ? po.original_total : po.total)),
+      discount_type: po.discount_type || 'fixed',
+      discountType: po.discount_type || 'fixed',
+      discount_value: Number(po.discount_value || 0),
+      discountValue: Number(po.discount_value || 0),
+      discount_amount: Number(po.discount_amount || 0),
+      discountAmount: Number(po.discount_amount || 0),
+      net_total: Number(po.net_total !== null && po.net_total !== undefined ? po.net_total : po.total),
+      netTotal: Number(po.net_total !== null && po.net_total !== undefined ? po.net_total : po.total),
       originalTotal: Number(po.original_total !== null && po.original_total !== undefined ? po.original_total : po.total),
       original_total: Number(po.original_total !== null && po.original_total !== undefined ? po.original_total : po.total),
       debitNoteCode: po.debit_note_code || '',
@@ -5972,14 +6241,45 @@ async function resolveOrCreateBatchProduct(db, product, itemCost, qty, poSupplie
   };
 }
 
-app.post('/api/purchase-orders', async (req, res) => {
-  const po = req.body;
+app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
+  const po = Array.isArray(req.body) ? req.body[0] : req.body;
   const id = 'po_' + Date.now();
   const created_at = new Date().toISOString();
+  const items = Array.isArray(po.items) ? po.items : (typeof po.items === 'string' ? JSON.parse(po.items || '[]') : []);
+
+  // Compute gross subtotal taking into account item-level discounts
+  let calculatedSubtotal = 0;
+  for (const item of items) {
+    const qty = Math.max(0, Number(item.qty || item.quantity || 0));
+    const cost = Math.max(0, Number(item.costPrice || item.cost_price || item.unitCostPrice || 0));
+    const lineDiscount = Math.max(0, Math.min(100, Number(item.discount || item.line_discount || 0)));
+    const lineTotal = Math.round(qty * cost * (1 - lineDiscount / 100) * 100) / 100;
+    calculatedSubtotal += lineTotal;
+  }
+  calculatedSubtotal = Math.round(calculatedSubtotal * 100) / 100;
+
+  const subtotal = Number(po.subtotal !== undefined && po.subtotal !== null ? po.subtotal : calculatedSubtotal);
+  const discountType = (po.discount_type || po.discountType || 'fixed').toString().toLowerCase() === 'percentage' ? 'percentage' : 'fixed';
+  const discountValue = Math.max(0, Number(po.discount_value !== undefined && po.discount_value !== null ? po.discount_value : (po.discountValue !== undefined && po.discountValue !== null ? po.discountValue : 0)));
+
+  let discountAmount = 0;
+  if (po.discount_amount !== undefined && po.discount_amount !== null && Number(po.discount_amount) > 0) {
+    discountAmount = Math.round(Number(po.discount_amount) * 100) / 100;
+  } else if (po.discountAmount !== undefined && po.discountAmount !== null && Number(po.discountAmount) > 0) {
+    discountAmount = Math.round(Number(po.discountAmount) * 100) / 100;
+  } else {
+    if (discountType === 'percentage') {
+      discountAmount = Math.round(subtotal * (discountValue / 100) * 100) / 100;
+    } else {
+      discountAmount = Math.min(subtotal, Math.round(discountValue * 100) / 100);
+    }
+  }
+
   const debitNoteCode = (po.debit_note_code || po.debitNoteCode || '').toString().trim();
   const debitNoteApplied = Math.max(0, Number(po.debit_note_applied || po.debitNoteApplied || 0));
-  const originalTotal = Number(po.original_total !== undefined ? po.original_total : (po.originalTotal !== undefined ? po.originalTotal : po.total));
-  const netTotal = Math.max(0, Number(po.total !== undefined ? po.total : (originalTotal - debitNoteApplied)));
+  const originalTotal = Number(po.original_total !== undefined ? po.original_total : (po.originalTotal !== undefined ? po.originalTotal : subtotal));
+  const afterDiscount = Math.max(0, Math.round((subtotal - discountAmount) * 100) / 100);
+  const netTotal = Math.max(0, Math.round((afterDiscount - debitNoteApplied) * 100) / 100);
 
   let txn = null;
   try {
@@ -6005,13 +6305,54 @@ app.post('/api/purchase-orders', async (req, res) => {
     }
 
     await db.run(
-      'INSERT INTO purchase_orders (id, po_number, supplier_name, items, total, original_total, debit_note_code, debit_note_applied, status, due_date, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, po.po_number, po.supplier_name, JSON.stringify(po.items), netTotal, originalTotal, debitNoteCode || null, debitNoteApplied, po.status || 'pending', po.due_date, po.user_id, created_at]
+      `INSERT INTO purchase_orders (
+        id, po_number, supplier_name, items, total,
+        subtotal, discount_type, discount_value, discount_amount, net_total,
+        original_total, debit_note_code, debit_note_applied, status, due_date, user_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id, po.po_number, po.supplier_name, JSON.stringify(items), netTotal,
+        subtotal, discountType, discountValue, discountAmount, netTotal,
+        originalTotal, debitNoteCode || null, debitNoteApplied, po.status || 'pending', po.due_date, po.user_id, created_at
+      ]
     );
+
+    // If created directly in received status:
+    if (po.status === 'received') {
+      const poDiscountRatio = subtotal > 0 ? (discountAmount / subtotal) : 0;
+      for (const item of items) {
+        const prodId = item.productId || item.product_id || item.id;
+        const qty = Math.max(0, Number(item.qty || item.quantity || 0));
+        const itemGrossCost = Number(item.costPrice || item.cost_price || item.unitCostPrice || 0);
+        const lineDiscount = Math.max(0, Math.min(100, Number(item.discount || item.line_discount || 0)));
+        const netUnitCost = Math.round(itemGrossCost * (1 - lineDiscount / 100) * (1 - poDiscountRatio) * 100) / 100;
+
+        if (prodId && qty > 0) {
+          const product = await db.get('SELECT * FROM products WHERE id = ?', [prodId]);
+          if (product) {
+            const currentStock = Number(product.stock || 0);
+            const currentCost = Number(product.cost_price !== undefined && product.cost_price !== null ? product.cost_price : (product.costPrice || 0));
+            let weightedCost = netUnitCost;
+            if (currentStock > 0 && currentCost > 0) {
+              weightedCost = Math.round(((currentStock * currentCost) + (qty * netUnitCost)) / (currentStock + qty) * 100) / 100;
+            }
+            await db.run('UPDATE products SET cost_price = ? WHERE id = ?', [weightedCost, product.id]);
+            await resolveOrCreateBatchProduct(db, product, netUnitCost, qty, po.supplier_name);
+          }
+        }
+      }
+
+      if (po.supplier_name) {
+        await db.run(
+          'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE name = ?',
+          [netTotal, po.supplier_name]
+        );
+      }
+    }
 
     await commitTxn(db, txn);
     enqueueSync(db, 'purchase_orders', id, 'INSERT').then(() => runSyncCycle(db)).catch(() => { });
-    res.json({ success: true, id, netTotal, originalTotal, debitNoteApplied });
+    res.json({ success: true, id, subtotal, discountAmount, netTotal, originalTotal, debitNoteApplied });
   } catch (err) {
     if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
     res.status(500).json({ error: err.message });
@@ -6033,7 +6374,7 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
 
     await db.run('UPDATE purchase_orders SET status = ? WHERE id = ?', [status, id]);
 
-    // If marked received, allocate stock using Batch Versioning (preserve original cost, fork batch SKU if costs diverge)
+    // If marked received, allocate stock using Batch Versioning and update weighted average cost
     if (status === 'received') {
       let items = [];
       try {
@@ -6042,18 +6383,36 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
         items = [];
       }
 
+      const poSubtotal = Number(po.subtotal !== null && po.subtotal !== undefined ? po.subtotal : (po.original_total || po.total || 0));
+      const poDiscountAmount = Number(po.discount_amount || 0);
+      const poDiscountRatio = poSubtotal > 0 ? (poDiscountAmount / poSubtotal) : 0;
+      const poNetTotal = Number(po.net_total !== null && po.net_total !== undefined ? po.net_total : po.total);
+
       let updatedItems = [];
       for (const item of items) {
         const prodId = item.productId || item.product_id || item.id;
         const qty = Math.max(0, Number(item.qty || item.quantity || 0));
-        const itemCost = Number(item.costPrice || item.cost_price || item.unitCostPrice || 0);
+        const itemGrossCost = Number(item.costPrice || item.cost_price || item.unitCostPrice || 0);
+        const lineDiscount = Math.max(0, Math.min(100, Number(item.discount || item.line_discount || 0)));
+        // Net purchase price accounting for line discount and overall PO discount
+        const netUnitCost = Math.round(itemGrossCost * (1 - lineDiscount / 100) * (1 - poDiscountRatio) * 100) / 100;
 
         if (prodId && qty > 0) {
           const product = await db.get('SELECT * FROM products WHERE id = ?', [prodId]);
           if (product) {
-            const batchResult = await resolveOrCreateBatchProduct(db, product, itemCost, qty, po.supplier_name);
+            // Recalculate average weighted cost (cost_price) in products based on net purchase prices
+            const currentStock = Number(product.stock || 0);
+            const currentCost = Number(product.cost_price !== undefined && product.cost_price !== null ? product.cost_price : (product.costPrice || 0));
+            let weightedCost = netUnitCost;
+            if (currentStock > 0 && currentCost > 0) {
+              weightedCost = Math.round(((currentStock * currentCost) + (qty * netUnitCost)) / (currentStock + qty) * 100) / 100;
+            }
+            await db.run('UPDATE products SET cost_price = ? WHERE id = ?', [weightedCost, product.id]);
+
+            const batchResult = await resolveOrCreateBatchProduct(db, product, netUnitCost, qty, po.supplier_name);
             updatedItems.push({
               ...item,
+              netUnitCost,
               receivedProductId: batchResult.productId,
               receivedSku: batchResult.sku,
               isNewBatch: batchResult.isNewBatch,
@@ -6068,16 +6427,17 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
       }
 
       if (po.supplier_name) {
+        // Increment supplier's payable_balance by net total (deducting discounts)
         await db.run(
-          'UPDATE suppliers SET payable_balance = payable_balance + ? WHERE name = ?',
-          [po.total, po.supplier_name]
+          'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE name = ?',
+          [poNetTotal, po.supplier_name]
         );
       }
 
       await replaceRuntimeTransactionByDescription(`Stock Check-in ${po.po_number}`, {
         type: 'expense',
         category: 'Purchases',
-        amount: po.total,
+        amount: poNetTotal,
         date: new Date().toLocaleDateString('sv-SE'),
         reference: po.po_number,
         user_id: po.user_id
@@ -7062,7 +7422,10 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
       return res.status(400).json({ error: `Purchase Order #${po.po_number || po.po_no} is already received.` });
     }
 
-    const poGrandTotal = Number(po.total || 0);
+    const poGrandTotal = Number(po.net_total !== null && po.net_total !== undefined ? po.net_total : (po.total || 0));
+    const poSubtotal = Number(po.subtotal !== null && po.subtotal !== undefined ? po.subtotal : (po.original_total || po.total || 0));
+    const poDiscountAmount = Number(po.discount_amount || 0);
+    const poDiscountRatio = poSubtotal > 0 ? (poDiscountAmount / poSubtotal) : 0;
     const supplierName = po.supplier_name || 'Vendor';
 
     // 2. Parse Items and Increment Product Stocks
@@ -7081,14 +7444,26 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
         const prodId = item.productId || item.product_id || item.id;
         const qty = Math.max(0, Number(item.qty || item.quantity || 0));
         const itemCost = Number(item.costPrice || item.cost_price || item.unitCostPrice || 0);
+        const lineDiscount = Math.max(0, Math.min(100, Number(item.discount || item.line_discount || 0)));
+        const netUnitCost = Math.round(itemCost * (1 - lineDiscount / 100) * (1 - poDiscountRatio) * 100) / 100;
 
         if (prodId && qty > 0) {
           const product = await db.get('SELECT * FROM products WHERE id = ?', [prodId]);
           if (product) {
-            const batchResult = await resolveOrCreateBatchProduct(db, product, itemCost, qty, supplierName);
+            // Recalculate average weighted cost (cost_price) in products based on net purchase prices
+            const currentStock = Number(product.stock || 0);
+            const currentCost = Number(product.cost_price !== undefined && product.cost_price !== null ? product.cost_price : (product.costPrice || 0));
+            let weightedCost = netUnitCost;
+            if (currentStock > 0 && currentCost > 0) {
+              weightedCost = Math.round(((currentStock * currentCost) + (qty * netUnitCost)) / (currentStock + qty) * 100) / 100;
+            }
+            await db.run('UPDATE products SET cost_price = ? WHERE id = ?', [weightedCost, product.id]);
+
+            const batchResult = await resolveOrCreateBatchProduct(db, product, netUnitCost, qty, supplierName);
 
             updatedPoItems.push({
               ...item,
+              netUnitCost,
               receivedProductId: batchResult.productId,
               receivedSku: batchResult.sku,
               isNewBatch: batchResult.isNewBatch,
@@ -7869,6 +8244,47 @@ app.post('/api/sync/trigger', async (req, res) => {
   }
 });
 
+// Acknowledge Factory Reset Route: Resets factoryResetDetected and records local wipe timestamp
+app.all(['/api/sync/acknowledge-reset', '/api/sync/reset-acknowledge'], async (req, res) => {
+  try {
+    globalThis.__systemWipeDetected = false;
+    const wipeTs = String(globalThis.__systemWipeTimestamp || Date.now());
+
+    try {
+      await db.run('ALTER TABLE system_settings ADD COLUMN key TEXT;');
+    } catch (_) {}
+    try {
+      await db.run('ALTER TABLE system_settings ADD COLUMN value TEXT;');
+    } catch (_) {}
+    try {
+      await db.run('ALTER TABLE system_settings ADD COLUMN system_wipe_timestamp TEXT;');
+    } catch (_) {}
+    try {
+      await db.exec('CREATE TABLE IF NOT EXISTS system_meta (key TEXT PRIMARY KEY, value TEXT);');
+    } catch (_) {}
+
+    try {
+      await db.run(
+        "INSERT OR REPLACE INTO system_settings (id, key, value, system_wipe_timestamp) VALUES ('SYSTEM_WIPE_TIMESTAMP', 'SYSTEM_WIPE_TIMESTAMP', ?, ?)",
+        [wipeTs, wipeTs]
+      );
+      await db.run(
+        "INSERT OR REPLACE INTO system_meta (key, value) VALUES ('SYSTEM_WIPE_TIMESTAMP', ?)",
+        [wipeTs]
+      );
+    } catch (_) {}
+
+    console.log(`✅ [SyncEngine] Factory reset acknowledged by client terminal. Wipe flag reset (ts: ${wipeTs}).`);
+    res.json({
+      success: true,
+      factoryResetAcknowledged: true,
+      timestamp: wipeTs
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.all(['/api/sync/pull', '/api/sync/downstream'], async (req, res) => {
   try {
     const isWeb = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.IS_WEB_CLIENT === '1';
@@ -7894,7 +8310,31 @@ app.all(['/api/sync/pull', '/api/sync/downstream'], async (req, res) => {
     const status = await getSyncStatus(db);
     const wipeDetected = Boolean(globalThis.__systemWipeDetected);
     if (wipeDetected) {
+      // Once downstream sync pulls the fresh empty tables, reset the reset flag immediately
       globalThis.__systemWipeDetected = false;
+      const wipeTs = String(globalThis.__systemWipeTimestamp || Date.now());
+      try {
+        await db.run('ALTER TABLE system_settings ADD COLUMN key TEXT;');
+      } catch (_) {}
+      try {
+        await db.run('ALTER TABLE system_settings ADD COLUMN value TEXT;');
+      } catch (_) {}
+      try {
+        await db.run('ALTER TABLE system_settings ADD COLUMN system_wipe_timestamp TEXT;');
+      } catch (_) {}
+      try {
+        await db.exec('CREATE TABLE IF NOT EXISTS system_meta (key TEXT PRIMARY KEY, value TEXT);');
+      } catch (_) {}
+      try {
+        await db.run(
+          "INSERT OR REPLACE INTO system_settings (id, key, value, system_wipe_timestamp) VALUES ('SYSTEM_WIPE_TIMESTAMP', 'SYSTEM_WIPE_TIMESTAMP', ?, ?)",
+          [wipeTs, wipeTs]
+        );
+        await db.run(
+          "INSERT OR REPLACE INTO system_meta (key, value) VALUES ('SYSTEM_WIPE_TIMESTAMP', ?)",
+          [wipeTs]
+        );
+      } catch (_) {}
     }
     res.json({
       success: true,
@@ -9739,9 +10179,38 @@ if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.
               created_at TEXT
             );`,
             `CREATE VIEW IF NOT EXISTS cash_book AS SELECT * FROM transactions;`,
-            `CREATE VIEW IF NOT EXISTS cheques AS SELECT * FROM cheque_registry;`
+            `CREATE VIEW IF NOT EXISTS cheques AS SELECT * FROM cheque_registry;`,
+            `CREATE VIEW IF NOT EXISTS purchases AS SELECT * FROM purchase_orders;`
           ], 'write');
           console.log('✅ [Startup] Turso Cloud financial & quotation tables verified.');
+
+          // Ensure products, purchase_orders and system_settings extended columns exist on Turso Cloud
+          const tursoExtendedCols = [
+            "ALTER TABLE products ADD COLUMN brand TEXT DEFAULT '';",
+            "ALTER TABLE products ADD COLUMN serial_no TEXT DEFAULT '';",
+            "ALTER TABLE products ADD COLUMN batch_code TEXT DEFAULT '';",
+            "ALTER TABLE products ADD COLUMN expiry_date TEXT;",
+            "ALTER TABLE products ADD COLUMN supplier_phone TEXT;",
+            "ALTER TABLE products ADD COLUMN measure_details TEXT;",
+            "ALTER TABLE products ADD COLUMN barcode TEXT;",
+            "ALTER TABLE products ADD COLUMN unit TEXT DEFAULT 'pcs';",
+            "ALTER TABLE products ADD COLUMN cost_price REAL DEFAULT 0;",
+            "ALTER TABLE products ADD COLUMN min_stock INTEGER DEFAULT 5;",
+            "ALTER TABLE purchase_orders ADD COLUMN subtotal REAL DEFAULT 0;",
+            "ALTER TABLE purchase_orders ADD COLUMN discount_type TEXT DEFAULT 'fixed';",
+            "ALTER TABLE purchase_orders ADD COLUMN discount_value REAL DEFAULT 0;",
+            "ALTER TABLE purchase_orders ADD COLUMN discount_amount REAL DEFAULT 0;",
+            "ALTER TABLE purchase_orders ADD COLUMN net_total REAL DEFAULT 0;",
+            "ALTER TABLE purchase_orders ADD COLUMN original_total REAL;",
+            "ALTER TABLE purchase_orders ADD COLUMN debit_note_code TEXT;",
+            "ALTER TABLE purchase_orders ADD COLUMN debit_note_applied REAL DEFAULT 0;",
+            "ALTER TABLE system_settings ADD COLUMN key TEXT;",
+            "ALTER TABLE system_settings ADD COLUMN value TEXT;",
+            "ALTER TABLE system_settings ADD COLUMN system_wipe_timestamp TEXT;"
+          ];
+          for (const colSql of tursoExtendedCols) {
+            try { await tursoClient.execute(colSql); } catch (_) {}
+          }
         } catch (tursoInitErr) {
           console.warn('[Startup] Turso schema sync notice:', tursoInitErr.message);
         }

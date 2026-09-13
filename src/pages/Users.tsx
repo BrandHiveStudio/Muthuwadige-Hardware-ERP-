@@ -19,7 +19,8 @@ import {
   getDefaultRolePermissions,
   arePermissionsCustomized,
   getCustomOverrideCount,
-  hasPermission
+  hasPermission,
+  hasCapability
 } from '../utils/permissions';
 import { API_URL, fetchWithTimeout } from '../lib/api';
 import type { UserRole } from '../types';
@@ -53,7 +54,7 @@ export function Users() {
 
   // Edit Form State
   const [editingUser, setEditingUser] = useState<any>(null);
-  const [editPermissions, setEditPermissions] = useState<string[]>([]);
+  const [editPermissions, setEditPermissions] = useState<Record<string, boolean>>({});
 
   // Password Reset Modal State
   const [showResetPasswordModal, setShowResetPasswordModal] = useState(false);
@@ -171,6 +172,23 @@ export function Users() {
     setIsSaving(false);
     if (!error) {
       setUsers(users.map(u => u.id === editingUser.id ? { ...editingUser, permissions: editPermissions, custom_permissions: editPermissions } : u));
+      
+      // If updating active session user, update session caches and emit event immediately
+      try {
+        const localUserStr = localStorage.getItem('erp_user') || sessionStorage.getItem('erp_user');
+        if (localUserStr) {
+          const lu = JSON.parse(localUserStr);
+          if (lu && lu.id === editingUser.id) {
+            const updatedLu = { ...lu, ...editingUser, permissions: editPermissions, custom_permissions: editPermissions };
+            localStorage.setItem('erp_user', JSON.stringify(updatedLu));
+            sessionStorage.setItem('erp_user', JSON.stringify(updatedLu));
+            localStorage.setItem('custom_permissions', JSON.stringify(editPermissions));
+            sessionStorage.setItem('custom_permissions', JSON.stringify(editPermissions));
+            window.dispatchEvent(new Event('permissions-updated'));
+          }
+        }
+      } catch (_) {}
+
       setShowEditUser(false);
       alert(`User profile & permissions updated successfully for ${editingUser.name}!`);
     } else {
@@ -221,30 +239,57 @@ export function Users() {
     setFormData({ ...formData, permissions: updated });
   };
 
-  // Toggle permission helper for Edit User form
+  const resetEditToRoleDefaults = (role: string) => {
+    const defaultList = getDefaultRolePermissions(role);
+    const resetMap: Record<string, boolean> = {};
+    CAPABILITIES.forEach(cap => {
+      resetMap[cap.key] = defaultList.includes(cap.key);
+    });
+    setEditPermissions(resetMap);
+  };
+
+  // Toggle permission helper for Edit User form: flips explicit boolean override
   const toggleEditPermission = (key: string) => {
-    const exists = editPermissions.includes(key);
-    const updated = exists
-      ? editPermissions.filter(k => k !== key)
-      : [...editPermissions, key];
-    setEditPermissions(updated);
+    setEditPermissions(prev => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
   };
 
   const openEditModal = (u: any) => {
     setEditingUser({ ...u });
     const rawPerms = u.custom_permissions !== undefined ? u.custom_permissions : u.permissions;
-    const current = Array.isArray(rawPerms)
-      ? rawPerms
-      : typeof rawPerms === 'string' && rawPerms.trim()
-        ? (() => {
-            try {
-              return JSON.parse(rawPerms);
-            } catch {
-              return rawPerms.split(',').map((p: string) => p.trim());
-            }
-          })()
-        : getDefaultRolePermissions(u.role);
-    setEditPermissions(current);
+    let parsed: any = null;
+    if (rawPerms) {
+      if (typeof rawPerms === 'object') {
+        parsed = rawPerms;
+      } else if (typeof rawPerms === 'string' && rawPerms.trim()) {
+        try {
+          parsed = JSON.parse(rawPerms);
+        } catch {
+          parsed = rawPerms.split(',').map((p: string) => p.trim());
+        }
+      }
+    }
+
+    const defaultList = getDefaultRolePermissions(u.role);
+    const initialMap: Record<string, boolean> = {};
+
+    CAPABILITIES.forEach(cap => {
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        if (parsed[cap.key] !== undefined) {
+          initialMap[cap.key] = Boolean(parsed[cap.key]);
+        } else {
+          initialMap[cap.key] = defaultList.includes(cap.key);
+        }
+      } else if (Array.isArray(parsed)) {
+        initialMap[cap.key] = parsed.includes(cap.key);
+      } else {
+        initialMap[cap.key] = defaultList.includes(cap.key);
+      }
+    });
+
+    setEditPermissions(initialMap);
     setShowEditUser(true);
   };
 
@@ -648,7 +693,24 @@ export function Users() {
                         const inspectedRawPerms = inspectedUser 
                           ? (inspectedUser.custom_permissions !== undefined ? inspectedUser.custom_permissions : inspectedUser.permissions)
                           : null;
-                        const isCustom = Array.isArray(inspectedRawPerms) && inspectedRawPerms.includes(cap.key);
+
+                        let parsedInspectedPerms: any = null;
+                        if (inspectedRawPerms) {
+                          if (typeof inspectedRawPerms === 'object') {
+                            parsedInspectedPerms = inspectedRawPerms;
+                          } else if (typeof inspectedRawPerms === 'string' && inspectedRawPerms.trim()) {
+                            try {
+                              parsedInspectedPerms = JSON.parse(inspectedRawPerms);
+                            } catch {
+                              parsedInspectedPerms = inspectedRawPerms.split(',').map((p: string) => p.trim());
+                            }
+                          }
+                        }
+
+                        const defaultRoleAllowed = getDefaultRolePermissions(inspectedUser?.role || '').includes(cap.key);
+                        const hasExplicitOverride = parsedInspectedPerms && typeof parsedInspectedPerms === 'object' && !Array.isArray(parsedInspectedPerms)
+                          ? (parsedInspectedPerms[cap.key] !== undefined && Boolean(parsedInspectedPerms[cap.key]) !== defaultRoleAllowed)
+                          : (Array.isArray(parsedInspectedPerms) ? parsedInspectedPerms.includes(cap.key) !== defaultRoleAllowed : false);
 
                         return (
                           <tr key={cap.key} className="hover:bg-slate-50/60 transition-colors">
@@ -663,12 +725,16 @@ export function Users() {
                                 {userAllowed ? (
                                   <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-300 font-black text-xs shadow-sm">
                                     <CheckIcon className="w-4 h-4 text-emerald-600 stroke-[3]" />
-                                    <span>Granted {isCustom ? '(Custom)' : ''}</span>
+                                    <span>Granted {hasExplicitOverride ? '(Custom Allow)' : ''}</span>
                                   </div>
                                 ) : (
-                                  <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100/70 text-slate-400 border border-slate-200 text-xs font-semibold">
-                                    <span className="text-slate-300 font-bold">—</span>
-                                    <span>Disabled</span>
+                                  <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-black shadow-sm ${
+                                    hasExplicitOverride 
+                                      ? 'bg-rose-50 text-rose-700 border border-rose-300' 
+                                      : 'bg-slate-100/70 text-slate-400 border border-slate-200 font-semibold'
+                                  }`}>
+                                    <span className={hasExplicitOverride ? 'text-rose-600 font-black' : 'text-slate-300 font-bold'}>✕</span>
+                                    <span>{hasExplicitOverride ? 'Revoked (Custom Deny)' : 'Disabled'}</span>
                                   </div>
                                 )}
                               </td>
@@ -949,7 +1015,7 @@ export function Users() {
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block">Base System Role</label>
                 {arePermissionsCustomized(editingUser.role, editPermissions) ? (
                   <span className="text-[10px] font-black text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full uppercase">
-                    Customized Permissions ({editPermissions.length} Active)
+                    Customized Overrides ({getCustomOverrideCount(editingUser.role, editPermissions)} Active)
                   </span>
                 ) : (
                   <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full uppercase">
@@ -967,7 +1033,7 @@ export function Users() {
                       type="button"
                       onClick={() => {
                         setEditingUser({ ...editingUser, role: r.role });
-                        setEditPermissions(getDefaultRolePermissions(r.role));
+                        resetEditToRoleDefaults(r.role);
                       }}
                       className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
                         isSelected
@@ -996,7 +1062,7 @@ export function Users() {
 
                 <button
                   type="button"
-                  onClick={() => setEditPermissions(getDefaultRolePermissions(editingUser.role))}
+                  onClick={() => resetEditToRoleDefaults(editingUser.role)}
                   className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-[11px] font-black text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 transition-all cursor-pointer"
                 >
                   <RotateCcwIcon className="w-3.5 h-3.5" /> Reset to Role Defaults
@@ -1015,7 +1081,7 @@ export function Users() {
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {catCaps.map(cap => {
-                          const isChecked = editPermissions.includes(cap.key);
+                          const isChecked = Boolean(editPermissions[cap.key]);
 
                           return (
                             <label

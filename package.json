@@ -89,7 +89,7 @@
       "!*.db",
       "!*.db-wal",
       "!*.db-shm",
-      "!.env"
+      ".env"
     ],
     "asarUnpack": [
       "**/*.node"

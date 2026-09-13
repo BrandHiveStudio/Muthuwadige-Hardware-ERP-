@@ -318,9 +318,11 @@ export function Auth({ onLogin }: AuthProps) {
         ? data.user.custom_permissions 
         : (data.user?.permissions !== undefined ? data.user.permissions : data.user?.user_metadata?.custom_permissions);
       
-      let parsedPermissions: string[] | undefined = undefined;
+      let parsedPermissions: string[] | Record<string, boolean> | undefined = undefined;
       if (rawPerms) {
         if (Array.isArray(rawPerms)) {
+          parsedPermissions = rawPerms;
+        } else if (typeof rawPerms === 'object') {
           parsedPermissions = rawPerms;
         } else if (typeof rawPerms === 'string' && rawPerms.trim().length > 0) {
           try {

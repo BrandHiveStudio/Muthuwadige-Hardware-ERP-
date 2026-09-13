@@ -98,6 +98,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
   // New PO State
   const [selectedSupplier, setSelectedSupplier] = useState<string>('');
   const [poItems, setPoItems] = useState<PurchaseItem[]>([]);
+  const [discountType, setDiscountType] = useState<'fixed' | 'percentage'>('fixed');
+  const [discountValue, setDiscountValue] = useState<number>(0);
   const [dueDate, setDueDate] = useState('');
   const [productSearch, setProductSearch] = useState('');
   const [isLoading, setIsLoading] = useState(!cachedOrders);
@@ -214,7 +216,41 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     return supplierList.find(s => s.id === returnSupplierId || s.name === returnSupplierName);
   }, [supplierList, returnSupplierId, returnSupplierName]);
 
-  const poTotal = useMemo(() => poItems.reduce((sum, i) => sum + (i.total || 0), 0), [poItems]);
+  // Gross Subtotal (sum of all item totals accounting for optional line discounts)
+  const poGrossSubtotal = useMemo(() => {
+    return poItems.reduce((sum, i) => {
+      const qty = Number(i.qty || 0);
+      const cost = Number(i.costPrice || 0);
+      const lineDisc = Math.max(0, Math.min(100, Number(i.discount || 0)));
+      const lineTotal = Math.round(qty * cost * (1 - lineDisc / 100) * 100) / 100;
+      return sum + lineTotal;
+    }, 0);
+  }, [poItems]);
+
+  // Overall PO Supplier Discount Amount
+  const poDiscountAmount = useMemo(() => {
+    if (discountValue <= 0 || poGrossSubtotal <= 0) return 0;
+    if (discountType === 'percentage') {
+      const pct = Math.min(100, Math.max(0, discountValue));
+      return Math.round(poGrossSubtotal * (pct / 100) * 100) / 100;
+    }
+    return Math.min(poGrossSubtotal, Math.round(Math.max(0, discountValue) * 100) / 100);
+  }, [discountType, discountValue, poGrossSubtotal]);
+
+  // Total After Discount (before applying debit note)
+  const poAfterDiscount = useMemo(() => {
+    return Math.max(0, Math.round((poGrossSubtotal - poDiscountAmount) * 100) / 100);
+  }, [poGrossSubtotal, poDiscountAmount]);
+
+  const poTotal = poAfterDiscount;
+
+  const finalDebitNoteApplied = useMemo(() => {
+    return Math.min(debitNoteApplied, poAfterDiscount);
+  }, [debitNoteApplied, poAfterDiscount]);
+
+  const netTotalPayable = useMemo(() => {
+    return Math.max(0, Math.round((poAfterDiscount - finalDebitNoteApplied) * 100) / 100);
+  }, [poAfterDiscount, finalDebitNoteApplied]);
 
   // Active Debit Notes for Selected Supplier in New PO
   const availableSupplierDebitNotes = useMemo(() => {
@@ -266,9 +302,9 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     );
     if (found) {
       const bal = Number(found.balance_remaining !== undefined && found.balance_remaining !== null ? found.balance_remaining : (found.total_returned_cost || found.totalReturnedCost || found.total || 0));
-      setDebitNoteApplied(Math.min(bal, poTotal));
+      setDebitNoteApplied(Math.min(bal, poAfterDiscount));
     }
-  }, [selectedDebitNoteCode, purchaseReturns, poTotal]);
+  }, [selectedDebitNoteCode, purchaseReturns, poAfterDiscount]);
 
   // Filtered Returns List
   const filteredPurchaseReturns = useMemo(() => {
@@ -380,16 +416,43 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     });
 
     const finalY = (doc as any).lastAutoTable.finalY + 10;
-    const summaryXText = pageWidth - 65; 
+    const summaryXText = pageWidth - 75; 
     const summaryXValue = pageWidth - 15;
+    const subtotalVal = Number(order.subtotal || order.original_total || order.originalTotal || order.total || 0);
+    const discountVal = Number(order.discount_amount || order.discountAmount || 0);
+    const debitVal = Number(order.debit_note_applied || order.debitNoteApplied || 0);
+
+    let curY = finalY;
+    if (discountVal > 0 || debitVal > 0) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor(80, 80, 80);
+      doc.text("Gross Subtotal:", summaryXText, curY);
+      doc.text(`${symbol} ${convert(subtotalVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
+      curY += 6;
+
+      if (discountVal > 0) {
+        doc.setTextColor(34, 139, 34);
+        doc.text("Supplier Discount:", summaryXText, curY);
+        doc.text(`-${symbol} ${convert(discountVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
+        curY += 6;
+      }
+
+      if (debitVal > 0) {
+        doc.setTextColor(75, 0, 130);
+        doc.text("Debit Note Applied:", summaryXText, curY);
+        doc.text(`-${symbol} ${convert(debitVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
+        curY += 6;
+      }
+    }
 
     doc.setFont('helvetica', 'bold');
     doc.setFillColor(245, 245, 245);
-    doc.rect(summaryXText - 3, finalY, 56, 12, 'F');
-    doc.setFontSize(11);
+    doc.rect(summaryXText - 3, curY, 66, 12, 'F');
+    doc.setFontSize(10);
     doc.setTextColor(50, 50, 50);
-    doc.text("Grand Total:", summaryXText, finalY + 8);
-    doc.text(`${symbol} ${convert(order.total).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, finalY + 8, { align: 'right' });
+    doc.text("Net Total Payable:", summaryXText, curY + 8);
+    doc.text(`${symbol} ${convert(order.total).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY + 8, { align: 'right' });
 
     doc.setFontSize(9);
     doc.setTextColor(218, 165, 32); 
@@ -564,6 +627,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
   const addItem = (product: any) => {
     setPoItems((prev) => {
       if (prev.find((i) => i.productId === product.id)) return prev;
+      const initialCost = Number(product.costPrice || product.cost_price || 0);
       return [
         ...prev,
         {
@@ -571,20 +635,25 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
           productName: product.name,
           supplier: product.supplier || '',
           qty: 1,
-          costPrice: product.costPrice || product.cost_price || 0,
-          total: product.costPrice || product.cost_price || 0
+          costPrice: initialCost,
+          discount: 0,
+          total: initialCost
         } as any
       ];
     });
     setProductSearch('');
   };
 
-  const updateItem = (productId: string, field: 'qty' | 'costPrice', value: number) => {
+  const updateItem = (productId: string, field: 'qty' | 'costPrice' | 'discount', value: number) => {
     setPoItems((prev) =>
       prev.map((i) => {
         if (i.productId !== productId) return i;
         const updated = { ...i, [field]: value };
-        return { ...updated, total: updated.qty * updated.costPrice };
+        const qty = Math.max(0, Number(updated.qty || 0));
+        const cost = Math.max(0, Number(updated.costPrice || 0));
+        const disc = Math.max(0, Math.min(100, Number(updated.discount || 0)));
+        const lineTotal = Math.round(qty * cost * (1 - disc / 100) * 100) / 100;
+        return { ...updated, total: lineTotal };
       })
     );
   };
@@ -624,8 +693,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       }
     }
 
-    const finalDebitNoteApplied = Math.min(debitNoteApplied, poTotal);
-    const finalPayable = Math.max(0, poTotal - finalDebitNoteApplied);
+    const finalDebitNoteApplied = Math.min(debitNoteApplied, poAfterDiscount);
+    const finalPayable = Math.max(0, Math.round((poAfterDiscount - finalDebitNoteApplied) * 100) / 100);
 
     if (finalDebitNoteApplied > 0 && selectedDebitNoteCode.trim()) {
       const q = selectedDebitNoteCode.trim().toUpperCase();
@@ -652,7 +721,12 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
         supplier_name: selectedSupplier,
         items: poItems,
         total: finalPayable,
-        original_total: poTotal,
+        subtotal: poGrossSubtotal,
+        discount_type: discountType,
+        discount_value: discountValue,
+        discount_amount: poDiscountAmount,
+        net_total: finalPayable,
+        original_total: poGrossSubtotal,
         debit_note_code: finalDebitNoteApplied > 0 ? selectedDebitNoteCode.trim().toUpperCase() : null,
         debit_note_applied: finalDebitNoteApplied,
         status: 'pending',
@@ -662,6 +736,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       }]);
       if (error) throw error;
       setPoItems([]);
+      setDiscountType('fixed');
+      setDiscountValue(0);
       setSelectedDebitNoteCode('');
       setDebitNoteApplied(0);
       setTab('history');
@@ -1303,72 +1379,160 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
               </div>
 
               {poItems.length > 0 ? (
-                <div className="overflow-x-auto mt-6 border border-slate-100 rounded-2xl">
-                    <table className="w-full text-sm text-left">
-                        <thead className="bg-slate-50 border-b border-slate-100 text-[10px] uppercase font-black text-slate-400 tracking-widest">
-                            <tr>
-                              <th className="py-4 px-6">Item Name</th>
-                              <th className="py-4 text-center">Qty</th>
-                              <th className="py-4 text-right">Cost Price ({symbol})</th>
-                              <th className="py-4 text-right px-6">Total</th>
-                              <th className="py-4"></th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-50">
-                            {poItems.map((item) => {
-                              const prodObj = products.find(p => p.id === item.productId);
-                              const itemSupplier = ((item as any).supplier || prodObj?.supplier || '').trim();
-                              const hasMismatch = Boolean(selectedSupplier.trim() && itemSupplier && itemSupplier.toLowerCase() !== selectedSupplier.trim().toLowerCase());
+                <>
+                  <div className="overflow-x-auto mt-6 border border-slate-100 rounded-2xl">
+                      <table className="w-full text-sm text-left">
+                          <thead className="bg-slate-50 border-b border-slate-100 text-[10px] uppercase font-black text-slate-400 tracking-widest">
+                              <tr>
+                                <th className="py-4 px-6">Item Name</th>
+                                <th className="py-4 text-center">Qty</th>
+                                <th className="py-4 text-right">Cost Price ({symbol})</th>
+                                <th className="py-4 text-center">Disc (%)</th>
+                                <th className="py-4 text-right px-6">Total</th>
+                                <th className="py-4"></th>
+                              </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-50">
+                              {poItems.map((item) => {
+                                const prodObj = products.find(p => p.id === item.productId);
+                                const itemSupplier = ((item as any).supplier || prodObj?.supplier || '').trim();
+                                const hasMismatch = Boolean(selectedSupplier.trim() && itemSupplier && itemSupplier.toLowerCase() !== selectedSupplier.trim().toLowerCase());
 
-                              return (
-                                <tr key={item.productId} className="group hover:bg-teal-50/20 transition-colors">
-                                    <td className="py-4 px-6">
-                                      <div className="font-black text-slate-800">{item.productName}</div>
-                                      {hasMismatch && (
-                                        <div className="inline-flex items-center gap-1.5 mt-1 px-2.5 py-0.5 rounded-md bg-amber-50 border border-amber-300 text-amber-900 text-[10px] font-black tracking-tight">
-                                          <span className="text-amber-600">⚠️</span>
-                                          <span>Default: {itemSupplier}</span>
-                                        </div>
-                                      )}
-                                    </td>
-                                    <td className="py-4 text-center">
-                                      <input 
-                                        type="number" 
-                                        min={0} 
-                                        step="any"
-                                        value={item.qty === 0 ? '' : item.qty} 
-                                        onFocus={(e) => e.target.select()}
-                                        onChange={(e) => {
-                                          const valStr = e.target.value;
-                                          const val = valStr === '' ? 0 : Math.max(0, parseFloat(valStr) || 0);
-                                          updateItem(item.productId, 'qty', val);
-                                        }}
-                                        onBlur={() => {
-                                          if (!item.qty || item.qty <= 0) {
-                                            updateItem(item.productId, 'qty', 1);
-                                          }
-                                        }}
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter') {
-                                            (e.target as HTMLElement).blur();
-                                          }
-                                        }}
-                                        className="w-16 text-center border border-slate-200 bg-white rounded-lg py-1.5 font-bold text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none" 
-                                      />
-                                    </td>
-                                    <td className="py-4 text-right"><input type="number" step="0.01" value={item.costPrice === 0 ? '' : item.costPrice} onChange={(e) => updateItem(item.productId, 'costPrice', parseFloat(e.target.value) || 0)} className="w-24 text-right border border-slate-200 bg-white rounded-lg py-1.5 px-3 font-bold text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none" /></td>
-                                    <td className="py-4 text-right font-black text-[#DAA520] px-6">{symbol} {convert(item.total).toLocaleString()}</td>
-                                    <td className="py-4 text-center px-4">
-                                      <button onClick={() => setPoItems(poItems.filter(i => i.productId !== item.productId))} className="p-2 rounded-xl bg-red-50 text-red-600 hover:bg-red-500 hover:text-white border border-red-100 transition-all shadow-sm shadow-red-500/10">
-                                        <XIcon className="w-4 h-4" />
-                                      </button>
-                                    </td>
-                                </tr>
-                              );
-                            })}
-                        </tbody>
-                    </table>
-                </div>
+                                return (
+                                  <tr key={item.productId} className="group hover:bg-teal-50/20 transition-colors">
+                                      <td className="py-4 px-6">
+                                        <div className="font-black text-slate-800">{item.productName}</div>
+                                        {hasMismatch && (
+                                          <div className="inline-flex items-center gap-1.5 mt-1 px-2.5 py-0.5 rounded-md bg-amber-50 border border-amber-300 text-amber-900 text-[10px] font-black tracking-tight">
+                                            <span className="text-amber-600">⚠️</span>
+                                            <span>Default: {itemSupplier}</span>
+                                          </div>
+                                        )}
+                                      </td>
+                                      <td className="py-4 text-center">
+                                        <input 
+                                          type="number" 
+                                          min={0} 
+                                          step="any"
+                                          value={item.qty === 0 ? '' : item.qty} 
+                                          onFocus={(e) => e.target.select()}
+                                          onChange={(e) => {
+                                            const valStr = e.target.value;
+                                            const val = valStr === '' ? 0 : Math.max(0, parseFloat(valStr) || 0);
+                                            updateItem(item.productId, 'qty', val);
+                                          }}
+                                          onBlur={() => {
+                                            if (!item.qty || item.qty <= 0) {
+                                              updateItem(item.productId, 'qty', 1);
+                                            }
+                                          }}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              (e.target as HTMLElement).blur();
+                                            }
+                                          }}
+                                          className="w-16 text-center border border-slate-200 bg-white rounded-lg py-1.5 font-bold text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none" 
+                                        />
+                                      </td>
+                                      <td className="py-4 text-right"><input type="number" step="0.01" value={item.costPrice === 0 ? '' : item.costPrice} onChange={(e) => updateItem(item.productId, 'costPrice', parseFloat(e.target.value) || 0)} className="w-24 text-right border border-slate-200 bg-white rounded-lg py-1.5 px-3 font-bold text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none" /></td>
+                                      <td className="py-4 text-center">
+                                        <input 
+                                          type="number" 
+                                          min={0} 
+                                          max={100}
+                                          step="any"
+                                          placeholder="0"
+                                          value={item.discount === 0 || item.discount === undefined ? '' : item.discount} 
+                                          onFocus={(e) => e.target.select()}
+                                          onChange={(e) => {
+                                            const valStr = e.target.value;
+                                            const val = valStr === '' ? 0 : Math.max(0, Math.min(100, parseFloat(valStr) || 0));
+                                            updateItem(item.productId, 'discount', val);
+                                          }}
+                                          className="w-16 text-center border border-slate-200 bg-white rounded-lg py-1.5 px-2 font-bold text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none" 
+                                        />
+                                      </td>
+                                      <td className="py-4 text-right font-black text-[#DAA520] px-6">{symbol} {convert(item.total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                      <td className="py-4 text-center px-4">
+                                        <button onClick={() => setPoItems(poItems.filter(i => i.productId !== item.productId))} className="p-2 rounded-xl bg-red-50 text-red-600 hover:bg-red-500 hover:text-white border border-red-100 transition-all shadow-sm shadow-red-500/10">
+                                          <XIcon className="w-4 h-4" />
+                                        </button>
+                                      </td>
+                                  </tr>
+                                );
+                              })}
+                          </tbody>
+                      </table>
+                  </div>
+
+                  {/* Discount Section below itemized table */}
+                  <div className="mt-5 p-4 rounded-2xl border border-amber-200/80 bg-gradient-to-r from-amber-50/70 via-amber-50/30 to-amber-50/70 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-sm">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2.5 rounded-xl bg-[#DAA520]/20 text-[#B8860B] border border-[#DAA520]/30 shadow-sm">
+                        <DollarSignIcon className="w-5 h-5 text-[#B8860B]" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
+                          <span>Supplier Order Discount</span>
+                          <span className="text-[10px] text-amber-700 font-bold">/ සැපයුම්කරු වට්ටම</span>
+                        </h4>
+                        <p className="text-[11px] text-slate-500 font-semibold mt-0.5">
+                          Apply an overall supplier concession or prompt settlement discount to this purchase
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 w-full md:w-auto">
+                      {/* Toggle */}
+                      <div className="flex bg-white rounded-xl p-1 border border-slate-200 shadow-sm shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setDiscountType('percentage')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+                            discountType === 'percentage'
+                              ? 'bg-[#DAA520] text-slate-900 shadow-sm'
+                              : 'text-slate-500 hover:text-slate-800'
+                          }`}
+                        >
+                          % Percentage
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDiscountType('fixed')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+                            discountType === 'fixed'
+                              ? 'bg-[#DAA520] text-slate-900 shadow-sm'
+                              : 'text-slate-500 hover:text-slate-800'
+                          }`}
+                        >
+                          {symbol} Fixed Amount
+                        </button>
+                      </div>
+
+                      {/* Discount input field */}
+                      <div className="relative flex-1 md:w-36">
+                        <input
+                          type="number"
+                          min={0}
+                          max={discountType === 'percentage' ? 100 : undefined}
+                          step="any"
+                          placeholder="0.00"
+                          value={discountValue === 0 ? '' : discountValue}
+                          onFocus={(e) => e.target.select()}
+                          onChange={(e) => {
+                            const valStr = e.target.value;
+                            const val = valStr === '' ? 0 : Math.max(0, parseFloat(valStr) || 0);
+                            setDiscountValue(val);
+                          }}
+                          className="w-full pl-7 pr-3 py-2 border border-slate-200 bg-white rounded-xl font-black text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none text-right text-sm shadow-sm"
+                        />
+                        <span className="absolute left-2.5 top-2.5 text-xs font-black text-slate-400">
+                          {discountType === 'percentage' ? '%' : symbol}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </>
               ) : (
                 <div className="py-12 text-center text-gray-400">
                     <TruckIcon className="w-12 h-12 mx-auto mb-3 opacity-20" />
@@ -1504,28 +1668,36 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                   })()}
                 </div>
 
-                <div className="pt-5 border-t border-gray-100 space-y-4">
-                    <div className="flex justify-between text-sm font-black text-gray-400 uppercase tracking-widest">
-                      <span>SKU Count</span>
+                <div className="pt-5 border-t border-gray-100 space-y-3">
+                    <div className="flex justify-between text-xs font-black text-gray-400 uppercase tracking-widest">
+                      <span>Total Qty / Units</span>
                       <span className="font-black text-[#464646]">{poItems.reduce((sum, item) => sum + (item.qty || 0), 0)}</span>
                     </div>
 
-                    {debitNoteApplied > 0 && (
-                      <>
-                        <div className="flex justify-between text-xs font-bold text-slate-500">
-                          <span>Gross Subtotal</span>
-                          <span className="font-bold text-slate-700">{symbol} {convert(poTotal).toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between text-xs font-black text-indigo-600">
-                          <span>Debit Note Applied ({selectedDebitNoteCode})</span>
-                          <span>-{symbol} {convert(debitNoteApplied).toLocaleString()}</span>
-                        </div>
-                      </>
-                    )}
+                    <div className="space-y-2 pt-2 border-t border-slate-100">
+                      <div className="flex justify-between text-xs font-bold text-slate-500">
+                        <span>Gross Subtotal:</span>
+                        <span className="font-bold text-slate-800">{symbol} {convert(poGrossSubtotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
 
-                    <div className="flex justify-between font-black text-2xl text-[#464646] pt-5 border-t-2 border-dashed border-gray-200">
-                        <span className="uppercase tracking-widest text-lg flex items-center">Total Pay</span>
-                        <span className="text-[#DAA520]">{symbol} {convert(Math.max(0, poTotal - debitNoteApplied)).toLocaleString()}</span>
+                      {poDiscountAmount > 0 && (
+                        <div className="flex justify-between text-xs font-black text-emerald-600">
+                          <span>Supplier Discount {discountType === 'percentage' ? `(${discountValue}%)` : ''}:</span>
+                          <span>- {symbol} {convert(poDiscountAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        </div>
+                      )}
+
+                      {finalDebitNoteApplied > 0 && (
+                        <div className="flex justify-between text-xs font-black text-indigo-600">
+                          <span>Debit Note Applied ({selectedDebitNoteCode}):</span>
+                          <span>- {symbol} {convert(finalDebitNoteApplied).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex justify-between font-black text-2xl text-[#464646] pt-4 border-t-2 border-dashed border-gray-200">
+                        <span className="uppercase tracking-widest text-base flex items-center">Net Total Payable</span>
+                        <span className="text-[#DAA520]">{symbol} {convert(netTotalPayable).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                 </div>
                 <button onClick={createPO} disabled={!selectedSupplier || poItems.length === 0 || isLoading} className="w-full bg-[#DAA520] text-white font-black py-4 rounded-xl shadow-lg shadow-[#DAA520]/20 hover:bg-[#B8860B] disabled:bg-gray-100 disabled:text-gray-300 transition-all flex items-center justify-center gap-3 uppercase tracking-widest text-xs">
@@ -2386,7 +2558,29 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                 </tbody>
               </table>
             </div>
-            
+
+            {/* Summary breakdown if discounts or debit notes exist */}
+            {((Number(viewOrder.discount_amount || viewOrder.discountAmount || 0) > 0) || (Number(viewOrder.debit_note_applied || viewOrder.debitNoteApplied || 0) > 0)) && (
+              <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-2 text-xs">
+                <div className="flex justify-between font-bold text-slate-600">
+                  <span>Gross Subtotal:</span>
+                  <span className="font-black text-slate-800">{symbol} {convert(viewOrder.subtotal || viewOrder.original_total || viewOrder.originalTotal || viewOrder.total).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                </div>
+                {Number(viewOrder.discount_amount || viewOrder.discountAmount || 0) > 0 && (
+                  <div className="flex justify-between font-bold text-emerald-600">
+                    <span>Supplier Discount ({viewOrder.discount_type === 'percentage' || viewOrder.discountType === 'percentage' ? `${viewOrder.discount_value || viewOrder.discountValue}%` : 'Fixed'}):</span>
+                    <span className="font-black">- {symbol} {convert(viewOrder.discount_amount || viewOrder.discountAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                {Number(viewOrder.debit_note_applied || viewOrder.debitNoteApplied || 0) > 0 && (
+                  <div className="flex justify-between font-bold text-indigo-600">
+                    <span>Debit Note Applied:</span>
+                    <span className="font-black">- {symbol} {convert(viewOrder.debit_note_applied || viewOrder.debitNoteApplied || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="bg-[#464646] text-white p-8 rounded-[32px] shadow-2xl relative overflow-hidden flex justify-between items-center">
               <div className="absolute top-0 right-0 w-48 h-48 bg-[#DAA520]/20 rounded-full -mr-16 -mt-16 blur-3xl"></div>
               <span className="font-black text-gray-300 uppercase tracking-widest text-xs relative z-10">Total Purchase Commitment</span>

@@ -99,10 +99,12 @@ export async function fetchWithTimeout(url: string, options: RequestInit = {}, t
       headers: mergedHeaders,
       signal: controller.signal
     });
-    // A 401 means the session token is missing/expired/invalid server-side (see `authenticate` in
-    // server.js). Clear the stale token and let App.tsx force a clean logout/redirect to the login
-    // screen instead of leaving every page silently failing its API calls one by one.
-    if (res.status === 401 && !url.includes('/auth/login') && typeof window !== 'undefined') {
+    // Only trigger session expiration / logout if an explicit auth verification endpoint
+    // (/api/auth/me or /api/auth/verify) returns 401.
+    // Auxiliary data fetches, background sync, or catalog polling errors must NEVER wipe credentials
+    // or trigger premature logout during initial bootstrap.
+    const isExplicitAuthCheck = url.includes('/auth/me') || url.includes('/auth/verify');
+    if (res.status === 401 && isExplicitAuthCheck && typeof window !== 'undefined') {
       try {
         sessionStorage.removeItem('erp_session_token');
         localStorage.removeItem('erp_session_token');
@@ -233,6 +235,16 @@ export const api = {
         },
         error: null
       };
+    },
+    me: async () => {
+      const res = await fetchWithTimeout(`${API_URL}/auth/me`);
+      if (!res.ok) await handleError(res, 'Failed to fetch current session user');
+      return res.json();
+    },
+    verify: async () => {
+      const res = await fetchWithTimeout(`${API_URL}/auth/verify`);
+      if (!res.ok) await handleError(res, 'Session verification failed');
+      return res.json();
     }
   },
 
@@ -879,6 +891,15 @@ export const api = {
       const res = await fetchWithTimeout(`${API_URL}/sync/pull`, { method: 'POST' });
       if (!res.ok) throw new Error('Failed to pull downstream updates');
       return res.json();
+    },
+    acknowledgeReset: async () => {
+      try {
+        const res = await fetchWithTimeout(`${API_URL}/sync/acknowledge-reset`, { method: 'POST' });
+        if (!res.ok) return { success: false };
+        return res.json();
+      } catch (err) {
+        return { success: false, error: (err as any)?.message };
+      }
     }
   },
 

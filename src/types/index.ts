@@ -123,6 +123,7 @@ export interface PurchaseItem {
   qty: number;
   costPrice: number;
   total: number;
+  discount?: number;
   receivedProductId?: string;
   receivedSku?: string;
   isNewBatch?: boolean;
@@ -135,6 +136,15 @@ export interface PurchaseOrder {
   supplierName: string;
   items: PurchaseItem[];
   total: number;
+  subtotal?: number;
+  discount_type?: 'fixed' | 'percentage';
+  discountType?: 'fixed' | 'percentage';
+  discount_value?: number;
+  discountValue?: number;
+  discount_amount?: number;
+  discountAmount?: number;
+  net_total?: number;
+  netTotal?: number;
   original_total?: number;
   originalTotal?: number;
   debit_note_code?: string;
@@ -169,7 +179,7 @@ export interface Transaction {
   reference: string;
 }
 // 1. Define all possible roles in one place (strictly restricted to Admin, Manager, Cashier)
-export type UserRole = 'Admin' | 'Manager' | 'Cashier';
+export type UserRole = 'Admin' | 'Manager' | 'Cashier' | 'super_admin' | 'Super Admin' | string;
 
 // 2. Update the User interface (Delete the old duplicate version)
 export interface User {
@@ -181,8 +191,9 @@ export interface User {
   email: string;
   role: UserRole; // Use the type defined above
   avatar: string;
-  permissions?: string[] | string;
-  custom_permissions?: string[] | string;
+  permissions?: string[] | string | Record<string, boolean>;
+  custom_permissions?: string[] | string | Record<string, boolean>;
+  customPermissions?: string[] | string | Record<string, boolean>;
 }
 
 // 3. Ensure PageName includes all your pages and granular permission keys

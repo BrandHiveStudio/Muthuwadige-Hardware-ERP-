@@ -132,6 +132,8 @@ export const ROLE_PRESETS: Record<string, string[]> = {
   ]
 };
 
+export const ROLE_DEFAULTS = ROLE_PRESETS;
+
 export const getDefaultRolePermissions = (role: string): string[] => {
   const norm = (role || '').toLowerCase().trim();
   if (norm === 'admin' || norm === 'super_admin' || norm === 'super admin') {
@@ -143,41 +145,91 @@ export const getDefaultRolePermissions = (role: string): string[] => {
   return ROLE_PRESETS.Cashier;
 };
 
-export const arePermissionsCustomized = (role: string, currentPerms?: string[] | string): boolean => {
+export const arePermissionsCustomized = (role: string, currentPerms?: string[] | string | Record<string, boolean>): boolean => {
   if (!currentPerms) return false;
+  const defaultPerms = getDefaultRolePermissions(role);
+
+  if (typeof currentPerms === 'object' && !Array.isArray(currentPerms)) {
+    return CAPABILITIES.some(cap => {
+      const defaultAllowed = defaultPerms.includes(cap.key);
+      if (currentPerms[cap.key] !== undefined) {
+        return Boolean(currentPerms[cap.key]) !== defaultAllowed;
+      }
+      return false;
+    });
+  }
+
   let perms: string[] = [];
   if (Array.isArray(currentPerms)) {
     perms = currentPerms;
   } else if (typeof currentPerms === 'string' && currentPerms.trim().length > 0) {
     try {
-      perms = JSON.parse(currentPerms);
+      const parsed = JSON.parse(currentPerms);
+      if (typeof parsed === 'object' && !Array.isArray(parsed) && parsed !== null) {
+        return CAPABILITIES.some(cap => {
+          const defaultAllowed = defaultPerms.includes(cap.key);
+          if (parsed[cap.key] !== undefined) {
+            return Boolean(parsed[cap.key]) !== defaultAllowed;
+          }
+          return false;
+        });
+      } else if (Array.isArray(parsed)) {
+        perms = parsed;
+      }
     } catch {
       perms = currentPerms.split(',').map((p: string) => p.trim());
     }
   } else {
     return false;
   }
-  const defaultPerms = getDefaultRolePermissions(role);
+
   if (perms.length !== defaultPerms.length) return true;
   const set = new Set(defaultPerms);
   return perms.some(k => !set.has(k));
 };
 
-export const getCustomOverrideCount = (role: string, currentPerms?: string[] | string): number => {
+export const getCustomOverrideCount = (role: string, currentPerms?: string[] | string | Record<string, boolean>): number => {
   if (!currentPerms) return 0;
+  const defaultPerms = getDefaultRolePermissions(role);
+
+  if (typeof currentPerms === 'object' && !Array.isArray(currentPerms)) {
+    let count = 0;
+    CAPABILITIES.forEach(cap => {
+      const defaultAllowed = defaultPerms.includes(cap.key);
+      if (currentPerms[cap.key] !== undefined && Boolean(currentPerms[cap.key]) !== defaultAllowed) {
+        count++;
+      }
+    });
+    return count;
+  }
+
   let perms: string[] = [];
   if (Array.isArray(currentPerms)) {
     perms = currentPerms;
   } else if (typeof currentPerms === 'string' && currentPerms.trim().length > 0) {
     try {
-      perms = JSON.parse(currentPerms);
+      const parsed = JSON.parse(currentPerms);
+      if (typeof parsed === 'object' && !Array.isArray(parsed) && parsed !== null) {
+        let count = 0;
+        CAPABILITIES.forEach(cap => {
+          const defaultAllowed = defaultPerms.includes(cap.key);
+          if (parsed[cap.key] !== undefined && Boolean(parsed[cap.key]) !== defaultAllowed) {
+            count++;
+          }
+        });
+        return count;
+      } else if (Array.isArray(parsed)) {
+        perms = parsed;
+      }
     } catch {
       perms = currentPerms.split(',').map((p: string) => p.trim());
     }
   } else {
     return 0;
   }
-  return perms.length;
+
+  const set = new Set(defaultPerms);
+  return perms.filter(k => !set.has(k)).length;
 };
 
 export const normalizeCapabilityKey = (key: string): string => {
@@ -254,11 +306,81 @@ export const normalizeCapabilityKey = (key: string): string => {
 };
 
 /**
+ * Strict capability evaluation function with explicit Allow / Deny overrides.
+ * 1. Root Super Admin (role === 'super_admin', 'admin@hardware.com', 'u2') -> always true.
+ * 2. Explicit user overrides FIRST (user.custom_permissions[capability] !== undefined) -> returns Boolean(override).
+ * 3. Fall back to role preset defaults (ROLE_DEFAULTS[user.role]?.includes(capability) ?? false).
+ */
+export function hasCapability(user: any, capability: string): boolean {
+  if (!user) return false;
+
+  const roleStr = (user.role || '').toLowerCase().trim();
+  const isSuperAdmin = 
+    roleStr === 'super_admin' || 
+    roleStr === 'super admin' || 
+    user.email === 'admin@hardware.com' ||
+    user.id === 'u1' ||
+    user.id === 'u2' ||
+    user.id === 'admin_super';
+
+  if (isSuperAdmin) {
+    return true;
+  }
+
+  const normalizedKey = normalizeCapabilityKey(capability);
+
+  // Check explicit user overrides FIRST
+  const rawPerms = user.custom_permissions !== undefined 
+    ? user.custom_permissions 
+    : (user.permissions !== undefined ? user.permissions : (() => {
+        try {
+          if (typeof window !== 'undefined') {
+            const cached = sessionStorage.getItem('custom_permissions');
+            if (cached) return JSON.parse(cached);
+          }
+        } catch (_) {}
+        return undefined;
+      })());
+
+  let customPerms: any = null;
+  if (rawPerms) {
+    if (typeof rawPerms === 'object') {
+      customPerms = rawPerms;
+    } else if (typeof rawPerms === 'string' && rawPerms.trim().length > 0) {
+      try {
+        customPerms = JSON.parse(rawPerms);
+      } catch {
+        customPerms = rawPerms.split(',').map((p: string) => p.trim());
+      }
+    }
+  }
+
+  if (customPerms) {
+    if (typeof customPerms === 'object' && !Array.isArray(customPerms)) {
+      if (customPerms[capability] !== undefined) {
+        return Boolean(customPerms[capability]);
+      }
+      if (customPerms[normalizedKey] !== undefined) {
+        return Boolean(customPerms[normalizedKey]);
+      }
+    } else if (Array.isArray(customPerms)) {
+      if (customPerms.includes('*') || customPerms.includes('all')) return true;
+      if (customPerms.includes(capability) || customPerms.includes(normalizedKey)) return true;
+      return false;
+    }
+  }
+
+  // Fall back to role preset defaults
+  const roleDefaults = getDefaultRolePermissions(user.role);
+  return roleDefaults.includes(capability) || roleDefaults.includes(normalizedKey);
+}
+
+/**
  * Global permission check helper.
  * Evaluation order:
  * 1. Root Super Admin -> always returns true.
  * 2. Core pages (dashboard, barcode-print, inventory lookup) -> returns true for all logged-in users.
- * 3. User custom overrides (user.custom_permissions or user.permissions) -> evaluated first.
+ * 3. User custom overrides (user.custom_permissions or user.permissions) -> evaluated first (Allow / Deny).
  * 4. Fallback to base role presets (ROLE_PRESETS[user.role]).
  */
 export const hasPermission = (user: any, capabilityKey: string): boolean => {
@@ -266,7 +388,6 @@ export const hasPermission = (user: any, capabilityKey: string): boolean => {
 
   const roleStr = (user.role || '').toLowerCase().trim();
   const isSuperAdmin = 
-    roleStr === 'admin' || 
     roleStr === 'super_admin' || 
     roleStr === 'super admin' || 
     user.email === 'admin@hardware.com' ||
@@ -289,7 +410,7 @@ export const hasPermission = (user: any, capabilityKey: string): boolean => {
     return true;
   }
 
-  // User & Audit log administration is restricted to Root Admins
+  // User & Audit log administration is restricted to Admins
   if (capabilityKey === 'users' || capabilityKey === 'audit_logs') {
     return roleStr === 'admin' || roleStr === 'super_admin' || roleStr === 'super admin';
   }
@@ -325,7 +446,15 @@ export const hasPermission = (user: any, capabilityKey: string): boolean => {
   }
 
   if (customPerms) {
-    if (Array.isArray(customPerms)) {
+    if (typeof customPerms === 'object' && !Array.isArray(customPerms)) {
+      // Explicit Allow / Deny dictionary override: evaluated FIRST
+      if ((customPerms as Record<string, boolean>)[capabilityKey] !== undefined) {
+        return Boolean((customPerms as Record<string, boolean>)[capabilityKey]);
+      }
+      if ((customPerms as Record<string, boolean>)[normalizedKey] !== undefined) {
+        return Boolean((customPerms as Record<string, boolean>)[normalizedKey]);
+      }
+    } else if (Array.isArray(customPerms)) {
       if (customPerms.includes('*') || customPerms.includes('all')) {
         return true;
       }
@@ -361,37 +490,52 @@ export const hasPermission = (user: any, capabilityKey: string): boolean => {
 
       // If custom permissions are explicitly configured for this user and not matched, deny
       return false;
-    } else if (typeof customPerms === 'object') {
-      if (customPerms[capabilityKey] !== undefined) return Boolean(customPerms[capabilityKey]);
-      if (customPerms[normalizedKey] !== undefined) return Boolean(customPerms[normalizedKey]);
     }
   }
 
-  // Fallback to role presets
+  // Composite alias resolution with sub-capabilities (checking customPerms first, then defaultPerms)
   const defaultPerms = getDefaultRolePermissions(user.role);
-  if (defaultPerms.includes(capabilityKey) || defaultPerms.includes(normalizedKey)) {
-    return true;
-  }
 
   if (capabilityKey === 'customers') {
-    return defaultPerms.includes('credit_record_settlement') ||
-           defaultPerms.includes('credit_edit_customer') ||
-           defaultPerms.includes('credit_issue_invoices') ||
-           defaultPerms.includes('pos_create_sales');
+    const subCaps = ['credit_record_settlement', 'credit_edit_customer', 'credit_issue_invoices', 'pos_create_sales'];
+    return subCaps.some(sc => {
+      if (customPerms && typeof customPerms === 'object' && !Array.isArray(customPerms) && (customPerms as Record<string, boolean>)[sc] !== undefined) {
+        return Boolean((customPerms as Record<string, boolean>)[sc]);
+      }
+      return defaultPerms.includes(sc);
+    });
   }
 
   if (capabilityKey === 'sales') {
-    return defaultPerms.includes('pos_create_sales') ||
-           defaultPerms.includes('pos_view_all_history') ||
-           defaultPerms.includes('pos_process_returns');
+    const subCaps = ['pos_create_sales', 'pos_view_all_history', 'pos_process_returns'];
+    return subCaps.some(sc => {
+      if (customPerms && typeof customPerms === 'object' && !Array.isArray(customPerms) && (customPerms as Record<string, boolean>)[sc] !== undefined) {
+        return Boolean((customPerms as Record<string, boolean>)[sc]);
+      }
+      return defaultPerms.includes(sc);
+    });
   }
 
   if (capabilityKey === 'quotes' || capabilityKey === 'quotations') {
+    if (customPerms && typeof customPerms === 'object' && !Array.isArray(customPerms) && (customPerms as Record<string, boolean>)['pos_create_sales'] !== undefined) {
+      return Boolean((customPerms as Record<string, boolean>)['pos_create_sales']);
+    }
     return defaultPerms.includes('pos_create_sales');
   }
 
   if (capabilityKey === 'credit_history') {
-    return defaultPerms.includes('credit_record_settlement') || defaultPerms.includes('credit_issue_invoices');
+    const subCaps = ['credit_record_settlement', 'credit_issue_invoices'];
+    return subCaps.some(sc => {
+      if (customPerms && typeof customPerms === 'object' && !Array.isArray(customPerms) && (customPerms as Record<string, boolean>)[sc] !== undefined) {
+        return Boolean((customPerms as Record<string, boolean>)[sc]);
+      }
+      return defaultPerms.includes(sc);
+    });
+  }
+
+  // Fallback to role presets
+  if (defaultPerms.includes(capabilityKey) || defaultPerms.includes(normalizedKey)) {
+    return true;
   }
 
   // Fallback to active dynamic Permissions Matrix for user's role

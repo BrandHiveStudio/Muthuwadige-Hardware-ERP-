@@ -80,16 +80,39 @@ export function App() {
     }
   };
 
-  // Factory reset detection listener: force logout and show alert
+  // Factory reset detection listener: wipe local cached catalog data, acknowledge reset to server, and preserve authenticated user session
   useEffect(() => {
-    const handleSystemFactoryReset = () => {
-      handleLogout();
-      notify('System was factory-reset by Root Admin. Terminal re-initialized.', 'Muthuwadige Hardware ERP', 'error');
-      alert('System was factory-reset by Root Admin. Terminal re-initialized.');
+    const handleSystemFactoryReset = async () => {
+      console.log('[SystemReset] Downstream factory reset detected. Clearing local catalog cache & acknowledging...');
+
+      // 1. Wipe local cached catalog data
+      resetAllCaches();
+      window.dispatchEvent(new Event('catalog-refreshed'));
+      window.dispatchEvent(new Event('sync-completed'));
+
+      // 2. Acknowledge the reset to the server so factoryResetDetected resets to false
+      try {
+        await api.sync.acknowledgeReset();
+      } catch (err) {
+        console.warn('[SystemReset] Notice acknowledging factory reset to server:', err);
+      }
+
+      // 3. Do NOT kick out the currently logged-in user if they just authenticated
+      const savedUser = sessionStorage.getItem('hardware_erp_user') || sessionStorage.getItem('erp_user');
+      const isAuth = sessionStorage.getItem('hardware_erp_auth') === 'true' || Boolean(currentUser);
+
+      if (savedUser && isAuth) {
+        console.log('[SystemReset] Active session preserved for authenticated user following cloud reset sync.');
+        notify('Cloud factory reset synchronized. Catalog cache reloaded.', 'Muthuwadige Hardware ERP', 'info');
+      } else {
+        handleLogout();
+        notify('System was factory-reset by Root Admin. Terminal re-initialized.', 'Muthuwadige Hardware ERP', 'error');
+        alert('System was factory-reset by Root Admin. Terminal re-initialized.');
+      }
     };
     window.addEventListener('system-factory-reset', handleSystemFactoryReset);
     return () => window.removeEventListener('system-factory-reset', handleSystemFactoryReset);
-  }, []);
+  }, [currentUser]);
 
   const [, setPermissionsTick] = useState(0);
   useEffect(() => {
@@ -362,16 +385,22 @@ export function App() {
     setCurrentPage('dashboard');
   };
 
-  // Active session validation: Ensure currentUser still exists in local profiles
-  // If Super Admin deleted the account from Cloud and downstream sync pruned it locally, force logout immediately.
+  // Active session validation: Ensure currentUser session is valid via /api/auth/me
+  // If session is revoked or deleted, force logout gracefully; otherwise keep session active
   const validateActiveSession = async () => {
     if (!currentUser || !currentUser.id) return;
     try {
-      const res = await fetchWithTimeout(`${API_URL}/profiles/${currentUser.id}`, {}, 5000);
-      if (res.status === 404) {
-        console.warn(`[AuthGuard] Active session invalidated: user profile ${currentUser.id} was deleted or revoked.`);
+      const res = await fetchWithTimeout(`${API_URL}/auth/me`, {}, 5000);
+      if (res.status === 401) {
+        console.warn(`[AuthGuard] Active session invalidated: auth/me returned 401.`);
         handleLogout();
-        notify("Your session has expired or your account has been removed by Super Admin.", 'Muthuwadige Hardware ERP', 'error');
+        notify("Your session has expired. Please log in again.", 'Muthuwadige Hardware ERP', 'error');
+      } else if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data?.user) {
+          sessionStorage.setItem('hardware_erp_user', JSON.stringify(data.user));
+          sessionStorage.setItem('erp_user', JSON.stringify(data.user));
+        }
       }
     } catch (_) {
       // Network timeout / offline: allow offline operation if profile was already cached
