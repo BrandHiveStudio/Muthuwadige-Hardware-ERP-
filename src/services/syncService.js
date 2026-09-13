@@ -452,6 +452,7 @@ export async function pullDownstreamChanges(localDb, tursoClient) {
     return { success: true, pulled: 0, message: 'Web environment: sync pull bypassed.' };
   }
   if (!localDb || !tursoClient) return;
+  await ensureSyncSchema(localDb);
 
   // Mark "an inbound cloud sync write is in progress" for the duration of this whole pull batch.
   // The change-tracking triggers (trg_sync_sales_insert etc., see their WHEN clause in server.js)
@@ -562,6 +563,9 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
       );
       if (!tableExists) return;
 
+      const localTableCols = await localDb.all(`PRAGMA table_info("${tableName}")`).catch(() => []);
+      const localColSet = new Set((localTableCols || []).map(c => c.name));
+
       const MASTER_TABLES = new Set(['products', 'categories', 'customers', 'suppliers', 'users', 'profiles']);
       const isMasterTable = MASTER_TABLES.has(tableName);
 
@@ -618,7 +622,8 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
               cleanRow.stock = cleanRow.stock_quantity;
             }
 
-            const pCols = Object.keys(cleanRow);
+            const rawCols = Object.keys(cleanRow);
+            const pCols = localColSet.size > 0 ? rawCols.filter(c => localColSet.has(c)) : rawCols;
             const pColNames = pCols.map(c => `"${c}"`).join(', ');
             const pPlaceholders = pCols.map(() => '?').join(', ');
             const pArgs = pCols.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
@@ -642,7 +647,8 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
               pArgs
             );
           } else if (useSafeUpsert) {
-            const cols = Object.keys(row);
+            const rawCols = Object.keys(row);
+            const cols = localColSet.size > 0 ? rawCols.filter(c => localColSet.has(c)) : rawCols;
             const colNames = cols.map(c => `"${c}"`).join(', ');
             const placeholders = cols.map(() => '?').join(', ');
             const args = cols.map(c => row[c] !== undefined ? row[c] : null);
@@ -656,7 +662,8 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
               args
             );
           } else {
-            const cols = Object.keys(row);
+            const rawCols = Object.keys(row);
+            const cols = localColSet.size > 0 ? rawCols.filter(c => localColSet.has(c)) : rawCols;
             const colNames = cols.map(c => `"${c}"`).join(', ');
             const placeholders = cols.map(() => '?').join(', ');
             const args = cols.map(c => row[c] !== undefined ? row[c] : null);

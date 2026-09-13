@@ -405,6 +405,7 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
     return { success: true, pulled: 0, message: 'Web environment: sync pull bypassed.' };
   }
   if (!localDb || !tursoClient) return;
+  await ensureSyncSchema(localDb);
 
   // 1. Factory Reset Detection on Turso Cloud
   try {
@@ -493,6 +494,9 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
       );
       if (!tableExists) return;
 
+      const localTableCols = await localDb.all(`PRAGMA table_info("${tableName}")`).catch(() => []);
+      const localColSet = new Set((localTableCols || []).map((c: any) => c.name));
+
       const MASTER_TABLES = new Set(['products', 'categories', 'customers', 'suppliers', 'users', 'profiles']);
       const isMasterTable = MASTER_TABLES.has(tableName);
 
@@ -549,7 +553,8 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
               cleanRow.stock = cleanRow.stock_quantity;
             }
 
-            const pCols = Object.keys(cleanRow);
+            const rawCols = Object.keys(cleanRow);
+            const pCols = localColSet.size > 0 ? rawCols.filter(c => localColSet.has(c)) : rawCols;
             const pColNames = pCols.map(c => `"${c}"`).join(', ');
             const pPlaceholders = pCols.map(() => '?').join(', ');
             const pArgs = pCols.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
@@ -573,7 +578,8 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
               pArgs
             );
           } else {
-            const cols = Object.keys(row);
+            const rawCols = Object.keys(row);
+            const cols = localColSet.size > 0 ? rawCols.filter(c => localColSet.has(c)) : rawCols;
             const colNames = cols.map(c => `"${c}"`).join(', ');
             const placeholders = cols.map(() => '?').join(', ');
             const args = cols.map(c => (row as any)[c] !== undefined ? (row as any)[c] : null);
