@@ -6252,8 +6252,10 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
   for (const item of items) {
     const qty = Math.max(0, Number(item.qty || item.quantity || 0));
     const cost = Math.max(0, Number(item.costPrice || item.cost_price || item.unitCostPrice || 0));
-    const lineDiscount = Math.max(0, Math.min(100, Number(item.discount || item.line_discount || 0)));
-    const lineTotal = Math.round(qty * cost * (1 - lineDiscount / 100) * 100) / 100;
+    const isFixed = (item.discountType || item.discount_type || '').toLowerCase() === 'fixed';
+    const disc = Math.max(0, Number(item.discount || item.line_discount || 0));
+    const unitAfterLineDisc = isFixed ? Math.max(0, cost - disc) : cost * (1 - Math.min(100, disc) / 100);
+    const lineTotal = Math.round(unitAfterLineDisc * qty * 100) / 100;
     calculatedSubtotal += lineTotal;
   }
   calculatedSubtotal = Math.round(calculatedSubtotal * 100) / 100;
@@ -6324,8 +6326,10 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
         const prodId = item.productId || item.product_id || item.id;
         const qty = Math.max(0, Number(item.qty || item.quantity || 0));
         const itemGrossCost = Number(item.costPrice || item.cost_price || item.unitCostPrice || 0);
-        const lineDiscount = Math.max(0, Math.min(100, Number(item.discount || item.line_discount || 0)));
-        const netUnitCost = Math.round(itemGrossCost * (1 - lineDiscount / 100) * (1 - poDiscountRatio) * 100) / 100;
+        const isFixed = (item.discountType || item.discount_type || '').toLowerCase() === 'fixed';
+        const disc = Math.max(0, Number(item.discount || item.line_discount || 0));
+        const unitAfterLineDisc = isFixed ? Math.max(0, itemGrossCost - disc) : itemGrossCost * (1 - Math.min(100, disc) / 100);
+        const netUnitCost = Math.round(unitAfterLineDisc * (1 - poDiscountRatio) * 100) / 100;
 
         if (prodId && qty > 0) {
           const product = await db.get('SELECT * FROM products WHERE id = ?', [prodId]);
@@ -6393,9 +6397,11 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
         const prodId = item.productId || item.product_id || item.id;
         const qty = Math.max(0, Number(item.qty || item.quantity || 0));
         const itemGrossCost = Number(item.costPrice || item.cost_price || item.unitCostPrice || 0);
-        const lineDiscount = Math.max(0, Math.min(100, Number(item.discount || item.line_discount || 0)));
+        const isFixed = (item.discountType || item.discount_type || '').toLowerCase() === 'fixed';
+        const disc = Math.max(0, Number(item.discount || item.line_discount || 0));
+        const unitAfterLineDisc = isFixed ? Math.max(0, itemGrossCost - disc) : itemGrossCost * (1 - Math.min(100, disc) / 100);
         // Net purchase price accounting for line discount and overall PO discount
-        const netUnitCost = Math.round(itemGrossCost * (1 - lineDiscount / 100) * (1 - poDiscountRatio) * 100) / 100;
+        const netUnitCost = Math.round(unitAfterLineDisc * (1 - poDiscountRatio) * 100) / 100;
 
         if (prodId && qty > 0) {
           const product = await db.get('SELECT * FROM products WHERE id = ?', [prodId]);
@@ -7444,8 +7450,10 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
         const prodId = item.productId || item.product_id || item.id;
         const qty = Math.max(0, Number(item.qty || item.quantity || 0));
         const itemCost = Number(item.costPrice || item.cost_price || item.unitCostPrice || 0);
-        const lineDiscount = Math.max(0, Math.min(100, Number(item.discount || item.line_discount || 0)));
-        const netUnitCost = Math.round(itemCost * (1 - lineDiscount / 100) * (1 - poDiscountRatio) * 100) / 100;
+        const isFixed = (item.discountType || item.discount_type || '').toLowerCase() === 'fixed';
+        const disc = Math.max(0, Number(item.discount || item.line_discount || 0));
+        const unitAfterLineDisc = isFixed ? Math.max(0, itemCost - disc) : itemCost * (1 - Math.min(100, disc) / 100);
+        const netUnitCost = Math.round(unitAfterLineDisc * (1 - poDiscountRatio) * 100) / 100;
 
         if (prodId && qty > 0) {
           const product = await db.get('SELECT * FROM products WHERE id = ?', [prodId]);

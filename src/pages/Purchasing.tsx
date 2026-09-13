@@ -217,17 +217,24 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     return supplierList.find(s => s.id === returnSupplierId || s.name === returnSupplierName);
   }, [supplierList, returnSupplierId, returnSupplierName]);
 
+  // PO Line Items Line Total Helper
+  const calculateLineTotal = (qty: number, costPrice: number, discount: number, discountType?: 'percent' | 'fixed' | 'percentage') => {
+    const q = Math.max(0, Number(qty || 0));
+    const c = Math.max(0, Number(costPrice || 0));
+    const d = Math.max(0, Number(discount || 0));
+    if (discountType === 'fixed') {
+      const effectiveUnitPrice = Math.max(0, c - d);
+      return Math.round(effectiveUnitPrice * q * 100) / 100;
+    } else {
+      const pct = Math.min(100, d);
+      return Math.round((c * q) * (1 - pct / 100) * 100) / 100;
+    }
+  };
+
   // Gross Subtotal (sum of all item totals accounting for optional line discounts)
   const poGrossSubtotal = useMemo(() => {
     return poItems.reduce((sum, i) => {
-      const qty = Number(i.qty || 0);
-      const cost = Number(i.costPrice || 0);
-      const disc = Math.max(0, Number(i.discount || 0));
-      const isFixed = i.discountType === 'fixed';
-      const lineTotal = isFixed
-        ? Math.max(0, Math.round((qty * cost - disc) * 100) / 100)
-        : Math.round(qty * cost * (1 - Math.min(100, disc) / 100) * 100) / 100;
-      return sum + lineTotal;
+      return sum + calculateLineTotal(i.qty, i.costPrice, i.discount || 0, i.discountType);
     }, 0);
   }, [poItems]);
 
@@ -628,18 +635,6 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
   };
 
   // PO Line Items Handling
-  const calculateLineTotal = (qty: number, costPrice: number, discount: number, discountType?: 'percent' | 'fixed' | 'percentage') => {
-    const q = Math.max(0, Number(qty || 0));
-    const c = Math.max(0, Number(costPrice || 0));
-    const gross = q * c;
-    const d = Math.max(0, Number(discount || 0));
-    if (discountType === 'fixed') {
-      return Math.max(0, Math.round((gross - d) * 100) / 100);
-    } else {
-      const pct = Math.min(100, d);
-      return Math.round(gross * (1 - pct / 100) * 100) / 100;
-    }
-  };
 
   const addItem = (product: any) => {
     setPoItems((prev) => {
