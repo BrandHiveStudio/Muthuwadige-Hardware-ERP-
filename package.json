@@ -13,6 +13,7 @@
     "backup": "node backup-worker.js",
     "electron-dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:dev": "npm run electron-dev",
+    "electron:start": "electron .",
     "dist": "npm run build && node build-dist.js",
     "package-win": "npm run build && electron-packager . MuthuwadigeHardwareERP --platform=win32 --arch=x64 --out=release-dist --overwrite --icon=build/icon.ico"
   },
