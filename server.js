@@ -3070,7 +3070,7 @@ async function ensureBulkImportColumns(database) {
   bulkColumnsEnsured = true;
 }
 
-// BULK PRODUCT IMPORT ROUTE (Excel / CSV)
+// BULK PRODUCT IMPORT ROUTE (Excel / CSV) - Direct Turso Cloud Batch Persistence & Root Token Auth Support
 app.post(['/api/products/bulk-import', '/api/products/bulk', '/api/products/import'], async (req, res) => {
   const user_email = req.headers['x-user-email'] || req.authUser?.email || 'system';
   try {

@@ -305,6 +305,11 @@ export function Inventory() {
       try {
         const res = await api.products.bulkImport(formattedItems);
         if (res?.success || (res?.count !== undefined && res.count > 0)) {
+          // Invalidate stale product caches to guarantee persistent state from Turso Cloud
+          try {
+            sessionStorage.removeItem('erp_cached_products');
+            localStorage.removeItem('erp_cached_products');
+          } catch (_) {}
           await fetchProducts(); // Refetch directly from database
           toast.success(`Successfully imported ${res.count || formattedItems.length} products`);
           window.dispatchEvent(new CustomEvent('refresh-inventory'));
