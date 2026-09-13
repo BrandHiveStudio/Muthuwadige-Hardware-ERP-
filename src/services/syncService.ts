@@ -84,7 +84,7 @@ export async function pingTurso(tursoClient: Client | null): Promise<boolean> {
   }
 }
 
-async function executeWithTimeout(tursoClient: Client, sqlOrObj: any, timeoutMs = 5000): Promise<any> {
+async function executeWithTimeout(tursoClient: Client, sqlOrObj: any, timeoutMs = 15000): Promise<any> {
   const queryPromise = tursoClient.execute(sqlOrObj);
   const timeoutPromise = new Promise((_, reject) =>
     setTimeout(() => reject(new Error(`Query timeout after ${timeoutMs}ms`)), timeoutMs)
@@ -413,7 +413,7 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
     const wipeCheck = await executeWithTimeout(
       tursoClient,
       "SELECT value, system_wipe_timestamp FROM system_settings WHERE key = 'SYSTEM_WIPE_TIMESTAMP' OR id = 'SYSTEM_WIPE_TIMESTAMP' OR id = 'global'",
-      5000
+      15000
     );
     if (wipeCheck?.rows && wipeCheck.rows.length > 0) {
       for (const r of wipeCheck.rows) {
@@ -500,7 +500,7 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
       const MASTER_TABLES = new Set(['products', 'categories', 'customers', 'suppliers', 'users', 'profiles']);
       const isMasterTable = MASTER_TABLES.has(tableName);
 
-      const res = await executeWithTimeout(tursoClient, selectSql || `SELECT * FROM "${tableName}"`, 5000);
+      const res = await executeWithTimeout(tursoClient, selectSql || `SELECT * FROM "${tableName}"`, 15000);
       const activeCloudIds: string[] = [];
       if (res?.rows && res.rows.length > 0) {
         for (const row of res.rows) {
