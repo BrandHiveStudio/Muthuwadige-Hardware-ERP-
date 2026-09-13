@@ -1946,6 +1946,33 @@ async function initializeDatabase() {
     )
   `);
 
+  // 21. Create Debit Notes Table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS debit_notes (
+      id TEXT PRIMARY KEY,
+      debit_note_no TEXT UNIQUE NOT NULL,
+      purchase_order_id TEXT,
+      po_number TEXT,
+      supplier_id TEXT,
+      supplier_name TEXT NOT NULL,
+      return_id TEXT,
+      total_amount REAL NOT NULL DEFAULT 0,
+      balance_remaining REAL NOT NULL DEFAULT 0,
+      redeemed_amount REAL NOT NULL DEFAULT 0,
+      settlement_mode TEXT DEFAULT 'SUPPLIER_DEBIT_NOTE',
+      items TEXT,
+      reason TEXT,
+      notes TEXT,
+      status TEXT DEFAULT 'ACTIVE',
+      handled_by TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME
+    )
+  `);
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_debit_notes_no ON debit_notes(debit_note_no)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_debit_notes_supplier ON debit_notes(supplier_name)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_debit_notes_po ON debit_notes(po_number)"); } catch (e) { }
+
   // Performance Indexes for fast barcode, invoice, and customer lookups
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)"); } catch (e) { }
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku)"); } catch (e) { }
@@ -7197,7 +7224,16 @@ app.get('/api/purchase-returns', async (req, res) => {
   }
 });
 
-app.post('/api/purchase-returns', async (req, res) => {
+app.get('/api/debit-notes', async (req, res) => {
+  try {
+    const notes = await db.all('SELECT * FROM debit_notes ORDER BY created_at DESC');
+    res.json(notes || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post(['/api/purchasing/return', '/api/purchase-returns'], async (req, res) => {
   const {
     supplier_id,
     supplierId,
@@ -7205,6 +7241,8 @@ app.post('/api/purchase-returns', async (req, res) => {
     supplierName,
     purchase_order_id,
     purchaseOrderId,
+    po_number,
+    poNumber,
     settlement_mode = 'SUPPLIER_DEBIT_NOTE',
     settlementMode,
     reason = '',
@@ -7217,8 +7255,16 @@ app.post('/api/purchase-returns', async (req, res) => {
 
   const finalSupplierId = supplier_id || supplierId || '';
   const finalSupplierName = supplier_name || supplierName || '';
-  const finalPoId = purchase_order_id || purchaseOrderId || null;
-  const finalSettlementMode = (settlement_mode || settlementMode || 'SUPPLIER_DEBIT_NOTE').toUpperCase();
+  const finalPoId = purchase_order_id || purchaseOrderId || po_number || poNumber || null;
+  const finalPoNumber = po_number || poNumber || purchase_order_id || purchaseOrderId || '';
+  
+  // Normalize settlement mode
+  let rawMode = (settlement_mode || settlementMode || 'SUPPLIER_DEBIT_NOTE').toUpperCase().replace(/\s+/g, '_');
+  if (rawMode === 'SUPPLIER_DEBIT_NOTE' || rawMode === 'DEBIT_NOTE') rawMode = 'SUPPLIER_DEBIT_NOTE';
+  else if (rawMode === 'CASH_REFUND' || rawMode === 'CASH') rawMode = 'CASH_REFUND';
+  else if (rawMode === 'BANK_REFUND' || rawMode === 'BANK' || rawMode === 'BANK_TRANSFER') rawMode = 'BANK_REFUND';
+  const finalSettlementMode = rawMode;
+
   const finalStaff = handled_by || handledBy || 'Sanoj Hardware';
 
   if (!finalSupplierName) {
@@ -7239,11 +7285,12 @@ app.post('/api/purchase-returns', async (req, res) => {
   try {
     const timestamp = Date.now();
     const returnId = 'pr_' + timestamp + '_' + Math.random().toString(36).substring(2, 6);
-    const returnNumber = 'PR-' + String(timestamp).slice(-6);
+    const debitNoteNo = 'DN-' + String(timestamp).slice(-6);
+    const returnNumber = req.body.return_number || req.body.returnNumber || req.body.debit_note_no || debitNoteNo;
     const createdAt = new Date().toISOString();
     const todayStr = new Date().toLocaleDateString('sv-SE');
 
-    txn = await beginTxn(db, `Create Purchase Return ${returnNumber}`);
+    txn = await beginTxn(db, `Create Purchase Return & Debit Note ${returnNumber}`);
 
     let totalReturnedCost = 0;
 
@@ -7253,7 +7300,7 @@ app.post('/api/purchase-returns', async (req, res) => {
       const prodId = rawItem.product_id || rawItem.productId;
       const prodName = rawItem.product_name || rawItem.productName || '';
       const qty = Number(rawItem.quantity || rawItem.qty || 0);
-      const unitCost = Number(rawItem.unit_cost_price !== undefined ? rawItem.unit_cost_price : (rawItem.unitCostPrice !== undefined ? rawItem.unitCostPrice : (rawItem.costPrice || 0)));
+      const unitCost = Number(rawItem.unit_cost_price !== undefined ? rawItem.unit_cost_price : (rawItem.unitCostPrice !== undefined ? rawItem.unitCostPrice : (rawItem.netUnitCost !== undefined ? rawItem.netUnitCost : (rawItem.costPrice || 0))));
       const lineSubtotal = Number(rawItem.subtotal !== undefined ? rawItem.subtotal : (qty * unitCost));
 
       if (!prodId) {
@@ -7307,6 +7354,39 @@ app.post('/api/purchase-returns', async (req, res) => {
         createdAt
       ]
     );
+
+    // 2b. Insert into debit_notes table
+    try {
+      const debitNoteId = 'dn_' + timestamp + '_' + Math.random().toString(36).substring(2, 6);
+      await db.run(
+        `INSERT INTO debit_notes (
+          id, debit_note_no, purchase_order_id, po_number, supplier_id, supplier_name,
+          return_id, total_amount, balance_remaining, redeemed_amount, settlement_mode,
+          items, reason, notes, status, handled_by, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          debitNoteId,
+          returnNumber,
+          finalPoId,
+          finalPoNumber,
+          finalSupplierId || (processedItems[0]?.productId ? 's_' + timestamp : 's_gen'),
+          finalSupplierName,
+          returnId,
+          totalReturnedCost,
+          totalReturnedCost,
+          0,
+          finalSettlementMode,
+          JSON.stringify(processedItems),
+          reason || '',
+          notes || '',
+          'ACTIVE',
+          finalStaff,
+          createdAt
+        ]
+      );
+    } catch (dnErr) {
+      console.warn('[DebitNote] Warning logging into debit_notes table:', dnErr.message);
+    }
 
     // 3. Insert items and decrement stock
     for (const item of processedItems) {
@@ -7404,7 +7484,7 @@ app.post('/api/purchase-returns', async (req, res) => {
     await logAudit(
       finalStaff,
       'PURCHASE_RETURN_CREATED',
-      `Created Purchase Return ${returnNumber} for supplier "${finalSupplierName}" (Total: Rs. ${totalReturnedCost.toLocaleString()}, Settlement: ${finalSettlementMode}, Items: ${processedItems.length})`
+      `Created Purchase Return & Debit Note ${returnNumber} for supplier "${finalSupplierName}" (Total: Rs. ${totalReturnedCost.toLocaleString()}, Settlement: ${finalSettlementMode}, Items: ${processedItems.length})`
     );
 
     await commitTxn(db, txn);
@@ -7414,10 +7494,16 @@ app.post('/api/purchase-returns', async (req, res) => {
       id: returnId,
       returnNumber,
       return_number: returnNumber,
+      debitNoteNo: returnNumber,
+      debit_note_no: returnNumber,
       supplierId: finalSupplierId,
       supplier_id: finalSupplierId,
       supplierName: finalSupplierName,
       supplier_name: finalSupplierName,
+      purchaseOrderId: finalPoId,
+      purchase_order_id: finalPoId,
+      poNumber: finalPoNumber,
+      po_number: finalPoNumber,
       totalReturnedCost,
       total_returned_cost: totalReturnedCost,
       settlementMode: finalSettlementMode,

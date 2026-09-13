@@ -861,6 +861,19 @@ export const api = {
       }
       return res.json();
     },
+    createReturn: async (data: any) => {
+      const res = await fetchWithTimeout(`${API_URL}/purchasing/return`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (!res.ok) {
+        let msg = 'Failed to process purchase return';
+        try { const j = await res.json(); if (j.error) msg = j.error; } catch (_) {}
+        throw new Error(msg);
+      }
+      return res.json();
+    },
     revertPo: async (poRef: string) => {
       const res = await fetchWithTimeout(`${API_URL}/purchase-orders/${poRef}/revert-receipt`, {
         method: 'POST',

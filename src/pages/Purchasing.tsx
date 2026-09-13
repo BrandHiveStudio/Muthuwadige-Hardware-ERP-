@@ -117,6 +117,15 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
   const [isCreateReturnOpen, setIsCreateReturnOpen] = useState<boolean>(false);
   const [viewDebitNote, setViewDebitNote] = useState<PurchaseReturn | null>(null);
 
+  // Dedicated Sales-Return-Style Purchase Return State
+  const [targetReturnPO, setTargetReturnPO] = useState<PurchaseOrder | null>(null);
+  const [poSearchQuery, setPoSearchQuery] = useState<string>('');
+  const [showPoSearchResults, setShowPoSearchResults] = useState<boolean>(false);
+  const [includeReturnDiscount, setIncludeReturnDiscount] = useState<boolean>(true);
+  const [includeReturnTransport, setIncludeReturnTransport] = useState<boolean>(false);
+  const [returnQtys, setReturnQtys] = useState<Record<string, number>>({});
+  const poSearchInputRef = React.useRef<HTMLInputElement>(null);
+
   // Create Return Form State
   const [returnSupplierId, setReturnSupplierId] = useState<string>('');
   const [returnSupplierName, setReturnSupplierName] = useState<string>('');
@@ -454,15 +463,15 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
         const discStr = hasDisc
           ? (itemData.discountType === 'percent'
               ? `${itemData.discount}%`
-              : `${symbol} ${convert(itemData.discount).toLocaleString(undefined, { minimumFractionDigits: 2 })} / unit`)
+              : `Rs. ${convert(itemData.discount).toLocaleString(undefined, { minimumFractionDigits: 2 })} / unit`)
           : '—';
 
         return [
           i.productName, 
           i.qty, 
-          `${symbol} ${convert(i.costPrice).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+          `Rs. ${convert(i.costPrice).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
           discStr,
-          `${symbol} ${convert(i.total !== undefined ? i.total : itemData.netLineTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          `Rs. ${convert(i.total !== undefined ? i.total : itemData.netLineTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
         ];
       }),
       theme: 'plain',
@@ -484,7 +493,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     });
 
     const finalY = (doc as any).lastAutoTable.finalY + 10;
-    const summaryXText = pageWidth - 80; 
+    const summaryXText = pageWidth - 85; 
     const summaryXValue = pageWidth - 15;
     const computedGross = (order.items || []).reduce((sum: number, it: any) => {
       const q = Number(it.qty || it.quantity || 0);
@@ -507,38 +516,38 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
     doc.setTextColor(80, 80, 80);
-    doc.text("Subtotal:", summaryXText, curY);
-    doc.text(`${symbol} ${convert(subtotalVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
+    doc.text("Gross Subtotal:", summaryXText, curY);
+    doc.text(`Rs. ${convert(subtotalVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
     curY += 6;
 
     if (discountVal > 0) {
       doc.setTextColor(220, 38, 38);
-      doc.text("Discount:", summaryXText, curY);
-      doc.text(`-${symbol} ${convert(discountVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
+      doc.text("Supplier Discount:", summaryXText, curY);
+      doc.text(`-Rs. ${convert(discountVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
       curY += 6;
     }
 
     if (transportVal > 0) {
       doc.setTextColor(37, 99, 235);
-      doc.text("Transport:", summaryXText, curY);
-      doc.text(`+${symbol} ${convert(transportVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
+      doc.text("Transportation Fee:", summaryXText, curY);
+      doc.text(`+Rs. ${convert(transportVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
       curY += 6;
     }
 
     if (debitVal > 0) {
       doc.setTextColor(75, 0, 130);
       doc.text("Debit Note Applied:", summaryXText, curY);
-      doc.text(`-${symbol} ${convert(debitVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
+      doc.text(`-Rs. ${convert(debitVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
       curY += 6;
     }
 
     doc.setFont('helvetica', 'bold');
     doc.setFillColor(245, 245, 245);
-    doc.rect(summaryXText - 3, curY, 71, 12, 'F');
+    doc.rect(summaryXText - 3, curY, 73, 12, 'F');
     doc.setFontSize(10);
     doc.setTextColor(50, 50, 50);
     doc.text("Net Total Payable:", summaryXText, curY + 8);
-    doc.text(`${symbol} ${convert(netTotalVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY + 8, { align: 'right' });
+    doc.text(`Rs. ${convert(netTotalVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY + 8, { align: 'right' });
 
     doc.setFontSize(9);
     doc.setTextColor(218, 165, 32); 
@@ -611,33 +620,44 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     // Return Details
     const returnNumberStr = ret.return_number || ret.returnNumber || ret.id;
     const dateStr = ret.created_at ? new Date(ret.created_at).toLocaleDateString() : (ret.date || new Date().toLocaleDateString());
-    const modeStr = (ret.settlement_mode || ret.settlementMode || '').replace(/_/g, ' ');
+    const modeStr = (ret.settlement_mode || ret.settlementMode || 'SUPPLIER_DEBIT_NOTE').replace(/_/g, ' ');
+    const poNumberStr = ret.purchase_order_id || ret.purchaseOrderId || (ret as any).po_number || (ret as any).poNumber || 'N/A';
+    const origDateStr = (ret as any).po_date || (ret as any).original_date || (ret as any).date || dateStr;
 
-    doc.setFontSize(9);
+    doc.setFontSize(8.5);
     doc.setFont('helvetica', 'bold');
-    doc.text(`Debit Note No:`, pageWidth - 85, 65);
-    doc.text(`Date:`, pageWidth - 85, 72);
-    doc.text(`Settlement Mode:`, pageWidth - 85, 79);
+    doc.text(`Debit Note No:`, pageWidth - 85, 60);
+    doc.text(`Linked PO #:`, pageWidth - 85, 66);
+    doc.text(`Original Date:`, pageWidth - 85, 72);
+    doc.text(`Return Date:`, pageWidth - 85, 78);
+    doc.text(`Settlement Mode:`, pageWidth - 85, 84);
 
     doc.setFont('helvetica', 'normal');
-    doc.text(returnNumberStr, pageWidth - 15, 65, { align: 'right' });
-    doc.text(dateStr, pageWidth - 15, 72, { align: 'right' });
-    doc.text(modeStr, pageWidth - 15, 79, { align: 'right' });
+    doc.text(returnNumberStr, pageWidth - 15, 60, { align: 'right' });
+    doc.text(poNumberStr, pageWidth - 15, 66, { align: 'right' });
+    doc.text(origDateStr, pageWidth - 15, 72, { align: 'right' });
+    doc.text(dateStr, pageWidth - 15, 78, { align: 'right' });
+    doc.text(modeStr, pageWidth - 15, 84, { align: 'right' });
 
     doc.setDrawColor(220, 220, 220);
-    doc.line(15, 85, pageWidth - 15, 85);
+    doc.line(15, 88, pageWidth - 15, 88);
 
     // Table of returned items
     const items = ret.items || [];
     autoTable(doc, {
-      startY: 90,
-      head: [['Item Description', 'Qty Returned', 'Unit Cost (Rs.)', 'Total Returned (Rs.)']],
-      body: items.map((i: any) => [
-        i.product_name || i.productName || 'Hardware Item',
-        i.quantity !== undefined ? i.quantity : (i.qty || 0),
-        `${(Number(i.unit_cost_price !== undefined ? i.unit_cost_price : (i.unitCostPrice || i.costPrice || 0))).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
-        `${(Number(i.subtotal !== undefined ? i.subtotal : (Number(i.quantity || i.qty || 0) * Number(i.unit_cost_price || i.unitCostPrice || 0)))).toLocaleString(undefined, { minimumFractionDigits: 2 })}`
-      ]),
+      startY: 92,
+      head: [['Item Description', 'Qty Returned', 'Net Unit Price (Rs.)', 'Line Total (Rs.)']],
+      body: items.map((i: any) => {
+        const q = Number(i.quantity !== undefined ? i.quantity : (i.qty || 0));
+        const u = Number(i.unit_cost_price !== undefined ? i.unit_cost_price : (i.unitCostPrice || i.netUnitCost || i.costPrice || 0));
+        const tot = Number(i.subtotal !== undefined ? i.subtotal : (q * u));
+        return [
+          i.product_name || i.productName || 'Hardware Item',
+          q,
+          `Rs. ${u.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+          `Rs. ${tot.toLocaleString(undefined, { minimumFractionDigits: 2 })}`
+        ];
+      }),
       theme: 'plain',
       headStyles: {
         fillColor: gold,
@@ -656,18 +676,32 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     });
 
     const finalY = (doc as any).lastAutoTable.finalY + 10;
-    const summaryXText = pageWidth - 72;
+    const summaryXText = pageWidth - 85;
     const summaryXValue = pageWidth - 15;
+    const totalVal = Number(ret.total_returned_cost !== undefined ? ret.total_returned_cost : (ret.totalReturnedCost || ret.total || 0));
 
-    // Totals Box
+    let sY = finalY;
+
+    // Summary Block
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(80, 80, 80);
+    doc.text("Total Returned Merchandise:", summaryXText, sY);
+    doc.text(`Rs. ${totalVal.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, sY, { align: 'right' });
+    sY += 6;
+
+    doc.setTextColor(100, 100, 100);
+    doc.text("Transport Fee:", summaryXText, sY);
+    doc.text("Excluded (Rs. 0.00)", summaryXValue, sY, { align: 'right' });
+    sY += 6;
+
     doc.setFont('helvetica', 'bold');
     doc.setFillColor(245, 245, 245);
-    doc.rect(summaryXText - 3, finalY, 63, 12, 'F');
-    doc.setFontSize(11);
+    doc.rect(summaryXText - 3, sY, 73, 12, 'F');
+    doc.setFontSize(10);
     doc.setTextColor(50, 50, 50);
-    doc.text("Total Debit Value:", summaryXText, finalY + 8);
-    const totalVal = Number(ret.total_returned_cost !== undefined ? ret.total_returned_cost : (ret.totalReturnedCost || ret.total || 0));
-    doc.text(`${symbol} ${totalVal.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, finalY + 8, { align: 'right' });
+    doc.text("Total Debit Note Issued:", summaryXText, sY + 8);
+    doc.text(`Rs. ${totalVal.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, sY + 8, { align: 'right' });
 
     // Reason & Note Section
     doc.setFontSize(9);
@@ -689,13 +723,13 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
     // Dual Signatures
     doc.setDrawColor(150, 150, 150);
-    doc.line(15, finalY + 45, 75, finalY + 45);
-    doc.line(pageWidth - 75, finalY + 45, pageWidth - 15, finalY + 45);
+    doc.line(15, sY + 35, 75, sY + 35);
+    doc.line(pageWidth - 75, sY + 35, pageWidth - 15, sY + 35);
     doc.setFont('helvetica', 'italic');
     doc.setFontSize(8);
     const handledByStaff = ret.handled_by || (ret as any).handledBy || (ret as any).created_by_name || currentUser?.name || currentUser?.full_name || 'Sanoj Hardware';
-    doc.text(`Handled By: ${handledByStaff}`, 45, finalY + 50, { align: 'center' });
-    doc.text("Supplier / Driver Representative", pageWidth - 45, finalY + 50, { align: 'center' });
+    doc.text(`Prepared By: ${handledByStaff}`, 45, sY + 40, { align: 'center' });
+    doc.text("Supplier Acknowledgment", pageWidth - 45, sY + 40, { align: 'center' });
 
     // Bottom dark bar
     doc.setFillColor(darkSilver[0], darkSilver[1], darkSilver[2]);
@@ -1311,6 +1345,172 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     }
   };
 
+  const targetPOSupplier = useMemo(() => {
+    if (!targetReturnPO) return null;
+    const sName = (targetReturnPO.supplierName || '').trim().toLowerCase();
+    return supplierList.find(s => s.name.trim().toLowerCase() === sName) || null;
+  }, [targetReturnPO, supplierList]);
+
+  // Handle PO selection for return
+  const handleSelectReturnPO = (po: PurchaseOrder) => {
+    setTargetReturnPO(po);
+    setIncludeReturnDiscount(true);
+    setIncludeReturnTransport(false);
+    const initialQtys: Record<string, number> = {};
+    const items = Array.isArray(po.items) ? po.items : [];
+    items.forEach((item: any, idx: number) => {
+      const pId = item.productId || item.id || `item_${idx}`;
+      initialQtys[pId] = 0;
+    });
+    setReturnQtys(initialQtys);
+    setShowPoSearchResults(false);
+  };
+
+  const handleTriggerPoSearch = () => {
+    const q = poSearchQuery.trim().toLowerCase();
+    if (!q) {
+      alert("Please enter a PO number, supplier name, or item name to search.");
+      return;
+    }
+    const matches = orders.filter(o => {
+      if ((o.poNumber || '').toLowerCase().includes(q)) return true;
+      if ((o.supplierName || '').toLowerCase().includes(q)) return true;
+      const items = Array.isArray(o.items) ? o.items : [];
+      return items.some((i: any) =>
+        (i.productName && i.productName.toLowerCase().includes(q)) ||
+        (i.barcode && i.barcode.toLowerCase().includes(q)) ||
+        (i.sku && i.sku.toLowerCase().includes(q))
+      );
+    });
+
+    if (matches.length === 0) {
+      alert(`No purchase orders found matching "${poSearchQuery}".`);
+      return;
+    }
+
+    if (matches.length === 1) {
+      handleSelectReturnPO(matches[0]);
+    } else {
+      setShowPoSearchResults(true);
+    }
+  };
+
+  const handleConfirmProcessPurchaseReturn = async () => {
+    if (!targetReturnPO) return;
+    const targetPoItems = Array.isArray(targetReturnPO.items) ? targetReturnPO.items : [];
+    
+    // Map items with net unit cost and quantity
+    const returnedItemsToSubmit = targetPoItems.map((item: any, idx: number) => {
+      const pId = item.productId || item.id || `item_${idx}`;
+      const qtyToReturn = returnQtys[pId] || 0;
+      const grossCost = Number(item.costPrice || item.cost_price || 0);
+      const disc = Number(item.discount || 0);
+      const isPercent = item.discountType === 'percent' || item.discountType === 'percentage';
+      const unitDisc = includeReturnDiscount ? (isPercent ? (grossCost * disc) / 100 : disc) : 0;
+      const netUnitCost = Math.max(0, Math.round((grossCost - unitDisc) * 100) / 100);
+      const lineSubtotal = Math.round(qtyToReturn * netUnitCost * 100) / 100;
+      return {
+        productId: pId,
+        productName: item.productName || item.name || 'Hardware Item',
+        quantity: qtyToReturn,
+        qty: qtyToReturn,
+        unitCostPrice: netUnitCost,
+        unit_cost_price: netUnitCost,
+        netUnitCost,
+        subtotal: lineSubtotal
+      };
+    }).filter(it => it.quantity > 0);
+
+    if (returnedItemsToSubmit.length === 0) {
+      alert("Please enter a return quantity greater than 0 for at least one item.");
+      return;
+    }
+
+    const merchandiseTotal = returnedItemsToSubmit.reduce((sum, it) => sum + it.subtotal, 0);
+    const origTransportFee = Number((targetReturnPO as any).transportation_fee !== undefined ? (targetReturnPO as any).transportation_fee : ((targetReturnPO as any).transportationFee || 0));
+    const transportTotal = includeReturnTransport && merchandiseTotal > 0 ? origTransportFee : 0;
+    const finalTotalDebit = Math.round((merchandiseTotal + transportTotal) * 100) / 100;
+
+    setIsSubmittingReturn(true);
+    try {
+      const staffName = currentUser?.name || currentUser?.full_name || currentUser?.username || 'Sanoj Hardware';
+      const effectiveReason = returnReason === 'Other' && returnCustomReason.trim() ? returnCustomReason.trim() : returnReason;
+
+      const payload = {
+        po_number: targetReturnPO.poNumber,
+        poNumber: targetReturnPO.poNumber,
+        purchase_order_id: targetReturnPO.poNumber,
+        purchaseOrderId: targetReturnPO.poNumber,
+        supplier_id: targetPOSupplier?.id || '',
+        supplier_name: targetReturnPO.supplierName,
+        settlement_mode: returnSettlementMode,
+        settlementMode: returnSettlementMode,
+        reason: effectiveReason,
+        notes: returnNotes.trim(),
+        handled_by: staffName,
+        items: returnedItemsToSubmit
+      };
+
+      const result = await api.purchasing.createReturn(payload);
+
+      if (result && (result.success || result.id)) {
+        alert(`✅ Purchase Return & Debit Note ${result.returnNumber || result.debitNoteNo || result.id} processed successfully!`);
+        
+        const createdDebitNoteRecord: PurchaseReturn = {
+          id: result.id,
+          returnNumber: result.returnNumber || result.debitNoteNo || result.id,
+          return_number: result.returnNumber || result.debitNoteNo || result.id,
+          supplierId: targetPOSupplier?.id || '',
+          supplier_id: targetPOSupplier?.id || '',
+          supplierName: targetReturnPO.supplierName,
+          supplier_name: targetReturnPO.supplierName,
+          purchaseOrderId: targetReturnPO.poNumber,
+          purchase_order_id: targetReturnPO.poNumber,
+          totalReturnedCost: finalTotalDebit,
+          total_returned_cost: finalTotalDebit,
+          balanceRemaining: finalTotalDebit,
+          balance_remaining: finalTotalDebit,
+          redeemedAmount: 0,
+          redeemed_amount: 0,
+          settlementMode: returnSettlementMode,
+          settlement_mode: returnSettlementMode,
+          reason: effectiveReason,
+          notes: returnNotes.trim(),
+          handledBy: staffName,
+          handled_by: staffName,
+          createdAt: new Date().toISOString(),
+          created_at: new Date().toISOString(),
+          status: 'ACTIVE',
+          items: returnedItemsToSubmit
+        };
+
+        // Open Debit Note Voucher preview modal immediately
+        setViewDebitNote(createdDebitNoteRecord);
+
+        // Reset dedicated return form
+        setTargetReturnPO(null);
+        setReturnQtys({});
+        setPoSearchQuery('');
+        setShowPoSearchResults(false);
+        setReturnNotes('');
+        setIncludeReturnTransport(false);
+        setIncludeReturnDiscount(true);
+
+        // Refresh data
+        await fetchData();
+        window.dispatchEvent(new CustomEvent('refresh-all-data'));
+        window.dispatchEvent(new CustomEvent('refresh-purchasing'));
+        window.dispatchEvent(new CustomEvent('refresh-inventory'));
+        window.dispatchEvent(new CustomEvent('refresh-finance'));
+        window.dispatchEvent(new CustomEvent('suppliers-updated'));
+      }
+    } catch (err: any) {
+      alert("Error processing purchase return: " + err.message);
+    } finally {
+      setIsSubmittingReturn(false);
+    }
+  };
+
   // Void Purchase Return Action
   const handleVoidPurchaseReturn = async (returnNo: string) => {
     const reason = window.prompt(
@@ -1477,7 +1677,14 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
         {tab === 'returns' && (
           <button
-            onClick={() => setIsCreateReturnOpen(true)}
+            onClick={() => {
+              setTab('returns');
+              setTargetReturnPO(null);
+              setTimeout(() => {
+                poSearchInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                poSearchInputRef.current?.focus();
+              }, 100);
+            }}
             className="flex items-center gap-2 bg-[#DAA520] hover:bg-[#B8860B] text-slate-900 px-5 py-2.5 rounded-xl text-xs font-black shadow-lg shadow-[#DAA520]/20 transition-all uppercase tracking-wider"
           >
             <PlusIcon className="w-4 h-4 text-slate-900" /> New Purchase Return / ආපසු යැවීම
@@ -2062,7 +2269,572 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       {/* TAB 3: PURCHASE RETURNS & DEBIT NOTES                                       */}
       {/* ========================================================================= */}
       {tab === 'returns' && (
-        <div className="space-y-4 animate-in slide-in-from-left-4 duration-500">
+        <div className="space-y-6 animate-in slide-in-from-left-4 duration-500">
+          {/* Dedicated Sales-Return-Style Purchase Return Panel */}
+          <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xl shadow-slate-100/50 p-6 space-y-6 text-left">
+            {/* 1. Search Header */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <h2 className="text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
+                    <RotateCcwIcon className="w-5 h-5 text-[#DAA520]" />
+                    <span>Process Purchase Return & Supplier Debit Note</span>
+                  </h2>
+                  <p className="text-xs text-slate-500 font-semibold mt-0.5">
+                    Search and link an original Purchase Order to return defective or excess merchandise, calculate net debit values, and credit supplier accounts.
+                  </p>
+                </div>
+                {targetReturnPO && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTargetReturnPO(null);
+                      setReturnQtys({});
+                      setPoSearchQuery('');
+                      setShowPoSearchResults(false);
+                    }}
+                    className="text-xs font-black text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-xl transition-colors flex items-center gap-1.5"
+                  >
+                    <XIcon className="w-3.5 h-3.5" /> Clear Selected PO
+                  </button>
+                )}
+              </div>
+
+              <div className="relative">
+                <div className="flex items-center gap-3 bg-slate-50 border-2 border-slate-200 rounded-2xl p-2 shadow-sm focus-within:ring-4 focus-within:ring-[#DAA520]/20 focus-within:border-[#DAA520] transition-all">
+                  <SearchIcon className="w-5 h-5 text-slate-400 ml-2 shrink-0" />
+                  <input
+                    ref={poSearchInputRef}
+                    type="text"
+                    placeholder="Search by PO # (e.g. PO-204773 or PO-334889), Supplier Name, or Product Name..."
+                    value={poSearchQuery}
+                    onChange={(e) => {
+                      setPoSearchQuery(e.target.value);
+                      setShowPoSearchResults(true);
+                    }}
+                    onFocus={() => {
+                      if (poSearchQuery.trim().length >= 1) setShowPoSearchResults(true);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleTriggerPoSearch();
+                      }
+                    }}
+                    className="bg-transparent text-sm font-bold text-slate-800 outline-none w-full placeholder-slate-400 py-1"
+                  />
+                  {poSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPoSearchQuery('');
+                        setShowPoSearchResults(false);
+                      }}
+                      className="text-slate-400 hover:text-slate-600 p-1 text-xs font-bold"
+                    >
+                      <XIcon className="w-4 h-4" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleTriggerPoSearch}
+                    className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-[#DAA520] font-black rounded-xl text-xs uppercase tracking-wider transition-all shadow-md flex items-center gap-1.5 shrink-0"
+                  >
+                    <SearchIcon className="w-3.5 h-3.5" /> Search POs / Invoices
+                  </button>
+                </div>
+
+                {/* Search Results Dropdown */}
+                {showPoSearchResults && poSearchQuery.trim().length >= 1 && (
+                  <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-2xl shadow-2xl z-50 max-h-72 overflow-y-auto divide-y divide-slate-100 animate-in fade-in slide-in-from-top-2 duration-200">
+                    {orders.filter(o => {
+                      const q = poSearchQuery.trim().toLowerCase();
+                      if ((o.poNumber || '').toLowerCase().includes(q)) return true;
+                      if ((o.supplierName || '').toLowerCase().includes(q)) return true;
+                      const items = Array.isArray(o.items) ? o.items : [];
+                      return items.some((i: any) =>
+                        (i.productName && i.productName.toLowerCase().includes(q)) ||
+                        (i.sku && i.sku.toLowerCase().includes(q))
+                      );
+                    }).slice(0, 10).map((po) => (
+                      <button
+                        key={po.id}
+                        type="button"
+                        onClick={() => handleSelectReturnPO(po)}
+                        className="w-full flex items-center justify-between p-4 hover:bg-amber-50/60 text-left transition-colors group"
+                      >
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-black text-slate-900 text-sm group-hover:text-[#DAA520] transition-colors">
+                              {po.poNumber}
+                            </span>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 uppercase">
+                              {po.status || 'Received'}
+                            </span>
+                          </div>
+                          <p className="text-xs font-bold text-slate-600 mt-0.5">
+                            Supplier: <span className="text-slate-900">{po.supplierName}</span> &bull; {po.date || 'Recent'}
+                          </p>
+                          <p className="text-[10px] text-slate-400 font-semibold mt-0.5">
+                            {(po.items && po.items.length) || 0} item(s) ordered
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-sm font-black text-slate-900">
+                            {symbol} {Number(po.total || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </span>
+                          <span className="block text-[10px] font-black uppercase tracking-wider text-[#DAA520] mt-0.5 group-hover:underline">
+                            Select PO &rarr;
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 2. Active PO Details & Returns Pipeline */}
+            {targetReturnPO ? (
+              <div className="bg-slate-50/80 rounded-2xl border border-slate-200/90 p-5 space-y-6 animate-in slide-in-from-top-3 duration-300">
+                {/* Active PO Header Card */}
+                <div className="flex flex-wrap items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-[#DAA520]">
+                      <FileCheckIcon className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black uppercase tracking-widest text-slate-400">Selected Purchase Order</span>
+                        <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-black rounded-full uppercase">
+                          {targetReturnPO.status || 'Received'}
+                        </span>
+                      </div>
+                      <h3 className="text-base font-black text-slate-900">
+                        {targetReturnPO.poNumber} &mdash; <span className="text-indigo-600">{targetReturnPO.supplierName}</span>
+                      </h3>
+                      <p className="text-[10px] text-slate-500 font-bold mt-0.5">
+                        PO Date: {targetReturnPO.date || 'Recent'} &bull; Due Date: {targetReturnPO.dueDate || 'N/A'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTargetReturnPO(null);
+                      setReturnQtys({});
+                    }}
+                    className="text-xs font-black text-slate-400 hover:text-rose-600 transition-colors uppercase tracking-wider flex items-center gap-1"
+                  >
+                    Change PO
+                  </button>
+                </div>
+
+                {/* Original PO Overview Bar (6 Stat Cards) */}
+                {(() => {
+                  const grossSubtotal = Number((targetReturnPO as any).subtotal || (targetReturnPO as any).items?.reduce((s: number, it: any) => s + (Number(it.costPrice || it.cost_price || 0) * Number(it.quantity || it.qty || 0)), 0) || 0);
+                  const origDiscount = Number((targetReturnPO as any).discount || 0);
+                  const origTransport = Number((targetReturnPO as any).transportation_fee !== undefined ? (targetReturnPO as any).transportation_fee : ((targetReturnPO as any).transportationFee || 0));
+                  const origTotal = Number(targetReturnPO.total || 0);
+                  const currentPayableBal = Number(targetPOSupplier ? (targetPOSupplier.payableBalance !== undefined ? targetPOSupplier.payableBalance : (targetPOSupplier.payable_balance || targetPOSupplier.balance || 0)) : 0);
+
+                  // Calculate dynamic debit note value from current return selections
+                  const targetPoItems = Array.isArray(targetReturnPO.items) ? targetReturnPO.items : [];
+                  const merchDebitTotal = targetPoItems.reduce((sum: number, it: any, idx: number) => {
+                    const pId = it.productId || it.id || `item_${idx}`;
+                    const q = returnQtys[pId] || 0;
+                    const grossCost = Number(it.costPrice || it.cost_price || 0);
+                    const disc = Number(it.discount || 0);
+                    const isPercent = it.discountType === 'percent' || it.discountType === 'percentage';
+                    const unitDisc = includeReturnDiscount ? (isPercent ? (grossCost * disc) / 100 : disc) : 0;
+                    const netUnitCost = Math.max(0, Math.round((grossCost - unitDisc) * 100) / 100);
+                    return sum + (q * netUnitCost);
+                  }, 0);
+                  const dynamicTransportDebit = includeReturnTransport && merchDebitTotal > 0 ? origTransport : 0;
+                  const totalApplicableDebit = Math.round((merchDebitTotal + dynamicTransportDebit) * 100) / 100;
+
+                  return (
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                      {/* Subtotal */}
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-sm">
+                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Subtotal</p>
+                        <p className="text-sm font-black text-slate-800 mt-1">
+                          {symbol} {grossSubtotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </p>
+                        <p className="text-[9px] text-slate-400 font-bold mt-0.5">Original items gross</p>
+                      </div>
+
+                      {/* Discount with Included Toggle Pill */}
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-sm flex flex-col justify-between">
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Discount</p>
+                          <p className="text-sm font-black text-rose-600 mt-1">
+                            - {symbol} {origDiscount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </p>
+                        </div>
+                        <label className="mt-2 flex items-center gap-1.5 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={includeReturnDiscount}
+                            onChange={(e) => setIncludeReturnDiscount(e.target.checked)}
+                            className="rounded text-[#DAA520] focus:ring-[#DAA520] w-3.5 h-3.5"
+                          />
+                          <span className={`text-[10px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded ${includeReturnDiscount ? 'bg-amber-100 text-amber-900 font-extrabold' : 'bg-slate-100 text-slate-400 line-through'}`}>
+                            {includeReturnDiscount ? '✓ Included' : 'Excluded'}
+                          </span>
+                        </label>
+                      </div>
+
+                      {/* Transport Fee with Excluded Toggle Pill */}
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-sm flex flex-col justify-between">
+                        <div>
+                          <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Transport Fee</p>
+                          <p className={`text-sm font-black mt-1 ${!includeReturnTransport ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
+                            + {symbol} {origTransport.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </p>
+                        </div>
+                        <label className="mt-2 flex items-center gap-1.5 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={includeReturnTransport}
+                            onChange={(e) => setIncludeReturnTransport(e.target.checked)}
+                            className="rounded text-[#DAA520] focus:ring-[#DAA520] w-3.5 h-3.5"
+                          />
+                          <span className={`text-[10px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded ${includeReturnTransport ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500 font-bold'}`}>
+                            {includeReturnTransport ? '✓ Included' : 'Excluded'}
+                          </span>
+                        </label>
+                      </div>
+
+                      {/* Final PO Total */}
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-sm">
+                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Final PO Total</p>
+                        <p className="text-sm font-black text-slate-900 mt-1">
+                          {symbol} {origTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </p>
+                        <p className="text-[9px] text-slate-400 font-bold mt-0.5">Original net commitment</p>
+                      </div>
+
+                      {/* Current Payable Balance */}
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-sm">
+                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Current Payable</p>
+                        <p className="text-sm font-black text-indigo-600 mt-1">
+                          {symbol} {currentPayableBal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </p>
+                        <p className="text-[9px] text-indigo-400 font-bold mt-0.5">Supplier balance due</p>
+                      </div>
+
+                      {/* Applicable Debit Note */}
+                      <div className="bg-gradient-to-br from-amber-500/10 via-amber-500/5 to-transparent p-3.5 rounded-xl border-2 border-[#DAA520]/40 shadow-sm">
+                        <p className="text-[9px] font-black uppercase tracking-widest text-[#DAA520]">Applicable Debit Note</p>
+                        <p className="text-base font-black text-slate-900 mt-1">
+                          {symbol} {totalApplicableDebit.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </p>
+                        <p className="text-[9px] text-slate-500 font-bold mt-0.5">Calculated refund value</p>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Return Items Table */}
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                  <div className="px-5 py-3 bg-slate-50/80 border-b border-slate-200 flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-black uppercase tracking-widest text-slate-800">
+                        Itemized Return Specifications
+                      </h4>
+                      <p className="text-[10px] text-slate-400 font-semibold mt-0.5">
+                        Specify the exact quantity to return. Net unit costs reflect original discounts automatically.
+                      </p>
+                    </div>
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                      {targetReturnPO.items?.length || 0} Products in PO
+                    </span>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-widest text-slate-400 border-b border-slate-200">
+                        <tr>
+                          <th className="py-3 px-4">Item Name</th>
+                          <th className="py-3 text-center">Ordered Qty</th>
+                          <th className="py-3 text-center">Prev Returned</th>
+                          <th className="py-3 text-center">Remaining Returnable</th>
+                          <th className="py-3 text-right">Unit Cost (Net)</th>
+                          <th className="py-3 text-center w-36">Return Qty</th>
+                          <th className="py-3 text-right px-4">Total Debit Value</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {Array.isArray(targetReturnPO.items) && targetReturnPO.items.map((item: any, idx: number) => {
+                          const pId = item.productId || item.id || `item_${idx}`;
+                          const orderedQty = Number(item.quantity || item.qty || 0);
+
+                          // Calculate previously returned quantity for this item in this PO
+                          const prevReturned = purchaseReturns
+                            .filter(pr => (pr.purchase_order_id === targetReturnPO.poNumber || pr.purchaseOrderId === targetReturnPO.poNumber) && (pr.status || '').toUpperCase() !== 'VOIDED')
+                            .reduce((sum, pr) => {
+                              const matchItem = Array.isArray(pr.items) ? pr.items.find((it: any) => (it.productId === pId || it.product_id === pId || it.productName === item.productName)) : null;
+                              return sum + (matchItem ? Number(matchItem.quantity || matchItem.qty || 0) : 0);
+                            }, 0);
+
+                          const remainingReturnable = Math.max(0, orderedQty - prevReturned);
+                          const grossCost = Number(item.costPrice || item.cost_price || 0);
+                          const disc = Number(item.discount || 0);
+                          const isPercent = item.discountType === 'percent' || item.discountType === 'percentage';
+                          const unitDisc = includeReturnDiscount ? (isPercent ? (grossCost * disc) / 100 : disc) : 0;
+                          const netUnitCost = Math.max(0, Math.round((grossCost - unitDisc) * 100) / 100);
+                          const returnQty = returnQtys[pId] || 0;
+                          const totalDebitValue = Math.round(returnQty * netUnitCost * 100) / 100;
+
+                          return (
+                            <tr key={pId} className="hover:bg-slate-50/60 transition-colors">
+                              <td className="py-3 px-4">
+                                <p className="font-black text-slate-800 text-xs">{item.productName || item.name || 'Product'}</p>
+                                <p className="text-[10px] text-slate-400 font-semibold">
+                                  SKU: {item.sku || 'N/A'} {item.barcode ? `| Barcode: ${item.barcode}` : ''}
+                                </p>
+                              </td>
+                              <td className="py-3 text-center font-bold text-slate-700">
+                                {orderedQty}
+                              </td>
+                              <td className="py-3 text-center font-bold text-slate-400">
+                                {prevReturned}
+                              </td>
+                              <td className="py-3 text-center">
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${remainingReturnable > 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-400'}`}>
+                                  {remainingReturnable}
+                                </span>
+                              </td>
+                              <td className="py-3 text-right">
+                                <span className="font-black text-slate-900">
+                                  {symbol} {netUnitCost.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                </span>
+                                {unitDisc > 0 && (
+                                  <span className="block text-[9px] text-rose-500 font-bold">
+                                    (-{symbol} {unitDisc.toFixed(2)})
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 text-center">
+                                <div className="inline-flex items-center border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-white">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const current = returnQtys[pId] || 0;
+                                      setReturnQtys(prev => ({ ...prev, [pId]: Math.max(0, current - 1) }));
+                                    }}
+                                    disabled={returnQty <= 0}
+                                    className="w-8 h-8 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent font-bold"
+                                  >
+                                    -
+                                  </button>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max={remainingReturnable}
+                                    value={returnQty}
+                                    onChange={(e) => {
+                                      const val = Math.max(0, Math.min(remainingReturnable, parseInt(e.target.value) || 0));
+                                      setReturnQtys(prev => ({ ...prev, [pId]: val }));
+                                    }}
+                                    className="w-14 text-center font-black text-slate-900 outline-none text-xs"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const current = returnQtys[pId] || 0;
+                                      setReturnQtys(prev => ({ ...prev, [pId]: Math.min(remainingReturnable, current + 1) }));
+                                    }}
+                                    disabled={returnQty >= remainingReturnable}
+                                    className="w-8 h-8 flex items-center justify-center text-slate-500 hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent font-bold"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </td>
+                              <td className="py-3 text-right px-4 font-black text-[#DAA520]">
+                                {symbol} {totalDebitValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Settlement Mode & Reason Configuration */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  {/* Settlement Mode */}
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 block">
+                      Settlement Mode <span className="text-red-500">*</span>
+                    </label>
+                    <div className="space-y-2">
+                      <label
+                        onClick={() => setReturnSettlementMode('SUPPLIER_DEBIT_NOTE')}
+                        className={`p-3 rounded-xl border-2 cursor-pointer transition-all flex items-center justify-between ${returnSettlementMode === 'SUPPLIER_DEBIT_NOTE' ? 'border-indigo-600 bg-indigo-50/40 shadow-sm' : 'border-slate-200 hover:border-slate-300'}`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <Building2Icon className={`w-4 h-4 ${returnSettlementMode === 'SUPPLIER_DEBIT_NOTE' ? 'text-indigo-600' : 'text-slate-400'}`} />
+                          <div>
+                            <span className="text-xs font-black text-slate-900 block">Supplier Debit Note</span>
+                            <span className="text-[9px] text-slate-500 font-semibold">Deduct from Supplier Payable Balance</span>
+                          </div>
+                        </div>
+                        <span className="text-[9px] font-black uppercase tracking-wider text-indigo-700 bg-indigo-100 px-1.5 py-0.5 rounded">
+                          Recommended
+                        </span>
+                      </label>
+
+                      <label
+                        onClick={() => setReturnSettlementMode('CASH_REFUND')}
+                        className={`p-3 rounded-xl border-2 cursor-pointer transition-all flex items-center justify-between ${returnSettlementMode === 'CASH_REFUND' ? 'border-emerald-600 bg-emerald-50/40 shadow-sm' : 'border-slate-200 hover:border-slate-300'}`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <DollarSignIcon className={`w-4 h-4 ${returnSettlementMode === 'CASH_REFUND' ? 'text-emerald-600' : 'text-slate-400'}`} />
+                          <div>
+                            <span className="text-xs font-black text-slate-900 block">Cash Refund</span>
+                            <span className="text-[9px] text-slate-500 font-semibold">Record direct cash received</span>
+                          </div>
+                        </div>
+                        <span className="text-[9px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">
+                          Cash
+                        </span>
+                      </label>
+
+                      <label
+                        onClick={() => setReturnSettlementMode('BANK_REFUND')}
+                        className={`p-3 rounded-xl border-2 cursor-pointer transition-all flex items-center justify-between ${returnSettlementMode === 'BANK_REFUND' ? 'border-blue-600 bg-blue-50/40 shadow-sm' : 'border-slate-200 hover:border-slate-300'}`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <ShieldCheckIcon className={`w-4 h-4 ${returnSettlementMode === 'BANK_REFUND' ? 'text-blue-600' : 'text-slate-400'}`} />
+                          <div>
+                            <span className="text-xs font-black text-slate-900 block">Bank Transfer</span>
+                            <span className="text-[9px] text-slate-500 font-semibold">Direct bank transfer refund</span>
+                          </div>
+                        </div>
+                        <span className="text-[9px] font-black uppercase tracking-wider text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded">
+                          Bank
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Return Reason */}
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 block">
+                      Reason for Return <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={returnReason}
+                      onChange={(e) => setReturnReason(e.target.value)}
+                      className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520] bg-white cursor-pointer"
+                    >
+                      <option value="Damaged Stock">Damaged Stock (අලාභහානි)</option>
+                      <option value="Defective / Expired">Defective / Expired (දෝෂ සහිත / කල් ඉකුත් වූ)</option>
+                      <option value="Wrong Item Received">Wrong Item Received (වැරදි භාණ්ඩ)</option>
+                      <option value="Excess Stock">Excess Stock / Over-ordered (අතිරික්ත තොග)</option>
+                      <option value="Other">Other / Custom Reason</option>
+                    </select>
+
+                    {returnReason === 'Other' && (
+                      <input
+                        type="text"
+                        placeholder="Specify custom reason..."
+                        value={returnCustomReason}
+                        onChange={(e) => setReturnCustomReason(e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
+                      />
+                    )}
+                    <p className="text-[10px] text-slate-400 font-semibold leading-relaxed">
+                      Accurate return reasons facilitate supplier warranty claims and inventory discrepancy audits.
+                    </p>
+                  </div>
+
+                  {/* Notes & Voucher Remarks */}
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-2">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 block">
+                      Voucher Notes & Driver Remarks
+                    </label>
+                    <textarea
+                      rows={3}
+                      placeholder="e.g. Returned via Delivery Van #WP-GA-1234. Driver signed acknowledgment..."
+                      value={returnNotes}
+                      onChange={(e) => setReturnNotes(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
+                    />
+                  </div>
+                </div>
+
+                {/* Final Execution Button */}
+                {(() => {
+                  const targetPoItems = Array.isArray(targetReturnPO.items) ? targetReturnPO.items : [];
+                  const merchDebitTotal = targetPoItems.reduce((sum: number, it: any, idx: number) => {
+                    const pId = it.productId || it.id || `item_${idx}`;
+                    const q = returnQtys[pId] || 0;
+                    const grossCost = Number(it.costPrice || it.cost_price || 0);
+                    const disc = Number(it.discount || 0);
+                    const isPercent = it.discountType === 'percent' || it.discountType === 'percentage';
+                    const unitDisc = includeReturnDiscount ? (isPercent ? (grossCost * disc) / 100 : disc) : 0;
+                    const netUnitCost = Math.max(0, Math.round((grossCost - unitDisc) * 100) / 100);
+                    return sum + (q * netUnitCost);
+                  }, 0);
+                  const origTransport = Number((targetReturnPO as any).transportation_fee !== undefined ? (targetReturnPO as any).transportation_fee : ((targetReturnPO as any).transportationFee || 0));
+                  const dynamicTransportDebit = includeReturnTransport && merchDebitTotal > 0 ? origTransport : 0;
+                  const totalApplicableDebit = Math.round((merchDebitTotal + dynamicTransportDebit) * 100) / 100;
+                  const hasSelectedItems = Object.values(returnQtys).some(q => q > 0);
+
+                  return (
+                    <div className="pt-3 border-t border-slate-200/80 flex flex-col sm:flex-row items-center justify-between gap-4">
+                      <div>
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 block">
+                          Total Debit Amount to Issue
+                        </span>
+                        <p className="text-2xl font-black text-slate-900">
+                          {symbol} {totalApplicableDebit.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-3 w-full sm:w-auto">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTargetReturnPO(null);
+                            setReturnQtys({});
+                          }}
+                          className="px-5 py-3 rounded-xl border border-slate-200 text-xs font-black uppercase tracking-wider text-slate-600 hover:bg-slate-100 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isSubmittingReturn || !hasSelectedItems}
+                          onClick={handleConfirmProcessPurchaseReturn}
+                          className="flex-1 sm:flex-none px-8 py-3 bg-[#DAA520] hover:bg-[#B8860B] disabled:bg-slate-200 disabled:text-slate-400 text-slate-900 font-black rounded-xl text-xs uppercase tracking-wider shadow-lg shadow-[#DAA520]/20 transition-all flex items-center justify-center gap-2"
+                        >
+                          {isSubmittingReturn ? (
+                            <>
+                              <Loader2Icon className="w-4 h-4 animate-spin text-slate-900" />
+                              <span>Processing Return & Debit Note...</span>
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircleIcon className="w-4 h-4 text-slate-900" />
+                              <span>Confirm & Process Purchase Return ({symbol} {totalApplicableDebit.toLocaleString(undefined, { minimumFractionDigits: 2 })})</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            ) : null}
+          </div>
+
           {/* Summary Cards Row */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
