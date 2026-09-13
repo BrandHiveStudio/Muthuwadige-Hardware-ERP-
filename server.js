@@ -2366,6 +2366,7 @@ app.post('/api/auth/login', async (req, res) => {
       const session = await createSession(localAccount);
 
       return res.json({
+        success: true,
         token: session.token,
         expiresAt: session.expiresAt,
         user: {
@@ -2581,6 +2582,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     return res.json({
+      success: true,
       token: session.token,
       expiresAt: session.expiresAt,
       user: {

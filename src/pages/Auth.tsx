@@ -251,7 +251,7 @@ export function Auth({ onLogin }: AuthProps) {
     window.location.reload();
   };
 
-  const handleAuth = async (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -269,60 +269,93 @@ export function Auth({ onLogin }: AuthProps) {
     setIsLoading(true);
 
     try {
-      // Login Logic
-      const { data, error: signInError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
+      const cleanEmail = email.trim().toLowerCase();
+      const cleanPassword = password.trim();
+
+      const loginEndpoint = (typeof window !== 'undefined' && window.location.protocol !== 'file:')
+        ? '/api/auth/login'
+        : `${API_URL}/auth/login`;
+
+      const res = await fetch(loginEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email: cleanEmail, password: cleanPassword }),
       });
 
-      if (signInError) throw signInError;
+      const data = await res.json().catch(() => ({}));
 
+      if (!res.ok || data.success === false || (!data.token && !data.user)) {
+        throw new Error(data.error || 'Invalid email or password.');
+      }
+
+      // Store session tokens consistently across all keys used in the app
+      if (data.token) {
+        localStorage.setItem('token', data.token);
+        sessionStorage.setItem('token', data.token);
+        localStorage.setItem('auth_token', data.token);
+        sessionStorage.setItem('erp_session_token', data.token);
+        localStorage.setItem('erp_session_token', data.token);
+      }
       if (data.user) {
-        // Directly consume authenticated user profile returned by /api/auth/login
-        const finalRole = data.user.role || data.user.user_metadata?.role || 'Super Admin';
-        const finalName = data.user.name || data.user.full_name || data.user.user_metadata?.full_name || 'Admin';
-        
-        const rawPerms = data.user.custom_permissions !== undefined 
-          ? data.user.custom_permissions 
-          : (data.user.permissions !== undefined ? data.user.permissions : data.user.user_metadata?.custom_permissions);
-        
-        let parsedPermissions: string[] | undefined = undefined;
-        if (rawPerms) {
-          if (Array.isArray(rawPerms)) {
-            parsedPermissions = rawPerms;
-          } else if (typeof rawPerms === 'string' && rawPerms.trim().length > 0) {
-            try {
-              parsedPermissions = JSON.parse(rawPerms);
-            } catch {
-              parsedPermissions = rawPerms.split(',').map((p: string) => p.trim());
-            }
+        localStorage.setItem('user', JSON.stringify(data.user));
+        sessionStorage.setItem('user', JSON.stringify(data.user));
+        localStorage.setItem('currentUser', JSON.stringify(data.user));
+        sessionStorage.setItem('hardware_erp_user', JSON.stringify(data.user));
+        sessionStorage.setItem('erp_user', JSON.stringify(data.user));
+        sessionStorage.setItem('hardware_erp_auth', 'true');
+        localStorage.setItem('hardware_erp_auth', 'true');
+      }
+
+      const rawPerms = data.user?.custom_permissions !== undefined 
+        ? data.user.custom_permissions 
+        : (data.user?.permissions !== undefined ? data.user.permissions : data.user?.user_metadata?.custom_permissions);
+      
+      let parsedPermissions: string[] | undefined = undefined;
+      if (rawPerms) {
+        if (Array.isArray(rawPerms)) {
+          parsedPermissions = rawPerms;
+        } else if (typeof rawPerms === 'string' && rawPerms.trim().length > 0) {
+          try {
+            parsedPermissions = JSON.parse(rawPerms);
+          } catch {
+            parsedPermissions = rawPerms.split(',').map((p: string) => p.trim());
           }
         }
+      }
 
+      if (parsedPermissions) {
+        sessionStorage.setItem('custom_permissions', JSON.stringify(parsedPermissions));
+        localStorage.setItem('custom_permissions', JSON.stringify(parsedPermissions));
+      }
+
+      if (data.user) {
+        const finalRole = data.user.role || data.user.user_metadata?.role || 'Super Admin';
+        const finalName = data.user.name || data.user.full_name || data.user.user_metadata?.full_name || 'Admin';
         const loggedInUser: User = {
           id: data.user.id,
           email: data.user.email || '',
           name: finalName,
           full_name: finalName,
-          role: finalRole, 
+          role: finalRole,
           avatar: data.user.avatar || data.user.email?.charAt(0).toUpperCase() || 'U',
           custom_permissions: parsedPermissions,
           permissions: parsedPermissions
         };
-
-        if (parsedPermissions) {
-          sessionStorage.setItem('custom_permissions', JSON.stringify(parsedPermissions));
-          localStorage.setItem('custom_permissions', JSON.stringify(parsedPermissions));
-        }
-
         onLogin(loggedInUser);
+      } else {
+        window.location.href = '/dashboard';
       }
     } catch (err: any) {
-      setError(err.message || 'Authentication failed.');
+      console.error('Login failed:', err);
+      setError(err.message || 'Invalid email or password.');
     } finally {
       setIsLoading(false);
     }
   };
+
+  const handleAuth = handleLogin;
 
   return (
     <div className="min-h-screen w-full flex bg-gray-50">
