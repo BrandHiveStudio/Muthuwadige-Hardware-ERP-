@@ -24,7 +24,8 @@ import {
   FileCheckIcon,
   ReceiptIcon,
   CreditCardIcon,
-  BanIcon
+  BanIcon,
+  TagIcon
 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabaseClient';
@@ -221,8 +222,11 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     return poItems.reduce((sum, i) => {
       const qty = Number(i.qty || 0);
       const cost = Number(i.costPrice || 0);
-      const lineDisc = Math.max(0, Math.min(100, Number(i.discount || 0)));
-      const lineTotal = Math.round(qty * cost * (1 - lineDisc / 100) * 100) / 100;
+      const disc = Math.max(0, Number(i.discount || 0));
+      const isFixed = i.discountType === 'fixed';
+      const lineTotal = isFixed
+        ? Math.max(0, Math.round((qty * cost - disc) * 100) / 100)
+        : Math.round(qty * cost * (1 - Math.min(100, disc) / 100) * 100) / 100;
       return sum + lineTotal;
     }, 0);
   }, [poItems]);
@@ -624,19 +628,34 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
   };
 
   // PO Line Items Handling
+  const calculateLineTotal = (qty: number, costPrice: number, discount: number, discountType?: 'percent' | 'fixed' | 'percentage') => {
+    const q = Math.max(0, Number(qty || 0));
+    const c = Math.max(0, Number(costPrice || 0));
+    const gross = q * c;
+    const d = Math.max(0, Number(discount || 0));
+    if (discountType === 'fixed') {
+      return Math.max(0, Math.round((gross - d) * 100) / 100);
+    } else {
+      const pct = Math.min(100, d);
+      return Math.round(gross * (1 - pct / 100) * 100) / 100;
+    }
+  };
+
   const addItem = (product: any) => {
     setPoItems((prev) => {
-      if (prev.find((i) => i.productId === product.id)) return prev;
+      if (prev.find((i) => i.productId === product.id || (i as any).id === product.id)) return prev;
       const initialCost = Number(product.costPrice || product.cost_price || 0);
       return [
         ...prev,
         {
+          id: product.id,
           productId: product.id,
           productName: product.name,
           supplier: product.supplier || '',
           qty: 1,
           costPrice: initialCost,
           discount: 0,
+          discountType: 'percent',
           total: initialCost
         } as any
       ];
@@ -644,16 +663,34 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     setProductSearch('');
   };
 
-  const updateItem = (productId: string, field: 'qty' | 'costPrice' | 'discount', value: number) => {
+  const updateItem = (productId: string, field: 'qty' | 'costPrice' | 'discount' | 'discountType', value: any) => {
     setPoItems((prev) =>
       prev.map((i) => {
-        if (i.productId !== productId) return i;
+        if (i.productId !== productId && (i as any).id !== productId) return i;
         const updated = { ...i, [field]: value };
         const qty = Math.max(0, Number(updated.qty || 0));
         const cost = Math.max(0, Number(updated.costPrice || 0));
-        const disc = Math.max(0, Math.min(100, Number(updated.discount || 0)));
-        const lineTotal = Math.round(qty * cost * (1 - disc / 100) * 100) / 100;
+        const disc = Math.max(0, Number(updated.discount || 0));
+        const lineTotal = calculateLineTotal(qty, cost, disc, updated.discountType);
         return { ...updated, total: lineTotal };
+      })
+    );
+  };
+
+  const updateItemDiscount = (productId: string, discount: number) => {
+    updateItem(productId, 'discount', discount);
+  };
+
+  const toggleItemDiscountType = (productId: string) => {
+    setPoItems((prev) =>
+      prev.map((i) => {
+        if (i.productId !== productId && (i as any).id !== productId) return i;
+        const newType: 'percent' | 'fixed' = (i.discountType === 'fixed') ? 'percent' : 'fixed';
+        const qty = Math.max(0, Number(i.qty || 0));
+        const cost = Math.max(0, Number(i.costPrice || 0));
+        const disc = Math.max(0, Number(i.discount || 0));
+        const lineTotal = calculateLineTotal(qty, cost, disc, newType);
+        return { ...i, discountType: newType, total: lineTotal };
       })
     );
   };
@@ -1386,9 +1423,9 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                               <tr>
                                 <th className="py-4 px-6">Item Name</th>
                                 <th className="py-4 text-center">Qty</th>
-                                <th className="py-4 text-right">Cost Price ({symbol})</th>
-                                <th className="py-4 text-center">Disc (%)</th>
-                                <th className="py-4 text-right px-6">Total</th>
+                                <th className="py-4 text-right">Cost Price (Rs.)</th>
+                                <th className="py-4 text-center">Discount</th>
+                                <th className="py-4 text-right px-6">Total (Rs.)</th>
                                 <th className="py-4"></th>
                               </tr>
                           </thead>
@@ -1410,52 +1447,102 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                                         )}
                                       </td>
                                       <td className="py-4 text-center">
+                                        {/* POS-Style Quantity Stepper */}
+                                        <div className="inline-flex items-center border border-slate-200 bg-slate-50/50 rounded-xl p-1 shadow-inner">
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              const currentQty = Number(item.qty || 1);
+                                              const newQty = Math.max(1, Math.round((currentQty - 1) * 100) / 100);
+                                              updateItem(item.productId, 'qty', newQty);
+                                            }}
+                                            className="w-7 h-7 bg-white hover:bg-slate-100 active:scale-95 text-slate-600 rounded-lg flex items-center justify-center font-black transition-all border border-slate-200 shadow-sm text-sm cursor-pointer"
+                                            title="Decrease Quantity"
+                                          >
+                                            -
+                                          </button>
+                                          <input 
+                                            type="number" 
+                                            min={1} 
+                                            step="any"
+                                            value={item.qty === 0 ? '' : item.qty} 
+                                            onFocus={(e) => e.target.select()}
+                                            onChange={(e) => {
+                                              const valStr = e.target.value;
+                                              const val = valStr === '' ? 0 : Math.max(0, parseFloat(valStr) || 0);
+                                              updateItem(item.productId, 'qty', val);
+                                            }}
+                                            onBlur={() => {
+                                              if (!item.qty || item.qty <= 0) {
+                                                updateItem(item.productId, 'qty', 1);
+                                              }
+                                            }}
+                                            onKeyDown={(e) => {
+                                              if (e.key === 'Enter') {
+                                                (e.target as HTMLElement).blur();
+                                              }
+                                            }}
+                                            className="w-14 text-center bg-transparent border-0 font-bold text-slate-800 outline-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              const currentQty = Number(item.qty || 0);
+                                              const newQty = Math.round((currentQty + 1) * 100) / 100;
+                                              updateItem(item.productId, 'qty', newQty);
+                                            }}
+                                            className="w-7 h-7 bg-white hover:bg-slate-100 active:scale-95 text-slate-600 rounded-lg flex items-center justify-center font-black transition-all border border-slate-200 shadow-sm text-sm cursor-pointer"
+                                            title="Increase Quantity"
+                                          >
+                                            +
+                                          </button>
+                                        </div>
+                                      </td>
+                                      <td className="py-4 text-right">
                                         <input 
                                           type="number" 
-                                          min={0} 
-                                          step="any"
-                                          value={item.qty === 0 ? '' : item.qty} 
-                                          onFocus={(e) => e.target.select()}
-                                          onChange={(e) => {
-                                            const valStr = e.target.value;
-                                            const val = valStr === '' ? 0 : Math.max(0, parseFloat(valStr) || 0);
-                                            updateItem(item.productId, 'qty', val);
-                                          }}
-                                          onBlur={() => {
-                                            if (!item.qty || item.qty <= 0) {
-                                              updateItem(item.productId, 'qty', 1);
-                                            }
-                                          }}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              (e.target as HTMLElement).blur();
-                                            }
-                                          }}
-                                          className="w-16 text-center border border-slate-200 bg-white rounded-lg py-1.5 font-bold text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none" 
+                                          step="0.01" 
+                                          min={0}
+                                          value={item.costPrice === 0 ? '' : item.costPrice} 
+                                          onChange={(e) => updateItem(item.productId, 'costPrice', parseFloat(e.target.value) || 0)} 
+                                          className="w-24 text-right border border-slate-200 bg-white rounded-lg py-1.5 px-3 font-bold text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none" 
                                         />
                                       </td>
-                                      <td className="py-4 text-right"><input type="number" step="0.01" value={item.costPrice === 0 ? '' : item.costPrice} onChange={(e) => updateItem(item.productId, 'costPrice', parseFloat(e.target.value) || 0)} className="w-24 text-right border border-slate-200 bg-white rounded-lg py-1.5 px-3 font-bold text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none" /></td>
                                       <td className="py-4 text-center">
-                                        <input 
-                                          type="number" 
-                                          min={0} 
-                                          max={100}
-                                          step="any"
-                                          placeholder="0"
-                                          value={item.discount === 0 || item.discount === undefined ? '' : item.discount} 
-                                          onFocus={(e) => e.target.select()}
-                                          onChange={(e) => {
-                                            const valStr = e.target.value;
-                                            const val = valStr === '' ? 0 : Math.max(0, Math.min(100, parseFloat(valStr) || 0));
-                                            updateItem(item.productId, 'discount', val);
-                                          }}
-                                          className="w-16 text-center border border-slate-200 bg-white rounded-lg py-1.5 px-2 font-bold text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none" 
-                                        />
+                                        {/* POS-Style Inline Discount Toggle Pill */}
+                                        <div className="inline-flex items-center border border-slate-200 bg-slate-50/50 rounded-xl px-2 py-1.5 focus-within:ring-2 focus-within:ring-[#DAA520] shadow-inner">
+                                          <input
+                                            type="number"
+                                            min={0}
+                                            max={item.discountType === 'fixed' ? undefined : 100}
+                                            step={item.discountType === 'fixed' ? '1' : '0.1'}
+                                            placeholder="0"
+                                            value={item.discount === 0 || item.discount === undefined ? '' : item.discount}
+                                            onFocus={(e) => e.target.select()}
+                                            onChange={(e) => updateItemDiscount(item.productId, parseFloat(e.target.value) || 0)}
+                                            className="w-14 bg-transparent text-center font-bold text-slate-800 outline-none text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => toggleItemDiscountType(item.productId)}
+                                            className="ml-1 px-2 py-0.5 rounded-lg text-xs font-black transition-colors bg-white shadow-sm border border-slate-200 text-[#DAA520] hover:bg-amber-50 cursor-pointer active:scale-95"
+                                            title="Toggle between Percentage (%) and Flat Concession (Rs.)"
+                                          >
+                                            {item.discountType === 'fixed' ? 'Rs.' : '%'}
+                                          </button>
+                                        </div>
                                       </td>
-                                      <td className="py-4 text-right font-black text-[#DAA520] px-6">{symbol} {convert(item.total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                                      <td className="py-4 text-right font-black text-[#DAA520] px-6">
+                                        Rs. {convert(item.total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                      </td>
                                       <td className="py-4 text-center px-4">
-                                        <button onClick={() => setPoItems(poItems.filter(i => i.productId !== item.productId))} className="p-2 rounded-xl bg-red-50 text-red-600 hover:bg-red-500 hover:text-white border border-red-100 transition-all shadow-sm shadow-red-500/10">
-                                          <XIcon className="w-4 h-4" />
+                                        <button 
+                                          type="button"
+                                          onClick={() => setPoItems(poItems.filter(i => i.productId !== item.productId && (i as any).id !== item.productId))} 
+                                          className="p-2 rounded-xl bg-red-50 text-red-600 hover:bg-red-500 hover:text-white border border-red-100 transition-all shadow-sm shadow-red-500/10 cursor-pointer"
+                                          title="Remove item"
+                                        >
+                                          <Trash2Icon className="w-4 h-4" />
                                         </button>
                                       </td>
                                   </tr>
@@ -1468,8 +1555,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                   {/* Discount Section below itemized table */}
                   <div className="mt-5 p-4 rounded-2xl border border-amber-200/80 bg-gradient-to-r from-amber-50/70 via-amber-50/30 to-amber-50/70 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-sm">
                     <div className="flex items-center gap-3">
-                      <div className="p-2.5 rounded-xl bg-[#DAA520]/20 text-[#B8860B] border border-[#DAA520]/30 shadow-sm">
-                        <DollarSignIcon className="w-5 h-5 text-[#B8860B]" />
+                      <div className="w-10 h-10 rounded-xl bg-[#DAA520]/10 text-[#DAA520] border border-[#DAA520]/25 shadow-sm flex items-center justify-center font-black">
+                        <TagIcon className="w-5 h-5 text-[#DAA520]" />
                       </div>
                       <div>
                         <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
@@ -1488,7 +1575,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                         <button
                           type="button"
                           onClick={() => setDiscountType('percentage')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+                          className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
                             discountType === 'percentage'
                               ? 'bg-[#DAA520] text-slate-900 shadow-sm'
                               : 'text-slate-500 hover:text-slate-800'
@@ -1499,13 +1586,13 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                         <button
                           type="button"
                           onClick={() => setDiscountType('fixed')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all ${
+                          className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
                             discountType === 'fixed'
                               ? 'bg-[#DAA520] text-slate-900 shadow-sm'
                               : 'text-slate-500 hover:text-slate-800'
                           }`}
                         >
-                          {symbol} Fixed Amount
+                          Rs. Fixed Amount
                         </button>
                       </div>
 
@@ -1524,10 +1611,10 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                             const val = valStr === '' ? 0 : Math.max(0, parseFloat(valStr) || 0);
                             setDiscountValue(val);
                           }}
-                          className="w-full pl-7 pr-3 py-2 border border-slate-200 bg-white rounded-xl font-black text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none text-right text-sm shadow-sm"
+                          className="w-full pl-8 pr-3 py-2 border border-slate-200 bg-white rounded-xl font-black text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none text-right text-sm shadow-sm"
                         />
-                        <span className="absolute left-2.5 top-2.5 text-xs font-black text-slate-400">
-                          {discountType === 'percentage' ? '%' : symbol}
+                        <span className="absolute left-2.5 top-2.5 text-xs font-black text-[#DAA520]">
+                          {discountType === 'percentage' ? '%' : 'Rs.'}
                         </span>
                       </div>
                     </div>

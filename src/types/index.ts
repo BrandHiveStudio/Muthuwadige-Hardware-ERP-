@@ -124,6 +124,8 @@ export interface PurchaseItem {
   costPrice: number;
   total: number;
   discount?: number;
+  discountType?: 'percent' | 'fixed' | 'percentage';
+  discount_type?: 'percent' | 'fixed' | 'percentage';
   receivedProductId?: string;
   receivedSku?: string;
   isNewBatch?: boolean;
