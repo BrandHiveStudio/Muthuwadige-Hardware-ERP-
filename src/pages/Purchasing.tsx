@@ -217,41 +217,77 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     return supplierList.find(s => s.id === returnSupplierId || s.name === returnSupplierName);
   }, [supplierList, returnSupplierId, returnSupplierName]);
 
-  // PO Line Items Line Total Helper
-  const calculateLineTotal = (qty: number, costPrice: number, discount: number, discountType?: 'percent' | 'fixed' | 'percentage') => {
+  // PO Line Items Math Helper (Identical to Sales.tsx pipeline)
+  const calculateLineItem = (qty: number, costPrice: number, discount: number, discountType?: 'percent' | 'fixed' | 'percentage') => {
     const q = Math.max(0, Number(qty || 0));
     const c = Math.max(0, Number(costPrice || 0));
     const d = Math.max(0, Number(discount || 0));
-    if (discountType === 'fixed') {
-      const effectiveUnitPrice = Math.max(0, c - d);
-      return Math.round(effectiveUnitPrice * q * 100) / 100;
-    } else {
-      const pct = Math.min(100, d);
-      return Math.round((c * q) * (1 - pct / 100) * 100) / 100;
-    }
+    const grossLineTotal = Math.round(q * c * 100) / 100;
+    const isPercent = discountType === 'percent' || discountType === 'percentage';
+    const unitDiscountAmount = isPercent ? (c * Math.min(100, d)) / 100 : d;
+    const lineDiscountTotal = Math.min(grossLineTotal, Math.round(unitDiscountAmount * q * 100) / 100);
+    const netLineTotal = Math.max(0, Math.round((grossLineTotal - lineDiscountTotal) * 100) / 100);
+
+    return {
+      qty: q,
+      costPrice: c,
+      discount: d,
+      discountType: isPercent ? ('percent' as const) : ('fixed' as const),
+      unitDiscountAmount,
+      lineDiscountTotal,
+      grossLineTotal,
+      netLineTotal
+    };
   };
 
-  // Gross Subtotal (sum of all item totals accounting for optional line discounts)
+  const calculateLineTotal = (qty: number, costPrice: number, discount: number, discountType?: 'percent' | 'fixed' | 'percentage') => {
+    return calculateLineItem(qty, costPrice, discount, discountType).netLineTotal;
+  };
+
+  // GROSS SUBTOTAL: Sum of all (item.quantity * item.costPrice) across all items
   const poGrossSubtotal = useMemo(() => {
     return poItems.reduce((sum, i) => {
-      return sum + calculateLineTotal(i.qty, i.costPrice, i.discount || 0, i.discountType);
+      const itemData = calculateLineItem(i.qty, i.costPrice, i.discount || 0, i.discountType);
+      return sum + itemData.grossLineTotal;
     }, 0);
   }, [poItems]);
 
-  // Overall PO Supplier Discount Amount
-  const poDiscountAmount = useMemo(() => {
-    if (discountValue <= 0 || poGrossSubtotal <= 0) return 0;
+  // Total Line Item Discounts: sum(lineDiscountTotal)
+  const poLineDiscounts = useMemo(() => {
+    return poItems.reduce((sum, i) => {
+      const itemData = calculateLineItem(i.qty, i.costPrice, i.discount || 0, i.discountType);
+      return sum + itemData.lineDiscountTotal;
+    }, 0);
+  }, [poItems]);
+
+  // Net subtotal after line discounts, before supplier order discount
+  const poNetAfterLineDiscounts = useMemo(() => {
+    return Math.max(0, Math.round((poGrossSubtotal - poLineDiscounts) * 100) / 100);
+  }, [poGrossSubtotal, poLineDiscounts]);
+
+  // Order-level Supplier Discount:
+  // poDiscountType === 'percent' ? ((grossSubtotal - totalLineDiscounts) * poDiscountValue) / 100 : poDiscountValue
+  const poOrderDiscount = useMemo(() => {
+    if (discountValue <= 0 || poNetAfterLineDiscounts <= 0) return 0;
     if (discountType === 'percentage') {
       const pct = Math.min(100, Math.max(0, discountValue));
-      return Math.round(poGrossSubtotal * (pct / 100) * 100) / 100;
+      return Math.round(poNetAfterLineDiscounts * (pct / 100) * 100) / 100;
     }
-    return Math.min(poGrossSubtotal, Math.round(Math.max(0, discountValue) * 100) / 100);
-  }, [discountType, discountValue, poGrossSubtotal]);
+    return Math.min(poNetAfterLineDiscounts, Math.round(Math.max(0, discountValue) * 100) / 100);
+  }, [discountType, discountValue, poNetAfterLineDiscounts]);
 
-  // Total After Discount (before applying debit note)
+  // TOTAL DISCOUNT: Line Discounts + Supplier Order Discount
+  const poTotalDiscount = useMemo(() => {
+    return Math.round((poLineDiscounts + poOrderDiscount) * 100) / 100;
+  }, [poLineDiscounts, poOrderDiscount]);
+
+  // Backward compatibility alias for poDiscountAmount
+  const poDiscountAmount = poTotalDiscount;
+
+  // Total After All Discounts (before applying debit note)
   const poAfterDiscount = useMemo(() => {
-    return Math.max(0, Math.round((poGrossSubtotal - poDiscountAmount) * 100) / 100);
-  }, [poGrossSubtotal, poDiscountAmount]);
+    return Math.max(0, Math.round((poGrossSubtotal - poTotalDiscount) * 100) / 100);
+  }, [poGrossSubtotal, poTotalDiscount]);
 
   const poTotal = poAfterDiscount;
 
@@ -259,6 +295,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     return Math.min(debitNoteApplied, poAfterDiscount);
   }, [debitNoteApplied, poAfterDiscount]);
 
+  // NET TOTAL PAYABLE: grossSubtotal - totalDiscount - debitNoteAmount
   const netTotalPayable = useMemo(() => {
     return Math.max(0, Math.round((poAfterDiscount - finalDebitNoteApplied) * 100) / 100);
   }, [poAfterDiscount, finalDebitNoteApplied]);
@@ -402,13 +439,24 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
     autoTable(doc, {
       startY: 90,
-      head: [['Item Name', 'Quantity', 'Unit Cost', 'Total']],
-      body: order.items.map((i: any) => [
-        i.productName, 
-        i.qty, 
-        `${symbol} ${convert(i.costPrice).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
-        `${symbol} ${convert(i.total).toLocaleString(undefined, { minimumFractionDigits: 2 })}`
-      ]),
+      head: [['Item Name', 'Quantity', 'Unit Cost', 'Discount', 'Total']],
+      body: order.items.map((i: any) => {
+        const itemData = calculateLineItem(i.qty, i.costPrice, i.discount || 0, i.discountType);
+        const hasDisc = itemData.discount > 0 && itemData.lineDiscountTotal > 0;
+        const discStr = hasDisc
+          ? (itemData.discountType === 'percent'
+              ? `${itemData.discount}% (-${symbol} ${convert(itemData.lineDiscountTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`
+              : `-${symbol} ${convert(itemData.lineDiscountTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+          : '—';
+
+        return [
+          i.productName, 
+          i.qty, 
+          `${symbol} ${convert(i.costPrice).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+          discStr,
+          `${symbol} ${convert(i.total !== undefined ? i.total : itemData.netLineTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        ];
+      }),
       theme: 'plain',
       headStyles: { 
         fillColor: gold,
@@ -421,49 +469,60 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
         0: { halign: 'left' },
         1: { halign: 'center' },
         2: { halign: 'right' },
-        3: { halign: 'right' }
+        3: { halign: 'center' },
+        4: { halign: 'right' }
       },
       alternateRowStyles: { fillColor: [250, 250, 250] }
     });
 
     const finalY = (doc as any).lastAutoTable.finalY + 10;
-    const summaryXText = pageWidth - 75; 
+    const summaryXText = pageWidth - 80; 
     const summaryXValue = pageWidth - 15;
-    const subtotalVal = Number(order.subtotal || order.original_total || order.originalTotal || order.total || 0);
-    const discountVal = Number(order.discount_amount || order.discountAmount || 0);
+    const computedGross = (order.items || []).reduce((sum: number, it: any) => {
+      const q = Number(it.qty || it.quantity || 0);
+      const c = Number(it.costPrice || it.cost_price || 0);
+      return sum + (q * c);
+    }, 0);
+    const computedLineDisc = (order.items || []).reduce((sum: number, it: any) => {
+      const itemData = calculateLineItem(it.qty, it.costPrice, it.discount || 0, it.discountType);
+      return sum + itemData.lineDiscountTotal;
+    }, 0);
+
+    const subtotalVal = Number(order.subtotal || order.original_total || order.originalTotal || computedGross);
+    const discountVal = Number(order.discount_amount || order.discountAmount || computedLineDisc);
     const debitVal = Number(order.debit_note_applied || order.debitNoteApplied || 0);
+    const netTotalVal = Number(order.net_total !== undefined && order.net_total !== null ? order.net_total : order.total);
 
     let curY = finalY;
-    if (discountVal > 0 || debitVal > 0) {
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9);
-      doc.setTextColor(80, 80, 80);
-      doc.text("Gross Subtotal:", summaryXText, curY);
-      doc.text(`${symbol} ${convert(subtotalVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(80, 80, 80);
+    doc.text("Gross Subtotal:", summaryXText, curY);
+    doc.text(`${symbol} ${convert(subtotalVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
+    curY += 6;
+
+    if (discountVal > 0) {
+      doc.setTextColor(220, 38, 38);
+      doc.text("Supplier Discount:", summaryXText, curY);
+      doc.text(`-${symbol} ${convert(discountVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
       curY += 6;
+    }
 
-      if (discountVal > 0) {
-        doc.setTextColor(34, 139, 34);
-        doc.text("Supplier Discount:", summaryXText, curY);
-        doc.text(`-${symbol} ${convert(discountVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
-        curY += 6;
-      }
-
-      if (debitVal > 0) {
-        doc.setTextColor(75, 0, 130);
-        doc.text("Debit Note Applied:", summaryXText, curY);
-        doc.text(`-${symbol} ${convert(debitVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
-        curY += 6;
-      }
+    if (debitVal > 0) {
+      doc.setTextColor(75, 0, 130);
+      doc.text("Debit Note Applied:", summaryXText, curY);
+      doc.text(`-${symbol} ${convert(debitVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
+      curY += 6;
     }
 
     doc.setFont('helvetica', 'bold');
     doc.setFillColor(245, 245, 245);
-    doc.rect(summaryXText - 3, curY, 66, 12, 'F');
+    doc.rect(summaryXText - 3, curY, 71, 12, 'F');
     doc.setFontSize(10);
     doc.setTextColor(50, 50, 50);
     doc.text("Net Total Payable:", summaryXText, curY + 8);
-    doc.text(`${symbol} ${convert(order.total).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY + 8, { align: 'right' });
+    doc.text(`${symbol} ${convert(netTotalVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY + 8, { align: 'right' });
 
     doc.setFontSize(9);
     doc.setTextColor(218, 165, 32); 
@@ -640,6 +699,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     setPoItems((prev) => {
       if (prev.find((i) => i.productId === product.id || (i as any).id === product.id)) return prev;
       const initialCost = Number(product.costPrice || product.cost_price || 0);
+      const itemData = calculateLineItem(1, initialCost, 0, 'percent');
       return [
         ...prev,
         {
@@ -651,7 +711,11 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
           costPrice: initialCost,
           discount: 0,
           discountType: 'percent',
-          total: initialCost
+          total: itemData.netLineTotal,
+          lineTotal: itemData.netLineTotal,
+          unitDiscountAmount: itemData.unitDiscountAmount,
+          lineDiscountTotal: itemData.lineDiscountTotal,
+          grossTotal: itemData.grossLineTotal
         } as any
       ];
     });
@@ -663,11 +727,15 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       prev.map((i) => {
         if (i.productId !== productId && (i as any).id !== productId) return i;
         const updated = { ...i, [field]: value };
-        const qty = Math.max(0, Number(updated.qty || 0));
-        const cost = Math.max(0, Number(updated.costPrice || 0));
-        const disc = Math.max(0, Number(updated.discount || 0));
-        const lineTotal = calculateLineTotal(qty, cost, disc, updated.discountType);
-        return { ...updated, total: lineTotal };
+        const itemData = calculateLineItem(updated.qty, updated.costPrice, updated.discount || 0, updated.discountType);
+        return {
+          ...updated,
+          total: itemData.netLineTotal,
+          lineTotal: itemData.netLineTotal,
+          unitDiscountAmount: itemData.unitDiscountAmount,
+          lineDiscountTotal: itemData.lineDiscountTotal,
+          grossTotal: itemData.grossLineTotal
+        };
       })
     );
   };
@@ -681,11 +749,16 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       prev.map((i) => {
         if (i.productId !== productId && (i as any).id !== productId) return i;
         const newType: 'percent' | 'fixed' = (i.discountType === 'fixed') ? 'percent' : 'fixed';
-        const qty = Math.max(0, Number(i.qty || 0));
-        const cost = Math.max(0, Number(i.costPrice || 0));
-        const disc = Math.max(0, Number(i.discount || 0));
-        const lineTotal = calculateLineTotal(qty, cost, disc, newType);
-        return { ...i, discountType: newType, total: lineTotal };
+        const itemData = calculateLineItem(i.qty, i.costPrice, i.discount || 0, newType);
+        return {
+          ...i,
+          discountType: newType,
+          total: itemData.netLineTotal,
+          lineTotal: itemData.netLineTotal,
+          unitDiscountAmount: itemData.unitDiscountAmount,
+          lineDiscountTotal: itemData.lineDiscountTotal,
+          grossTotal: itemData.grossLineTotal
+        };
       })
     );
   };
@@ -751,7 +824,17 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       const { error } = await supabase.from('purchase_orders').insert([{
         po_number: `PO-${Date.now().toString().slice(-6)}`,
         supplier_name: selectedSupplier,
-        items: poItems,
+        items: poItems.map(i => {
+          const itemData = calculateLineItem(i.qty, i.costPrice, i.discount || 0, i.discountType);
+          return {
+            ...i,
+            total: itemData.netLineTotal,
+            lineTotal: itemData.netLineTotal,
+            unitDiscountAmount: itemData.unitDiscountAmount,
+            lineDiscountTotal: itemData.lineDiscountTotal,
+            grossTotal: itemData.grossLineTotal
+          };
+        }),
         total: finalPayable,
         subtotal: poGrossSubtotal,
         discount_type: discountType,
@@ -1757,29 +1840,29 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                     </div>
 
                     <div className="space-y-2 pt-2 border-t border-slate-100">
-                      <div className="flex justify-between text-xs font-bold text-slate-500">
-                        <span>Gross Subtotal:</span>
-                        <span className="font-bold text-slate-800">{symbol} {convert(poGrossSubtotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      <div className="flex justify-between text-xs font-bold text-slate-600 uppercase tracking-wider">
+                        <span>Subtotal:</span>
+                        <span className="font-bold text-slate-800 font-mono">{symbol} {convert(poGrossSubtotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                       </div>
 
-                      {poDiscountAmount > 0 && (
-                        <div className="flex justify-between text-xs font-black text-emerald-600">
-                          <span>Supplier Discount {discountType === 'percentage' ? `(${discountValue}%)` : ''}:</span>
-                          <span>- {symbol} {convert(poDiscountAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      {poTotalDiscount > 0 && (
+                        <div className="flex justify-between text-xs text-red-500 font-bold uppercase tracking-wider">
+                          <span>Discount:</span>
+                          <span className="font-mono">-{symbol} {convert(poTotalDiscount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
                       )}
 
                       {finalDebitNoteApplied > 0 && (
-                        <div className="flex justify-between text-xs font-black text-indigo-600">
+                        <div className="flex justify-between text-xs font-black text-indigo-600 uppercase tracking-wider">
                           <span>Debit Note Applied ({selectedDebitNoteCode}):</span>
-                          <span>- {symbol} {convert(finalDebitNoteApplied).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          <span className="font-mono">-{symbol} {convert(finalDebitNoteApplied).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
                       )}
                     </div>
 
-                    <div className="flex justify-between font-black text-2xl text-[#464646] pt-4 border-t-2 border-dashed border-gray-200">
-                        <span className="uppercase tracking-widest text-base flex items-center">Net Total Payable</span>
-                        <span className="text-[#DAA520]">{symbol} {convert(netTotalPayable).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex justify-between items-center mt-3 shadow-lg">
+                      <span className="text-white font-black text-xs uppercase tracking-widest">Net Total Payable</span>
+                      <span className="text-2xl font-black text-[#DAA520] font-mono">{symbol} {convert(netTotalPayable).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                 </div>
                 <button onClick={createPO} disabled={!selectedSupplier || poItems.length === 0 || isLoading} className="w-full bg-[#DAA520] text-white font-black py-4 rounded-xl shadow-lg shadow-[#DAA520]/20 hover:bg-[#B8860B] disabled:bg-gray-100 disabled:text-gray-300 transition-all flex items-center justify-center gap-3 uppercase tracking-widest text-xs">
@@ -2625,49 +2708,83 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                       <th className="py-4 px-6">Item Catalog Desc.</th>
                       <th className="py-4 text-center">Qty</th>
                       <th className="py-4 text-right">Unit Rate</th>
+                      <th className="py-4 text-center">Discount</th>
                       <th className="py-4 text-right px-6">Total Cost</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {viewOrder.items.map((item, idx) => (
-                    <tr key={idx} className="hover:bg-teal-50/20 transition-all">
-                      <td className="py-4 px-6 font-black text-slate-800">{item.productName}</td>
-                      <td className="py-4 text-center font-black text-slate-500">{item.qty}</td>
-                      <td className="py-4 text-right font-bold text-slate-500">{symbol} {convert(item.costPrice).toLocaleString()}</td>
-                      <td className="py-4 text-right px-6 font-black text-[#DAA520]">{symbol} {convert(item.total).toLocaleString()}</td>
-                    </tr>
-                  ))}
+                  {viewOrder.items.map((item, idx) => {
+                    const itemData = calculateLineItem(item.qty, item.costPrice, item.discount || 0, item.discountType);
+                    const hasDiscount = itemData.discount > 0 && itemData.lineDiscountTotal > 0;
+                    return (
+                      <tr key={idx} className="hover:bg-teal-50/20 transition-all">
+                        <td className="py-4 px-6 font-black text-slate-800">{item.productName}</td>
+                        <td className="py-4 text-center font-black text-slate-500">{item.qty}</td>
+                        <td className="py-4 text-right font-bold text-slate-500">{symbol} {convert(item.costPrice).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                        <td className="py-4 text-center font-semibold text-xs">
+                          {hasDiscount ? (
+                            <span className="text-red-500 font-bold">
+                              {item.discount} {item.discountType === 'percent' ? '%' : 'Rs.'} ({symbol} {convert(itemData.lineDiscountTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+                            </span>
+                          ) : (
+                            <span className="text-slate-300 font-bold">—</span>
+                          )}
+                        </td>
+                        <td className="py-4 text-right px-6 font-black text-[#DAA520] font-mono">{symbol} {convert(item.total !== undefined ? item.total : itemData.netLineTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
-            {/* Summary breakdown if discounts or debit notes exist */}
-            {((Number(viewOrder.discount_amount || viewOrder.discountAmount || 0) > 0) || (Number(viewOrder.debit_note_applied || viewOrder.debitNoteApplied || 0) > 0)) && (
-              <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-2 text-xs">
-                <div className="flex justify-between font-bold text-slate-600">
-                  <span>Gross Subtotal:</span>
-                  <span className="font-black text-slate-800">{symbol} {convert(viewOrder.subtotal || viewOrder.original_total || viewOrder.originalTotal || viewOrder.total).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                </div>
-                {Number(viewOrder.discount_amount || viewOrder.discountAmount || 0) > 0 && (
-                  <div className="flex justify-between font-bold text-emerald-600">
-                    <span>Supplier Discount ({viewOrder.discount_type === 'percentage' || viewOrder.discountType === 'percentage' ? `${viewOrder.discount_value || viewOrder.discountValue}%` : 'Fixed'}):</span>
-                    <span className="font-black">- {symbol} {convert(viewOrder.discount_amount || viewOrder.discountAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                  </div>
-                )}
-                {Number(viewOrder.debit_note_applied || viewOrder.debitNoteApplied || 0) > 0 && (
-                  <div className="flex justify-between font-bold text-indigo-600">
-                    <span>Debit Note Applied:</span>
-                    <span className="font-black">- {symbol} {convert(viewOrder.debit_note_applied || viewOrder.debitNoteApplied || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                  </div>
-                )}
-              </div>
-            )}
+            {/* Identical Summary Breakdown */}
+            {(() => {
+              const orderItems = viewOrder.items || [];
+              const computedGross = orderItems.reduce((sum, it) => {
+                const q = Number(it.qty || (it as any).quantity || 0);
+                const c = Number(it.costPrice || (it as any).cost_price || 0);
+                return sum + (q * c);
+              }, 0);
+              const computedLineDiscounts = orderItems.reduce((sum, it) => {
+                const itemData = calculateLineItem(it.qty, it.costPrice, it.discount || 0, it.discountType);
+                return sum + itemData.lineDiscountTotal;
+              }, 0);
 
-            <div className="bg-[#464646] text-white p-8 rounded-[32px] shadow-2xl relative overflow-hidden flex justify-between items-center">
-              <div className="absolute top-0 right-0 w-48 h-48 bg-[#DAA520]/20 rounded-full -mr-16 -mt-16 blur-3xl"></div>
-              <span className="font-black text-gray-300 uppercase tracking-widest text-xs relative z-10">Total Purchase Commitment</span>
-              <span className="text-4xl font-black text-[#DAA520] drop-shadow-lg relative z-10">{symbol} {convert(viewOrder.total).toLocaleString()}</span>
-            </div>
+              const grossVal = Number(viewOrder.subtotal || viewOrder.original_total || viewOrder.originalTotal || computedGross);
+              const totalDiscVal = Number(viewOrder.discount_amount || viewOrder.discountAmount || computedLineDiscounts);
+              const debitVal = Number(viewOrder.debit_note_applied || viewOrder.debitNoteApplied || 0);
+              const netTotalVal = Number(viewOrder.net_total !== undefined && viewOrder.net_total !== null ? viewOrder.net_total : viewOrder.total);
+
+              return (
+                <div className="space-y-4">
+                  <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-2 text-xs">
+                    <div className="flex justify-between font-bold text-slate-600 uppercase tracking-wider">
+                      <span>Gross Subtotal:</span>
+                      <span className="font-black text-slate-800 font-mono">{symbol} {convert(grossVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                    {totalDiscVal > 0 && (
+                      <div className="flex justify-between font-bold text-red-500 uppercase tracking-wider">
+                        <span>Supplier Discount:</span>
+                        <span className="font-black font-mono">- {symbol} {convert(totalDiscVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+                    )}
+                    {debitVal > 0 && (
+                      <div className="flex justify-between font-bold text-indigo-600 uppercase tracking-wider">
+                        <span>Debit Note Applied:</span>
+                        <span className="font-black font-mono">- {symbol} {convert(debitVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="bg-[#464646] text-white p-6 rounded-[28px] shadow-2xl relative overflow-hidden flex justify-between items-center">
+                    <div className="absolute top-0 right-0 w-48 h-48 bg-[#DAA520]/20 rounded-full -mr-16 -mt-16 blur-3xl"></div>
+                    <span className="font-black text-gray-300 uppercase tracking-widest text-xs relative z-10">Total Purchase Commitment</span>
+                    <span className="text-3xl font-black text-[#DAA520] drop-shadow-lg relative z-10 font-mono">{symbol} {convert(netTotalVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  </div>
+                </div>
+              );
+            })()}
             
             <div className="flex gap-3">
               <button onClick={() => downloadPO_PDF(viewOrder)} className="flex-1 py-4 bg-[#464646] text-white rounded-xl font-black uppercase tracking-widest text-xs flex items-center justify-center gap-3 hover:bg-[#333333] shadow-xl transition-all shadow-[#464646]/20"><DownloadIcon className="w-5 h-5" /> Export PDF</button>

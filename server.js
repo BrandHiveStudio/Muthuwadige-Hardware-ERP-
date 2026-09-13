@@ -6247,20 +6247,24 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
   const created_at = new Date().toISOString();
   const items = Array.isArray(po.items) ? po.items : (typeof po.items === 'string' ? JSON.parse(po.items || '[]') : []);
 
-  // Compute gross subtotal taking into account item-level discounts
-  let calculatedSubtotal = 0;
+  // Compute gross subtotal and line discounts across items
+  let calculatedGrossSubtotal = 0;
+  let calculatedLineDiscounts = 0;
   for (const item of items) {
     const qty = Math.max(0, Number(item.qty || item.quantity || 0));
     const cost = Math.max(0, Number(item.costPrice || item.cost_price || item.unitCostPrice || 0));
     const isFixed = (item.discountType || item.discount_type || '').toLowerCase() === 'fixed';
     const disc = Math.max(0, Number(item.discount || item.line_discount || 0));
-    const unitAfterLineDisc = isFixed ? Math.max(0, cost - disc) : cost * (1 - Math.min(100, disc) / 100);
-    const lineTotal = Math.round(unitAfterLineDisc * qty * 100) / 100;
-    calculatedSubtotal += lineTotal;
+    const gross = Math.round(qty * cost * 100) / 100;
+    const unitDiscountAmount = isFixed ? disc : (cost * Math.min(100, disc) / 100);
+    const lineDiscount = Math.min(gross, Math.round(unitDiscountAmount * qty * 100) / 100);
+    calculatedGrossSubtotal += gross;
+    calculatedLineDiscounts += lineDiscount;
   }
-  calculatedSubtotal = Math.round(calculatedSubtotal * 100) / 100;
+  calculatedGrossSubtotal = Math.round(calculatedGrossSubtotal * 100) / 100;
+  calculatedLineDiscounts = Math.round(calculatedLineDiscounts * 100) / 100;
 
-  const subtotal = Number(po.subtotal !== undefined && po.subtotal !== null ? po.subtotal : calculatedSubtotal);
+  const subtotal = Number(po.subtotal !== undefined && po.subtotal !== null ? po.subtotal : calculatedGrossSubtotal);
   const discountType = (po.discount_type || po.discountType || 'fixed').toString().toLowerCase() === 'percentage' ? 'percentage' : 'fixed';
   const discountValue = Math.max(0, Number(po.discount_value !== undefined && po.discount_value !== null ? po.discount_value : (po.discountValue !== undefined && po.discountValue !== null ? po.discountValue : 0)));
 
@@ -6271,9 +6275,11 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
     discountAmount = Math.round(Number(po.discountAmount) * 100) / 100;
   } else {
     if (discountType === 'percentage') {
-      discountAmount = Math.round(subtotal * (discountValue / 100) * 100) / 100;
+      const netAfterLines = Math.max(0, subtotal - calculatedLineDiscounts);
+      const orderDisc = Math.round(netAfterLines * (discountValue / 100) * 100) / 100;
+      discountAmount = Math.round((calculatedLineDiscounts + orderDisc) * 100) / 100;
     } else {
-      discountAmount = Math.min(subtotal, Math.round(discountValue * 100) / 100);
+      discountAmount = Math.min(subtotal, Math.round((calculatedLineDiscounts + discountValue) * 100) / 100);
     }
   }
 
@@ -6321,7 +6327,18 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
 
     // If created directly in received status:
     if (po.status === 'received') {
-      const poDiscountRatio = subtotal > 0 ? (discountAmount / subtotal) : 0;
+      const totalLineDisc = items.reduce((sum, it) => {
+        const q = Math.max(0, Number(it.qty || it.quantity || 0));
+        const c = Math.max(0, Number(it.costPrice || it.cost_price || it.unitCostPrice || 0));
+        const isF = (it.discountType || it.discount_type || '').toLowerCase() === 'fixed';
+        const d = Math.max(0, Number(it.discount || it.line_discount || 0));
+        const uDisc = isF ? d : (c * Math.min(100, d) / 100);
+        return sum + Math.min(q * c, Math.round(uDisc * q * 100) / 100);
+      }, 0);
+      const netAfterLines = Math.max(0, subtotal - totalLineDisc);
+      const orderDiscountAmount = Math.max(0, discountAmount - totalLineDisc);
+      const poOrderDiscountRatio = netAfterLines > 0 ? (orderDiscountAmount / netAfterLines) : 0;
+
       for (const item of items) {
         const prodId = item.productId || item.product_id || item.id;
         const qty = Math.max(0, Number(item.qty || item.quantity || 0));
@@ -6329,7 +6346,7 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
         const isFixed = (item.discountType || item.discount_type || '').toLowerCase() === 'fixed';
         const disc = Math.max(0, Number(item.discount || item.line_discount || 0));
         const unitAfterLineDisc = isFixed ? Math.max(0, itemGrossCost - disc) : itemGrossCost * (1 - Math.min(100, disc) / 100);
-        const netUnitCost = Math.round(unitAfterLineDisc * (1 - poDiscountRatio) * 100) / 100;
+        const netUnitCost = Math.round(unitAfterLineDisc * (1 - poOrderDiscountRatio) * 100) / 100;
 
         if (prodId && qty > 0) {
           const product = await db.get('SELECT * FROM products WHERE id = ?', [prodId]);
@@ -6389,7 +6406,17 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
 
       const poSubtotal = Number(po.subtotal !== null && po.subtotal !== undefined ? po.subtotal : (po.original_total || po.total || 0));
       const poDiscountAmount = Number(po.discount_amount || 0);
-      const poDiscountRatio = poSubtotal > 0 ? (poDiscountAmount / poSubtotal) : 0;
+      const totalLineDisc = items.reduce((sum, it) => {
+        const q = Math.max(0, Number(it.qty || it.quantity || 0));
+        const c = Math.max(0, Number(it.costPrice || it.cost_price || it.unitCostPrice || 0));
+        const isF = (it.discountType || it.discount_type || '').toLowerCase() === 'fixed';
+        const d = Math.max(0, Number(it.discount || it.line_discount || 0));
+        const uDisc = isF ? d : (c * Math.min(100, d) / 100);
+        return sum + Math.min(q * c, Math.round(uDisc * q * 100) / 100);
+      }, 0);
+      const netAfterLines = Math.max(0, poSubtotal - totalLineDisc);
+      const orderDiscountAmount = Math.max(0, poDiscountAmount - totalLineDisc);
+      const poOrderDiscountRatio = netAfterLines > 0 ? (orderDiscountAmount / netAfterLines) : 0;
       const poNetTotal = Number(po.net_total !== null && po.net_total !== undefined ? po.net_total : po.total);
 
       let updatedItems = [];
@@ -6400,8 +6427,8 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
         const isFixed = (item.discountType || item.discount_type || '').toLowerCase() === 'fixed';
         const disc = Math.max(0, Number(item.discount || item.line_discount || 0));
         const unitAfterLineDisc = isFixed ? Math.max(0, itemGrossCost - disc) : itemGrossCost * (1 - Math.min(100, disc) / 100);
-        // Net purchase price accounting for line discount and overall PO discount
-        const netUnitCost = Math.round(unitAfterLineDisc * (1 - poDiscountRatio) * 100) / 100;
+        // Net purchase price accounting for line discount and overall order-level discount
+        const netUnitCost = Math.round(unitAfterLineDisc * (1 - poOrderDiscountRatio) * 100) / 100;
 
         if (prodId && qty > 0) {
           const product = await db.get('SELECT * FROM products WHERE id = ?', [prodId]);
@@ -7431,7 +7458,6 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
     const poGrandTotal = Number(po.net_total !== null && po.net_total !== undefined ? po.net_total : (po.total || 0));
     const poSubtotal = Number(po.subtotal !== null && po.subtotal !== undefined ? po.subtotal : (po.original_total || po.total || 0));
     const poDiscountAmount = Number(po.discount_amount || 0);
-    const poDiscountRatio = poSubtotal > 0 ? (poDiscountAmount / poSubtotal) : 0;
     const supplierName = po.supplier_name || 'Vendor';
 
     // 2. Parse Items and Increment Product Stocks
@@ -7444,6 +7470,18 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
       }
     }
 
+    const totalLineDisc = (Array.isArray(poItems) ? poItems : []).reduce((sum, it) => {
+      const q = Math.max(0, Number(it.qty || it.quantity || 0));
+      const c = Math.max(0, Number(it.costPrice || it.cost_price || it.unitCostPrice || 0));
+      const isF = (it.discountType || it.discount_type || '').toLowerCase() === 'fixed';
+      const d = Math.max(0, Number(it.discount || it.line_discount || 0));
+      const uDisc = isF ? d : (c * Math.min(100, d) / 100);
+      return sum + Math.min(q * c, Math.round(uDisc * q * 100) / 100);
+    }, 0);
+    const netAfterLines = Math.max(0, poSubtotal - totalLineDisc);
+    const orderDiscountAmount = Math.max(0, poDiscountAmount - totalLineDisc);
+    const poOrderDiscountRatio = netAfterLines > 0 ? (orderDiscountAmount / netAfterLines) : 0;
+
     let updatedPoItems = [];
     if (Array.isArray(poItems)) {
       for (const item of poItems) {
@@ -7453,7 +7491,7 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
         const isFixed = (item.discountType || item.discount_type || '').toLowerCase() === 'fixed';
         const disc = Math.max(0, Number(item.discount || item.line_discount || 0));
         const unitAfterLineDisc = isFixed ? Math.max(0, itemCost - disc) : itemCost * (1 - Math.min(100, disc) / 100);
-        const netUnitCost = Math.round(unitAfterLineDisc * (1 - poDiscountRatio) * 100) / 100;
+        const netUnitCost = Math.round(unitAfterLineDisc * (1 - poOrderDiscountRatio) * 100) / 100;
 
         if (prodId && qty > 0) {
           const product = await db.get('SELECT * FROM products WHERE id = ?', [prodId]);
