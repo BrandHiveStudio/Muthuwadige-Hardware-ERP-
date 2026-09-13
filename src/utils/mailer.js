@@ -10,8 +10,8 @@ import nodemailer from 'nodemailer';
 export const createMailTransporter = (settings = {}) => {
   const host = settings.smtp_host || process.env.SMTP_HOST || 'smtp.gmail.com';
   const port = Number(settings.smtp_port || process.env.SMTP_PORT || 465);
-  const user = settings.smtp_user || process.env.SMTP_USER || settings.shop_email || settings.email || process.env.GMAIL_USER;
-  const pass = settings.smtp_pass || process.env.SMTP_PASS || process.env.GMAIL_PASS;
+  const user = settings.smtp_user || settings.gmail_user || process.env.SMTP_USER || settings.shop_email || settings.email || process.env.GMAIL_USER;
+  const pass = settings.smtp_pass || settings.gmail_pass || process.env.SMTP_PASS || process.env.GMAIL_PASS;
 
   if (!user || !pass) {
     console.error('[MAILER ERROR] Missing SMTP credentials (user or app password).');
@@ -119,21 +119,25 @@ export const sendNotificationEmail = async (subject, text, settings = {}, target
  *
  * @param {Object} params Mail parameters including toEmail, subject, text, html, fileName, filePath, settings
  */
-export const sendBackupEmail = async ({ toEmail, subject, text, html, fileName, filePath, settings = {} }) => {
+export const sendBackupEmail = async ({ toEmail, subject, text, html, fileName, filePath, buffer, content, settings = {} }) => {
   try {
-    const destination = toEmail || settings.backup_email || settings.email || process.env.GMAIL_USER;
+    const destination = toEmail || settings.smtp_destination || settings.backup_email || settings.email || process.env.GMAIL_USER;
     if (!destination) {
       console.error('[Backup Email] No target email destination specified.');
       return { success: false, error: 'No target email destination' };
     }
 
     const transporter = createMailTransporter(settings);
-    const user = settings.smtp_user || process.env.SMTP_USER || settings.email || process.env.GMAIL_USER;
+    const user = settings.smtp_user || settings.gmail_user || process.env.SMTP_USER || settings.email || process.env.GMAIL_USER;
 
     if (!transporter) {
       console.error('[Backup Email] Missing SMTP credentials.');
       return { success: false, error: 'Missing SMTP credentials' };
     }
+
+    const attachment = (buffer || content)
+      ? { filename: fileName, content: buffer || content }
+      : { filename: fileName, path: filePath };
 
     const info = await transporter.sendMail({
       from: `"Muthuwadige Hardware ERP" <${user}>`,
@@ -141,7 +145,7 @@ export const sendBackupEmail = async ({ toEmail, subject, text, html, fileName, 
       subject,
       text,
       html,
-      attachments: [{ filename: fileName, path: filePath }]
+      attachments: [attachment]
     });
 
     console.log(`[Backup Email] Email sent successfully to ${destination} (Message ID: ${info.messageId})`);

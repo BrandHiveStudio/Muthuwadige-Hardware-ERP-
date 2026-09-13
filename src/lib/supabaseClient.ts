@@ -40,7 +40,7 @@ const fetchTable = async (table: string, type?: string, filter?: { col: string; 
       if (res.ok) data = await res.json();
     } else if (table === 'profiles') {
       data = await api.profiles.getAll();
-    } else if (table === 'system_settings') {
+    } else if (table === 'system_settings' || table === 'settings') {
       data = await api.settings.get();
     } else if (table === 'sales_returns') {
       data = await api.sales.returns.getAll();
@@ -106,6 +106,8 @@ const insertTable = async (table: string, payload: any) => {
       result = await api.cheques.create(payload);
     } else if (table === 'purchase_returns' || table === 'purchase-returns') {
       result = await api.purchaseReturns.create(payload);
+    } else if (table === 'system_settings' || table === 'settings') {
+      result = await api.settings.save(Array.isArray(payload) ? payload[0] : payload);
     } else {
       const res = await fetchWithTimeout(`${API_URL}/${table}`, {
         method: 'POST',
@@ -159,7 +161,7 @@ const updateTable = async (table: string, payload: any, val: any) => {
       result = await api.employees.save(payload, val);
     } else if (table === 'profiles') {
       result = await api.profiles.save(payload, val);
-    } else if (table === 'system_settings') {
+    } else if (table === 'system_settings' || table === 'settings') {
       result = await api.settings.save(payload);
     } else {
       const res = await fetchWithTimeout(`${API_URL}/${table}/${val}`, {
@@ -328,7 +330,7 @@ export const supabase: any = {
       upsert: (records: any[]) => {
         return {
           then: (onfulfilled: any) => {
-            if (table === 'system_settings') {
+            if (table === 'system_settings' || table === 'settings') {
               return api.settings.save(records[0]).then(onfulfilled);
             }
 

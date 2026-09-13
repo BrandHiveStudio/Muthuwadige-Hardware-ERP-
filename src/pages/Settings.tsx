@@ -429,27 +429,27 @@ export function Settings({ currentUser }: SettingsProps = {}) {
         } catch (_) {}
       }
 
+      const smtpPayload = {
+        gmail_user: smtpUser,
+        gmail_pass: smtpPass,
+        smtp_user: smtpUser,
+        smtp_pass: smtpPass,
+        smtp_destination: backupEmail || smtpUser,
+        auto_backup_enabled: backupEnabled ? 1 : 0,
+        backup_interval_hours: Number(backupIntervalHours) || 6
+      };
+
       let res = await fetch(`${API_URL}/settings/smtp`, {
         method: 'POST',
         headers: authHeaders,
-        body: JSON.stringify({
-          gmail_user: smtpUser,
-          gmail_pass: smtpPass,
-          smtp_user: smtpUser,
-          smtp_pass: smtpPass
-        })
+        body: JSON.stringify(smtpPayload)
       });
 
       if (res.status === 404) {
         res = await fetch(`${API_URL}/settings/smtp-config`, {
           method: 'POST',
           headers: authHeaders,
-          body: JSON.stringify({
-            gmail_user: smtpUser,
-            gmail_pass: smtpPass,
-            smtp_user: smtpUser,
-            smtp_pass: smtpPass
-          })
+          body: JSON.stringify(smtpPayload)
         });
       }
 

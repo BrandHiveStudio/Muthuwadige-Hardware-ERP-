@@ -6,6 +6,7 @@ import cron from 'node-cron';
 import nodemailer from 'nodemailer';
 import XLSX from 'xlsx-js-style';
 import { createMailTransporter, sendResetEmail as mailerSendResetEmail, sendNotificationEmail as mailerSendNotificationEmail, sendBackupEmail as mailerSendBackupEmail, sendFactoryResetOtpEmail as mailerSendFactoryResetOtpEmail } from './src/utils/mailer.js';
+import { executeBackupTask } from './backup-worker.js';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import { exec, execSync, spawn } from 'child_process';
@@ -417,6 +418,8 @@ const DEFAULT_RUNTIME_SETTINGS = {
   smtp_pass: '',
   smtp_host: 'smtp.gmail.com',
   smtp_port: '465',
+  smtp_destination: '',
+  auto_backup_enabled: 0,
   gmail_user: '',
   gmail_pass: '',
   updated_at: new Date().toISOString()
@@ -466,6 +469,10 @@ function normalizeRuntimeSettings(payload = {}) {
     intervalHours = 6;
   }
 
+  const rawPass = payload.smtp_pass || payload.gmail_pass || '';
+  const cleanPass = (rawPass && rawPass !== '••••••••') ? rawPass : '';
+  const isAutoBackup = payload.auto_backup_enabled === true || payload.auto_backup_enabled === 1 || payload.backup_enabled === true || payload.backup_enabled === 1;
+
   const normalized = {
     ...DEFAULT_RUNTIME_SETTINGS,
     ...payload,
@@ -475,13 +482,10 @@ function normalizeRuntimeSettings(payload = {}) {
     phone: payload.phone || '',
     email: payload.email || '',
     currency: payload.currency || DEFAULT_RUNTIME_SETTINGS.currency,
-    // TAX REMOVED: tax is not a supported feature. The Settings UI no longer sends this field at
-    // all, but this function is also reachable via a direct PUT /api/settings call - always store
-    // 0 regardless of what's in the payload, closing the same class of gap fixed on the
-    // Excel-restore import path above.
     tax_rate: 0,
-    backup_email: payload.backup_email || payload.backupEmail || '',
-    backup_enabled: payload.backup_enabled === true || payload.backup_enabled === 1 || payload.backupEnabled === true ? 1 : 0,
+    backup_email: payload.backup_email || payload.backupEmail || payload.smtp_destination || '',
+    backup_enabled: isAutoBackup ? 1 : 0,
+    auto_backup_enabled: isAutoBackup ? 1 : 0,
     backup_interval_hours: intervalHours,
     logo_path: payload.logo_path || payload.logoPath || '',
     printer_settings: safeParseJson(payload.printer_settings || payload.printerSettings),
@@ -492,11 +496,12 @@ function normalizeRuntimeSettings(payload = {}) {
     last_counter_sync_timestamp: payload.last_counter_sync_timestamp ?? payload.lastCounterSyncTimestamp ?? DEFAULT_RUNTIME_SETTINGS.last_counter_sync_timestamp,
     counter_sync_status: payload.counter_sync_status || payload.counterSyncStatus || DEFAULT_RUNTIME_SETTINGS.counter_sync_status,
     smtp_user: payload.smtp_user || payload.gmail_user || process.env.SMTP_USER || process.env.GMAIL_USER || '',
-    smtp_pass: payload.smtp_pass || payload.gmail_pass || process.env.SMTP_PASS || process.env.GMAIL_PASS || '',
+    smtp_pass: cleanPass || process.env.SMTP_PASS || process.env.GMAIL_PASS || '',
     smtp_host: payload.smtp_host || process.env.SMTP_HOST || 'smtp.gmail.com',
     smtp_port: String(payload.smtp_port || process.env.SMTP_PORT || '465'),
+    smtp_destination: payload.smtp_destination || payload.backup_email || payload.email || process.env.SMTP_DESTINATION || '',
     gmail_user: payload.gmail_user || payload.smtp_user || process.env.GMAIL_USER || process.env.SMTP_USER || '',
-    gmail_pass: payload.gmail_pass || payload.smtp_pass || process.env.GMAIL_PASS || process.env.SMTP_PASS || '',
+    gmail_pass: cleanPass || process.env.GMAIL_PASS || process.env.SMTP_PASS || '',
     updated_at: payload.updated_at || new Date().toISOString()
   };
 
@@ -552,6 +557,15 @@ async function createSession(profile) {
     } else {
       throw err;
     }
+  }
+  const tursoClient = getTursoClient();
+  if (tursoClient) {
+    try {
+      await tursoClient.execute({
+        sql: 'INSERT OR REPLACE INTO sessions (token, user_id, email, role, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
+        args: [token, profile.id, profile.email, profile.role, now.toISOString(), expiresAt]
+      });
+    } catch (_) { }
   }
   return { token, expiresAt };
 }
@@ -743,13 +757,51 @@ async function requireVoidPasskey(req, res, next) {
 }
 
 async function getRuntimeSettingsSnapshot() {
-  let settings = await db.get('SELECT * FROM system_settings WHERE id = ?', ['global']);
+  let settings = null;
+  try {
+    settings = await db.get('SELECT * FROM system_settings WHERE id = ?', ['global']);
+  } catch (_) { }
+
+  // If local db is missing or has empty SMTP credentials, check Turso Cloud if available
+  if (!settings || (!settings.smtp_pass && !settings.smtp_user)) {
+    const tursoClient = getTursoClient();
+    if (tursoClient) {
+      try {
+        const rs = await tursoClient.execute({
+          sql: 'SELECT * FROM system_settings WHERE id = ?',
+          args: ['global']
+        });
+        if (rs?.rows?.length > 0) {
+          const cloudRow = rs.rows[0];
+          if (!settings) {
+            settings = cloudRow;
+          } else {
+            settings = {
+              ...settings,
+              smtp_user: settings.smtp_user || cloudRow.smtp_user,
+              smtp_pass: settings.smtp_pass || cloudRow.smtp_pass,
+              smtp_host: settings.smtp_host || cloudRow.smtp_host,
+              smtp_port: settings.smtp_port || cloudRow.smtp_port,
+              smtp_destination: settings.smtp_destination || cloudRow.smtp_destination,
+              gmail_user: settings.gmail_user || cloudRow.gmail_user,
+              gmail_pass: settings.gmail_pass || cloudRow.gmail_pass,
+              auto_backup_enabled: settings.auto_backup_enabled ?? cloudRow.auto_backup_enabled,
+              backup_email: settings.backup_email || cloudRow.backup_email
+            };
+          }
+        }
+      } catch (_) { }
+    }
+  }
+
   if (!settings) {
     const initial = { ...DEFAULT_RUNTIME_SETTINGS, id: 'global' };
-    await db.run(
-      'INSERT INTO system_settings (id, shop_name, address, phone, email, currency, tax_rate, backup_email, backup_enabled, backup_interval_hours, logo_path, printer_settings, branch_settings, next_invoice_number, return_passkey, void_passkey, updated_at, last_counter_sync_timestamp, counter_sync_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [initial.id, initial.shop_name, initial.address, initial.phone, initial.email, initial.currency, initial.tax_rate, initial.backup_email, initial.backup_enabled, initial.backup_interval_hours, '', '', '', initial.next_invoice_number, initial.return_passkey, initial.void_passkey, initial.updated_at, null, 'IDLE']
-    );
+    try {
+      await db.run(
+        'INSERT INTO system_settings (id, shop_name, address, phone, email, currency, tax_rate, backup_email, backup_enabled, backup_interval_hours, logo_path, printer_settings, branch_settings, next_invoice_number, return_passkey, void_passkey, updated_at, last_counter_sync_timestamp, counter_sync_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [initial.id, initial.shop_name, initial.address, initial.phone, initial.email, initial.currency, initial.tax_rate, initial.backup_email, initial.backup_enabled, initial.backup_interval_hours, '', '', '', initial.next_invoice_number, initial.return_passkey, initial.void_passkey, initial.updated_at, null, 'IDLE']
+      );
+    } catch (_) { }
     settings = initial;
   }
   return normalizeRuntimeSettings(settings);
@@ -757,9 +809,40 @@ async function getRuntimeSettingsSnapshot() {
 
 async function setRuntimeSettings(payload = {}) {
   const current = await getRuntimeSettingsSnapshot();
-  const updated = normalizeRuntimeSettings({ ...current, ...payload });
+
+  // Preserve existing password if caller sent masked placeholder or omitted it
+  let passToSave = current.smtp_pass || current.gmail_pass || '';
+  if (payload.smtp_pass && payload.smtp_pass !== '••••••••') {
+    passToSave = payload.smtp_pass;
+  } else if (payload.gmail_pass && payload.gmail_pass !== '••••••••') {
+    passToSave = payload.gmail_pass;
+  }
+
+  const merged = {
+    ...current,
+    ...payload,
+    smtp_pass: passToSave,
+    gmail_pass: passToSave
+  };
+
+  const updated = normalizeRuntimeSettings(merged);
+
+  // Ensure columns exist on local SQLite if running locally
+  try {
+    await db.exec(`
+      ALTER TABLE system_settings ADD COLUMN smtp_user TEXT;
+      ALTER TABLE system_settings ADD COLUMN smtp_pass TEXT;
+      ALTER TABLE system_settings ADD COLUMN smtp_host TEXT;
+      ALTER TABLE system_settings ADD COLUMN smtp_port TEXT;
+      ALTER TABLE system_settings ADD COLUMN smtp_destination TEXT;
+      ALTER TABLE system_settings ADD COLUMN gmail_user TEXT;
+      ALTER TABLE system_settings ADD COLUMN gmail_pass TEXT;
+      ALTER TABLE system_settings ADD COLUMN auto_backup_enabled INTEGER DEFAULT 0;
+    `);
+  } catch (_) { }
+
   await db.run(
-    `INSERT OR REPLACE INTO system_settings (
+    `INSERT INTO system_settings (
       id,
       shop_name, 
       address, 
@@ -778,8 +861,43 @@ async function setRuntimeSettings(payload = {}) {
       void_passkey,
       last_counter_sync_timestamp,
       counter_sync_status,
+      smtp_user,
+      smtp_pass,
+      smtp_host,
+      smtp_port,
+      smtp_destination,
+      gmail_user,
+      gmail_pass,
+      auto_backup_enabled,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      shop_name = excluded.shop_name,
+      address = excluded.address,
+      phone = excluded.phone,
+      email = excluded.email,
+      currency = excluded.currency,
+      tax_rate = excluded.tax_rate,
+      backup_email = excluded.backup_email,
+      backup_enabled = excluded.backup_enabled,
+      backup_interval_hours = excluded.backup_interval_hours,
+      logo_path = excluded.logo_path,
+      printer_settings = excluded.printer_settings,
+      branch_settings = excluded.branch_settings,
+      next_invoice_number = excluded.next_invoice_number,
+      return_passkey = excluded.return_passkey,
+      void_passkey = excluded.void_passkey,
+      last_counter_sync_timestamp = excluded.last_counter_sync_timestamp,
+      counter_sync_status = excluded.counter_sync_status,
+      smtp_user = excluded.smtp_user,
+      smtp_pass = excluded.smtp_pass,
+      smtp_host = excluded.smtp_host,
+      smtp_port = excluded.smtp_port,
+      smtp_destination = excluded.smtp_destination,
+      gmail_user = excluded.gmail_user,
+      gmail_pass = excluded.gmail_pass,
+      auto_backup_enabled = excluded.auto_backup_enabled,
+      updated_at = excluded.updated_at`,
     [
       'global',
       updated.shop_name,
@@ -799,9 +917,109 @@ async function setRuntimeSettings(payload = {}) {
       updated.void_passkey,
       updated.last_counter_sync_timestamp || null,
       updated.counter_sync_status || 'IDLE',
+      updated.smtp_user,
+      updated.smtp_pass,
+      updated.smtp_host,
+      updated.smtp_port,
+      updated.smtp_destination,
+      updated.gmail_user,
+      updated.gmail_pass,
+      updated.auto_backup_enabled,
       updated.updated_at
     ]
   );
+
+  // Propagate to Turso Cloud if running in dual-engine local mode
+  const tursoClient = getTursoClient();
+  if (tursoClient) {
+    try {
+      await tursoClient.execute({
+        sql: `INSERT INTO system_settings (
+          id,
+          shop_name, 
+          address, 
+          phone, 
+          email, 
+          currency, 
+          tax_rate, 
+          backup_email, 
+          backup_enabled, 
+          backup_interval_hours,
+          logo_path, 
+          printer_settings, 
+          branch_settings, 
+          next_invoice_number,
+          return_passkey,
+          void_passkey,
+          smtp_user,
+          smtp_pass,
+          smtp_host,
+          smtp_port,
+          smtp_destination,
+          gmail_user,
+          gmail_pass,
+          auto_backup_enabled,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          shop_name = excluded.shop_name,
+          address = excluded.address,
+          phone = excluded.phone,
+          email = excluded.email,
+          currency = excluded.currency,
+          tax_rate = excluded.tax_rate,
+          backup_email = excluded.backup_email,
+          backup_enabled = excluded.backup_enabled,
+          backup_interval_hours = excluded.backup_interval_hours,
+          logo_path = excluded.logo_path,
+          printer_settings = excluded.printer_settings,
+          branch_settings = excluded.branch_settings,
+          next_invoice_number = excluded.next_invoice_number,
+          return_passkey = excluded.return_passkey,
+          void_passkey = excluded.void_passkey,
+          smtp_user = excluded.smtp_user,
+          smtp_pass = excluded.smtp_pass,
+          smtp_host = excluded.smtp_host,
+          smtp_port = excluded.smtp_port,
+          smtp_destination = excluded.smtp_destination,
+          gmail_user = excluded.gmail_user,
+          gmail_pass = excluded.gmail_pass,
+          auto_backup_enabled = excluded.auto_backup_enabled,
+          updated_at = excluded.updated_at`,
+        args: [
+          'global',
+          updated.shop_name,
+          updated.address,
+          updated.phone,
+          updated.email,
+          updated.currency,
+          updated.tax_rate,
+          updated.backup_email,
+          updated.backup_enabled,
+          updated.backup_interval_hours,
+          updated.logo_path || '',
+          typeof updated.printer_settings === 'object' ? JSON.stringify(updated.printer_settings) : updated.printer_settings || '',
+          typeof updated.branch_settings === 'object' ? JSON.stringify(updated.branch_settings) : updated.branch_settings || '',
+          updated.next_invoice_number,
+          updated.return_passkey,
+          updated.void_passkey,
+          updated.smtp_user,
+          updated.smtp_pass,
+          updated.smtp_host,
+          updated.smtp_port,
+          updated.smtp_destination,
+          updated.gmail_user,
+          updated.gmail_pass,
+          updated.auto_backup_enabled,
+          updated.updated_at
+        ]
+      });
+      console.log('✅ Settings synced to Turso Cloud successfully');
+    } catch (tursoErr) {
+      console.warn('[Settings] Failed to sync settings to Turso Cloud:', tursoErr.message);
+    }
+  }
+
   return updated;
 }
 
@@ -2092,6 +2310,26 @@ Muthuwadige Hardware ERP System`;
 }
 
 const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDate = null) => {
+  const isServerless = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || (typeof isTurso === 'function' && isTurso());
+  if (isServerless) {
+    console.log(`\n📦 [Serverless Backup] Executing in-memory backup task directly (Main PID: ${process.pid})...`);
+    try {
+      const result = await executeBackupTask({
+        targetEmail,
+        type,
+        fromDate,
+        toDate,
+        externalDb: db,
+        inMemory: true
+      });
+      console.log(`✅ [Serverless Backup] Completed. Status: ${result.message || (result.success ? 'Success' : 'Failed')}`);
+      return result;
+    } catch (err) {
+      console.error('❌ [Serverless Backup] Execution error:', err);
+      return { success: false, error: err.message, message: 'Serverless backup failed: ' + err.message };
+    }
+  }
+
   const workerPath = path.join(__dirname, 'backup-worker.js');
 
   if (!fs.existsSync(workerPath)) {
@@ -2317,9 +2555,9 @@ app.get(['/api/health', '/health'], async (req, res) => {
 // TRIGGER MANUAL BACKUP API
 app.post('/api/settings/trigger-backup', async (req, res) => {
   try {
-    const { fromDate, toDate } = req.body || {};
+    const { fromDate, toDate, targetEmail } = req.body || {};
     const settings = await getRuntimeSettingsSnapshot();
-    const email = settings.backup_email || 'sanojhardware@gmail.com';
+    const email = targetEmail || settings.smtp_destination || settings.backup_email || 'sanojhardware@gmail.com';
     const result = await performBackup(email, 'Manual', fromDate, toDate);
     if (result.success) {
       res.json(result);
@@ -2339,9 +2577,9 @@ app.post('/api/settings/trigger-backup', async (req, res) => {
 app.get('/api/trigger-backup', async (req, res) => {
   // Legacy GET support for backward compatibility with Settings.tsx fetch call
   try {
-    const { fromDate, toDate } = req.query || {};
+    const { fromDate, toDate, targetEmail } = req.query || {};
     const settings = await getRuntimeSettingsSnapshot();
-    const email = settings.backup_email || 'sanojhardware@gmail.com';
+    const email = targetEmail || settings.smtp_destination || settings.backup_email || 'sanojhardware@gmail.com';
     const result = await performBackup(email, 'Manual', fromDate, toDate);
     if (result.success) {
       res.json(result);
@@ -7540,10 +7778,19 @@ app.get('/api/settings', async (req, res) => {
         logo_path: settings?.logo_path || ''
       });
     }
+
+    const hasSmtpPass = Boolean((settings?.smtp_pass && settings.smtp_pass.trim().length > 0) || (settings?.gmail_pass && settings.gmail_pass.trim().length > 0) || process.env.SMTP_PASS || process.env.GMAIL_PASS);
+
     return res.status(200).json({
       ...settings,
-      backup_enabled: settings?.backup_enabled === 1 || settings?.backup_enabled === true,
-      backup_interval_hours: settings?.backup_interval_hours || 6
+      backup_enabled: settings?.backup_enabled === 1 || settings?.backup_enabled === true || settings?.auto_backup_enabled === 1 || settings?.auto_backup_enabled === true,
+      auto_backup_enabled: settings?.auto_backup_enabled === 1 || settings?.auto_backup_enabled === true || settings?.backup_enabled === 1 || settings?.backup_enabled === true,
+      backup_interval_hours: settings?.backup_interval_hours || 6,
+      smtp_user: settings?.smtp_user || settings?.gmail_user || process.env.SMTP_USER || process.env.GMAIL_USER || '',
+      smtp_destination: settings?.smtp_destination || settings?.backup_email || settings?.email || '',
+      has_smtp_pass: hasSmtpPass,
+      gmail_pass_configured: hasSmtpPass,
+      smtp_pass_configured: hasSmtpPass
     });
   } catch (err) {
     return res.status(200).json({
@@ -7556,17 +7803,20 @@ app.get('/api/settings', async (req, res) => {
   }
 });
 
-app.put('/api/settings', requireAdmin, async (req, res) => {
+const updateSettingsHandler = async (req, res) => {
   const s = req.body;
   try {
     const updated = await setRuntimeSettings(s);
     await scheduleAutomaticBackups();
-    await logAudit(s.user_email || 'system', 'SETTINGS_UPDATED', 'System settings were updated.');
+    await logAudit(s.user_email || req.authUser?.email || 'system', 'SETTINGS_UPDATED', 'System settings were updated.');
     res.json({ success: true, settings: updated });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
+};
+
+app.put('/api/settings', requireAdmin, updateSettingsHandler);
+app.post('/api/settings', requireAdmin, updateSettingsHandler);
 
 app.get('/api/settings/scheduler-status', async (req, res) => {
   try {
@@ -7836,12 +8086,21 @@ const getSmtpConfigHandler = async (req, res) => {
     const settings = await getRuntimeSettingsSnapshot();
     const user = settings.smtp_user || settings.gmail_user || process.env.SMTP_USER || process.env.GMAIL_USER || '';
     const pass = settings.smtp_pass || settings.gmail_pass || process.env.SMTP_PASS || process.env.GMAIL_PASS || '';
+    const destination = settings.smtp_destination || settings.backup_email || settings.email || user;
+    const isPassConfigured = Boolean(pass && pass.trim().length > 0);
     res.json({
-      configured: Boolean(user && pass && pass.trim().length > 0),
+      configured: Boolean(user && isPassConfigured),
       gmail_user: user,
       smtp_user: user,
-      gmail_pass_configured: Boolean(pass && pass.trim().length > 0),
-      smtp_pass_configured: Boolean(pass && pass.trim().length > 0)
+      smtp_destination: destination,
+      backup_email: destination,
+      auto_backup_enabled: settings.auto_backup_enabled === 1 || settings.backup_enabled === 1,
+      backup_interval_hours: settings.backup_interval_hours || 6,
+      smtp_host: settings.smtp_host || 'smtp.gmail.com',
+      smtp_port: settings.smtp_port || '465',
+      gmail_pass_configured: isPassConfigured,
+      smtp_pass_configured: isPassConfigured,
+      has_smtp_pass: isPassConfigured
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -7854,12 +8113,13 @@ app.get('/api/admin/smtp', getSmtpConfigHandler);
 // POST SMTP CONFIGURATION (SAVES TO APPDATA .ENV AND SYSTEM_SETTINGS TABLE)
 const saveSmtpConfigHandler = async (req, res) => {
   try {
-    const { gmail_user, gmail_pass, smtp_host, smtp_port, smtp_user, smtp_pass } = req.body || {};
+    const { gmail_user, gmail_pass, smtp_host, smtp_port, smtp_user, smtp_pass, smtp_destination, auto_backup_enabled, backup_interval_hours } = req.body || {};
     const updates = {};
     const effectiveUser = (smtp_user || gmail_user || '').trim();
     const effectivePass = (smtp_pass || gmail_pass || '').trim();
     const effectiveHost = (smtp_host || 'smtp.gmail.com').trim();
     const effectivePort = String(smtp_port || '465').trim();
+    const effectiveDest = (smtp_destination || '').trim();
 
     if (effectiveUser) {
       updates.GMAIL_USER = effectiveUser;
@@ -7871,6 +8131,10 @@ const saveSmtpConfigHandler = async (req, res) => {
     }
     if (effectiveHost) updates.SMTP_HOST = effectiveHost;
     if (effectivePort) updates.SMTP_PORT = effectivePort;
+    if (effectiveDest) {
+      updates.SMTP_DESTINATION = effectiveDest;
+      updates.BACKUP_EMAIL = effectiveDest;
+    }
 
     // 1. Update AppData .env configuration file if writable
     try {
@@ -7890,14 +8154,19 @@ const saveSmtpConfigHandler = async (req, res) => {
           ALTER TABLE system_settings ADD COLUMN smtp_pass TEXT;
           ALTER TABLE system_settings ADD COLUMN smtp_host TEXT;
           ALTER TABLE system_settings ADD COLUMN smtp_port TEXT;
+          ALTER TABLE system_settings ADD COLUMN smtp_destination TEXT;
           ALTER TABLE system_settings ADD COLUMN gmail_user TEXT;
           ALTER TABLE system_settings ADD COLUMN gmail_pass TEXT;
+          ALTER TABLE system_settings ADD COLUMN auto_backup_enabled INTEGER DEFAULT 0;
         `);
       } catch (_) { }
 
       const currentSettings = await getRuntimeSettingsSnapshot();
       const finalUser = effectiveUser || currentSettings.smtp_user || currentSettings.gmail_user || '';
       const finalPass = (effectivePass && effectivePass !== '••••••••') ? effectivePass : (currentSettings.smtp_pass || currentSettings.gmail_pass || '');
+      const finalDest = effectiveDest || currentSettings.smtp_destination || currentSettings.backup_email || finalUser;
+      const finalAutoBackup = auto_backup_enabled !== undefined ? (auto_backup_enabled ? 1 : 0) : currentSettings.auto_backup_enabled;
+      const finalInterval = backup_interval_hours ? Number(backup_interval_hours) : (currentSettings.backup_interval_hours || 6);
 
       await db.run(
         `UPDATE system_settings SET 
@@ -7907,9 +8176,14 @@ const saveSmtpConfigHandler = async (req, res) => {
           gmail_pass = ?, 
           smtp_host = ?, 
           smtp_port = ?, 
+          smtp_destination = ?,
+          backup_email = ?,
+          auto_backup_enabled = ?,
+          backup_enabled = ?,
+          backup_interval_hours = ?,
           updated_at = ? 
          WHERE id = 'global'`,
-        [finalUser, finalPass, finalUser, finalPass, effectiveHost, effectivePort, new Date().toISOString()]
+        [finalUser, finalPass, finalUser, finalPass, effectiveHost, effectivePort, finalDest, finalDest, finalAutoBackup, finalAutoBackup, finalInterval, new Date().toISOString()]
       );
 
       // Also propagate to Turso Cloud if running in dual mode
@@ -7924,9 +8198,14 @@ const saveSmtpConfigHandler = async (req, res) => {
               gmail_pass = ?, 
               smtp_host = ?, 
               smtp_port = ?, 
+              smtp_destination = ?,
+              backup_email = ?,
+              auto_backup_enabled = ?,
+              backup_enabled = ?,
+              backup_interval_hours = ?,
               updated_at = ? 
             WHERE id = 'global'`,
-            args: [finalUser, finalPass, finalUser, finalPass, effectiveHost, effectivePort, new Date().toISOString()]
+            args: [finalUser, finalPass, finalUser, finalPass, effectiveHost, effectivePort, finalDest, finalDest, finalAutoBackup, finalAutoBackup, finalInterval, new Date().toISOString()]
           });
         } catch (_) { }
       }

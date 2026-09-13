@@ -7,8 +7,6 @@
  * Spawned by main Express server using ELECTRON_RUN_AS_NODE=1
  */
 
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
 import XLSX from 'xlsx-js-style';
 import fs from 'fs';
 import path from 'path';
@@ -102,6 +100,9 @@ const releaseLock = () => {
 async function openDatabase() {
   try {
     log(`Opening database: ${DB_FILE}`);
+    const sqlite3Module = await import('sqlite3');
+    const sqlite3 = sqlite3Module.default;
+    const { open } = await import('sqlite');
     const db = await open({
       filename: DB_FILE,
       driver: sqlite3.Database
@@ -491,15 +492,29 @@ for (let i = 0; i < args.length; i++) {
 
 // If --email arg was omitted, targetEmail will be dynamically resolved from system settings or env in runBackup()
 
-async function runBackup() {
-  if (!acquireLock()) {
+export async function executeBackupTask({
+  targetEmail: inputEmail = null,
+  type = 'Manual',
+  fromDate = null,
+  toDate = null,
+  externalDb = null,
+  inMemory = false
+} = {}) {
+  let targetEmail = inputEmail;
+  const backupType = type || 'Manual';
+
+  if (!inMemory && !acquireLock()) {
     logError('Backup lock acquisition failed or another backup process is active');
-    process.exit(1);
+    return { success: false, error: 'Backup lock active or another backup is currently in progress' };
   }
 
   let db = null;
   try {
-    db = await openDatabase();
+    if (externalDb) {
+      db = externalDb;
+    } else {
+      db = await openDatabase();
+    }
 
     log('Fetching database records for master backup generation...');
     const customers = await db.all('SELECT * FROM customers').catch(() => []);
@@ -520,25 +535,35 @@ async function runBackup() {
     let purchaseReturns = await db.all('SELECT * FROM purchase_returns ORDER BY return_date DESC, created_at DESC').catch(() => []);
     const purchaseReturnItems = await db.all('SELECT * FROM purchase_return_items').catch(() => []);
 
-    let rawSettings = rawSettingsList.find(s => s.id === 'global') || rawSettingsList[0];
-    if (!targetEmail && rawSettings) {
-      targetEmail = rawSettings.backup_email || rawSettings.email || process.env.SMTP_USER || process.env.GMAIL_USER;
-    }
-    if (!rawSettings) {
-      rawSettings = {
-        shop_name: 'Muthuwadige Hardware',
-        address: 'No: 80, Mahahunupitiya, Negombo',
-        phone: '077 076 076 7',
-        email: 'sanojhardware@gmail.com',
-        currency: 'Rs.',
-        tax_rate: 0,
-        backup_email: targetEmail,
-        backup_enabled: 1,
-        logo_path: '',
-        printer_settings: '',
-        branch_settings: '',
-        updated_at: new Date().toISOString()
-      };
+    let rawSettings = rawSettingsList.find(s => s.id === 'global') || rawSettingsList[0] || {};
+    const smtpUser = rawSettings.smtp_user || rawSettings.gmail_user || process.env.SMTP_USER || process.env.GMAIL_USER || '';
+    const smtpPass = rawSettings.smtp_pass || rawSettings.gmail_pass || process.env.SMTP_PASS || process.env.GMAIL_PASS || '';
+    const smtpDest = targetEmail || rawSettings.smtp_destination || rawSettings.backup_email || rawSettings.email || smtpUser || 'sanojhardware@gmail.com';
+
+    rawSettings = {
+      ...rawSettings,
+      smtp_user: smtpUser,
+      gmail_user: smtpUser,
+      smtp_pass: smtpPass,
+      gmail_pass: smtpPass,
+      smtp_destination: smtpDest,
+      backup_email: smtpDest
+    };
+    targetEmail = smtpDest;
+
+    if (!rawSettings.shop_name) {
+      rawSettings.shop_name = 'Muthuwadige Hardware';
+      rawSettings.address = 'No: 80, Mahahunupitiya, Negombo';
+      rawSettings.phone = '077 076 076 7';
+      rawSettings.email = 'sanojhardware@gmail.com';
+      rawSettings.currency = 'Rs.';
+      rawSettings.tax_rate = 0;
+      rawSettings.backup_email = targetEmail;
+      rawSettings.backup_enabled = 1;
+      rawSettings.logo_path = '';
+      rawSettings.printer_settings = '';
+      rawSettings.branch_settings = '';
+      rawSettings.updated_at = new Date().toISOString();
     }
     const settings = [rawSettings];
 
@@ -1380,8 +1405,8 @@ async function runBackup() {
 
     styleOverviewSheet(wsOverview);
 
-    if (!fs.existsSync(backupsDir)) {
-      fs.mkdirSync(backupsDir, { recursive: true });
+    if (!inMemory && !fs.existsSync(backupsDir)) {
+      try { fs.mkdirSync(backupsDir, { recursive: true }); } catch (e) { }
     }
 
     let dateStr = new Date().toISOString().replace(/:/g, '-').split('.')[0];
@@ -1412,8 +1437,14 @@ async function runBackup() {
     XLSX.utils.book_append_sheet(wb, wsSettings, "System Settings");
     XLSX.utils.book_append_sheet(wb, wsBranches, "Branches");
 
-    XLSX.writeFile(wb, filePath);
-    log(`Master Excel backup report generated with enhanced executive styling: ${filePath}`);
+    let fileBuffer = null;
+    if (inMemory) {
+      fileBuffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+      log(`Master Excel backup report generated in-memory (${fileBuffer.length} bytes)`);
+    } else {
+      XLSX.writeFile(wb, filePath);
+      log(`Master Excel backup report generated with enhanced executive styling: ${filePath}`);
+    }
 
     let emailSent = false;
     if (targetEmail) {
@@ -1572,7 +1603,8 @@ async function runBackup() {
           text: `Automated backup created on ${new Date().toLocaleString()}.\n\nGross Sales: LKR ${grossSellingRev}\nNet Sales Revenue: LKR ${netSellingRev}\nCOGS: LKR ${netCostVal}\nGross Profit: LKR ${netSellingRev - netCostVal}\nTotal Payment Methods: LKR ${paymentTotal}\n\nPlease find attached the Excel database backup.`,
           html: htmlBody,
           fileName,
-          filePath,
+          filePath: inMemory ? null : filePath,
+          buffer: fileBuffer,
           settings: rawSettings
         });
 
@@ -1587,14 +1619,23 @@ async function runBackup() {
       }
     }
 
-    await db.run(
-      'INSERT INTO backup_logs (id, file_name, file_path, status, type, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
-      [`b_${Date.now()}`, fileName, filePath, 'Success', backupType, new Date().toISOString()]
-    );
+    try {
+      await db.run(
+        'INSERT INTO backup_logs (id, file_name, file_path, status, type, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
+        [`b_${Date.now()}`, fileName, inMemory ? 'IN_MEMORY' : filePath, emailSent ? 'Success' : 'Failed', backupType, new Date().toISOString()]
+      );
+    } catch (_) { }
 
     log('Backup completed successfully');
-    releaseLock();
-    process.exit(0);
+    if (!inMemory) releaseLock();
+    return {
+      success: true,
+      emailSent,
+      fileName,
+      message: emailSent
+        ? `Full database Excel backup generated and emailed successfully to ${targetEmail}.`
+        : 'Full database Excel backup compiled successfully (SMTP notification failed or not configured).'
+    };
 
   } catch (err) {
     logError(`Backup failed: ${err.message}`);
@@ -1602,15 +1643,38 @@ async function runBackup() {
       if (db) {
         await db.run(
           'INSERT INTO backup_logs (id, file_name, file_path, status, type, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
-          [`b_${Date.now()}`, 'Error_Backup', 'N/A', 'Failed', backupType, new Date().toISOString()]
+          [`b_${Date.now()}`, 'Error_Backup', inMemory ? 'IN_MEMORY' : 'N/A', 'Failed', backupType, new Date().toISOString()]
         );
       }
     } catch (dbErr) { }
-    releaseLock();
-    process.exit(1);
+    if (!inMemory) releaseLock();
+    return { success: false, error: err.message, message: 'Backup execution failed: ' + err.message };
   } finally {
-    if (db) await db.close();
+    if (db && !externalDb) {
+      try { await db.close(); } catch (_) { }
+    }
   }
 }
 
-runBackup();
+async function runBackup() {
+  const result = await executeBackupTask({
+    targetEmail,
+    type: backupType,
+    fromDate,
+    toDate,
+    inMemory: false
+  });
+  if (result.success) {
+    process.exit(0);
+  } else {
+    process.exit(1);
+  }
+}
+
+const isDirectCli = process.argv[1] && (
+  process.argv[1].endsWith('backup-worker.js') || 
+  process.argv[1].endsWith('backup-worker')
+);
+if (isDirectCli) {
+  runBackup();
+}

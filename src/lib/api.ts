@@ -516,14 +516,21 @@ export const api = {
 
   settings: {
     get: async () => {
-      const res = await fetchWithTimeout(`${API_URL}/settings`);
+      const res = await fetchWithTimeout(`${API_URL}/settings`, {
+        headers: {
+          ...getAuthHeaders()
+        }
+      });
       if (!res.ok) throw new Error('Failed to load shop settings');
       return res.json();
     },
     save: async (data: any) => {
       const res = await fetchWithTimeout(`${API_URL}/settings`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        },
         body: JSON.stringify(data)
       });
       if (!res.ok) throw new Error('Failed to commit system configurations');
