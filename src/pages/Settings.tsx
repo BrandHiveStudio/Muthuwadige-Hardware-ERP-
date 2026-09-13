@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabaseClient';
 import { useCurrency } from '../context/CurrencyContext';
 import { useScanner } from '../context/ScannerContext';
 import { QRCodeSVG } from 'qrcode.react';
-import { API_URL, BASE_URL, setApiUrl, fetchWithTimeout } from '../lib/api';
+import { API_URL, BASE_URL, setApiUrl, fetchWithTimeout, getAuthHeaders } from '../lib/api';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {
@@ -139,7 +139,10 @@ export function Settings({ currentUser }: SettingsProps = {}) {
     try {
       const response = await fetch(`${API_URL}/settings/trigger-backup`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        },
         body: JSON.stringify({
           fromDate: backupFromDate || null,
           toDate: backupToDate || null
@@ -167,7 +170,8 @@ export function Settings({ currentUser }: SettingsProps = {}) {
     if (window.confirm(`Are you sure you want to delete the backup "${name}"?`)) {
       try {
         const res = await fetch(`${API_URL}/backup-logs/${id}`, {
-          method: 'DELETE'
+          method: 'DELETE',
+          headers: getAuthHeaders()
         });
         if (res.ok) {
           alert("Backup deleted successfully!");
@@ -188,7 +192,10 @@ export function Settings({ currentUser }: SettingsProps = {}) {
       try {
         const res = await fetch(`${API_URL}/backup-logs/bulk-delete`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders()
+          },
           body: JSON.stringify({ ids: selectedBackups })
         });
         if (res.ok) {
@@ -337,7 +344,9 @@ export function Settings({ currentUser }: SettingsProps = {}) {
     }
 
     try {
-      const resLogs = await fetch(`${API_URL}/backup-logs`);
+      const resLogs = await fetch(`${API_URL}/backup-logs`, {
+        headers: getAuthHeaders()
+      });
       if (resLogs.ok) {
         const logsData = await resLogs.json();
         const mappedLogs = logsData.map((l: any) => ({
@@ -355,7 +364,9 @@ export function Settings({ currentUser }: SettingsProps = {}) {
     }
 
     try {
-      const resNet = await fetch(`${API_URL}/system/network-info`);
+      const resNet = await fetch(`${API_URL}/system/network-info`, {
+        headers: getAuthHeaders()
+      });
       if (resNet.ok) {
         const netData = await resNet.json();
         if (netData && netData.addresses) {
@@ -623,7 +634,10 @@ export function Settings({ currentUser }: SettingsProps = {}) {
     try {
       const res = await fetch(`${API_URL}/settings/test-notification`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        }
       });
       const result = await res.json();
       if (res.ok) {
@@ -690,7 +704,10 @@ export function Settings({ currentUser }: SettingsProps = {}) {
 
       const res = await fetch(`${API_URL}/settings/restore`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        },
         body: JSON.stringify(payload)
       });
 
@@ -726,7 +743,10 @@ export function Settings({ currentUser }: SettingsProps = {}) {
     if (user) {
       const res = await fetch(`${API_URL}/profiles/${user.id}/password`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        },
         body: JSON.stringify({ password: newPassword })
       });
       if (res.ok) {

@@ -1,4 +1,4 @@
-import { api, API_URL, fetchWithTimeout } from '../lib/api';
+import { api, API_URL, fetchWithTimeout, getAuthHeaders } from '../lib/api';
 
 export interface BackupTriggerOptions {
   email?: string;
@@ -11,7 +11,10 @@ export async function triggerDatabaseBackup(options: BackupTriggerOptions = {}) 
   try {
     const res = await fetchWithTimeout(`${API_URL}/settings/trigger-backup`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders()
+      },
       body: JSON.stringify(options)
     }, 15000);
 
