@@ -4862,12 +4862,38 @@ app.post('/api/sales', async (req, res) => {
       };
     });
 
+    // Independently recalculate item subtotals and final payable total (fail-safe calculation safeguard)
+    let recomputedSubtotal = 0;
+    for (const item of enrichedItems) {
+      const q = Number(item.qty || 0);
+      const p = Number(item.price !== undefined ? item.price : (item.unit_price || 0));
+      const d = Number(item.discount || 0);
+      const isPct = item.discountType === 'percent' || item.discountType === 'percentage';
+      const unitDisc = isPct ? (p * d) / 100 : d;
+      const netLine = Math.max(0, (p - unitDisc) * q);
+      recomputedSubtotal += netLine;
+    }
+    recomputedSubtotal = Math.round(recomputedSubtotal * 100) / 100;
+
+    const globalDiscountVal = Number(s.discount || 0);
+    const rawDiscountType = (s.discount_type || s.discountType || 'fixed').toLowerCase();
+    let globalDiscountAmt = 0;
+    if (rawDiscountType === 'percent' || rawDiscountType === 'percentage') {
+      globalDiscountAmt = Math.round(((recomputedSubtotal * globalDiscountVal) / 100) * 100) / 100;
+    } else {
+      globalDiscountAmt = Math.min(recomputedSubtotal, globalDiscountVal);
+    }
+
+    const recomputedPayable = Math.max(0, Math.round((recomputedSubtotal - globalDiscountAmt + transportationFeeVal - creditNoteApplied) * 100) / 100);
+    const finalTotalAmount = enrichedItems.length > 0 ? recomputedPayable : Number(s.total_amount || 0);
+    const finalSubtotal = enrichedItems.length > 0 ? recomputedSubtotal : Number(s.subtotal || 0);
+
     // 2. Insert Sale Order
     const cashierName = s.cashier || s.cashier_name || s.user_name || (s.user_email ? s.user_email.split('@')[0] : 'Krish');
     const userEmail = s.user_email || (s.user_id ? `${s.user_id}@hardware.erp` : 'admin@hardware.erp');
     await db.run(
       'INSERT INTO sales (id, invoice_no, customer_id, customer_name, customer_phone, customer_address, items, subtotal, discount, tax, tax_rate, total_amount, status, user_id, user_email, cashier, payment_method, created_at, due_date, credit_period_days, payment_received, transportation_fee, credit_note_applied, credit_note_code, client_tx_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, finalInvoiceNo, s.customer_id, customerNameVal, customerPhoneVal, customerAddressVal, JSON.stringify(enrichedItems), s.subtotal, s.discount, 0, 0, s.total_amount, s.status, s.user_id, userEmail, cashierName, s.payment_method || 'Cash', created_at, s.due_date || null, s.credit_period_days || 0, s.payment_received || 0, transportationFeeVal, creditNoteApplied, creditNoteCode, clientTxId]
+      [id, finalInvoiceNo, s.customer_id, customerNameVal, customerPhoneVal, customerAddressVal, JSON.stringify(enrichedItems), finalSubtotal, globalDiscountAmt, 0, 0, finalTotalAmount, s.status, s.user_id, userEmail, cashierName, s.payment_method || 'Cash', created_at, s.due_date || null, s.credit_period_days || 0, s.payment_received || 0, transportationFeeVal, creditNoteApplied, creditNoteCode, clientTxId]
     );
 
     // 3. Decrement Product Stock levels & validate available stock
@@ -4986,7 +5012,7 @@ app.post('/api/sales', async (req, res) => {
       await replaceRuntimeTransactionByDescription(`POS Sale ${finalInvoiceNo}`, {
         type: 'income',
         category: 'Sales',
-        amount: s.total_amount,
+        amount: finalTotalAmount,
         date: new Date(created_at).toLocaleDateString('sv-SE'),
         reference: finalInvoiceNo,
         user_id: s.user_id,
@@ -5006,7 +5032,7 @@ app.post('/api/sales', async (req, res) => {
       console.error("[Low Stock Trigger Error]:", checkErr);
     }
 
-    await logAudit(s.user_email || 'system', 'SALE_COMPLETED', `Invoice ${finalInvoiceNo} (Total: Rs. ${s.total_amount}) was generated.`);
+    await logAudit(s.user_email || 'system', 'SALE_COMPLETED', `Invoice ${finalInvoiceNo} (Total: Rs. ${finalTotalAmount}) was generated.`);
 
     // Enqueue upstream sync for sale, inventory decrements, and customer balance
     try {

@@ -371,6 +371,19 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     }
   }, [selectedDebitNoteCode, purchaseReturns, poTotalWithTransport]);
 
+  // Unsaved Changes Warning Guard
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (poItems.length > 0) {
+        e.preventDefault();
+        e.returnValue = 'You have unsaved items in your Purchase Order. Leave without saving?';
+        return e.returnValue;
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [poItems.length]);
+
   // Filtered Returns List
   const filteredPurchaseReturns = useMemo(() => {
     return purchaseReturns.filter(pr => {
@@ -1753,6 +1766,31 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                 <option value="">Select a registered supplier...</option>
                 {suppliers.map((s, idx) => <option key={idx} value={s}>{s}</option>)}
               </select>
+
+              {/* Selected Supplier Metadata */}
+              {selectedSupplier && (() => {
+                const sObj = supplierList.find(s => s.name === selectedSupplier);
+                if (!sObj) return null;
+                const contactNum = sObj.phone || sObj.mobile || sObj.contact || 'N/A';
+                const bal = Number(sObj.payableBalance ?? sObj.payable_balance ?? sObj.balance ?? 0);
+                return (
+                  <div className="mt-3.5 pt-3 border-t border-gray-100 flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <div className="flex items-center gap-2 text-slate-600">
+                      <span className="font-semibold text-slate-400">Contact:</span>
+                      <span className="font-bold text-slate-800 font-mono">{contactNum}</span>
+                      {(sObj.contactPerson || sObj.contact_person) && (
+                        <span className="text-slate-400">({sObj.contactPerson || sObj.contact_person})</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-slate-400">Outstanding Balance:</span>
+                      <span className={`font-black font-mono ${bal > 0 ? 'text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200/60' : 'text-slate-700'}`}>
+                        {symbol} {convert(bal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="bg-white rounded-xl border border-gray-100 p-6 shadow-sm">
@@ -1805,8 +1843,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                                       <td className="py-4 px-6">
                                         <div className="font-black text-slate-800">{item.productName}</div>
                                         {hasMismatch && (
-                                          <div className="inline-flex items-center gap-1.5 mt-1 px-2.5 py-0.5 rounded-md bg-amber-50 border border-amber-300 text-amber-900 text-[10px] font-black tracking-tight">
-                                            <span className="text-amber-600">⚠️</span>
+                                          <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-600 text-[10px] font-semibold tracking-tight">
                                             <span>Default: {itemSupplier}</span>
                                           </div>
                                         )}
@@ -2031,7 +2068,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-xl p-6 h-fit sticky top-20">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-xl p-6 h-fit sticky top-4">
             <h3 className="text-sm font-black uppercase tracking-widest mb-6 border-b border-gray-100 pb-4 text-[#464646]">PO Summary</h3>
             <div className="space-y-6">
                 <div>
@@ -2088,7 +2125,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                     <div className="relative">
                       <input
                         type="text"
-                        placeholder="Enter/Scan Debit Note Code (e.g. PR-...)"
+                        placeholder="Enter/Scan Debit Note Code (e.g. DN-XXXXXX)"
                         value={selectedDebitNoteCode}
                         onChange={(e) => {
                           const val = e.target.value.toUpperCase();

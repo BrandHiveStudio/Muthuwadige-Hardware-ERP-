@@ -1140,6 +1140,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   const [quoteCart, setQuoteCart] = useState<SaleItem[]>([]);
   const [quoteSearch, setQuoteSearch] = useState('');
   const quoteSearchInputRef = useRef<HTMLInputElement>(null);
+  const posSearchInputRef = useRef<HTMLInputElement>(null);
 
   // Quotation Additional Charges State
   const [quoteDiscountType, setQuoteDiscountType] = useState<'amount' | 'percentage'>('amount');
@@ -2270,30 +2271,42 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
   // Natively print beautiful receipts in selected language
   const handlePrintReceipt = (order: SaleOrder) => {
-    const htmlContent = generatePrintHTML(order, isSinhala, shopSettings);
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'fixed';
-    iframe.style.right = '0';
-    iframe.style.bottom = '0';
-    iframe.style.width = '0';
-    iframe.style.height = '0';
-    iframe.style.border = '0';
-    document.body.appendChild(iframe);
+    try {
+      const htmlContent = generatePrintHTML(order, isSinhala, shopSettings);
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      document.body.appendChild(iframe);
 
-    const doc = iframe.contentWindow?.document || iframe.contentDocument;
-    if (doc) {
-      doc.open();
-      doc.write(htmlContent);
-      doc.close();
-    }
+      const doc = iframe.contentWindow?.document || iframe.contentDocument;
+      if (doc) {
+        doc.open();
+        doc.write(htmlContent);
+        doc.close();
+      }
 
-    setTimeout(() => {
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
       setTimeout(() => {
-        document.body.removeChild(iframe);
-      }, 1000);
-    }, 300);
+        try {
+          iframe.contentWindow?.focus();
+          iframe.contentWindow?.print();
+        } catch (printErr) {
+          console.warn("Print dialogue failed or was cancelled:", printErr);
+          notify("Thermal printer offline or disconnected. You can retry printing or download the PDF receipt.", "Printer Notice", 'error');
+        }
+        setTimeout(() => {
+          if (iframe.parentNode) {
+            document.body.removeChild(iframe);
+          }
+        }, 1000);
+      }, 300);
+    } catch (err: any) {
+      console.warn("Receipt printing failed:", err);
+      notify("Could not send receipt to printer. Please retry or download the PDF.", "Printer Notice", 'error');
+    }
   };
 
   // Download Quotation PDF using exact Preview layout and styling
@@ -3018,6 +3031,65 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     }
   };
 
+  // Keyboard Shortcuts (POS Counter Focus) & Unsaved Changes Guard
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // F2 or Ctrl + Enter: Trigger Payment / Complete Sale
+      if (e.key === 'F2' || (e.ctrlKey && e.key === 'Enter')) {
+        if (tab === 'new') {
+          e.preventDefault();
+          processSale();
+        }
+      }
+      // F4: Instantly focus Product Search / Barcode input
+      else if (e.key === 'F4') {
+        if (tab === 'new') {
+          e.preventDefault();
+          posSearchInputRef.current?.focus();
+          posSearchInputRef.current?.select();
+        }
+      }
+      // Esc: Dismiss open modals / Cancel prompt
+      else if (e.key === 'Escape') {
+        if (showReceipt) setShowReceipt(false);
+        else if (showShiftModal) setShowShiftModal(false);
+        else if (showHoldNameModal) setShowHoldNameModal(false);
+        else if (showMobileScannerModal) setShowMobileScannerModal(false);
+        else if (showReturnPreviewModal) setShowReturnPreviewModal(false);
+        else if (showCreditNotePreviewModal) setShowCreditNotePreviewModal(false);
+        else if (showCreditNoteUsageModal) setShowCreditNoteUsageModal(false);
+        else if (showQuotePreviewModal) setShowQuotePreviewModal(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    tab,
+    showReceipt,
+    showShiftModal,
+    showHoldNameModal,
+    showMobileScannerModal,
+    showReturnPreviewModal,
+    showCreditNotePreviewModal,
+    showCreditNoteUsageModal,
+    showQuotePreviewModal,
+    processSale
+  ]);
+
+  // Unsaved Cart Warning
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (cartItems.length > 0) {
+        e.preventDefault();
+        e.returnValue = 'You have unsaved items in your cart. Leave without saving?';
+        return e.returnValue;
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [cartItems.length]);
+
   const handleHoldBill = (customHoldName?: string) => {
     if (cartItems.length === 0) return;
     if (cartItems.some(i => i.qty <= 0)) {
@@ -3626,6 +3698,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 <div className="flex items-center gap-3 bg-slate-50/50 hover:bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus-within:border-amber-500 focus-within:ring-1 focus-within:ring-amber-500 transition-all duration-200 shadow-inner">
                   <SearchIcon className="w-5 h-5 text-slate-400" />
                   <input 
+                    ref={posSearchInputRef}
                     type="text" 
                     placeholder={t('Search hardware by name, SKU or barcode...', 'නම, SKU හෝ බාර්කෝඩ් මඟින් සොයන්න...')} 
                     value={productSearch} 
@@ -3924,6 +3997,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     type="number" 
                     min={0} 
                     value={transportationFee || ''} 
+                    onFocus={(e) => e.target.select()}
                     onChange={(e) => setTransportationFee(parseFloat(e.target.value) || 0)} 
                     placeholder="0.00"
                     className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm" 
@@ -4209,6 +4283,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                         min={0} 
                         max={Math.min(activeCreditBalance > 0 ? activeCreditBalance : 999999, netTotalBeforeCreditNote)}
                         value={creditNoteApplied === '' ? '' : creditNoteApplied} 
+                        onFocus={(e) => e.target.select()}
                         onChange={(e) => {
                           const val = e.target.value === '' ? '' : Math.max(0, parseFloat(e.target.value) || 0);
                           if (typeof val === 'number') {
