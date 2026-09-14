@@ -562,7 +562,11 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
       });
-      if (!res.ok) throw new Error('Failed to update profile configurations');
+      if (!res.ok) {
+        let msg = 'Failed to update profile configurations';
+        try { const j = await res.json(); if (j.error) msg = j.error; } catch (_) {}
+        throw new Error(msg);
+      }
       return res.json();
     },
     changePassword: async (id: string, password?: string) => {
@@ -571,12 +575,20 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password })
       });
-      if (!res.ok) throw new Error('Failed to update password');
+      if (!res.ok) {
+        let msg = 'Failed to update password';
+        try { const j = await res.json(); if (j.error) msg = j.error; } catch (_) {}
+        throw new Error(msg);
+      }
       return res.json();
     },
     delete: async (id: string) => {
       const res = await fetchWithTimeout(`${API_URL}/profiles/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete staff user profile');
+      if (!res.ok) {
+        let msg = 'Failed to delete staff user profile';
+        try { const j = await res.json(); if (j.error) msg = j.error; } catch (_) {}
+        throw new Error(msg);
+      }
       return res.json();
     }
   },

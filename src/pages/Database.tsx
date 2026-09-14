@@ -8,10 +8,8 @@ import {
   TruckIcon,
   UsersIcon,
   ShieldIcon,
-  SearchIcon,
-  DownloadIcon
+  SearchIcon
 } from 'lucide-react';
-import { API_URL } from '../lib/api';
 
 type DbTab = 'products' | 'customers' | 'profiles' | 'purchase_orders' | 'sales' | 'system_settings';
 
@@ -302,29 +300,6 @@ export function Database() {
           )}
           </div>
         </div>
-      </div>
-
-      {/* Database Local Backup Action Card */}
-      <div className="mt-8 bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0 border border-amber-200/60 shadow-sm">
-            <DatabaseIcon className="w-5 h-5 text-amber-600" />
-          </div>
-          <div>
-            <h4 className="text-sm font-bold text-slate-900">Download Local Database Backup</h4>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Generate and download a complete offline SQLite database snapshot (.sqlite) for safekeeping.
-            </p>
-          </div>
-        </div>
-        <a
-          href={`${API_URL}/database/backup`}
-          download
-          className="px-5 py-2.5 rounded-xl border border-amber-300 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shrink-0 shadow-md shadow-amber-500/20"
-        >
-          <DownloadIcon className="w-4 h-4 text-slate-950" />
-          <span>Download Database Backup</span>
-        </a>
       </div>
     </div>
   );

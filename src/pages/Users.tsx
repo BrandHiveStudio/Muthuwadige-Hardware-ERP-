@@ -239,7 +239,12 @@ export function Users({ currentUser: propCurrentUser }: UsersProps = {}) {
         setShowResetPasswordModal(false);
         setNewPassword('');
       } else {
-        alert("Failed to reset password.");
+        let errMsg = 'Failed to reset password.';
+        try {
+          const errData = await res.json();
+          if (errData?.error) errMsg = `Failed to reset password: ${errData.error}`;
+        } catch (_) {}
+        alert(errMsg);
       }
     } catch (e: any) {
       alert("Failed to reset password: " + (e?.message || e));

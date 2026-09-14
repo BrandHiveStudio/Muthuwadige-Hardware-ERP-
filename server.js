@@ -750,21 +750,32 @@ async function authenticate(req, res, next) {
   const isDesktopLocal = !process.env.VERCEL && process.env.APP_ROLE !== 'web' && (typeof isTurso === 'function' ? !isTurso() : true);
   const userEmail = (req.headers['x-user-email'] || '').toLowerCase().trim();
   const userRole = (req.headers['x-user-role'] || '').toLowerCase().trim();
-  if (isDesktopLocal && userEmail) {
-    let resolvedId = null;
+  const userName = (req.headers['x-user-name'] || '').toLowerCase().trim();
+
+  if (isDesktopLocal && (userEmail || userName || userRole)) {
+    const isRootCandidate = userName === 'super_admin' || userEmail === 'sanojhardware@gmail.com' || userEmail === 'super_admin' || userRole === 'super_admin';
+    let resolvedId = isRootCandidate ? 'u1' : null;
     try {
-      const p = await db.get('SELECT id, role FROM profiles WHERE LOWER(email) = ?', [userEmail]);
-      if (p) resolvedId = p.id;
-      if (!p) {
-        const u = await db.get('SELECT id, role FROM users WHERE LOWER(email) = ?', [userEmail]);
-        if (u) resolvedId = u.id;
+      if (!resolvedId && userEmail) {
+        const p = await db.get('SELECT id, role FROM profiles WHERE LOWER(email) = ? OR LOWER(username) = ?', [userEmail, userEmail]);
+        if (p) resolvedId = p.id;
+        if (!p) {
+          const u = await db.get('SELECT id, role FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?', [userEmail, userEmail]);
+          if (u) resolvedId = u.id;
+        }
+      }
+      if (!resolvedId && userName) {
+        const p = await db.get('SELECT id, role FROM profiles WHERE LOWER(name) = ? OR LOWER(username) = ?', [userName, userName]);
+        if (p) resolvedId = p.id;
       }
     } catch (_) {}
 
     const authUser = {
-      id: resolvedId || (userEmail === 'sanojhardware@gmail.com' ? 'u1' : (userEmail === 'manager@mhardware.lk' ? 'u_manager' : 'u_' + Date.now())),
-      email: userEmail,
-      role: userRole || 'admin'
+      id: resolvedId || (isRootCandidate ? 'u1' : (userEmail === 'manager@mhardware.lk' ? 'u_manager' : 'u_' + Date.now())),
+      email: userEmail || (isRootCandidate ? 'sanojhardware@gmail.com' : ''),
+      username: userName || (isRootCandidate ? 'super_admin' : ''),
+      name: req.headers['x-user-name'] || (isRootCandidate ? 'Root Administrator' : ''),
+      role: isRootCandidate ? 'super_admin' : (userRole || 'admin')
     };
     req.authUser = authUser;
     req.user = authUser;
@@ -817,7 +828,7 @@ async function authenticate(req, res, next) {
 
     if (!session || new Date(session.expires_at).getTime() < Date.now()) {
       if (isDesktopLocal && session) {
-        const authUser = { id: session.user_id, email: session.email, role: session.role };
+        const authUser = { id: session.user_id, email: session.email, role: session.role, username: session.email === 'sanojhardware@gmail.com' ? 'super_admin' : (session.username || '') };
         req.authUser = authUser;
         req.user = authUser;
         return next();
@@ -829,7 +840,7 @@ async function authenticate(req, res, next) {
       }
       return res.status(401).json({ error: 'Session expired or invalid. Please log in again.' });
     }
-    const authUser = { id: session.user_id, email: session.email, role: session.role };
+    const authUser = { id: session.user_id, email: session.email, role: session.role, username: session.email === 'sanojhardware@gmail.com' ? 'super_admin' : (session.username || '') };
     req.authUser = authUser;
     req.user = authUser;
     next();
@@ -841,7 +852,26 @@ async function authenticate(req, res, next) {
 // Applied on top of `authenticate` for routes that must be restricted to admin-equivalent roles
 // (user/permission management, settings changes, destructive/database operations).
 function requireAdmin(req, res, next) {
-  if (!req.authUser || !isAdminRole(req.authUser.role)) {
+  const caller = req.user || req.authUser || {};
+  const callerRole = (caller.role || req.headers['x-user-role'] || '').toLowerCase().trim();
+  const callerUsername = (caller.username || req.headers['x-user-name'] || '').toLowerCase().trim();
+  const callerEmail = (caller.email || req.headers['x-user-email'] || '').toLowerCase().trim();
+
+  const isCallerRoot = 
+    req.user?.username === 'super_admin' || 
+    req.user?.role?.toUpperCase() === 'SUPER_ADMIN' ||
+    req.user?.role?.toLowerCase() === 'super_admin' ||
+    req.authUser?.username === 'super_admin' || 
+    req.authUser?.role?.toUpperCase() === 'SUPER_ADMIN' ||
+    req.authUser?.role?.toLowerCase() === 'super_admin' ||
+    callerUsername === 'super_admin' || 
+    callerRole === 'super_admin' || 
+    callerRole === 'super admin' || 
+    callerEmail === 'sanojhardware@gmail.com' || 
+    callerEmail === 'super_admin' ||
+    caller.id === 'u1';
+
+  if (!isCallerRoot && !isAdminRole(callerRole)) {
     return res.status(403).json({ error: 'This action requires an administrator role.' });
   }
   next();
@@ -9469,20 +9499,34 @@ app.put(['/api/profiles/:id', '/api/users/:id'], requireAdmin, async (req, res) 
   const { id } = req.params;
   const p = req.body;
   try {
+    const caller = req.user || req.authUser || {};
+    const callerRole = (caller.role || req.headers['x-user-role'] || '').toLowerCase().trim();
+    const callerUsername = (caller.username || req.headers['x-user-name'] || '').toLowerCase().trim();
+    const callerEmail = (caller.email || req.headers['x-user-email'] || '').toLowerCase().trim();
+
+    const isCallerRoot = 
+      req.user?.username === 'super_admin' || 
+      req.user?.role?.toUpperCase() === 'SUPER_ADMIN' ||
+      req.user?.role?.toLowerCase() === 'super_admin' ||
+      req.authUser?.username === 'super_admin' || 
+      req.authUser?.role?.toUpperCase() === 'SUPER_ADMIN' ||
+      req.authUser?.role?.toLowerCase() === 'super_admin' ||
+      callerUsername === 'super_admin' || 
+      callerRole === 'super_admin' || 
+      callerRole === 'super admin' || 
+      callerEmail === 'sanojhardware@gmail.com' || 
+      callerEmail === 'super_admin' ||
+      caller.id === 'u1';
+
     const targetUser = await db.get('SELECT * FROM profiles WHERE id = ? UNION SELECT * FROM users WHERE id = ?', [id, id]);
     const isTargetSuperAdmin = targetUser && (
       (targetUser.role || '').toLowerCase().trim() === 'super_admin' ||
       (targetUser.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com' ||
+      (targetUser.username || '').toLowerCase().trim() === 'super_admin' ||
       targetUser.id === 'u1'
     );
-    const isCallerSuperAdmin = req.authUser && (
-      (req.authUser.role || '').toLowerCase().trim() === 'super_admin' ||
-      (req.authUser.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com' ||
-      req.authUser.username === 'super_admin' ||
-      req.authUser.id === 'u1'
-    );
 
-    if (isTargetSuperAdmin && !isCallerSuperAdmin) {
+    if (isTargetSuperAdmin && !isCallerRoot) {
       return res.status(403).json({ error: '403 Forbidden: Modifying the Root Administrator account is restricted to the Root Administrator.' });
     }
 
@@ -9525,6 +9569,7 @@ app.delete(['/api/profiles/:id', '/api/users/:id'], requireAdmin, async (req, re
     const isTargetSuperAdmin = targetUser && (
       (targetUser.role || '').toLowerCase().trim() === 'super_admin' ||
       (targetUser.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com' ||
+      (targetUser.username || '').toLowerCase().trim() === 'super_admin' ||
       targetUser.id === 'u1'
     );
 
@@ -9549,25 +9594,41 @@ app.put(['/api/profiles/:id/password', '/api/users/:id/password'], async (req, r
   const { password } = req.body;
 
   try {
+    const caller = req.user || req.authUser || {};
+    const callerRole = (caller.role || req.headers['x-user-role'] || '').toLowerCase().trim();
+    const callerUsername = (caller.username || req.headers['x-user-name'] || '').toLowerCase().trim();
+    const callerEmail = (caller.email || req.headers['x-user-email'] || '').toLowerCase().trim();
+
+    const isCallerRoot = 
+      req.user?.username === 'super_admin' || 
+      req.user?.role?.toUpperCase() === 'SUPER_ADMIN' ||
+      req.user?.role?.toLowerCase() === 'super_admin' ||
+      req.authUser?.username === 'super_admin' || 
+      req.authUser?.role?.toUpperCase() === 'SUPER_ADMIN' ||
+      req.authUser?.role?.toLowerCase() === 'super_admin' ||
+      callerUsername === 'super_admin' || 
+      callerRole === 'super_admin' || 
+      callerRole === 'super admin' || 
+      callerEmail === 'sanojhardware@gmail.com' || 
+      callerEmail === 'super_admin' ||
+      caller.id === 'u1';
+
+    const isCallerAdmin = isCallerRoot || isAdminRole(callerRole);
+
     const targetUser = await db.get('SELECT * FROM profiles WHERE id = ? UNION SELECT * FROM users WHERE id = ?', [id, id]);
     const isTargetSuperAdmin = targetUser && (
       (targetUser.role || '').toLowerCase().trim() === 'super_admin' ||
       (targetUser.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com' ||
+      (targetUser.username || '').toLowerCase().trim() === 'super_admin' ||
       targetUser.id === 'u1'
     );
-    const isCallerSuperAdmin = req.authUser && (
-      (req.authUser.role || '').toLowerCase().trim() === 'super_admin' ||
-      (req.authUser.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com' ||
-      req.authUser.username === 'super_admin' ||
-      req.authUser.id === 'u1'
-    );
 
-    if (isTargetSuperAdmin && !isCallerSuperAdmin) {
+    if (isTargetSuperAdmin && !isCallerRoot) {
       return res.status(403).json({ error: '403 Forbidden: Resetting credentials of the Root Administrator is restricted to the Root Administrator.' });
     }
 
-    // A user may change their own password; changing someone else's requires an admin role.
-    if (req.authUser.id !== id && !isAdminRole(req.authUser.role)) {
+    // Root Admin and Admins can reset staff passwords; non-admins can only change their own
+    if (!isCallerAdmin && (!caller.id || caller.id !== id)) {
       return res.status(403).json({ error: 'You can only change your own password.' });
     }
 
