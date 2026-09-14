@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import cron from 'node-cron';
@@ -187,6 +188,9 @@ app.use(cors({
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// Parse HttpOnly session cookies issued at login so the authenticate middleware
+// can read them without any JavaScript access. Must come before app.use(authenticate).
+app.use(cookieParser());
 
 // Global Request Logging Middleware
 app.use((req, res, next) => {
@@ -727,8 +731,17 @@ async function authenticate(req, res, next) {
     return res.status(503).json({ error: 'Database is not ready: ' + err.message });
   }
 
+  // SECURITY: reject token-in-URL-query-param auth attempts — tokens in query strings
+  // leak into server logs, browser history, and Referer headers.
+  if (req.query?.token) {
+    return res.status(400).json({ error: 'Authentication via URL query parameter is not permitted. Use Authorization header or session cookie.' });
+  }
+
+  // Read token from HttpOnly cookie first (most secure), then fall back to Authorization Bearer
+  // header (required for Electron desktop where file:// origin cannot send SameSite cookies).
+  const cookieToken = req.cookies?.token || '';
   const authHeader = req.headers['authorization'] || '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : (req.headers['x-session-token'] || req.headers['auth-token'] || req.headers['token'] || '');
+  const token = cookieToken || (authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : (req.headers['x-session-token'] || req.headers['auth-token'] || req.headers['token'] || ''));
 
   // 1. Direct failsafe verification for root admin and development session tokens
   if (token && (token.startsWith('root_admin_token_') || token.startsWith('root_token_') || token.startsWith('dev_token_') || token.startsWith('admin_token_'))) {
@@ -2984,6 +2997,14 @@ app.post('/api/auth/login', async (req, res) => {
       console.warn('[AUTH] Non-fatal session sync error:', err.message);
     }
 
+    // Set HttpOnly session cookie — invisible to JavaScript, safe from XSS
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days, matches SESSION_TTL_MS
+    });
+
     return res.status(200).json({
       success: true,
       token,
@@ -3040,6 +3061,14 @@ app.post('/api/auth/login', async (req, res) => {
       }
 
       const session = await createSession(localAccount);
+
+      // Set HttpOnly session cookie — invisible to JavaScript, safe from XSS
+      res.cookie('token', session.token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days, matches SESSION_TTL_MS
+      });
 
       return res.json({
         success: true,
@@ -3301,6 +3330,14 @@ app.post('/api/auth/login', async (req, res) => {
         }
       }
     }
+
+    // Set HttpOnly session cookie — invisible to JavaScript, safe from XSS
+    res.cookie('token', session.token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days, matches SESSION_TTL_MS
+    });
 
     return res.json({
       success: true,

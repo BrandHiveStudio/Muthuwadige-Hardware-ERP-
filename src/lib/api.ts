@@ -97,7 +97,13 @@ export async function fetchWithTimeout(url: string, options: RequestInit = {}, t
     const res = await fetch(url, {
       ...options,
       headers: mergedHeaders,
-      signal: controller.signal
+      signal: controller.signal,
+      // Include HttpOnly cookies automatically on every request so the server can
+      // authenticate via the secure cookie set at login, without exposing the raw
+      // token to JavaScript. The Authorization Bearer header is preserved as a
+      // backward-compatible fallback (e.g. Electron file:// origin, where
+      // SameSite cookies are not sent).
+      credentials: 'include'
     });
     // Only trigger session expiration / logout if an explicit auth verification endpoint
     // (/api/auth/me or /api/auth/verify) returns 401.
