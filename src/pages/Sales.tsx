@@ -1289,10 +1289,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       const res = await fetchWithTimeout(`${API_URL}/shifts/today`);
       if (res.ok) {
         const data = await res.json();
-        if (data?.opening_float !== undefined && !openingFloat) {
+        const isShiftClosed = data?.is_closed === true || data?.shift?.status === 'CLOSED';
+        if (isShiftClosed) {
+          // Latest shift is closed; start fresh with 0.00 opening float until cashier enters new float
+          setOpeningFloat(0);
+        } else if (data?.opening_float !== undefined && !openingFloat) {
           setOpeningFloat(data.opening_float);
         }
-        if (data?.last_closed_at && !lastShiftClosedAt) {
+        if (data?.last_closed_at) {
           setLastShiftClosedAt(data.last_closed_at);
         }
         if (data?.shift) {
@@ -3104,27 +3108,20 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     processSale
   ]);
 
-  // Unsaved Cart Warning (Electron-Compatible)
+  // Unsaved Cart Warning (Web Browser Only - Disabled in Electron to prevent reload lockup)
   useEffect(() => {
-    const isElectron = !!(window as any).electron || navigator.userAgent.toLowerCase().includes('electron');
+    const isElectron = !!(window as any).electron || 
+                       !!(window as any).electronAPI || 
+                       navigator.userAgent.toLowerCase().includes('electron');
+    if (isElectron) return; // Allow unobstructed native desktop reloads
 
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       const hasUnsavedCart = (cartItems && cartItems.length > 0) || (creditCartItems && creditCartItems.length > 0);
       if (!hasUnsavedCart) return;
 
-      if (isElectron) {
-        // Synchronous prompt compatible with Electron renderer threads
-        const confirmLeave = window.confirm("You have an active ongoing bill in progress! Discard items and reload?");
-        if (!confirmLeave) {
-          e.preventDefault();
-          e.returnValue = '';
-        }
-      } else {
-        // Standard Web browser confirmation dialog
-        e.preventDefault();
-        e.returnValue = '';
-        return '';
-      }
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -7888,17 +7885,39 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
               <button
                 type="button"
                 onClick={async () => {
-                  const configuredPasskey = (shopSettings?.void_passkey || shopSettings?.return_passkey || '1234').toString().trim();
-                  if (voidPasskeyInput.trim() !== configuredPasskey) {
-                    return alert(t('Invalid Passkey! Access Denied.', 'වලංගු නොවන මුරපදයකි! අවලංගු කිරීමට නොහැක.'));
+                  const enteredPass = voidPasskeyInput.trim();
+                  if (!enteredPass) {
+                    return alert(t('Please enter the supervisor passkey.', 'කරුණාකර අධීක්ෂක මුරපදය ඇතුළත් කරන්න.'));
                   }
+
+                  // Verify passkey against server (which authorizes valid passkey, 1234 PIN, or ADMIN/SUPER_ADMIN sessions)
+                  try {
+                    const verifyRes = await fetchWithTimeout(`${API_URL}/settings/verify-passkey`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ passkey: enteredPass })
+                    });
+                    if (!verifyRes.ok) {
+                      const errData = await verifyRes.json().catch(() => ({}));
+                      return alert(errData?.error || t('Invalid Passkey! Access Denied.', 'වලංගු නොවන මුරපදයකි! අවලංගු කිරීමට නොහැක.'));
+                    }
+                  } catch (e: any) {
+                    // Offline fallback: allow 1234 or unmasked local passkey
+                    const localPass = (shopSettings?.void_passkey && !shopSettings.void_passkey.includes('•')) 
+                      ? shopSettings.void_passkey.trim() 
+                      : '1234';
+                    if (enteredPass !== localPass && enteredPass !== '1234') {
+                      return alert(t('Invalid Passkey! Access Denied.', 'වලංගු නොවන මුරපදයකි! අවලංගු කිරීමට නොහැක.'));
+                    }
+                  }
+
                   setShowVoidModal(false);
                   if (targetDeleteInvoiceId) {
                     const idToDelete = targetDeleteInvoiceId;
                     setTargetDeleteInvoiceId(null);
                     setIsLoading(true);
                     try {
-                      await deleteSaleWithPasskey(idToDelete, voidPasskeyInput.trim());
+                      await deleteSaleWithPasskey(idToDelete, enteredPass);
                       setOrders((prev) => prev.map((order) => order.id === idToDelete ? { ...order, status: 'VOIDED' as any } : order));
                       alert(t('Sales invoice voided/deleted successfully.', 'විකිණීම් ඉන්වොයිසිය සාර්ථකව අවලංගු කරන ලදි.'));
                     } catch (err: any) {
@@ -7907,10 +7926,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       setIsLoading(false);
                     }
                   } else if (targetVoidInvoiceId) {
-                    await handleVoidOrder(targetVoidInvoiceId, voidPasskeyInput.trim());
+                    await handleVoidOrder(targetVoidInvoiceId, enteredPass);
                     setTargetVoidInvoiceId(null);
                   } else if (targetVoidReturnId) {
-                    await handleVoidSalesReturn(targetVoidReturnId, voidPasskeyInput.trim());
+                    await handleVoidSalesReturn(targetVoidReturnId, enteredPass);
                     setTargetVoidReturnId(null);
                   }
                 }}

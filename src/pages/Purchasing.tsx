@@ -371,27 +371,20 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     }
   }, [selectedDebitNoteCode, purchaseReturns, poTotalWithTransport]);
 
-  // Unsaved Changes Warning Guard (Electron-Compatible)
+  // Unsaved Changes Warning Guard (Web Browser Only - Disabled in Electron to prevent reload lockup)
   useEffect(() => {
-    const isElectron = !!(window as any).electron || navigator.userAgent.toLowerCase().includes('electron');
+    const isElectron = !!(window as any).electron || 
+                       !!(window as any).electronAPI || 
+                       navigator.userAgent.toLowerCase().includes('electron');
+    if (isElectron) return; // Allow unobstructed native desktop reloads
 
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       const hasUnsavedCart = poItems && poItems.length > 0;
       if (!hasUnsavedCart) return;
 
-      if (isElectron) {
-        // Synchronous prompt compatible with Electron renderer threads
-        const confirmLeave = window.confirm("You have an active ongoing bill in progress! Discard items and reload?");
-        if (!confirmLeave) {
-          e.preventDefault();
-          e.returnValue = '';
-        }
-      } else {
-        // Standard Web browser confirmation dialog
-        e.preventDefault();
-        e.returnValue = '';
-        return '';
-      }
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);

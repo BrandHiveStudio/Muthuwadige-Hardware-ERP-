@@ -199,6 +199,9 @@ export function Header({
     if (isRefreshing) return;
 
     setIsRefreshing(true);
+    const unbufferTimer = setTimeout(() => {
+      setIsRefreshing(false);
+    }, 3000);
 
     try {
       if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
@@ -221,11 +224,15 @@ export function Header({
       const win = typeof window !== 'undefined' ? (window as any) : null;
       if (win?.electronAPI?.reload) {
         await Promise.resolve(win.electronAPI.reload());
+        setTimeout(() => {
+          try { window.location.reload(); } catch (_) {}
+        }, 500);
         return;
       }
     } catch (err) {
       console.error('Window reload error:', err);
     }
+    clearTimeout(unbufferTimer);
     window.location.reload();
   };
 

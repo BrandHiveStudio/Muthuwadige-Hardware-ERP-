@@ -49,6 +49,7 @@ export const TABLES_TO_SYNC = [
   'sales_returns',
   'sales_return_items',
   'shift_logs',
+  'audit_logs',
   'expenses',
   'system_settings'
 ];
@@ -94,6 +95,59 @@ async function executeWithTimeout(tursoClient, sqlOrObj, timeoutMs = 15000) {
   return Promise.race([queryPromise, timeoutPromise]);
 }
 
+let tursoSchemaEnsured = false;
+export async function ensureTursoSchema(tursoClient) {
+  if (!tursoClient || tursoSchemaEnsured) return;
+  try {
+    await tursoClient.batch([
+      `CREATE TABLE IF NOT EXISTS shift_logs (
+        id TEXT PRIMARY KEY,
+        station_id TEXT,
+        cashier_name TEXT,
+        opening_float REAL DEFAULT 0,
+        cash_sales REAL DEFAULT 0,
+        cash_returns REAL DEFAULT 0,
+        petty_expenses REAL DEFAULT 0,
+        expected_cash REAL DEFAULT 0,
+        counted_cash REAL DEFAULT 0,
+        discrepancy REAL DEFAULT 0,
+        discrepancy_status TEXT,
+        remarks TEXT,
+        opened_at TEXT,
+        closed_at TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );`,
+      `CREATE TABLE IF NOT EXISTS audit_logs (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        user_name TEXT,
+        user_role TEXT,
+        action TEXT NOT NULL,
+        details TEXT,
+        ip_address TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );`
+    ], 'write');
+    const cols = [
+      "ALTER TABLE shift_logs ADD COLUMN date TEXT;",
+      "ALTER TABLE shift_logs ADD COLUMN status TEXT DEFAULT 'CLOSED';",
+      "ALTER TABLE shift_logs ADD COLUMN actual_cash REAL DEFAULT 0;",
+      "ALTER TABLE shift_logs ADD COLUMN notes TEXT;",
+      "ALTER TABLE shift_logs ADD COLUMN cashier_id TEXT;",
+      "ALTER TABLE shift_logs ADD COLUMN cashier_email TEXT;",
+      "ALTER TABLE shift_logs ADD COLUMN updated_at TEXT;",
+      "ALTER TABLE audit_logs ADD COLUMN timestamp TEXT DEFAULT CURRENT_TIMESTAMP;",
+      "ALTER TABLE audit_logs ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP;"
+    ];
+    for (const c of cols) {
+      try { await tursoClient.execute(c); } catch (_) {}
+    }
+    tursoSchemaEnsured = true;
+  } catch (e) {
+    console.warn('[BackgroundSync] Warning: Failed to ensure Turso shift_logs/audit_logs schema:', e?.message);
+  }
+}
+
 let schemaEnsured = false;
 export async function ensureSyncSchema(db) {
   if (!db || schemaEnsured) return;
@@ -118,6 +172,27 @@ export async function ensureSyncSchema(db) {
           password TEXT,
           role TEXT,
           name TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+    } catch(_) {}
+    try {
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS shift_logs (
+          id TEXT PRIMARY KEY,
+          station_id TEXT,
+          cashier_name TEXT,
+          opening_float REAL DEFAULT 0,
+          cash_sales REAL DEFAULT 0,
+          cash_returns REAL DEFAULT 0,
+          petty_expenses REAL DEFAULT 0,
+          expected_cash REAL DEFAULT 0,
+          counted_cash REAL DEFAULT 0,
+          discrepancy REAL DEFAULT 0,
+          discrepancy_status TEXT,
+          remarks TEXT,
+          opened_at TEXT,
+          closed_at TEXT,
           created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
       `);
@@ -190,6 +265,8 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
   if (isWebClient) return;
   const nowIso = new Date().toISOString();
 
+  await ensureTursoSchema(tursoClient);
+
   const pendingItems = await localDb.all(
     "SELECT * FROM sync_queue WHERE status = 'PENDING' ORDER BY created_at ASC LIMIT 100"
   );
@@ -197,7 +274,8 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
   if (pendingItems && pendingItems.length > 0) {
     console.log(`[BackgroundSync] Transmitting ${pendingItems.length} queued record(s) to Turso Cloud...`);
     const statements = [];
-    const successfulIds = [];
+    const statementItemMap = [];
+    const directSuccessfulIds = [];
 
     for (const item of pendingItems) {
       let row = null;
@@ -237,11 +315,12 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
       if (targetTable === 'cheques') targetTable = 'cheque_registry';
 
       if (item.action === 'DELETE') {
-        statements.push({
+        const stmt = {
           sql: `DELETE FROM "${targetTable}" WHERE id = ?`,
           args: [item.record_id]
-        });
-        successfulIds.push(item.id);
+        };
+        statements.push(stmt);
+        statementItemMap.push({ statement: stmt, itemId: item.id, table: targetTable });
       } else if (row && typeof row === 'object' && targetTable === 'profiles') {
         // SECURITY: profiles/authentication credentials must not be blindly overwritten by an
         // incidental sync of some other field (name/role/permissions edited elsewhere, or - as
@@ -264,12 +343,13 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
           ? `DO UPDATE SET ${updateCols.map(c => `"${c}" = excluded."${c}"`).join(', ')}`
           : 'DO NOTHING';
 
-        statements.push({
+        const stmt = {
           sql: `INSERT INTO "profiles" (${colNames}) VALUES (${placeholders})
                 ON CONFLICT("id") ${conflictClause}`,
           args
-        });
-        successfulIds.push(item.id);
+        };
+        statements.push(stmt);
+        statementItemMap.push({ statement: stmt, itemId: item.id, table: targetTable });
       } else if (row && typeof row === 'object' && targetTable === 'products') {
         // Enforce Cloud Wins (LWW) on Master Data:
         // Never allow an unmodified local product row to push up and overwrite newer cloud prices or stock counts.
@@ -304,14 +384,14 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
                 [cloudPrice, cloudPrice, cloudCost, cloudStock, cloudStock, cloudUpdated, row.id || item.record_id]
               );
             } catch (_) {}
-            successfulIds.push(item.id);
+            directSuccessfulIds.push(item.id);
             continue;
           }
 
           // 2. If unmodified local product (identical price, cost_price, and stock), skip upstream push
           if (cloudPrice === localPrice && cloudCost === localCost && cloudStock === localStock) {
             console.log(`[BackgroundSync] Skipping upstream push for unmodified product ${row.sku || item.record_id}.`);
-            successfulIds.push(item.id);
+            directSuccessfulIds.push(item.id);
             continue;
           }
         }
@@ -334,7 +414,7 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
         const placeholders = columns.map(() => '?').join(', ');
         const args = columns.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
 
-        statements.push({
+        const stmt = {
           sql: `INSERT INTO "products" (${colNames}) VALUES (${placeholders})
                 ON CONFLICT("sku") DO UPDATE SET
                   "stock" = excluded."stock",
@@ -344,27 +424,49 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
                   "cost_price" = excluded."cost_price",
                   "updated_at" = excluded."updated_at"`,
           args
-        });
-        successfulIds.push(item.id);
+        };
+        statements.push(stmt);
+        statementItemMap.push({ statement: stmt, itemId: item.id, table: targetTable });
       } else if (row && typeof row === 'object') {
         const columns = Object.keys(row);
         const colNames = columns.map(c => `"${c}"`).join(', ');
         const placeholders = columns.map(() => '?').join(', ');
         const args = columns.map(c => row[c] !== undefined ? row[c] : null);
 
-        statements.push({
+        const stmt = {
           sql: `INSERT OR REPLACE INTO "${targetTable}" (${colNames}) VALUES (${placeholders})`,
           args
-        });
-        successfulIds.push(item.id);
+        };
+        statements.push(stmt);
+        statementItemMap.push({ statement: stmt, itemId: item.id, table: targetTable });
       } else {
-        successfulIds.push(item.id);
+        directSuccessfulIds.push(item.id);
       }
     }
 
+    const successfulIds = [...directSuccessfulIds];
+
     if (statements.length > 0) {
-      await tursoClient.batch(statements, 'write');
-      lastUpstreamSync = new Date().toISOString();
+      try {
+        await tursoClient.batch(statements, 'write');
+        for (const entry of statementItemMap) {
+          successfulIds.push(entry.itemId);
+        }
+        lastUpstreamSync = new Date().toISOString();
+      } catch (batchErr) {
+        console.warn(`[BackgroundSync] Batch upstream write failed (${batchErr.message}). Retrying statement batches isolated per table/record...`);
+        for (const entry of statementItemMap) {
+          try {
+            await tursoClient.execute(entry.statement);
+            successfulIds.push(entry.itemId);
+          } catch (singleErr) {
+            console.error(`[BackgroundSync] Failed to push upstream for table "${entry.table}" (item: ${entry.itemId}):`, singleErr.message);
+          }
+        }
+        if (successfulIds.length > directSuccessfulIds.length) {
+          lastUpstreamSync = new Date().toISOString();
+        }
+      }
     }
 
     // Purge processed items from local sync_queue
@@ -372,7 +474,7 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
       const placeholders = successfulIds.map(() => '?').join(', ');
       await localDb.run(`DELETE FROM sync_queue WHERE id IN (${placeholders})`, successfulIds);
     }
-    console.log(`[BackgroundSync] Successfully synced ${statements.length} record(s) to Turso Cloud.`);
+    console.log(`[BackgroundSync] Successfully processed ${successfulIds.length} record(s) for Turso Cloud.`);
   } else {
     if (!lastUpstreamSync) lastUpstreamSync = new Date().toISOString();
   }

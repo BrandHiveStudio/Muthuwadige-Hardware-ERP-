@@ -908,7 +908,16 @@ async function requireVoidPasskey(req, res, next) {
     const callerRole = (caller.role || req.headers['x-user-role'] || '').toUpperCase();
     const callerName = (caller.username || caller.name || req.headers['x-user-name'] || '').toLowerCase();
 
-    const isAuthorized = (enteredPasskey === validPasskey) || (enteredPasskey === '1234') || (callerRole === 'SUPER_ADMIN') || (callerName === 'super_admin') || (req.user?.role?.toUpperCase() === 'SUPER_ADMIN') || (req.authUser?.role?.toUpperCase() === 'SUPER_ADMIN');
+    const isAuthorized = (enteredPasskey && enteredPasskey === validPasskey) || 
+      (enteredPasskey === '1234') || 
+      (callerRole === 'SUPER_ADMIN') || 
+      (callerRole === 'ADMIN') || 
+      (callerRole === 'ADMINISTRATOR') || 
+      (callerName === 'super_admin') || 
+      (req.user?.role?.toUpperCase() === 'SUPER_ADMIN') || 
+      (req.user?.role?.toUpperCase() === 'ADMIN') || 
+      (req.authUser?.role?.toUpperCase() === 'SUPER_ADMIN') ||
+      (req.authUser?.role?.toUpperCase() === 'ADMIN');
     if (!isAuthorized) {
       return res.status(403).json({ error: 'Invalid Passkey! Access Denied.' });
     }
@@ -934,7 +943,16 @@ app.post(['/api/settings/verify-passkey', '/api/verify-passkey'], async (req, re
     const callerRole = (caller.role || req.headers['x-user-role'] || '').toUpperCase();
     const callerName = (caller.username || caller.name || req.headers['x-user-name'] || '').toLowerCase();
 
-    const isAuthorized = (enteredPasskey === validPasskey) || (enteredPasskey === '1234') || (callerRole === 'SUPER_ADMIN') || (callerName === 'super_admin') || (req.user?.role?.toUpperCase() === 'SUPER_ADMIN') || (req.authUser?.role?.toUpperCase() === 'SUPER_ADMIN');
+    const isAuthorized = (enteredPasskey && enteredPasskey === validPasskey) || 
+      (enteredPasskey === '1234') || 
+      (callerRole === 'SUPER_ADMIN') || 
+      (callerRole === 'ADMIN') || 
+      (callerRole === 'ADMINISTRATOR') || 
+      (callerName === 'super_admin') || 
+      (req.user?.role?.toUpperCase() === 'SUPER_ADMIN') || 
+      (req.user?.role?.toUpperCase() === 'ADMIN') || 
+      (req.authUser?.role?.toUpperCase() === 'SUPER_ADMIN') ||
+      (req.authUser?.role?.toUpperCase() === 'ADMIN');
     if (!isAuthorized) {
       return res.status(403).json({ valid: false, error: 'Invalid Passkey! Access Denied.' });
     }
@@ -10811,7 +10829,7 @@ app.get('/api/shifts/current', async (req, res) => {
 
     // Cash sales strictly created AFTER the most recent shift closure
     const salesRow = await db.get(`
-      SELECT COALESCE(SUM(total), 0) AS total_cash_sales
+      SELECT COALESCE(SUM(total_amount), 0) AS total_cash_sales
       FROM sales
       WHERE (LOWER(payment_method) = 'cash')
         AND (status IS NULL OR (UPPER(status) != 'VOIDED' AND UPPER(status) != 'VOID' AND UPPER(status) != 'CANCELLED'))
@@ -10820,7 +10838,7 @@ app.get('/api/shifts/current', async (req, res) => {
 
     // Cash returns strictly created AFTER the most recent shift closure
     const returnsRow = await db.get(`
-      SELECT COALESCE(SUM(refund_amount), 0) AS total_cash_returns
+      SELECT COALESCE(SUM(COALESCE(total_refunded, return_amount, 0)), 0) AS total_cash_returns
       FROM sales_returns
       WHERE (status IS NULL OR (UPPER(status) != 'VOIDED' AND UPPER(status) != 'VOID'))
         AND created_at > ?
@@ -10985,6 +11003,11 @@ app.post('/api/shifts/close', async (req, res) => {
       ]
     );
 
+    // Clear the active opening float setting so the next shift/day begins clean at 0.00
+    try {
+      await db.run("DELETE FROM system_settings WHERE key LIKE 'OPENING_FLOAT_%' OR id LIKE 'OPENING_FLOAT_%'");
+    } catch (_) { }
+
     const expStr = resolvedExpectedCash.toFixed(2);
     const actStr = resolvedCountedCash.toFixed(2);
     const diffStr = resolvedDiscrepancy.toFixed(2);
@@ -11085,11 +11108,38 @@ if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.
               total REAL,
               created_at TEXT
             );`,
+            `CREATE TABLE IF NOT EXISTS shift_logs (
+              id TEXT PRIMARY KEY,
+              station_id TEXT,
+              cashier_name TEXT,
+              opening_float REAL DEFAULT 0,
+              cash_sales REAL DEFAULT 0,
+              cash_returns REAL DEFAULT 0,
+              petty_expenses REAL DEFAULT 0,
+              expected_cash REAL DEFAULT 0,
+              counted_cash REAL DEFAULT 0,
+              discrepancy REAL DEFAULT 0,
+              discrepancy_status TEXT,
+              remarks TEXT,
+              opened_at TEXT,
+              closed_at TEXT,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );`,
+            `CREATE TABLE IF NOT EXISTS audit_logs (
+              id TEXT PRIMARY KEY,
+              user_id TEXT,
+              user_name TEXT,
+              user_role TEXT,
+              action TEXT NOT NULL,
+              details TEXT,
+              ip_address TEXT,
+              created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );`,
             `CREATE VIEW IF NOT EXISTS cash_book AS SELECT * FROM transactions;`,
             `CREATE VIEW IF NOT EXISTS cheques AS SELECT * FROM cheque_registry;`,
             `CREATE VIEW IF NOT EXISTS purchases AS SELECT * FROM purchase_orders;`
           ], 'write');
-          console.log('✅ [Startup] Turso Cloud financial & quotation tables verified.');
+          console.log('✅ [Startup] Turso Cloud financial, quotation, shift_logs & audit_logs tables verified.');
 
           // Ensure products, purchase_orders and system_settings extended columns exist on Turso Cloud
           const tursoExtendedCols = [
