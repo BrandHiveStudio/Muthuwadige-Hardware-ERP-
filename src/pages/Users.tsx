@@ -117,7 +117,7 @@ export function Users({ currentUser: propCurrentUser }: UsersProps = {}) {
     e.preventDefault();
 
     if (isQuotaReached) {
-      alert("Staff quota limit reached. Maximum 3 additional staff accounts allowed.");
+      alert("Account limit reached (3 staff members). Delete an account below to add someone new, or contact support to add more staff.");
       return;
     }
 
@@ -375,7 +375,7 @@ export function Users({ currentUser: propCurrentUser }: UsersProps = {}) {
               <div className="flex items-center gap-2.5">
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping shrink-0" />
                 <span>
-                  <strong>Staff Account Limit Reached (3 Staff + 1 Super Admin = 4 Total Accounts):</strong> You have utilized all 3 additional staff accounts on this workstation. To add a new team member, delete an inactive account or contact support to upgrade your enterprise license.
+                  <strong>Account limit reached (3 staff members).</strong> Delete an account below to add someone new, or contact support to add more staff.
                 </span>
               </div>
             </div>
