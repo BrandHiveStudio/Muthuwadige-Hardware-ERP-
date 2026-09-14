@@ -373,18 +373,21 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
   // Unsaved Changes Warning Guard (Electron-Compatible)
   useEffect(() => {
-    const handleBeforeUnload = (e: any) => {
-      const hasUnsaved = poItems && poItems.length > 0;
-      if (!hasUnsaved) return;
+    const isElectron = !!(window as any).electron || navigator.userAgent.toLowerCase().includes('electron');
 
-      const isElectron = window.navigator.userAgent.toLowerCase().includes('electron');
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      const hasUnsavedCart = poItems && poItems.length > 0;
+      if (!hasUnsavedCart) return;
+
       if (isElectron) {
-        const confirmLeave = window.confirm("You have unsaved changes in your active cart/order. Are you sure you want to discard and reload?");
+        // Synchronous prompt compatible with Electron renderer threads
+        const confirmLeave = window.confirm("You have an active ongoing bill in progress! Discard items and reload?");
         if (!confirmLeave) {
           e.preventDefault();
-          e.stopImmediatePropagation();
+          e.returnValue = '';
         }
       } else {
+        // Standard Web browser confirmation dialog
         e.preventDefault();
         e.returnValue = '';
         return '';

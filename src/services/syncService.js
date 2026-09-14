@@ -49,7 +49,8 @@ export const TABLES_TO_SYNC = [
   'sales_returns',
   'sales_return_items',
   'shift_logs',
-  'expenses'
+  'expenses',
+  'system_settings'
 ];
 
 /**

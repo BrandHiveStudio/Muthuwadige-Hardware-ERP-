@@ -374,12 +374,21 @@ export async function close() {
   isTursoActive = false;
 }
 
+export function prepare(sql) {
+  return {
+    get: (...params) => get(sql, ...params),
+    all: (...params) => all(sql, ...params),
+    run: (...params) => run(sql, ...params)
+  };
+}
+
 export const db = {
   isTurso,
   all,
   get,
   run,
   exec,
+  prepare,
   close,
   getUnderlyingClient: () => (isTursoActive ? tursoClient : localSqliteDb)
 };

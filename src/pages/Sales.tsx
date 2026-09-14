@@ -4,6 +4,7 @@ import {
   SearchIcon,
   PlusIcon,
   Trash2Icon,
+  Trash2,
   ShoppingCartIcon,
   ReceiptIcon,
   XIcon,
@@ -1258,12 +1259,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   const [loadingCNUsage, setLoadingCNUsage] = useState(false);
 
   // 💵 Shift Balancing & Cash Drawer Control State
+  // 💵 Shift Balancing & Cash Drawer Control State
   const [showShiftModal, setShowShiftModal] = useState(false);
   const [openingFloat, setOpeningFloat] = useState<number | string>(() => {
     const today = new Date().toISOString().split('T')[0];
     const saved = localStorage.getItem(`shift_opening_float_${today}`);
     return saved ? Number(saved) : 0;
   });
+  const [lastShiftClosedAt, setLastShiftClosedAt] = useState<string>('1970-01-01 00:00:00');
   const [actualCountedCash, setActualCountedCash] = useState<number | string>('');
   const [drawerPettyExpenses, setDrawerPettyExpenses] = useState<number | string>('');
   const [shiftNotes, setShiftNotes] = useState<string>('');
@@ -1272,14 +1275,29 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
   const fetchTodayShift = useCallback(async () => {
     try {
+      const currentRes = await fetchWithTimeout(`${API_URL}/shifts/current`);
+      if (currentRes.ok) {
+        const currentData = await currentRes.json();
+        if (currentData?.last_closed_at) {
+          setLastShiftClosedAt(currentData.last_closed_at);
+        }
+        if (currentData?.opening_float !== undefined) {
+          setOpeningFloat(currentData.opening_float);
+        }
+      }
+
       const res = await fetchWithTimeout(`${API_URL}/shifts/today`);
       if (res.ok) {
         const data = await res.json();
-        if (data?.opening_float !== undefined) {
+        if (data?.opening_float !== undefined && !openingFloat) {
           setOpeningFloat(data.opening_float);
         }
+        if (data?.last_closed_at && !lastShiftClosedAt) {
+          setLastShiftClosedAt(data.last_closed_at);
+        }
         if (data?.shift) {
-          setShiftSuccessMsg(`Shift previously closed today (Counted: Rs. ${Number(data.shift.actual_cash || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`);
+          const countedDisplay = Number(data.shift.counted_cash || data.shift.actual_cash || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          setShiftSuccessMsg(`Shift previously closed today (Counted: Rs. ${countedDisplay})`);
         }
       }
     } catch (_) { }
@@ -1305,36 +1323,64 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     }
   };
 
+  // Shift Balancing Real-Time Computations (Section 5: Isolated to Active Window)
+  const shiftTodayCashSales = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    return orders
+      .filter(o => {
+        const isToday = o.created_at?.startsWith(today);
+        const isAfterClose = lastShiftClosedAt && lastShiftClosedAt !== '1970-01-01 00:00:00' 
+          ? Boolean(o.created_at && o.created_at > lastShiftClosedAt) 
+          : Boolean(isToday);
+        const statusUpper = (o.status || '').toUpperCase();
+        const isNotCancelled = statusUpper !== 'CANCELLED' && statusUpper !== 'VOIDED' && statusUpper !== 'VOID';
+        const method = (o.payment_method || o.paymentMethod || 'cash').toLowerCase();
+        const isCash = method === 'cash' || (o as any).payment_type === 'cash';
+        return isToday && isAfterClose && isNotCancelled && isCash;
+      })
+      .reduce((sum, o) => sum + Number(o.total || 0), 0);
+  }, [orders, lastShiftClosedAt]);
+
+  const shiftTodayCashReturns = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    return salesReturnsList
+      .filter(r => {
+        const isToday = r.created_at?.startsWith(today);
+        const isAfterClose = lastShiftClosedAt && lastShiftClosedAt !== '1970-01-01 00:00:00' 
+          ? Boolean(r.created_at && r.created_at > lastShiftClosedAt) 
+          : Boolean(isToday);
+        const statusUpper = (r.status || '').toUpperCase();
+        const isNotVoided = statusUpper !== 'VOIDED' && statusUpper !== 'VOID';
+        const refundType = ((r as any).refund_type || (r as any).refund_mode || r.returnMethod || 'cash').toLowerCase();
+        const isCash = refundType.includes('cash') || (!(r as any).credit_note_id && !r.creditNoteNo);
+        return isToday && isAfterClose && isNotVoided && isCash;
+      })
+      .reduce((sum, r) => sum + Number(r.refund_amount || (r as any).total_refund || r.totalRefunded || 0), 0);
+  }, [salesReturnsList, lastShiftClosedAt]);
+
+  const shiftExpectedCash = useMemo(() => {
+    const numOpening = Math.max(0, Number(openingFloat) || 0);
+    const numPetty = Math.max(0, Number(drawerPettyExpenses) || 0);
+    return Math.max(0, Math.round((numOpening + shiftTodayCashSales - shiftTodayCashReturns - numPetty) * 100) / 100);
+  }, [openingFloat, shiftTodayCashSales, shiftTodayCashReturns, drawerPettyExpenses]);
+
+  const shiftDiscrepancy = useMemo(() => {
+    if (actualCountedCash === '' || actualCountedCash === undefined || actualCountedCash === null) return null;
+    const numActual = typeof actualCountedCash === 'number' ? actualCountedCash : parseFloat(actualCountedCash) || 0;
+    return Math.round((numActual - shiftExpectedCash) * 100) / 100;
+  }, [actualCountedCash, shiftExpectedCash]);
+
   const handleCloseShift = async () => {
     const today = new Date().toISOString().split('T')[0];
+    const nowIso = new Date().toISOString();
     const numOpeningFloat = Math.max(0, Number(openingFloat) || 0);
     const numPettyExpenses = Math.max(0, Number(drawerPettyExpenses) || 0);
     const numActual = typeof actualCountedCash === 'number' ? actualCountedCash : parseFloat(actualCountedCash) || 0;
     
-    // Calculate cash sales from today's orders
-    const todayCashSales = orders
-      .filter(o => {
-        const isToday = o.created_at?.startsWith(today);
-        const isNotCancelled = (o.status || '').toLowerCase() !== 'cancelled';
-        const method = (o.payment_method || o.paymentMethod || 'cash').toLowerCase();
-        const isCash = method === 'cash' || (o as any).payment_type === 'cash';
-        return isToday && isNotCancelled && isCash;
-      })
-      .reduce((sum, o) => sum + Number(o.total || 0), 0);
-
-    // Calculate cash returns from today's returns
-    const todayCashReturns = salesReturnsList
-      .filter(r => {
-        const isToday = r.created_at?.startsWith(today);
-        const isNotVoided = (r.status || '').toUpperCase() !== 'VOIDED';
-        const refundType = ((r as any).refund_type || (r as any).refund_mode || r.returnMethod || 'cash').toLowerCase();
-        const isCash = refundType.includes('cash') || (!(r as any).credit_note_id && !r.creditNoteNo);
-        return isToday && isNotVoided && isCash;
-      })
-      .reduce((sum, r) => sum + Number(r.refund_amount || (r as any).total_refund || r.totalRefunded || 0), 0);
-
-    const expectedCash = Math.max(0, Math.round((numOpeningFloat + todayCashSales - todayCashReturns - numPettyExpenses) * 100) / 100);
+    const expectedCash = shiftExpectedCash;
     const discrepancy = Math.round((numActual - expectedCash) * 100) / 100;
+    const discrepancyStatus = Math.abs(discrepancy) < 0.01 ? 'Balanced' : (discrepancy > 0 ? 'Overage' : 'Shortage');
+    const shiftId = 'shift_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
 
     setIsSavingShift(true);
     try {
@@ -1342,17 +1388,37 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          opening_float: numOpeningFloat,
-          cash_sales: todayCashSales,
-          cash_returns: todayCashReturns,
-          petty_expenses: numPettyExpenses,
-          expected_cash: expectedCash,
-          actual_cash: numActual,
-          discrepancy,
-          notes: shiftNotes,
-          cashier_email: currentUser?.email || 'cashier@hardware.com',
+          id: shiftId,
+          shift_id: shiftId,
+          shiftId: shiftId,
+          station_id: 'STATION-01',
+          stationId: 'STATION-01',
           cashier_name: currentUser?.name || currentUser?.full_name || 'Cashier',
-          cashier_id: currentUser?.id || 'u1'
+          cashierName: currentUser?.name || currentUser?.full_name || 'Cashier',
+          cashier_email: currentUser?.email || 'cashier@hardware.com',
+          cashier_id: currentUser?.id || 'u1',
+          opening_float: numOpeningFloat,
+          openingFloat: numOpeningFloat,
+          cash_sales: shiftTodayCashSales,
+          cashSales: shiftTodayCashSales,
+          cash_returns: shiftTodayCashReturns,
+          cashReturns: shiftTodayCashReturns,
+          petty_expenses: numPettyExpenses,
+          pettyExpenses: numPettyExpenses,
+          expected_cash: expectedCash,
+          expectedCash: expectedCash,
+          actual_cash: numActual,
+          counted_cash: numActual,
+          countedCash: numActual,
+          discrepancy,
+          discrepancy_status: discrepancyStatus,
+          discrepancyStatus: discrepancyStatus,
+          remarks: shiftNotes,
+          notes: shiftNotes,
+          opened_at: today,
+          openedAt: today,
+          closed_at: nowIso,
+          closedAt: nowIso
         })
       });
 
@@ -1362,6 +1428,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
         setActualCountedCash('');
         setDrawerPettyExpenses('');
         setShiftNotes('');
+        setLastShiftClosedAt(nowIso);
         setShiftSuccessMsg('Shift reconciliation archived successfully!');
         notify('Shift balancing completed and archived!', 'Muthuwadige Hardware ERP', 'success');
         setTimeout(() => {
@@ -1378,45 +1445,6 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       setIsSavingShift(false);
     }
   };
-
-  // Shift Balancing Real-Time Computations
-  const shiftTodayCashSales = useMemo(() => {
-    const today = new Date().toISOString().split('T')[0];
-    return orders
-      .filter(o => {
-        const isToday = o.created_at?.startsWith(today);
-        const isNotCancelled = (o.status || '').toLowerCase() !== 'cancelled';
-        const method = (o.payment_method || o.paymentMethod || 'cash').toLowerCase();
-        const isCash = method === 'cash' || (o as any).payment_type === 'cash';
-        return isToday && isNotCancelled && isCash;
-      })
-      .reduce((sum, o) => sum + Number(o.total || 0), 0);
-  }, [orders]);
-
-  const shiftTodayCashReturns = useMemo(() => {
-    const today = new Date().toISOString().split('T')[0];
-    return salesReturnsList
-      .filter(r => {
-        const isToday = r.created_at?.startsWith(today);
-        const isNotVoided = (r.status || '').toUpperCase() !== 'VOIDED';
-        const refundType = ((r as any).refund_type || (r as any).refund_mode || r.returnMethod || 'cash').toLowerCase();
-        const isCash = refundType.includes('cash') || (!(r as any).credit_note_id && !r.creditNoteNo);
-        return isToday && isNotVoided && isCash;
-      })
-      .reduce((sum, r) => sum + Number(r.refund_amount || (r as any).total_refund || r.totalRefunded || 0), 0);
-  }, [salesReturnsList]);
-
-  const shiftExpectedCash = useMemo(() => {
-    const numOpening = Math.max(0, Number(openingFloat) || 0);
-    const numPetty = Math.max(0, Number(drawerPettyExpenses) || 0);
-    return Math.max(0, Math.round((numOpening + shiftTodayCashSales - shiftTodayCashReturns - numPetty) * 100) / 100);
-  }, [openingFloat, shiftTodayCashSales, shiftTodayCashReturns, drawerPettyExpenses]);
-
-  const shiftDiscrepancy = useMemo(() => {
-    if (actualCountedCash === '' || actualCountedCash === undefined || actualCountedCash === null) return null;
-    const numActual = typeof actualCountedCash === 'number' ? actualCountedCash : parseFloat(actualCountedCash) || 0;
-    return Math.round((numActual - shiftExpectedCash) * 100) / 100;
-  }, [actualCountedCash, shiftExpectedCash]);
 
 
 
@@ -2165,6 +2193,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     setTargetDeleteInvoiceId(orderId);
     setVoidPasskeyInput('');
     setShowVoidModal(true);
+  };
+
+  const handleInitiateDelete = (orderId: string) => {
+    handleDeleteOrder(orderId);
   };
 
   useEffect(() => { 
@@ -3074,18 +3106,21 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
   // Unsaved Cart Warning (Electron-Compatible)
   useEffect(() => {
-    const handleBeforeUnload = (e: any) => {
-      const hasUnsaved = cartItems && cartItems.length > 0;
-      if (!hasUnsaved) return;
+    const isElectron = !!(window as any).electron || navigator.userAgent.toLowerCase().includes('electron');
 
-      const isElectron = window.navigator.userAgent.toLowerCase().includes('electron');
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      const hasUnsavedCart = (cartItems && cartItems.length > 0) || (creditCartItems && creditCartItems.length > 0);
+      if (!hasUnsavedCart) return;
+
       if (isElectron) {
-        const confirmLeave = window.confirm("You have unsaved changes in your active cart/order. Are you sure you want to discard and reload?");
+        // Synchronous prompt compatible with Electron renderer threads
+        const confirmLeave = window.confirm("You have an active ongoing bill in progress! Discard items and reload?");
         if (!confirmLeave) {
           e.preventDefault();
-          e.stopImmediatePropagation();
+          e.returnValue = '';
         }
       } else {
+        // Standard Web browser confirmation dialog
         e.preventDefault();
         e.returnValue = '';
         return '';
@@ -3094,7 +3129,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [cartItems]);
+  }, [cartItems, creditCartItems]);
 
   const handleHoldBill = (customHoldName?: string) => {
     if (cartItems.length === 0) return;
@@ -4551,6 +4586,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     ) : (
                       filteredOrders.map(order => {
                         const isCredit = isCreditOrder(order);
+                        const isVoided = (order.status || '').toUpperCase() === 'VOIDED' || (order.status || '').toUpperCase() === 'VOID' || (order.status || '').toUpperCase() === 'CANCELLED';
                         return (
                           <tr key={order.id} className={`transition-all duration-200 ${isCredit ? 'bg-amber-50/50 hover:bg-amber-50/90 border-l-4 border-l-amber-500' : 'hover:bg-slate-50/30'}`}>
                             <td className="px-6 py-4">
@@ -4591,19 +4627,19 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                             </td>
                           <td className="px-6 py-4 text-right font-black text-amber-500 font-mono text-sm">{symbol} {convert(order.total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                           <td className="px-6 py-4 text-center">
-                            <span className={`px-2.5 py-1 rounded-xl text-[9px] font-black uppercase tracking-wider ${
-                              (order.status as string) === 'cancelled' || (order.status as string) === 'Cancelled' || (order.status as string) === 'voided' || (order.status as string) === 'Voided'
-                                ? 'bg-red-100 text-red-700 border border-red-200 shadow-xs'
-                                : statusColors[order.status] || 'bg-slate-100 text-slate-500'
-                            }`}>
-                              {(order.status as string) === 'Paid' || (order.status as string) === 'paid' 
-                                ? t('Paid', 'ගෙවන ලද') 
-                                : (order.status as string) === 'Non Paid' 
-                                ? t('Non Paid', 'නොගෙවූ') 
-                                : (order.status as string) === 'cancelled' || (order.status as string) === 'Cancelled' || (order.status as string) === 'voided' || (order.status as string) === 'Voided'
-                                ? 'VOIDED'
-                                : order.status}
-                            </span>
+                            {isVoided ? (
+                              <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-700 border border-rose-200">
+                                VOIDED
+                              </span>
+                            ) : (
+                              <span className={`px-2.5 py-1 rounded-xl text-[9px] font-black uppercase tracking-wider ${statusColors[order.status] || 'bg-slate-100 text-slate-500'}`}>
+                                {(order.status as string) === 'Paid' || (order.status as string) === 'paid' 
+                                  ? t('Paid', 'ගෙවන ලද') 
+                                  : (order.status as string) === 'Non Paid' 
+                                  ? t('Non Paid', 'නොගෙවූ') 
+                                  : order.status}
+                              </span>
+                            )}
                           </td>
                           <td className="px-6 py-4 text-center flex items-center justify-center gap-2">
                             {(order.status as string) === 'Non Paid' && (
@@ -4637,7 +4673,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                               <PrinterIcon className="w-3.5 h-3.5 text-amber-400" />
                               {t('Print', 'මුද්‍රණය')}
                             </button>
-                            {(order.status as string) !== 'cancelled' && (order.status as string) !== 'Cancelled' && (order.status as string) !== 'voided' && (order.status as string) !== 'Voided' ? (
+                            {!isVoided ? (
                               <button
                                 type="button"
                                 onClick={() => { setTargetVoidInvoiceId(order.id); setVoidPasskeyInput(''); setShowVoidModal(true); }}
@@ -4650,12 +4686,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                             ) : (
                               <button
                                 type="button"
-                                onClick={() => handleDeleteOrder(order.id)}
-                                className="text-[9px] font-black uppercase tracking-widest bg-rose-600 hover:bg-rose-700 text-white px-3 py-2 rounded-xl transition-all shadow-md flex items-center gap-1"
+                                onClick={() => handleInitiateDelete(order.id)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-all"
                                 title={t('Delete', 'මකන්න')}
                               >
-                                <Trash2Icon className="w-3.5 h-3.5" />
-                                {t('Delete', 'මකන්න')}
+                                <Trash2 className="w-3.5 h-3.5" /> DELETE
                               </button>
                             )}
                           </td>
@@ -8680,9 +8715,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     type="number"
                     min="0"
                     step="50"
-                    value={openingFloat}
-                    onChange={(e) => setOpeningFloat(e.target.value)}
-                    placeholder="0.00"
+                    value={openingFloat === 0 ? '' : openingFloat}
+                    onChange={(e) => setOpeningFloat(e.target.value === '' ? 0 : Number(e.target.value))}
+                    placeholder="0"
+                    onFocus={(e) => e.target.select()}
                     className="w-32 pl-9 pr-3 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500"
                   />
                 </div>
