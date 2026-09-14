@@ -45,8 +45,11 @@ export interface Supplier {
   id: string;
   name: string;
   contact?: string;
+  contactPerson?: string;
+  contact_person?: string;
   email?: string;
   phone?: string;
+  mobile?: string;
   address?: string;
   totalOrders?: number;
   balance?: number;

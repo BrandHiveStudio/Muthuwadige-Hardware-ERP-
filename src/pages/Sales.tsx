@@ -1046,6 +1046,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   const [lastOrder, setLastOrder] = useState<SaleOrder | null>(null);
   const [historySearch, setHistorySearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [historyPaymentMethodFilter, setHistoryPaymentMethodFilter] = useState<string>('all');
   const [historySubTab, setHistorySubTab] = useState<'normal' | 'credit' | 'paid'>('paid');
   const [selectedHistoryIds, setSelectedHistoryIds] = useState<string[]>([]);
   const [selectedCreditIds, setSelectedCreditIds] = useState<string[]>([]);
@@ -3111,7 +3112,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       const res = await fetchWithTimeout(`${API_URL}/sales/${orderId}/void`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_email: userEmail, void_passkey: voidPasskey })
+        body: JSON.stringify({ 
+          user_email: userEmail, 
+          void_passkey: voidPasskey,
+          supervisor_name: currentUser?.name || currentUser?.full_name || 'Supervisor'
+        })
       });
       
       if (res.ok) {
@@ -3202,9 +3207,17 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       const matchDate = (!salesHistoryFromDate || sDate >= salesHistoryFromDate) && 
                         (!salesHistoryToDate || sDate <= salesHistoryToDate);
 
-      return matchSearch && matchStatus && matchDate;
+      const method = (o.payment_method || o.paymentMethod || '').toLowerCase();
+      const matchPaymentMethod = 
+        historyPaymentMethodFilter === 'all' ||
+        (historyPaymentMethodFilter === 'cash' && (method === 'cash' || (!method && !isCreditOrder(o)))) ||
+        (historyPaymentMethodFilter === 'card' && method.includes('card')) ||
+        (historyPaymentMethodFilter === 'credit' && (method.includes('credit') || isCreditOrder(o))) ||
+        (historyPaymentMethodFilter === 'bank transfer' && (method.includes('bank') || method.includes('transfer')));
+
+      return matchSearch && matchStatus && matchDate && matchPaymentMethod;
     });
-  }, [orders, historySearch, statusFilter, salesHistoryFromDate, salesHistoryToDate]);
+  }, [orders, historySearch, statusFilter, salesHistoryFromDate, salesHistoryToDate, historyPaymentMethodFilter]);
 
   const isCreditOrder = (o: SaleOrder) => 
     o.payment_method === 'Credit' || 
@@ -4311,11 +4324,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   </span>
                 </h3>
                 
-                {(historySearch || statusFilter !== 'all' || salesHistoryFromDate || salesHistoryToDate) && (
+                {(historySearch || statusFilter !== 'all' || historyPaymentMethodFilter !== 'all' || salesHistoryFromDate || salesHistoryToDate) && (
                   <button 
                     onClick={() => {
                       setHistorySearch('');
                       setStatusFilter('all');
+                      setHistoryPaymentMethodFilter('all');
                       setSalesHistoryFromDate('');
                       setSalesHistoryToDate('');
                     }}
@@ -4383,6 +4397,33 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     />
                   </div>
                 </div>
+              </div>
+
+              {/* Payment Method Filter Pills */}
+              <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-slate-100">
+                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider mr-1">
+                  {t('Payment Mode:', 'ගෙවීම් ක්‍රමය:')}
+                </span>
+                {[
+                  { id: 'all', label: t('All Modes', 'සියල්ල') },
+                  { id: 'cash', label: t('Cash', 'මුදල්') },
+                  { id: 'card', label: t('Card', 'කාඩ්පත්') },
+                  { id: 'credit', label: t('Credit / Ledger', 'ණය / ලෙජරය') },
+                  { id: 'bank transfer', label: t('Bank Transfer', 'බැංකු හුවමාරු') }
+                ].map(mode => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    onClick={() => setHistoryPaymentMethodFilter(mode.id)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                      historyPaymentMethodFilter === mode.id
+                        ? 'bg-slate-900 text-amber-400 shadow-sm'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
               </div>
             </div>
 

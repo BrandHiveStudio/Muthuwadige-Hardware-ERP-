@@ -1519,13 +1519,28 @@ export function Settings({ currentUser }: SettingsProps = {}) {
               <div className="absolute top-0 left-0 h-1.5 w-full bg-[#464646]" />
 
               <div className="space-y-4">
-                <div className="w-14 h-14 bg-[#464646]/10 text-[#464646] rounded-2xl flex items-center justify-center shadow-inner">
-                  <RefreshCcwIcon className="w-7 h-7" />
+                <div className="flex items-center justify-between">
+                  <div className="w-14 h-14 bg-[#464646]/10 text-[#464646] rounded-2xl flex items-center justify-center shadow-inner">
+                    <RefreshCcwIcon className="w-7 h-7" />
+                  </div>
+                  {!isRootAdmin && (
+                    <span className="px-3 py-1 bg-amber-50 border border-amber-200 text-amber-800 rounded-full text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5">
+                      <LockIcon className="w-3.5 h-3.5 text-amber-600" />
+                      Restricted to Root Administrator
+                    </span>
+                  )}
                 </div>
                 <div>
                   <h3 className="font-black text-[#464646] text-xl">Connection Settings</h3>
                   <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest mt-1">Configure Network Role</p>
                 </div>
+
+                {!isRootAdmin && (
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-600 text-xs font-semibold flex items-center gap-2">
+                    <span>🔒</span>
+                    <span>Displaying in read-only mode. Network role switching is reserved for Root Administrator to prevent accidental client detachment.</span>
+                  </div>
+                )}
 
                 <div className="pt-2 space-y-5">
                   <div className="space-y-2">
@@ -1533,8 +1548,11 @@ export function Settings({ currentUser }: SettingsProps = {}) {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <button
                         type="button"
-                        onClick={() => setAppRole('host')}
-                        className={`p-4 rounded-2xl border text-left transition-all ${appRole === 'host'
+                        disabled={!isRootAdmin}
+                        onClick={() => isRootAdmin && setAppRole('host')}
+                        className={`p-4 rounded-2xl border text-left transition-all ${
+                          !isRootAdmin ? 'cursor-not-allowed opacity-80 ' : ''
+                        }${appRole === 'host'
                           ? 'border-[#DAA520] bg-[#DAA520]/5 shadow-sm'
                           : 'border-gray-200 hover:bg-gray-50'
                           }`}
@@ -1545,8 +1563,11 @@ export function Settings({ currentUser }: SettingsProps = {}) {
 
                       <button
                         type="button"
-                        onClick={() => setAppRole('client')}
-                        className={`p-4 rounded-2xl border text-left transition-all ${appRole === 'client'
+                        disabled={!isRootAdmin}
+                        onClick={() => isRootAdmin && setAppRole('client')}
+                        className={`p-4 rounded-2xl border text-left transition-all ${
+                          !isRootAdmin ? 'cursor-not-allowed opacity-80 ' : ''
+                        }${appRole === 'client'
                           ? 'border-blue-500 bg-blue-50/50 shadow-sm'
                           : 'border-gray-200 hover:bg-gray-50'
                           }`}
@@ -1563,10 +1584,14 @@ export function Settings({ currentUser }: SettingsProps = {}) {
                         <label className="text-[10px] font-black text-[#464646] uppercase tracking-widest mb-1.5 block">Host Server Address / URL</label>
                         <input
                           type="text"
+                          disabled={!isRootAdmin}
+                          readOnly={!isRootAdmin}
                           value={hostAddress}
-                          onChange={e => setHostAddress(e.target.value)}
+                          onChange={e => isRootAdmin && setHostAddress(e.target.value)}
                           placeholder="e.g. http://192.168.1.50:5001"
-                          className="w-full px-4 py-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-mono font-bold text-xs text-slate-700 bg-white"
+                          className={`w-full px-4 py-3 border border-gray-200 rounded-xl outline-none font-mono font-bold text-xs text-slate-700 ${
+                            !isRootAdmin ? 'bg-slate-100 cursor-not-allowed text-slate-500' : 'bg-white focus:ring-2 focus:ring-blue-500'
+                          }`}
                         />
                       </div>
 
@@ -1632,15 +1657,26 @@ export function Settings({ currentUser }: SettingsProps = {}) {
               </div>
 
               <div className="pt-6 border-t border-slate-100 mt-6">
-                <button
-                  type="button"
-                  onClick={handleSaveConnectionSettings}
-                  disabled={isConnecting}
-                  className="w-full bg-[#DAA520] hover:bg-[#B8860B] disabled:bg-gray-300 text-white py-4.5 rounded-2xl font-black uppercase tracking-widest text-[11px] transition-all duration-300 shadow-lg shadow-[#DAA520]/20 flex items-center justify-center gap-2"
-                >
-                  {isConnecting && <Loader2Icon className="w-4.5 h-4.5 animate-spin" />}
-                  Save and Sync Role Configurations
-                </button>
+                {isRootAdmin ? (
+                  <button
+                    type="button"
+                    onClick={handleSaveConnectionSettings}
+                    disabled={isConnecting}
+                    className="w-full bg-[#DAA520] hover:bg-[#B8860B] disabled:bg-gray-300 text-white py-4.5 rounded-2xl font-black uppercase tracking-widest text-[11px] transition-all duration-300 shadow-lg shadow-[#DAA520]/20 flex items-center justify-center gap-2"
+                  >
+                    {isConnecting && <Loader2Icon className="w-4.5 h-4.5 animate-spin" />}
+                    Save and Sync Role Configurations
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled
+                    className="w-full bg-slate-200 text-slate-400 py-4.5 rounded-2xl font-black uppercase tracking-widest text-[11px] cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    <LockIcon className="w-4 h-4 text-slate-400" />
+                    Role Configuration Restricted to Root Administrator
+                  </button>
+                )}
               </div>
             </div>
           </div>

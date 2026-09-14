@@ -225,17 +225,36 @@ export function Sidebar({
         />
 
         {/* Header & Brand with Collapse Button */}
-        <div className="flex items-center justify-between p-3 border-b border-[#3d4248] min-h-[64px]">
-          <div className="flex items-center gap-2.5 overflow-hidden">
-            <div className="w-10 h-10 rounded-xl bg-white p-1 flex items-center justify-center flex-shrink-0 shadow-sm">
+        {isCollapsed ? (
+          <div className="flex flex-col items-center justify-center p-2 border-b border-[#3d4248] min-h-[76px] gap-2">
+            <div className="w-10 h-10 rounded-xl bg-white p-1 flex items-center justify-center shadow-sm flex-shrink-0 mx-auto">
               <img 
                 src={shopSettings?.logo_path || "./images/logo.png"} 
                 alt="Logo" 
-                className="w-full h-full object-contain"
+                className="w-10 h-10 object-contain mx-auto"
                 onError={(e) => { e.currentTarget.style.display = 'none'; }}
               />
             </div>
-            {!isCollapsed && (
+            <button
+              type="button"
+              onClick={toggleCollapse}
+              className="p-1 rounded-lg bg-[#3d4248] hover:bg-[#4d535b] text-gray-300 hover:text-white transition flex-shrink-0"
+              title="Expand Sidebar"
+            >
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between p-3 border-b border-[#3d4248] min-h-[64px]">
+            <div className="flex items-center gap-2.5 overflow-hidden">
+              <div className="w-10 h-10 rounded-xl bg-white p-1 flex items-center justify-center flex-shrink-0 shadow-sm">
+                <img 
+                  src={shopSettings?.logo_path || "./images/logo.png"} 
+                  alt="Logo" 
+                  className="w-full h-full object-contain"
+                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                />
+              </div>
               <div className="flex flex-col truncate text-left">
                 <span className="font-black text-sm tracking-wide uppercase text-white leading-tight truncate">
                   {firstWord}
@@ -244,18 +263,19 @@ export function Sidebar({
                   {restWords}
                 </span>
               </div>
-            )}
-          </div>
+            </div>
 
-          {/* Collapse / Expand Toggle Button */}
-          <button
-            onClick={toggleCollapse}
-            className="p-1.5 rounded-lg bg-[#3d4248] hover:bg-[#4d535b] text-gray-300 hover:text-white transition flex-shrink-0"
-            title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
-          >
-            {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-          </button>
-        </div>
+            {/* Collapse / Expand Toggle Button */}
+            <button
+              type="button"
+              onClick={toggleCollapse}
+              className="p-1.5 rounded-lg bg-[#3d4248] hover:bg-[#4d535b] text-gray-300 hover:text-white transition flex-shrink-0"
+              title="Collapse Sidebar"
+            >
+              <ChevronLeft size={16} />
+            </button>
+          </div>
+        )}
 
         {/* Navigation List */}
         <div className="flex-1 overflow-y-auto px-2 py-3 space-y-4 custom-scrollbar">

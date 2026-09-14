@@ -436,26 +436,48 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     doc.setTextColor(50, 50, 50);
     doc.setFontSize(10);
     doc.setFont('helvetica', 'bold');
-    doc.text("SUPPLIER:", 15, 65);
+    doc.text("SUPPLIER:", 15, 63);
+    doc.setFontSize(9);
+    doc.text(order.supplierName, 15, 69);
+
+    const suppObj = supplierList.find(s => s.name === order.supplierName || s.id === (order as any).supplierId);
+    const suppContact = suppObj?.contactPerson || (suppObj as any)?.contact_person;
+    const suppPhone = suppObj?.phone || (suppObj as any)?.mobile;
+    const suppEmail = suppObj?.email;
+
     doc.setFont('helvetica', 'normal');
-    doc.text(order.supplierName, 15, 72);
+    doc.setFontSize(8);
+    let suppY = 74;
+    if (suppContact) {
+      doc.text(`Attn: ${suppContact}`, 15, suppY);
+      suppY += 4.5;
+    }
+    if (suppPhone) {
+      doc.text(`Phone: ${suppPhone}`, 15, suppY);
+      suppY += 4.5;
+    }
+    if (suppEmail) {
+      doc.text(`Email: ${suppEmail}`, 15, suppY);
+      suppY += 4.5;
+    }
 
     doc.setFontSize(9);
     doc.setFont('helvetica', 'bold');
-    doc.text(`PO Number:`, pageWidth - 80, 65);
-    doc.text(`Order Date:`, pageWidth - 80, 72);
-    doc.text(`Expected Date:`, pageWidth - 80, 79);
+    doc.text(`PO Number:`, pageWidth - 80, 63);
+    doc.text(`Order Date:`, pageWidth - 80, 70);
+    doc.text(`Expected Date:`, pageWidth - 80, 77);
     
     doc.setFont('helvetica', 'normal');
-    doc.text(order.poNumber, pageWidth - 15, 65, { align: 'right' });
-    doc.text(order.date, pageWidth - 15, 72, { align: 'right' });
-    doc.text(order.dueDate, pageWidth - 15, 79, { align: 'right' });
+    doc.text(order.poNumber, pageWidth - 15, 63, { align: 'right' });
+    doc.text(order.date, pageWidth - 15, 70, { align: 'right' });
+    doc.text(order.dueDate, pageWidth - 15, 77, { align: 'right' });
 
+    const poDividerY = Math.max(88, suppY + 2);
     doc.setDrawColor(220, 220, 220);
-    doc.line(15, 85, pageWidth - 15, 85);
+    doc.line(15, poDividerY, pageWidth - 15, poDividerY);
 
     autoTable(doc, {
-      startY: 90,
+      startY: poDividerY + 4,
       head: [['Item Name', 'Quantity', 'Unit Cost', 'Discount', 'Total']],
       body: order.items.map((i: any) => {
         const itemData = calculateLineItem(i.qty, i.costPrice, i.discount || 0, i.discountType);
@@ -610,12 +632,34 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     doc.text("Contact: 077 076 076 7 | sanojhardware@gmail.com", 15, 32);
 
     // Supplier Info
+    const sName = ret.supplier_name || ret.supplierName || 'Supplier';
+    const suppObj = supplierList.find(s => s.name === sName || s.id === (ret as any).supplier_id || s.id === (ret as any).supplierId);
+    const suppContact = suppObj?.contactPerson || (suppObj as any)?.contact_person;
+    const suppPhone = suppObj?.phone || (suppObj as any)?.mobile;
+    const suppEmail = suppObj?.email;
+
     doc.setTextColor(50, 50, 50);
     doc.setFontSize(10);
     doc.setFont('helvetica', 'bold');
-    doc.text("SUPPLIER / VENDOR:", 15, 65);
+    doc.text("SUPPLIER / VENDOR:", 15, 63);
+    doc.setFontSize(9);
+    doc.text(sName, 15, 69);
+
     doc.setFont('helvetica', 'normal');
-    doc.text(ret.supplier_name || ret.supplierName || 'Supplier', 15, 72);
+    doc.setFontSize(8);
+    let suppY = 74;
+    if (suppContact) {
+      doc.text(`Attn: ${suppContact}`, 15, suppY);
+      suppY += 4.5;
+    }
+    if (suppPhone) {
+      doc.text(`Phone: ${suppPhone}`, 15, suppY);
+      suppY += 4.5;
+    }
+    if (suppEmail) {
+      doc.text(`Email: ${suppEmail}`, 15, suppY);
+      suppY += 4.5;
+    }
 
     // Return Details
     const returnNumberStr = ret.return_number || ret.returnNumber || ret.id;
@@ -639,13 +683,14 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     doc.text(dateStr, pageWidth - 15, 78, { align: 'right' });
     doc.text(modeStr, pageWidth - 15, 84, { align: 'right' });
 
+    const dnDividerY = Math.max(90, suppY + 2);
     doc.setDrawColor(220, 220, 220);
-    doc.line(15, 88, pageWidth - 15, 88);
+    doc.line(15, dnDividerY, pageWidth - 15, dnDividerY);
 
     // Table of returned items
     const items = ret.items || [];
     autoTable(doc, {
-      startY: 92,
+      startY: dnDividerY + 4,
       head: [['Item Description', 'Qty Returned', 'Net Unit Price (Rs.)', 'Line Total (Rs.)']],
       body: items.map((i: any) => {
         const q = Number(i.quantity !== undefined ? i.quantity : (i.qty || 0));

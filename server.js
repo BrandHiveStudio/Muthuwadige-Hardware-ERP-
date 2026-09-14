@@ -447,13 +447,35 @@ let runtimeSettings = { ...DEFAULT_RUNTIME_SETTINGS };
 let runtimeTransactions = [];
 let runtimeEmployees = [];
 
-async function logAudit(userEmail, action, details) {
+async function logAudit(userEmail, action, details, userName = null, userRole = null) {
   const id = 'al_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
   const timestamp = new Date().toISOString();
+  let effectiveEmail = userEmail || 'Automated Background Sync';
+  let effectiveName = userName;
+  let effectiveRole = userRole;
+
+  if (effectiveEmail === 'system' || effectiveEmail === 'system_trigger') {
+    effectiveEmail = 'Automated Background Sync';
+  }
+
+  // If name or role wasn't provided, try looking up from profiles
+  if ((!effectiveName || !effectiveRole) && effectiveEmail !== 'Automated Background Sync') {
+    try {
+      const prof = await db.get(
+        'SELECT name, full_name, role FROM profiles WHERE email = ? OR username = ? LIMIT 1',
+        [effectiveEmail, effectiveEmail]
+      );
+      if (prof) {
+        effectiveName = effectiveName || prof.name || prof.full_name;
+        effectiveRole = effectiveRole || prof.role;
+      }
+    } catch (_) {}
+  }
+
   try {
     await db.run(
-      'INSERT INTO audit_logs (id, user_email, action, details, timestamp) VALUES (?, ?, ?, ?, ?)',
-      [id, userEmail || 'system', action, details, timestamp]
+      'INSERT INTO audit_logs (id, user_email, action, details, timestamp, user_name, user_role) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [id, effectiveEmail, action, details, timestamp, effectiveName, effectiveRole]
     );
     enqueueSync(db, 'audit_logs', id, 'UPSERT').catch(() => { });
   } catch (err) {
@@ -1473,73 +1495,88 @@ async function initializeDatabase() {
     )
   `);
 
-  // Create SQLite triggers for database auditing
+  // Create SQLite triggers for database auditing (Automated Background Sync)
   await db.exec(`
+    DROP TRIGGER IF EXISTS audit_products_update;
     CREATE TRIGGER IF NOT EXISTS audit_products_update AFTER UPDATE ON products
     BEGIN
-      INSERT INTO audit_logs (id, user_email, action, details, timestamp)
+      INSERT INTO audit_logs (id, user_email, action, details, timestamp, user_name, user_role)
       VALUES (
         'al_' || strftime('%s', 'now') || '_' || hex(randomblob(2)),
-        'system_trigger',
+        'Automated Background Sync',
         'PRODUCT_UPDATED',
         'Product ' || OLD.name || ' (SKU: ' || OLD.sku || ') was updated. Stock: ' || OLD.stock || ' -> ' || NEW.stock || ', Price: ' || OLD.price || ' -> ' || NEW.price,
-        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+        'Automated Background Sync',
+        'SYSTEM'
       );
     END;
   `);
 
   await db.exec(`
+    DROP TRIGGER IF EXISTS audit_products_delete;
     CREATE TRIGGER IF NOT EXISTS audit_products_delete AFTER DELETE ON products
     BEGIN
-      INSERT INTO audit_logs (id, user_email, action, details, timestamp)
+      INSERT INTO audit_logs (id, user_email, action, details, timestamp, user_name, user_role)
       VALUES (
         'al_' || strftime('%s', 'now') || '_' || hex(randomblob(2)),
-        'system_trigger',
+        'Automated Background Sync',
         'PRODUCT_DELETED',
         'Product ' || OLD.name || ' (SKU: ' || OLD.sku || ') was deleted.',
-        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+        'Automated Background Sync',
+        'SYSTEM'
       );
     END;
   `);
 
   await db.exec(`
+    DROP TRIGGER IF EXISTS audit_customers_update;
     CREATE TRIGGER IF NOT EXISTS audit_customers_update AFTER UPDATE ON customers
     BEGIN
-      INSERT INTO audit_logs (id, user_email, action, details, timestamp)
+      INSERT INTO audit_logs (id, user_email, action, details, timestamp, user_name, user_role)
       VALUES (
         'al_' || strftime('%s', 'now') || '_' || hex(randomblob(2)),
-        'system_trigger',
+        'Automated Background Sync',
         'CUSTOMER_UPDATED',
         'Customer ' || OLD.name || ' details were updated.',
-        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+        'Automated Background Sync',
+        'SYSTEM'
       );
     END;
   `);
 
   await db.exec(`
+    DROP TRIGGER IF EXISTS audit_settings_update;
     CREATE TRIGGER IF NOT EXISTS audit_settings_update AFTER UPDATE ON system_settings
     BEGIN
-      INSERT INTO audit_logs (id, user_email, action, details, timestamp)
+      INSERT INTO audit_logs (id, user_email, action, details, timestamp, user_name, user_role)
       VALUES (
         'al_' || strftime('%s', 'now') || '_' || hex(randomblob(2)),
-        'system_trigger',
+        'Automated Background Sync',
         'SETTINGS_UPDATED',
         'System settings were updated.',
-        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+        'Automated Background Sync',
+        'SYSTEM'
       );
     END;
   `);
 
   await db.exec(`
+    DROP TRIGGER IF EXISTS audit_suppliers_update;
     CREATE TRIGGER IF NOT EXISTS audit_suppliers_update AFTER UPDATE ON suppliers
     BEGIN
-      INSERT INTO audit_logs (id, user_email, action, details, timestamp)
+      INSERT INTO audit_logs (id, user_email, action, details, timestamp, user_name, user_role)
       VALUES (
         'al_' || strftime('%s', 'now') || '_' || hex(randomblob(2)),
-        'system_trigger',
+        'Automated Background Sync',
         'SUPPLIER_UPDATED',
         'Supplier ' || OLD.name || ' was updated.',
-        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+        'Automated Background Sync',
+        'SYSTEM'
       );
     END;
   `);
@@ -2026,6 +2063,11 @@ async function initializeDatabase() {
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_audit_logs_action_date ON audit_logs(action, timestamp)"); } catch (e) { }
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_created_at ON sales(created_at)"); } catch (e) { }
   try { await db.exec("ALTER TABLE sales ADD COLUMN cashier_name TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales ADD COLUMN voided_at TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales ADD COLUMN voided_by TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales ADD COLUMN void_reason TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE audit_logs ADD COLUMN user_name TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE audit_logs ADD COLUMN user_role TEXT"); } catch (e) { }
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_cashier ON sales(cashier_name)"); } catch (e) { }
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_cashier_raw ON sales(cashier)"); } catch (e) { }
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_po_created_at ON purchase_orders(created_at)"); } catch (e) { }
@@ -5229,21 +5271,30 @@ app.get('/api/credit-settlements', async (req, res) => {
 
 app.delete('/api/sales/:id', requireVoidPasskey, async (req, res) => {
   const { id } = req.params;
+  const now = new Date().toISOString();
+  const supervisor = req.authUser?.name || req.authUser?.username || 'Supervisor';
   let txn = null;
   try {
     const sale = await db.get('SELECT * FROM sales WHERE id = ?', [id]);
     if (sale) {
-      txn = await beginTxn(db, `Delete Sale ${sale.invoice_no}`);
+      txn = await beginTxn(db, `Void Sale ${sale.invoice_no}`);
       await removeRuntimeTransactionsForSale(sale.invoice_no);
-      await db.run('DELETE FROM sales WHERE id = ?', [id]);
+      // Soft-void instead of hard-deleting the record from database
+      await db.run(
+        "UPDATE sales SET status = 'VOIDED', voided_at = ?, voided_by = ?, void_reason = 'Passkey Delete Request' WHERE id = ?",
+        [now, supervisor, id]
+      );
       await commitTxn(db, txn);
-    } else {
-      await db.run('DELETE FROM sales WHERE id = ?', [id]);
+      await logAudit(
+        req.authUser?.email || 'Supervisor',
+        'VOID_INVOICE',
+        `Voided invoice ${sale.invoice_no} (Total: Rs. ${sale.total_amount}). Cashier: ${sale.user_id || 'N/A'}, Supervisor: ${supervisor}`,
+        supervisor,
+        req.authUser?.role || 'SUPERVISOR'
+      );
+      enqueueSync(db, 'sales', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
     }
-    // Previously this hard-delete never synced at all: the sale would disappear locally but stay
-    // permanently "live" in the cloud/web portal forever. Now propagated like every other mutation.
-    enqueueSync(db, 'sales', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => { });
-    res.json({ success: true });
+    res.json({ success: true, status: 'VOIDED' });
   } catch (err) {
     if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
     res.status(500).json({ error: err.message });
@@ -5252,7 +5303,9 @@ app.delete('/api/sales/:id', requireVoidPasskey, async (req, res) => {
 
 app.post('/api/sales/:id/void', requireVoidPasskey, async (req, res) => {
   const { id } = req.params;
-  const { user_email } = req.body;
+  const { user_email, supervisor_name, void_reason, cashier_id } = req.body;
+  const supervisor = supervisor_name || req.authUser?.name || req.authUser?.username || 'Supervisor';
+  const now = new Date().toISOString();
   try {
     await db.run('BEGIN TRANSACTION');
 
@@ -5262,12 +5315,16 @@ app.post('/api/sales/:id/void', requireVoidPasskey, async (req, res) => {
       return res.status(404).json({ error: 'Sale invoice not found' });
     }
 
-    if (sale.status === 'cancelled') {
+    if (sale.status === 'cancelled' || sale.status === 'VOIDED') {
       await safeRollback(db);
       return res.status(400).json({ error: 'Invoice is already voided' });
     }
 
-    await db.run("UPDATE sales SET status = 'cancelled' WHERE id = ?", [id]);
+    // Flag with status: 'VOIDED', preserving the record and statutory audit details
+    await db.run(
+      "UPDATE sales SET status = 'VOIDED', voided_at = ?, voided_by = ?, void_reason = ? WHERE id = ?",
+      [now, supervisor, void_reason || 'Manual Void via Passkey', id]
+    );
     enqueueSync(db, 'sales', id, 'UPSERT').catch(() => { });
 
     const items = JSON.parse(sale.items);
@@ -5281,10 +5338,12 @@ app.post('/api/sales/:id/void', requireVoidPasskey, async (req, res) => {
       enqueueSync(db, 'products', item.productId, 'UPSERT').catch(() => { });
     }
 
-    const auditId = 'al_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-    await db.run(
-      'INSERT INTO audit_logs (id, user_email, action, details) VALUES (?, ?, ?, ?)',
-      [auditId, user_email || 'System', 'VOID_INVOICE', `Voided invoice ${sale.invoice_no} (Total: Rs. ${sale.total_amount})`]
+    await logAudit(
+      user_email || req.authUser?.email || 'Supervisor',
+      'VOID_INVOICE',
+      `Voided invoice ${sale.invoice_no} (Total: Rs. ${sale.total_amount}). Cashier: ${sale.user_id || cashier_id || 'N/A'}, Supervisor: ${supervisor}, Reason: ${void_reason || 'Manual Void'}`,
+      supervisor,
+      'SUPERVISOR'
     );
 
     const orphanedTxRows = await db.all(
@@ -5299,7 +5358,7 @@ app.post('/api/sales/:id/void', requireVoidPasskey, async (req, res) => {
 
     await db.run('COMMIT');
     runSyncCycle(db).catch(() => { });
-    res.json({ success: true });
+    res.json({ success: true, status: 'VOIDED' });
   } catch (err) {
     await safeRollback(db);
     res.status(500).json({ error: err.message });
@@ -9609,7 +9668,32 @@ app.post('/api/system/reset-data', async (req, res) => {
 // AUDIT LOGS API
 app.get('/api/audit_logs', async (req, res) => {
   try {
-    const data = await db.all('SELECT * FROM audit_logs ORDER BY timestamp DESC');
+    const data = await db.all(`
+      SELECT 
+        a.*,
+        COALESCE(
+          NULLIF(a.user_name, ''),
+          p.name,
+          p.full_name,
+          CASE 
+            WHEN a.user_email = 'Automated Background Sync' OR a.user_email = 'system_trigger' THEN 'Automated Background Sync'
+            ELSE a.user_email 
+          END
+        ) as user_name,
+        COALESCE(
+          NULLIF(a.user_role, ''),
+          p.role,
+          CASE 
+            WHEN a.user_email = 'Automated Background Sync' OR a.user_email = 'system_trigger' THEN 'SYSTEM'
+            ELSE 'STAFF' 
+          END
+        ) as user_role
+      FROM audit_logs a
+      LEFT JOIN profiles p ON (
+        (a.user_email IS NOT NULL AND a.user_email != '' AND (a.user_email = p.email OR a.user_email = p.username))
+      )
+      ORDER BY a.timestamp DESC
+    `);
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
