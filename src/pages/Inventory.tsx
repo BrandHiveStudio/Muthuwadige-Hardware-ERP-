@@ -912,17 +912,19 @@ export function Inventory() {
 
       if (adjustError) throw adjustError;
 
-      // 3. Log expense in transactions if Damage
-      if (actionType === 'Damage') {
-        const damageCost = stockQty * (stockProduct.costPrice || 0);
+      // 3. Log expense in transactions if Damage / Breakage / Wastage
+      if (actionType === 'Damage' || actionType === 'Damaged / Breakage / Wastage') {
+        const uom = stockProduct.unit || 'units';
+        const costPrice = Number(stockProduct.costPrice || stockProduct.cost_price || 0);
+        const writeOffValue = Math.round((stockQty * costPrice) * 100) / 100;
         await supabase
           .from('transactions')
           .insert([{
             type: 'expense',
-            category: 'Damage',
-            description: `Damaged Stock Written Off: ${stockProduct.name} (x${stockQty})`,
-            amount: damageCost,
-            reference: stockProduct.sku,
+            category: 'Inventory Loss / Damage Write-Off',
+            description: `Damage write-off: ${stockQty} ${uom} of ${stockProduct.name}`,
+            amount: writeOffValue,
+            reference: stockProduct.sku || stockProduct.barcode || 'DAMAGE-WRITEOFF',
             date: new Date().toISOString().split('T')[0]
           }]);
       }
@@ -1497,7 +1499,7 @@ export function Inventory() {
               ) : (
                 <>
                   <option value="Adjustment (Decrease)">Adjustment (Decrease) / තොග අඩු කිරීම</option>
-                  <option value="Damage">Damage (Expense Write-off) / හානි වූ දෑ ඉවත් කිරීම</option>
+                  <option value="Damage">Damaged / Breakage / Wastage (Expense Write-off) / හානි වූ හෝ කැඩී බිඳී ගිය දෑ</option>
                   <option value="Purchase Return">Purchase Return / සැපයුම්කරුට ආපසු යැවීම</option>
                 </>
               )}

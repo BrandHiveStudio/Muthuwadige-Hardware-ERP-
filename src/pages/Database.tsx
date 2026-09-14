@@ -9,17 +9,9 @@ import {
   UsersIcon,
   ShieldIcon,
   SearchIcon,
-  RotateCcw,
-  Trash2,
-  AlertTriangle,
-  X,
-  Mail,
-  Eye,
-  EyeOff,
-  CheckCircle2,
-  Clock
+  DownloadIcon
 } from 'lucide-react';
-import { API_URL, fetchWithTimeout } from '../lib/api';
+import { API_URL } from '../lib/api';
 
 type DbTab = 'products' | 'customers' | 'profiles' | 'purchase_orders' | 'sales' | 'system_settings';
 
@@ -28,111 +20,6 @@ export function Database() {
   const [dbData, setDbData] = useState<any[]>([]);
   const [dbSearch, setDbSearch] = useState('');
   const [dbLoading, setDbLoading] = useState(false);
-
-  // Root Admin & Factory Reset States
-  const [currentUser] = useState<any>(() => {
-    try {
-      const saved = sessionStorage.getItem('hardware_erp_user') || sessionStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user') || localStorage.getItem('erp_user');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
-  const isRootAdmin = (currentUser?.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com' || currentUser?.role === 'super_admin';
-
-  const [showResetModal, setShowResetModal] = useState(false);
-  const [resetOtp, setResetOtp] = useState('');
-  const [resetPassword, setResetPassword] = useState('');
-  const [showResetPassword, setShowResetPassword] = useState(false);
-  const [isSendingOtp, setIsSendingOtp] = useState(false);
-  const [otpSent, setOtpSent] = useState(false);
-  const [otpCooldown, setOtpCooldown] = useState(0);
-  const [isExecutingReset, setIsExecutingReset] = useState(false);
-  const [resetError, setResetError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (otpCooldown <= 0) return;
-    const timer = setInterval(() => {
-      setOtpCooldown(prev => prev - 1);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [otpCooldown]);
-
-  const handleRequestResetOtp = async () => {
-    setIsSendingOtp(true);
-    setResetError(null);
-    try {
-      const token = localStorage.getItem('token') || sessionStorage.getItem('token') || localStorage.getItem('auth_token') || sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token');
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-      if (currentUser?.email) headers['x-user-email'] = currentUser.email;
-
-      const res = await fetchWithTimeout(`${API_URL}/admin/request-factory-reset-otp`, {
-        method: 'POST',
-        headers
-      }, 10000);
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setOtpSent(true);
-        setOtpCooldown(60);
-      } else {
-        setResetError(data.error || data.message || 'Failed to dispatch verification code.');
-      }
-    } catch (err: any) {
-      setResetError('Network error connecting to reset service: ' + err.message);
-    } finally {
-      setIsSendingOtp(false);
-    }
-  };
-
-  const handleExecuteFactoryReset = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!resetOtp || resetOtp.trim().length !== 6) {
-      setResetError('Please enter the 6-digit verification code.');
-      return;
-    }
-    if (otpCooldown <= 0) {
-      setResetError('Verification OTP code has expired. Please request a new code.');
-      return;
-    }
-    if (!resetPassword) {
-      setResetError('Please enter your Root Admin password.');
-      return;
-    }
-
-    setIsExecutingReset(true);
-    setResetError(null);
-    try {
-      const token = localStorage.getItem('token') || sessionStorage.getItem('token') || localStorage.getItem('auth_token') || sessionStorage.getItem('erp_session_token') || localStorage.getItem('erp_session_token');
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-      if (currentUser?.email) headers['x-user-email'] = currentUser.email;
-
-      const res = await fetchWithTimeout(`${API_URL}/admin/execute-factory-reset`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          otp_code: resetOtp.trim(),
-          password: resetPassword
-        })
-      }, 30000);
-      const data = await res.json();
-      if (res.ok && data.success) {
-        alert('SUCCESS: System was factory-reset by Root Admin. Terminal is re-initializing...');
-        setShowResetModal(false);
-        window.dispatchEvent(new CustomEvent('system-factory-reset'));
-        setTimeout(() => {
-          window.location.reload();
-        }, 1000);
-      } else {
-        setResetError(data.error || data.message || 'Factory reset execution failed.');
-      }
-    } catch (err: any) {
-      setResetError('Error connecting to reset execution service: ' + err.message);
-    } finally {
-      setIsExecutingReset(false);
-    }
-  };
 
   const fetchDbTable = async () => {
     setDbLoading(true);
@@ -417,216 +304,28 @@ export function Database() {
         </div>
       </div>
 
-      {/* Root Admin Factory Reset Action Row */}
-      {isRootAdmin && (
-        <div className="mt-8 bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-3.5">
-            <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-600 flex items-center justify-center shrink-0">
-              <RotateCcw className="w-5 h-5 text-slate-500" />
-            </div>
-            <div>
-              <h4 className="text-sm font-bold text-slate-900">Factory Reset System</h4>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Permanently clear business transactions and restore factory default state.
-              </p>
-            </div>
+      {/* Database Local Backup Action Card */}
+      <div className="mt-8 bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0 border border-amber-200/60 shadow-sm">
+            <DatabaseIcon className="w-5 h-5 text-amber-600" />
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              setResetOtp('');
-              setResetPassword('');
-              setResetError(null);
-              setOtpSent(false);
-              setOtpCooldown(0);
-              setShowResetModal(true);
-            }}
-            className="px-5 py-2.5 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 hover:border-rose-300 font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shrink-0 shadow-sm"
-          >
-            <Trash2 className="w-4 h-4 text-rose-600" />
-            <span>Factory Reset</span>
-          </button>
-        </div>
-      )}
-
-      {/* MODERN FACTORY RESET 60s OTP VERIFICATION MODAL */}
-      {showResetModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[110] p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200 text-left animate-in zoom-in-95 duration-200">
-            {/* Modal Header */}
-            <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-rose-100 text-rose-600 rounded-xl">
-                  <AlertTriangle className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-black text-slate-900 text-base">Factory Reset System</h3>
-                  <p className="text-[11px] text-slate-500 font-semibold">Root Admin Two-Factor Authorization</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                disabled={isExecutingReset}
-                onClick={() => {
-                  if (!isExecutingReset) {
-                    setShowResetModal(false);
-                    setResetOtp('');
-                    setResetPassword('');
-                    setResetError(null);
-                  }
-                }}
-                className="p-1.5 hover:bg-slate-200 rounded-full text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-50"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Modal Body */}
-            <form onSubmit={handleExecuteFactoryReset} className="p-6 sm:p-7 space-y-4">
-              {/* Detailed Breakdown Card */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                <div className="p-3.5 bg-rose-50/80 border border-rose-100 rounded-xl space-y-1">
-                  <p className="font-bold text-rose-800 uppercase text-[10px] tracking-wider flex items-center gap-1">
-                    <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                    Will be Cleared
-                  </p>
-                  <p className="text-[11px] text-rose-900/80 font-medium leading-relaxed">
-                    Sales, Invoices, Customers, Suppliers, Inventory Products, Expenses, and Staff accounts.
-                  </p>
-                </div>
-                <div className="p-3.5 bg-emerald-50/80 border border-emerald-100 rounded-xl space-y-1">
-                  <p className="font-bold text-emerald-800 uppercase text-[10px] tracking-wider flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                    Will be Preserved
-                  </p>
-                  <p className="text-[11px] text-emerald-900/80 font-medium leading-relaxed">
-                    Root Admin (<span className="font-semibold">sanojhardware@gmail.com</span>) and basic system configurations.
-                  </p>
-                </div>
-              </div>
-
-              {resetError && (
-                <div className="p-3 bg-rose-100 border border-rose-200 rounded-xl text-xs font-bold text-rose-800 flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                  <span>{resetError}</span>
-                </div>
-              )}
-
-              {/* OTP Dispatch Action */}
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h5 className="text-xs font-black text-slate-800 uppercase tracking-wider">Step 1: Security Code</h5>
-                    <p className="text-[11px] text-slate-500 font-medium">Delivered to: sanojhardware@gmail.com</p>
-                  </div>
-                  {otpSent && (
-                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-black tracking-wide border shadow-xs bg-amber-50 text-amber-700 border-amber-200">
-                      <Clock className="w-3.5 h-3.5" />
-                      <span>{otpCooldown > 0 ? `${otpCooldown}s remaining` : 'Code expired'}</span>
-                    </div>
-                  )}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleRequestResetOtp}
-                  disabled={isSendingOtp || otpCooldown > 0}
-                  className="w-full py-2.5 bg-slate-800 hover:bg-slate-900 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-sm"
-                >
-                  {isSendingOtp ? (
-                    <>
-                      <Loader2Icon className="w-4 h-4 animate-spin" />
-                      <span>Sending Verification Code...</span>
-                    </>
-                  ) : otpCooldown > 0 ? (
-                    <span>Verification Code Sent ({otpCooldown}s)</span>
-                  ) : (
-                    <>
-                      <Mail className="w-4 h-4" />
-                      <span>{otpSent ? 'Resend Verification Code' : 'Send Verification OTP to Root Email'}</span>
-                    </>
-                  )}
-                </button>
-              </div>
-
-              {/* Inputs */}
-              <div className="space-y-3.5">
-                <div>
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5 block">
-                    Step 2: 6-Digit Verification Code
-                  </label>
-                  <input
-                    type="text"
-                    maxLength={6}
-                    required
-                    value={resetOtp}
-                    onChange={e => setResetOtp(e.target.value.replace(/\D/g, ''))}
-                    placeholder="Enter 6-digit OTP"
-                    className="w-full px-4 py-2.5 border border-slate-300 rounded-xl font-mono text-center tracking-[0.3em] font-black text-base text-slate-800 outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500 placeholder:tracking-normal placeholder:font-sans placeholder:text-xs placeholder:text-slate-400"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1.5 block">
-                    Step 3: Root Admin Password
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showResetPassword ? 'text' : 'password'}
-                      required
-                      value={resetPassword}
-                      onChange={e => setResetPassword(e.target.value)}
-                      placeholder="Enter password for sanojhardware@gmail.com"
-                      className="w-full px-4 py-2.5 pr-11 border border-slate-300 rounded-xl font-bold text-xs text-slate-800 outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500 placeholder:text-slate-400"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowResetPassword(!showResetPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
-                    >
-                      {showResetPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex gap-3 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  disabled={isExecutingReset}
-                  onClick={() => {
-                    setShowResetModal(false);
-                    setResetOtp('');
-                    setResetPassword('');
-                    setResetError(null);
-                  }}
-                  className="flex-1 py-3 font-bold text-slate-600 hover:bg-slate-100 rounded-xl uppercase tracking-wider text-xs transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isExecutingReset || !resetOtp || resetOtp.length !== 6 || !resetPassword || (otpSent && otpCooldown <= 0)}
-                  className="flex-1 py-3 font-bold bg-rose-600 hover:bg-rose-700 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-xl shadow-md shadow-rose-600/20 uppercase tracking-wider text-xs transition-all flex items-center justify-center gap-2"
-                >
-                  {isExecutingReset ? (
-                    <>
-                      <Loader2Icon className="w-4 h-4 animate-spin" />
-                      <span>Wiping System...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Trash2 className="w-4 h-4" />
-                      <span>Confirm & Wipe System</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
+          <div>
+            <h4 className="text-sm font-bold text-slate-900">Download Local Database Backup</h4>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Generate and download a complete offline SQLite database snapshot (.sqlite) for safekeeping.
+            </p>
           </div>
         </div>
-      )}
+        <a
+          href={`${API_URL}/database/backup`}
+          download
+          className="px-5 py-2.5 rounded-xl border border-amber-300 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shrink-0 shadow-md shadow-amber-500/20"
+        >
+          <DownloadIcon className="w-4 h-4 text-slate-950" />
+          <span>Download Database Backup</span>
+        </a>
+      </div>
     </div>
   );
 }

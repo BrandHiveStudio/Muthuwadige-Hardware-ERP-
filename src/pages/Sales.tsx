@@ -1253,6 +1253,163 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   const [creditNoteUsageLogs, setCreditNoteUsageLogs] = useState<CreditNoteUsage[]>([]);
   const [loadingCNUsage, setLoadingCNUsage] = useState(false);
 
+  // 💵 Shift Balancing & Cash Drawer Control State
+  const [showShiftModal, setShowShiftModal] = useState(false);
+  const [openingFloat, setOpeningFloat] = useState<number | string>(() => {
+    const today = new Date().toISOString().split('T')[0];
+    const saved = localStorage.getItem(`shift_opening_float_${today}`);
+    return saved ? Number(saved) : 0;
+  });
+  const [actualCountedCash, setActualCountedCash] = useState<number | string>('');
+  const [drawerPettyExpenses, setDrawerPettyExpenses] = useState<number | string>('');
+  const [shiftNotes, setShiftNotes] = useState<string>('');
+  const [isSavingShift, setIsSavingShift] = useState(false);
+  const [shiftSuccessMsg, setShiftSuccessMsg] = useState<string | null>(null);
+
+  const fetchTodayShift = useCallback(async () => {
+    try {
+      const res = await fetchWithTimeout(`${API_URL}/shifts/today`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.opening_float !== undefined) {
+          setOpeningFloat(data.opening_float);
+        }
+        if (data?.shift) {
+          setShiftSuccessMsg(`Shift previously closed today (Counted: Rs. ${Number(data.shift.actual_cash || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`);
+        }
+      }
+    } catch (_) { }
+  }, []);
+
+  useEffect(() => {
+    fetchTodayShift();
+  }, [fetchTodayShift]);
+
+  const handleSaveOpeningFloat = async (val: number) => {
+    const today = new Date().toISOString().split('T')[0];
+    localStorage.setItem(`shift_opening_float_${today}`, String(val));
+    setOpeningFloat(val);
+    try {
+      await fetchWithTimeout(`${API_URL}/shifts/float`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ opening_float: val })
+      });
+      notify('Opening cash float saved for today!', 'Muthuwadige Hardware ERP', 'success');
+    } catch (e) {
+      console.warn('Notice saving opening float:', e);
+    }
+  };
+
+  const handleCloseShift = async () => {
+    const today = new Date().toISOString().split('T')[0];
+    const numOpeningFloat = Math.max(0, Number(openingFloat) || 0);
+    const numPettyExpenses = Math.max(0, Number(drawerPettyExpenses) || 0);
+    const numActual = typeof actualCountedCash === 'number' ? actualCountedCash : parseFloat(actualCountedCash) || 0;
+    
+    // Calculate cash sales from today's orders
+    const todayCashSales = orders
+      .filter(o => {
+        const isToday = o.created_at?.startsWith(today);
+        const isNotCancelled = (o.status || '').toLowerCase() !== 'cancelled';
+        const method = (o.payment_method || o.paymentMethod || 'cash').toLowerCase();
+        const isCash = method === 'cash' || (o as any).payment_type === 'cash';
+        return isToday && isNotCancelled && isCash;
+      })
+      .reduce((sum, o) => sum + Number(o.total || 0), 0);
+
+    // Calculate cash returns from today's returns
+    const todayCashReturns = salesReturnsList
+      .filter(r => {
+        const isToday = r.created_at?.startsWith(today);
+        const isNotVoided = (r.status || '').toUpperCase() !== 'VOIDED';
+        const refundType = ((r as any).refund_type || (r as any).refund_mode || r.returnMethod || 'cash').toLowerCase();
+        const isCash = refundType.includes('cash') || (!(r as any).credit_note_id && !r.creditNoteNo);
+        return isToday && isNotVoided && isCash;
+      })
+      .reduce((sum, r) => sum + Number(r.refund_amount || (r as any).total_refund || r.totalRefunded || 0), 0);
+
+    const expectedCash = Math.max(0, Math.round((numOpeningFloat + todayCashSales - todayCashReturns - numPettyExpenses) * 100) / 100);
+    const discrepancy = Math.round((numActual - expectedCash) * 100) / 100;
+
+    setIsSavingShift(true);
+    try {
+      const res = await fetchWithTimeout(`${API_URL}/shifts/close`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          opening_float: numOpeningFloat,
+          cash_sales: todayCashSales,
+          cash_returns: todayCashReturns,
+          petty_expenses: numPettyExpenses,
+          expected_cash: expectedCash,
+          actual_cash: numActual,
+          discrepancy,
+          notes: shiftNotes,
+          cashier_email: currentUser?.email || 'cashier@hardware.com',
+          cashier_name: currentUser?.name || currentUser?.full_name || 'Cashier',
+          cashier_id: currentUser?.id || 'u1'
+        })
+      });
+
+      if (res.ok) {
+        setShiftSuccessMsg('Shift reconciliation archived successfully!');
+        notify('Shift balancing completed and archived!', 'Muthuwadige Hardware ERP', 'success');
+        setTimeout(() => {
+          setShowShiftModal(false);
+          setShiftSuccessMsg(null);
+        }, 2000);
+      } else {
+        const d = await res.json();
+        alert('Failed to save shift: ' + (d.error || 'Server error'));
+      }
+    } catch (err: any) {
+      alert('Error saving shift reconciliation: ' + err.message);
+    } finally {
+      setIsSavingShift(false);
+    }
+  };
+
+  // Shift Balancing Real-Time Computations
+  const shiftTodayCashSales = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    return orders
+      .filter(o => {
+        const isToday = o.created_at?.startsWith(today);
+        const isNotCancelled = (o.status || '').toLowerCase() !== 'cancelled';
+        const method = (o.payment_method || o.paymentMethod || 'cash').toLowerCase();
+        const isCash = method === 'cash' || (o as any).payment_type === 'cash';
+        return isToday && isNotCancelled && isCash;
+      })
+      .reduce((sum, o) => sum + Number(o.total || 0), 0);
+  }, [orders]);
+
+  const shiftTodayCashReturns = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    return salesReturnsList
+      .filter(r => {
+        const isToday = r.created_at?.startsWith(today);
+        const isNotVoided = (r.status || '').toUpperCase() !== 'VOIDED';
+        const refundType = ((r as any).refund_type || (r as any).refund_mode || r.returnMethod || 'cash').toLowerCase();
+        const isCash = refundType.includes('cash') || (!(r as any).credit_note_id && !r.creditNoteNo);
+        return isToday && isNotVoided && isCash;
+      })
+      .reduce((sum, r) => sum + Number(r.refund_amount || (r as any).total_refund || r.totalRefunded || 0), 0);
+  }, [salesReturnsList]);
+
+  const shiftExpectedCash = useMemo(() => {
+    const numOpening = Math.max(0, Number(openingFloat) || 0);
+    const numPetty = Math.max(0, Number(drawerPettyExpenses) || 0);
+    return Math.max(0, Math.round((numOpening + shiftTodayCashSales - shiftTodayCashReturns - numPetty) * 100) / 100);
+  }, [openingFloat, shiftTodayCashSales, shiftTodayCashReturns, drawerPettyExpenses]);
+
+  const shiftDiscrepancy = useMemo(() => {
+    if (actualCountedCash === '' || actualCountedCash === undefined || actualCountedCash === null) return null;
+    const numActual = typeof actualCountedCash === 'number' ? actualCountedCash : parseFloat(actualCountedCash) || 0;
+    return Math.round((numActual - shiftExpectedCash) * 100) / 100;
+  }, [actualCountedCash, shiftExpectedCash]);
+
+
 
 
   const fetchCreditNoteUsage = async (code?: string) => {
@@ -3286,7 +3443,6 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Wireless Mobile Scanner Status Badge & Modal Trigger */}
           <button
             type="button"
             onClick={() => {
@@ -3304,6 +3460,20 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             <SmartphoneIcon className={`w-4 h-4 ${isMobileScannerConnected ? 'text-emerald-600' : 'text-slate-600'}`} />
             <span className="hidden sm:inline">{t('Mobile Scanner', 'ජංගම ස්කෑනරය')}</span>
             <span className={`w-2 h-2 rounded-full ${isMobileScannerConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`}></span>
+          </button>
+
+          {/* Shift Balancing & Cash Drawer Control Modal Trigger */}
+          <button
+            type="button"
+            onClick={() => {
+              fetchTodayShift();
+              setShowShiftModal(true);
+            }}
+            className="px-3.5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 border shadow-sm bg-white hover:bg-slate-50 text-slate-800 border-slate-200 active:scale-[0.98]"
+            title={t('Shift Balancing & Cash Drawer Reconciliation', 'කාර්ය මුරය සහ මුදල් ලාච්චුව තුලනය කිරීම')}
+          >
+            <DollarSignIcon className="w-4 h-4 text-emerald-600" />
+            <span className="hidden sm:inline">{t('Shift / Drawer', 'මුර තුලනය')}</span>
           </button>
 
           <div className="flex gap-1 bg-slate-100/60 p-1.5 rounded-2xl w-fit border border-slate-200/40">
@@ -8320,6 +8490,238 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             >
               {t('Done / Keep Listening in Background', 'අවසන් / පසුබිමේ සක්‍රියව තබන්න')}
             </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* 💵 Shift Balancing & Cash Drawer Control Modal */}
+      {showShiftModal && (
+        <Modal
+          isOpen={showShiftModal}
+          onClose={() => setShowShiftModal(false)}
+          title={t('💵 Shift Balancing & Cash Drawer Reconciliation', '💵 කාර්ය මුර ශේෂය සහ මුදල් ලාච්චු සැසඳුම')}
+        >
+          <div className="space-y-5 p-2 text-left max-w-2xl mx-auto">
+            {shiftSuccessMsg && (
+              <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-700 text-xs font-bold flex items-center gap-2">
+                <CheckCircleIcon className="w-5 h-5 text-emerald-600 shrink-0" />
+                <span>{shiftSuccessMsg}</span>
+              </div>
+            )}
+
+            {/* Header info */}
+            <div className="bg-slate-900 text-white p-4 rounded-2xl border border-slate-800 flex justify-between items-center gap-3">
+              <div>
+                <h4 className="text-xs font-black text-amber-400 uppercase tracking-widest flex items-center gap-2">
+                  <DollarSignIcon className="w-4 h-4 text-amber-400" />
+                  {t('Daily Cash Drawer Register', 'දෛනික මුදල් ලාච්චු ලේඛනය')}
+                </h4>
+                <p className="text-[11px] text-slate-300 font-medium mt-0.5">
+                  {t('Cashier:', 'කැෂියර්:')} <span className="text-white font-bold">{currentUser?.name || currentUser?.full_name || 'Admin'}</span> • {new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' })}
+                </p>
+              </div>
+              <div className="text-right">
+                <span className="text-[10px] font-mono text-slate-400 block uppercase tracking-wider">{t('POS Terminal', 'POS පර්යන්තය')}</span>
+                <span className="text-xs font-bold text-amber-300 font-mono">STATION-01</span>
+              </div>
+            </div>
+
+            {/* Step 1: Opening Float Setup */}
+            <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-black text-amber-900 uppercase tracking-wider">
+                  {t('1. Shift Opening Float', '1. මුරය ආරම්භක පාවෙන මුදල')}
+                </div>
+                <div className="text-[11px] text-amber-700">
+                  {t('Cash placed in drawer at shift start to provide change.', 'මාරු කාසි/නෝට්ටු දීම සඳහා මුරය ආරම්භයේදී ලාච්චුවේ තැබූ මුදල.')}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">Rs.</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="50"
+                    value={openingFloat}
+                    onChange={(e) => setOpeningFloat(e.target.value)}
+                    placeholder="0.00"
+                    className="w-32 pl-9 pr-3 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleSaveOpeningFloat(Number(openingFloat) || 0)}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white font-bold text-xs rounded-lg transition-all shadow-sm shrink-0"
+                >
+                  {t('Set Float', 'සුරකින්න')}
+                </button>
+              </div>
+            </div>
+
+            {/* Step 2: Live Breakdown Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-center">
+                <div className="text-[10px] font-black text-slate-500 uppercase tracking-wider">{t('Opening Float', 'ආරම්භක මුදල')}</div>
+                <div className="text-sm font-black text-slate-800 mt-1 font-mono">
+                  Rs. {Number(openingFloat || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+                <div className="text-[9px] text-slate-400 mt-0.5">{t('Starting cash', 'ආරම්භක')}</div>
+              </div>
+
+              <div className="p-3 bg-emerald-50/60 border border-emerald-200 rounded-xl text-center">
+                <div className="text-[10px] font-black text-emerald-800 uppercase tracking-wider">{t('+ Cash Sales', '+ මුදල් විකිණුම්')}</div>
+                <div className="text-sm font-black text-emerald-700 mt-1 font-mono">
+                  +Rs. {shiftTodayCashSales.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+                <div className="text-[9px] text-emerald-600 mt-0.5">{t('Today collected', 'අද එකතුව')}</div>
+              </div>
+
+              <div className="p-3 bg-rose-50/60 border border-rose-200 rounded-xl text-center">
+                <div className="text-[10px] font-black text-rose-800 uppercase tracking-wider">{t('- Cash Refunds', '- මුදල් ආපසු')}</div>
+                <div className="text-sm font-black text-rose-700 mt-1 font-mono">
+                  -Rs. {shiftTodayCashReturns.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
+                <div className="text-[9px] text-rose-600 mt-0.5">{t('Customer refunds', 'පාරිභෝගික ආපසු')}</div>
+              </div>
+
+              <div className="p-3 bg-amber-50/60 border border-amber-200 rounded-xl text-center">
+                <div className="text-[10px] font-black text-amber-800 uppercase tracking-wider">{t('- Drawer Expenses', '- ලාච්චු වියදම්')}</div>
+                <div className="mt-1">
+                  <input
+                    type="number"
+                    min="0"
+                    step="10"
+                    placeholder="0.00"
+                    value={drawerPettyExpenses}
+                    onChange={(e) => setDrawerPettyExpenses(e.target.value)}
+                    className="w-full text-center px-1 py-0.5 bg-white border border-amber-300 rounded font-mono text-xs font-bold text-amber-900 outline-none focus:ring-1 focus:ring-amber-500"
+                  />
+                </div>
+                <div className="text-[9px] text-amber-600 mt-0.5">{t('Petty cash out', 'සුළු වියදම්')}</div>
+              </div>
+            </div>
+
+            {/* Step 3: Expected Cash Banner */}
+            <div className="p-4 bg-gradient-to-r from-slate-900 to-slate-800 text-white rounded-2xl border border-slate-700 shadow-md flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div>
+                <span className="text-[10px] font-black text-amber-400 uppercase tracking-widest block">
+                  {t('Expected Drawer Cash (System Total)', 'පද්ධතිය අනුව ලාච්චුවේ තිබිය යුතු මුදල')}
+                </span>
+                <span className="text-xs text-slate-400">
+                  {t('Formula: Float + Cash Sales - Refunds - Expenses', 'සූත්‍රය: පාවෙන මුදල + විකිණුම් - ආපසු - වියදම්')}
+                </span>
+              </div>
+              <div className="text-2xl font-black text-emerald-400 font-mono tracking-tight">
+                Rs. {shiftExpectedCash.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            </div>
+
+            {/* Step 4: Actual Cash Count Input & Discrepancy Alert */}
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <label className="text-xs font-black text-slate-700 uppercase tracking-wider">
+                  {t('2. Actual Counted Cash in Drawer:', '2. ලාච්චුවේ සත්‍ය ගණන් කළ මුදල:')}
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-400">Rs.</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="10"
+                    value={actualCountedCash}
+                    onChange={(e) => setActualCountedCash(e.target.value)}
+                    placeholder="0.00"
+                    className="w-44 pl-10 pr-3 py-2 bg-white border-2 border-slate-300 rounded-xl text-base font-black text-slate-900 outline-none focus:border-amber-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              {shiftDiscrepancy !== null && (
+                <div className={`p-3 rounded-xl border flex items-center justify-between ${
+                  shiftDiscrepancy === 0
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                    : shiftDiscrepancy > 0
+                    ? 'bg-sky-50 border-sky-300 text-sky-800'
+                    : 'bg-rose-50 border-rose-300 text-rose-800'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    {shiftDiscrepancy === 0 ? (
+                      <CheckCircleIcon className="w-5 h-5 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertTriangleIcon className={`w-5 h-5 shrink-0 ${shiftDiscrepancy > 0 ? 'text-sky-600' : 'text-rose-600'}`} />
+                    )}
+                    <div>
+                      <span className="text-xs font-black uppercase tracking-wider block">
+                        {shiftDiscrepancy === 0
+                          ? t('DRAWER PERFECTLY BALANCED', 'ලාච්චුව සම්පූර්ණයෙන් සමතුලිතයි')
+                          : shiftDiscrepancy > 0
+                          ? t('DRAWER CASH OVERAGE (+ Surplus)', 'ලාච්චුවේ වැඩිපුර මුදලක් ඇත')
+                          : t('DRAWER CASH SHORTAGE (- Deficit)', 'ලාච්චුවේ මුදල් හිඟයක් පවතී')}
+                      </span>
+                      <span className="text-[10px] opacity-80">
+                        {shiftDiscrepancy === 0
+                          ? t('Count matches system expected cash exactly.', 'සත්‍ය මුදල සහ පද්ධතියේ මුදල නිශ්චිතවම සමානයි.')
+                          : shiftDiscrepancy > 0
+                          ? t('Count exceeds expected cash by the amount shown.', 'පද්ධතියේ මුදලට වඩා මුදල් වැඩියෙන් ඇත.')
+                          : t('Count is less than expected cash. Please verify receipts or petty cash.', 'පද්ධතියේ මුදලට වඩා අඩුයි. කරුණාකර බිල්පත් පරීක්ෂා කරන්න.')}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-base font-black font-mono">
+                    {shiftDiscrepancy > 0 ? '+' : ''}Rs. {shiftDiscrepancy.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </div>
+                </div>
+              )}
+
+              {/* Notes */}
+              <div>
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-1">
+                  {t('Reconciliation Remarks / Discrepancy Note (Optional):', 'සැසඳුම් සටහන් / හේතු (අවශ්‍ය නම් පමණක්):')}
+                </label>
+                <input
+                  type="text"
+                  value={shiftNotes}
+                  onChange={(e) => setShiftNotes(e.target.value)}
+                  placeholder={t('e.g. Returned Rs. 200 change difference / petty expense voucher attached', 'උදා: රු. 200 මාරු කාසි වෙනස / වියදම් වවුචරය අමුණා ඇත')}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 outline-none focus:border-amber-500"
+                />
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowShiftModal(false)}
+                className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 active:scale-[0.99] text-slate-700 font-black text-xs uppercase tracking-widest rounded-xl transition-all"
+              >
+                {t('Close / Continue Sales', 'වසා දමන්න / විකිණුම් කරගෙන යන්න')}
+              </button>
+
+              <button
+                type="button"
+                disabled={isSavingShift || actualCountedCash === ''}
+                onClick={handleCloseShift}
+                className={`flex-1 py-3 font-black text-xs uppercase tracking-widest rounded-xl transition-all shadow-md flex items-center justify-center gap-2 ${
+                  isSavingShift || actualCountedCash === ''
+                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                    : 'bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white'
+                }`}
+              >
+                {isSavingShift ? (
+                  <>
+                    <RefreshCwIcon className="w-4 h-4 animate-spin" />
+                    <span>{t('Archiving...', 'සුරකිමින්...')}</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircleIcon className="w-4 h-4" />
+                    <span>{t('Close Shift & Archive Report', 'මුරය අවසන් කර වාර්තාව සුරකින්න')}</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </Modal>
       )}

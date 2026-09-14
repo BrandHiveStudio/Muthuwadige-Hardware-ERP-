@@ -31,7 +31,23 @@ const ROLES: { role: UserRole; label: string; color: string; desc: string }[] = 
   { role: 'Cashier', label: 'Cashier', color: 'emerald', desc: 'Front-desk POS counter checkout, returns/exchanges, and credit settlements.' }
 ];
 
-export function Users() {
+interface UsersProps {
+  currentUser?: any;
+}
+
+export function Users({ currentUser: propCurrentUser }: UsersProps = {}) {
+  const currentUser = React.useMemo(() => {
+    if (propCurrentUser) return propCurrentUser;
+    try {
+      const saved = sessionStorage.getItem('hardware_erp_user') || sessionStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user') || localStorage.getItem('erp_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  }, [propCurrentUser]);
+
+  const isCallerRootAdmin = currentUser?.username === 'super_admin' || currentUser?.role === 'super_admin' || (currentUser?.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com';
+
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddUser, setShowAddUser] = useState(false);
@@ -472,51 +488,61 @@ export function Users() {
                               <SlidersHorizontalIcon className="w-4 h-4" />
                             </button>
 
-                            {/* Edit Details & Permissions */}
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openEditModal(u);
-                              }}
-                              className="p-2.5 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200 transition-all shadow-sm cursor-pointer"
-                              title="Edit User & Permissions"
-                            >
-                              <Edit2Icon className="w-4 h-4" />
-                            </button>
-                            
-                            {/* Reset Password */}
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setResetPasswordUser(u);
-                                setNewPassword('');
-                                setShowResetPasswordModal(true);
-                              }}
-                              className="p-2.5 rounded-xl bg-slate-50 text-slate-600 hover:bg-slate-200 border border-slate-200 transition-all shadow-sm cursor-pointer"
-                              title="Reset Password"
-                            >
-                              <LockIcon className="w-4 h-4" />
-                            </button>
-
-                            {/* Delete User */}
-                            {superAdmin ? (
-                              <div className="p-2.5 rounded-xl bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-50" title="Root Super Admin account cannot be deleted">
-                                <Trash2Icon className="w-4 h-4" />
-                              </div>
+                            {/* Actions or Protected Root Badge */}
+                            {superAdmin && !isCallerRootAdmin ? (
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider bg-purple-50 text-purple-800 border border-purple-200 shadow-xs" title="Root Administrator Account is protected">
+                                <LockIcon className="w-3.5 h-3.5 text-purple-600" />
+                                Protected Root Account
+                              </span>
                             ) : (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setDeleteTargetUser(u);
-                                }}
-                                className="p-2.5 rounded-xl bg-red-50 text-red-600 hover:bg-red-600 hover:text-white border border-red-200 transition-all shadow-sm cursor-pointer"
-                                title="Delete Staff Member"
-                              >
-                                <Trash2Icon className="w-4 h-4" />
-                              </button>
+                              <>
+                                {/* Edit Details & Permissions */}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openEditModal(u);
+                                  }}
+                                  className="p-2.5 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200 transition-all shadow-sm cursor-pointer"
+                                  title="Edit User & Permissions"
+                                >
+                                  <Edit2Icon className="w-4 h-4" />
+                                </button>
+                                
+                                {/* Reset Password */}
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setResetPasswordUser(u);
+                                    setNewPassword('');
+                                    setShowResetPasswordModal(true);
+                                  }}
+                                  className="p-2.5 rounded-xl bg-slate-50 text-slate-600 hover:bg-slate-200 border border-slate-200 transition-all shadow-sm cursor-pointer"
+                                  title="Reset Password"
+                                >
+                                  <LockIcon className="w-4 h-4" />
+                                </button>
+
+                                {/* Delete User */}
+                                {superAdmin ? (
+                                  <div className="p-2.5 rounded-xl bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-50" title="Root Super Admin account cannot be deleted">
+                                    <Trash2Icon className="w-4 h-4" />
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setDeleteTargetUser(u);
+                                    }}
+                                    className="p-2.5 rounded-xl bg-red-50 text-red-600 hover:bg-red-600 hover:text-white border border-red-200 transition-all shadow-sm cursor-pointer"
+                                    title="Delete Staff Member"
+                                  >
+                                    <Trash2Icon className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </>
                             )}
                           </div>
                         </td>

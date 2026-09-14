@@ -561,7 +561,7 @@ export function App() {
       case 'customers': return <Customers currentUser={currentUser} />;
       case 'suppliers': return <Suppliers />;
       case 'reports': return <Reports currentUser={currentUser} />;
-      case 'users': return <Users />;
+      case 'users': return <Users currentUser={currentUser} />;
       case 'database': return <Database />;
       case 'settings': return <Settings currentUser={currentUser} />;
       case 'finance': return <Finance currentUser={currentUser} />;

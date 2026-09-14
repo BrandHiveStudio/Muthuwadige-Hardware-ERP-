@@ -1973,6 +1973,31 @@ async function initializeDatabase() {
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_debit_notes_supplier ON debit_notes(supplier_name)"); } catch (e) { }
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_debit_notes_po ON debit_notes(po_number)"); } catch (e) { }
 
+  // 22. Create Shift Logs Table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS shift_logs (
+      id TEXT PRIMARY KEY,
+      date TEXT NOT NULL,
+      cashier_id TEXT,
+      cashier_name TEXT,
+      cashier_email TEXT,
+      opening_float REAL DEFAULT 0,
+      cash_sales REAL DEFAULT 0,
+      cash_returns REAL DEFAULT 0,
+      petty_expenses REAL DEFAULT 0,
+      expected_cash REAL DEFAULT 0,
+      actual_cash REAL DEFAULT 0,
+      discrepancy REAL DEFAULT 0,
+      notes TEXT,
+      status TEXT DEFAULT 'CLOSED',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME
+    )
+  `);
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_shift_logs_date ON shift_logs(date)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_shift_logs_cashier ON shift_logs(cashier_email)"); } catch (e) { }
+
+
   // Performance Indexes for fast barcode, invoice, and customer lookups
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode)"); } catch (e) { }
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku)"); } catch (e) { }
@@ -2732,6 +2757,33 @@ app.get('/api/trigger-backup', async (req, res) => {
   }
 });
 
+// DOWNLOAD LOCAL DATABASE BACKUP SNAPSHOT (.sqlite)
+app.get(['/api/database/backup', '/api/backup/download'], async (req, res) => {
+  try {
+    const candidatePaths = [
+      DB_FILE,
+      path.join(__dirname, 'hardware.db'),
+      process.env.USER_DATA_PATH ? path.join(process.env.USER_DATA_PATH, 'hardware.db') : null
+    ].filter(Boolean);
+
+    const existingFile = candidatePaths.find(p => fs.existsSync(p));
+
+    if (existingFile) {
+      const today = new Date().toISOString().slice(0, 10);
+      const filename = `muthuwadige-hardware-backup-${today}.sqlite`;
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Type', 'application/x-sqlite3');
+      const fileStream = fs.createReadStream(existingFile);
+      return fileStream.pipe(res);
+    } else {
+      return res.status(404).json({ error: 'Local database backup file not found.' });
+    }
+  } catch (err) {
+    console.error('Error streaming database backup:', err);
+    return res.status(500).json({ error: 'Failed to download database backup: ' + err.message });
+  }
+});
+
 // AUTHENTICATION
 app.post('/api/auth/login', async (req, res) => {
   const email = (req.body?.email || '').trim().toLowerCase();
@@ -3346,8 +3398,20 @@ app.post('/api/auth/reset-password', async (req, res) => {
 // ---------------------------------------------------------------------------
 let activeFactoryResetOtp = null;
 
+// Explicitly disable web-invoked factory reset endpoint in production
+app.post('/api/system/factory-reset', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ error: '403 Forbidden: Factory reset must be executed via offline server CLI scripts.' });
+  }
+  return res.status(400).json({ error: 'Please use the secure OTP verification endpoint.' });
+});
+
 app.post('/api/admin/request-factory-reset-otp', async (req, res) => {
   try {
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(403).json({ error: '403 Forbidden: Factory reset must be executed via offline server CLI scripts.' });
+    }
+
     const caller = req.authUser;
     if (!caller) {
       return res.status(401).json({ error: 'Authentication required. Please log in.' });
@@ -3396,6 +3460,10 @@ app.post('/api/admin/request-factory-reset-otp', async (req, res) => {
 
 app.post('/api/admin/execute-factory-reset', async (req, res) => {
   try {
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(403).json({ error: '403 Forbidden: Factory reset must be executed via offline server CLI scripts.' });
+    }
+
     const caller = req.authUser;
     if (!caller) {
       return res.status(401).json({ error: 'Authentication required. Please log in.' });
@@ -6323,7 +6391,7 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
   try {
     txn = await beginTxn(db, `Create PO ${po.po_number || id}`);
 
-    // If debit note applied, deduct from purchase_returns
+    // If debit note applied, deduct from purchase_returns & debit_notes
     if (debitNoteApplied > 0 && debitNoteCode) {
       const pr = await db.get(
         'SELECT * FROM purchase_returns WHERE (return_number = ? OR id = ?) AND status NOT IN (\'VOIDED\', \'REDEEMED\')',
@@ -6340,6 +6408,24 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
           [newBal, newRedeemed, newStatus, po.po_number || id, created_at, pr.id]
         );
       }
+
+      try {
+        const dn = await db.get(
+          'SELECT * FROM debit_notes WHERE (debit_note_no = ? OR id = ? OR return_id = ?) AND status NOT IN (\'VOIDED\', \'REDEEMED\')',
+          [debitNoteCode, debitNoteCode, pr?.id || debitNoteCode]
+        );
+        if (dn) {
+          const prevDnBal = Number(dn.balance_remaining !== null && dn.balance_remaining !== undefined ? dn.balance_remaining : dn.total_amount);
+          const newDnBal = Math.max(0, Math.round((prevDnBal - debitNoteApplied) * 100) / 100);
+          const prevDnRedeemed = Number(dn.redeemed_amount || 0);
+          const newDnRedeemed = Math.round((prevDnRedeemed + debitNoteApplied) * 100) / 100;
+          const newDnStatus = newDnBal <= 0.001 ? 'REDEEMED' : 'PARTIALLY_REDEEMED';
+          await db.run(
+            'UPDATE debit_notes SET balance_remaining = ?, redeemed_amount = ?, status = ?, updated_at = ? WHERE id = ?',
+            [newDnBal, newDnRedeemed, newDnStatus, created_at, dn.id]
+          );
+        }
+      } catch (_) { }
     }
 
     await db.run(
@@ -8340,8 +8426,17 @@ app.get('/api/settings', async (req, res) => {
 
     const hasSmtpPass = Boolean((settings?.smtp_pass && settings.smtp_pass.trim().length > 0) || (settings?.gmail_pass && settings.gmail_pass.trim().length > 0) || process.env.SMTP_PASS || process.env.GMAIL_PASS);
 
+    const isCallerSuperAdmin = req.authUser && (
+      req.authUser.username === 'super_admin' ||
+      req.authUser.role === 'super_admin' ||
+      (req.authUser.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com'
+    );
+    const returnPasskey = isCallerSuperAdmin ? (settings?.return_passkey || '1234') : '••••';
+
     return res.status(200).json({
       ...settings,
+      return_passkey: returnPasskey,
+      void_passkey: returnPasskey,
       backup_enabled: settings?.backup_enabled === 1 || settings?.backup_enabled === true || settings?.auto_backup_enabled === 1 || settings?.auto_backup_enabled === true,
       auto_backup_enabled: settings?.auto_backup_enabled === 1 || settings?.auto_backup_enabled === true || settings?.backup_enabled === 1 || settings?.backup_enabled === true,
       backup_interval_hours: settings?.backup_interval_hours || 6,
@@ -8363,8 +8458,25 @@ app.get('/api/settings', async (req, res) => {
 });
 
 const updateSettingsHandler = async (req, res) => {
-  const s = req.body;
+  const s = req.body || {};
   try {
+    const isCallerSuperAdmin = req.authUser && (
+      req.authUser.username === 'super_admin' ||
+      req.authUser.role === 'super_admin' ||
+      (req.authUser.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com'
+    );
+
+    if (('return_passkey' in s || 'void_passkey' in s) && !isCallerSuperAdmin) {
+      const currentSnap = await getRuntimeSettingsSnapshot();
+      const newPass = s.return_passkey !== undefined ? s.return_passkey : s.void_passkey;
+      if (newPass !== undefined && newPass !== currentSnap.return_passkey && newPass !== '••••') {
+        return res.status(403).json({ error: '403 Forbidden: Modifying Void Security Passkey is restricted to Root Administrator.' });
+      }
+      // Prevent unauthorized overwrite
+      delete s.return_passkey;
+      delete s.void_passkey;
+    }
+
     const updated = await setRuntimeSettings(s);
     await scheduleAutomaticBackups();
     await logAudit(s.user_email || req.authUser?.email || 'system', 'SETTINGS_UPDATED', 'System settings were updated.');
@@ -9272,6 +9384,23 @@ app.put(['/api/profiles/:id', '/api/users/:id'], requireAdmin, async (req, res) 
   const { id } = req.params;
   const p = req.body;
   try {
+    const targetUser = await db.get('SELECT * FROM profiles WHERE id = ? UNION SELECT * FROM users WHERE id = ?', [id, id]);
+    const isTargetSuperAdmin = targetUser && (
+      (targetUser.role || '').toLowerCase().trim() === 'super_admin' ||
+      (targetUser.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com' ||
+      targetUser.id === 'u1'
+    );
+    const isCallerSuperAdmin = req.authUser && (
+      (req.authUser.role || '').toLowerCase().trim() === 'super_admin' ||
+      (req.authUser.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com' ||
+      req.authUser.username === 'super_admin' ||
+      req.authUser.id === 'u1'
+    );
+
+    if (isTargetSuperAdmin && !isCallerSuperAdmin) {
+      return res.status(403).json({ error: '403 Forbidden: Modifying the Root Administrator account is restricted to the Root Administrator.' });
+    }
+
     const effectivePerms = p.custom_permissions !== undefined ? p.custom_permissions : p.permissions;
     let permsVal = null;
     if (effectivePerms !== undefined) {
@@ -9307,6 +9436,17 @@ app.put(['/api/profiles/:id', '/api/users/:id'], requireAdmin, async (req, res) 
 app.delete(['/api/profiles/:id', '/api/users/:id'], requireAdmin, async (req, res) => {
   const { id } = req.params;
   try {
+    const targetUser = await db.get('SELECT * FROM profiles WHERE id = ? UNION SELECT * FROM users WHERE id = ?', [id, id]);
+    const isTargetSuperAdmin = targetUser && (
+      (targetUser.role || '').toLowerCase().trim() === 'super_admin' ||
+      (targetUser.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com' ||
+      targetUser.id === 'u1'
+    );
+
+    if (isTargetSuperAdmin) {
+      return res.status(403).json({ error: '403 Forbidden: Protected Root Account cannot be deleted.' });
+    }
+
     await db.run('DELETE FROM profiles WHERE id = ?', [id]);
     try {
       await db.run('DELETE FROM users WHERE id = ?', [id]);
@@ -9322,11 +9462,30 @@ app.delete(['/api/profiles/:id', '/api/users/:id'], requireAdmin, async (req, re
 app.put(['/api/profiles/:id/password', '/api/users/:id/password'], async (req, res) => {
   const { id } = req.params;
   const { password } = req.body;
-  // A user may change their own password; changing someone else's requires an admin role.
-  if (req.authUser.id !== id && !isAdminRole(req.authUser.role)) {
-    return res.status(403).json({ error: 'You can only change your own password.' });
-  }
+
   try {
+    const targetUser = await db.get('SELECT * FROM profiles WHERE id = ? UNION SELECT * FROM users WHERE id = ?', [id, id]);
+    const isTargetSuperAdmin = targetUser && (
+      (targetUser.role || '').toLowerCase().trim() === 'super_admin' ||
+      (targetUser.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com' ||
+      targetUser.id === 'u1'
+    );
+    const isCallerSuperAdmin = req.authUser && (
+      (req.authUser.role || '').toLowerCase().trim() === 'super_admin' ||
+      (req.authUser.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com' ||
+      req.authUser.username === 'super_admin' ||
+      req.authUser.id === 'u1'
+    );
+
+    if (isTargetSuperAdmin && !isCallerSuperAdmin) {
+      return res.status(403).json({ error: '403 Forbidden: Resetting credentials of the Root Administrator is restricted to the Root Administrator.' });
+    }
+
+    // A user may change their own password; changing someone else's requires an admin role.
+    if (req.authUser.id !== id && !isAdminRole(req.authUser.role)) {
+      return res.status(403).json({ error: 'You can only change your own password.' });
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
     await db.run('UPDATE profiles SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [hashedPassword, id]);
     try {
@@ -9378,6 +9537,10 @@ app.put('/api/permissions', requireAdmin, async (req, res) => {
 
 // SYSTEM DATA RESET ENDPOINT
 app.post('/api/system/reset-data', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ error: '403 Forbidden: Factory reset must be executed via offline server CLI scripts.' });
+  }
+
   const { mode, user_email, passkey } = req.body;
 
   try {
@@ -10294,6 +10457,120 @@ const serveMobileScannerHtml = (req, res) => {
 
 app.get('/mobile-scanner', serveMobileScannerHtml);
 app.get('/mobile-scanner.html', serveMobileScannerHtml);
+
+// ----------------------------------------------------
+// 💵 SHIFT BALANCING & CASH DRAWER RECONCILIATION API
+// ----------------------------------------------------
+app.get('/api/shifts/today', async (req, res) => {
+  try {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const shift = await db.get(
+      'SELECT * FROM shift_logs WHERE date = ? ORDER BY created_at DESC LIMIT 1',
+      [todayStr]
+    );
+    // Also check if an opening float was recorded for today in system_settings
+    let openingFloat = 0;
+    try {
+      const floatSetting = await db.get("SELECT value FROM system_settings WHERE key = ? OR id = ?", [`OPENING_FLOAT_${todayStr}`, `OPENING_FLOAT_${todayStr}`]);
+      if (floatSetting?.value) {
+        openingFloat = parseFloat(floatSetting.value) || 0;
+      }
+    } catch (_) { }
+
+    res.json({
+      date: todayStr,
+      shift: shift || null,
+      opening_float: shift?.opening_float !== undefined ? shift.opening_float : openingFloat,
+      is_closed: shift ? shift.status === 'CLOSED' : false
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/shifts/float', async (req, res) => {
+  try {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const { opening_float } = req.body || {};
+    const floatVal = Math.max(0, parseFloat(opening_float) || 0);
+
+    await db.run(
+      `INSERT OR REPLACE INTO system_settings (id, key, value, updated_at) 
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
+      [`OPENING_FLOAT_${todayStr}`, `OPENING_FLOAT_${todayStr}`, String(floatVal)]
+    );
+
+    await logAudit(
+      req.authUser?.email || 'cashier',
+      'OPENING_FLOAT_RECORDED',
+      `Opening Cash Float set to Rs. ${floatVal.toFixed(2)} for ${todayStr}.`
+    );
+
+    res.json({ success: true, opening_float: floatVal, date: todayStr });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/shifts/close', async (req, res) => {
+  try {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const {
+      opening_float,
+      cash_sales,
+      cash_returns,
+      petty_expenses,
+      expected_cash,
+      actual_cash,
+      discrepancy,
+      notes
+    } = req.body || {};
+
+    const id = 'shift_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    const cashierEmail = req.authUser?.email || req.body.cashier_email || 'cashier';
+    const cashierName = req.authUser?.name || req.body.cashier_name || 'Cashier';
+    const cashierId = req.authUser?.id || req.body.cashier_id || 'u_cashier';
+
+    await db.run(
+      `INSERT INTO shift_logs (
+        id, date, cashier_id, cashier_name, cashier_email,
+        opening_float, cash_sales, cash_returns, petty_expenses,
+        expected_cash, actual_cash, discrepancy, notes, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CLOSED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [
+        id,
+        todayStr,
+        cashierId,
+        cashierName,
+        cashierEmail,
+        Number(opening_float || 0),
+        Number(cash_sales || 0),
+        Number(cash_returns || 0),
+        Number(petty_expenses || 0),
+        Number(expected_cash || 0),
+        Number(actual_cash || 0),
+        Number(discrepancy || 0),
+        notes || null
+      ]
+    );
+
+    const logDetails = `Shift closed on ${todayStr} by ${cashierName} (${cashierEmail}). Expected: Rs. ${Number(expected_cash || 0).toFixed(2)}, Actual: Rs. ${Number(actual_cash || 0).toFixed(2)}, Discrepancy: Rs. ${Number(discrepancy || 0).toFixed(2)}.`;
+    await logAudit(cashierEmail, 'SHIFT_CLOSED', logDetails);
+
+    res.json({ success: true, shift_id: id, message: 'Shift balancing completed and archived successfully.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/shifts', async (req, res) => {
+  try {
+    const shifts = await db.all('SELECT * FROM shift_logs ORDER BY created_at DESC LIMIT 50');
+    res.json(shifts);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Serve static React production build files from the 'dist' directory (Desktop / standalone only)
 let distPath = path.join(__dirname, 'dist');

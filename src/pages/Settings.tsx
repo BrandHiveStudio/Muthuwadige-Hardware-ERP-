@@ -25,6 +25,19 @@ interface SettingsProps {
 }
 
 export function Settings({ currentUser }: SettingsProps = {}) {
+  const isRootAdmin = useMemo(() => {
+    let u = currentUser;
+    if (!u) {
+      try {
+        const saved = sessionStorage.getItem('hardware_erp_user') || sessionStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user') || localStorage.getItem('erp_user');
+        u = saved ? JSON.parse(saved) : null;
+      } catch {
+        u = null;
+      }
+    }
+    return u?.username === 'super_admin' || u?.role === 'super_admin' || (u?.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com';
+  }, [currentUser]);
+
   const { currency, setCurrency } = useCurrency();
   const {
     scannerSessionId,
@@ -910,15 +923,38 @@ export function Settings({ currentUser }: SettingsProps = {}) {
                 <p className="text-[10px] text-gray-400 mt-1.5 font-bold">This is the starting invoice number. Subsequent numbers will increment automatically (e.g. INV001 ➜ INV002 ➜ INV003).</p>
               </div>
               <div className="text-left">
-                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2.5 block">Centralized Void Security Passkey</label>
-                <input
-                  type="password"
-                  value={returnPasskey}
-                  onChange={e => setReturnPasskey(e.target.value)}
-                  className="w-full px-5 py-3.5 border border-gray-200 rounded-2xl outline-none focus:ring-4 focus:ring-[#DAA520]/15 focus:border-[#DAA520] font-bold text-[#464646] transition-all duration-300 shadow-sm"
-                  placeholder="e.g. 1234"
-                />
-                <p className="text-[10px] text-gray-400 mt-1.5 font-bold">This single centralized passkey is required to authorize both Sales Void and Sales Return Void operations.</p>
+                <div className="flex items-center justify-between mb-2.5">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block">Centralized Void Security Passkey</label>
+                  {!isRootAdmin && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-rose-50 text-rose-700 border border-rose-200 shadow-xs" title="Restricted to Root Administrator">
+                      <LockIcon className="w-2.5 h-2.5 text-rose-600" /> Restricted to Root Administrator
+                    </span>
+                  )}
+                </div>
+                <div className="relative">
+                  <input
+                    type="password"
+                    disabled={!isRootAdmin}
+                    value={isRootAdmin ? returnPasskey : '••••'}
+                    onChange={e => isRootAdmin && setReturnPasskey(e.target.value)}
+                    className={`w-full px-5 py-3.5 border rounded-2xl outline-none font-bold transition-all duration-300 shadow-sm ${
+                      !isRootAdmin 
+                        ? 'bg-slate-100/90 border-slate-200 text-slate-400 cursor-not-allowed select-none tracking-widest' 
+                        : 'border-gray-200 text-[#464646] focus:ring-4 focus:ring-[#DAA520]/15 focus:border-[#DAA520]'
+                    }`}
+                    placeholder="e.g. 1234"
+                  />
+                  {!isRootAdmin && (
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                      <LockIcon className="w-4 h-4 text-slate-400" />
+                    </div>
+                  )}
+                </div>
+                <p className="text-[10px] text-gray-400 mt-1.5 font-bold">
+                  {isRootAdmin 
+                    ? "This single centralized passkey is required to authorize both Sales Void and Sales Return Void operations." 
+                    : "Passkey configuration is strictly restricted to Root Administrator accounts."}
+                </p>
               </div>
             </div>
 

@@ -367,9 +367,9 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     );
     if (found) {
       const bal = Number(found.balance_remaining !== undefined && found.balance_remaining !== null ? found.balance_remaining : (found.total_returned_cost || found.totalReturnedCost || found.total || 0));
-      setDebitNoteApplied(Math.min(bal, poAfterDiscount));
+      setDebitNoteApplied(Math.min(bal, poTotalWithTransport));
     }
-  }, [selectedDebitNoteCode, purchaseReturns, poAfterDiscount]);
+  }, [selectedDebitNoteCode, purchaseReturns, poTotalWithTransport]);
 
   // Filtered Returns List
   const filteredPurchaseReturns = useMemo(() => {
