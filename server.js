@@ -447,19 +447,27 @@ let runtimeSettings = { ...DEFAULT_RUNTIME_SETTINGS };
 let runtimeTransactions = [];
 let runtimeEmployees = [];
 
-async function logAudit(userEmail, action, details, userName = null, userRole = null) {
+async function logAudit(userOrReq, action, details, userName = null, userRole = null) {
   const id = 'al_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
   const timestamp = new Date().toISOString();
-  let effectiveEmail = userEmail || 'Automated Background Sync';
+  let effectiveEmail = userOrReq;
   let effectiveName = userName;
   let effectiveRole = userRole;
+
+  if (userOrReq && typeof userOrReq === 'object' && (userOrReq.headers || userOrReq.user || userOrReq.authUser)) {
+    const req = userOrReq;
+    const caller = req.user || req.authUser || {};
+    effectiveEmail = caller.email || req.headers['x-user-email'] || caller.username || req.headers['x-user-name'] || 'system';
+    effectiveName = effectiveName || caller.name || caller.username || req.headers['x-user-name'] || null;
+    effectiveRole = effectiveRole || caller.role || req.headers['x-user-role'] || null;
+  }
 
   if (effectiveEmail === 'system' || effectiveEmail === 'system_trigger') {
     effectiveEmail = 'Automated Background Sync';
   }
 
   // If name or role wasn't provided, try looking up from profiles
-  if ((!effectiveName || !effectiveRole) && effectiveEmail !== 'Automated Background Sync') {
+  if ((!effectiveName || !effectiveRole) && effectiveEmail && effectiveEmail !== 'Automated Background Sync') {
     try {
       const prof = await db.get(
         'SELECT name, full_name, role FROM profiles WHERE email = ? OR username = ? LIMIT 1',
@@ -475,7 +483,7 @@ async function logAudit(userEmail, action, details, userName = null, userRole = 
   try {
     await db.run(
       'INSERT INTO audit_logs (id, user_email, action, details, timestamp, user_name, user_role) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [id, effectiveEmail, action, details, timestamp, effectiveName, effectiveRole]
+      [id, effectiveEmail || 'Automated Background Sync', action, details, timestamp, effectiveName, effectiveRole]
     );
     enqueueSync(db, 'audit_logs', id, 'UPSERT').catch(() => { });
   } catch (err) {
@@ -887,16 +895,32 @@ function requireAdmin(req, res, next) {
 async function requireVoidPasskey(req, res, next) {
   try {
     const settings = await getRuntimeSettingsSnapshot();
-    const configuredPasskey = (settings.void_passkey || settings.return_passkey || '1234').toString().trim();
-    const submitted = (req.body?.void_passkey || req.body?.voidPasskey || '').toString().trim();
-    if (!submitted || submitted !== configuredPasskey) {
-      return res.status(403).json({ error: 'Invalid or missing void passkey.' });
+    const storedPasskey = (settings.void_passkey || settings.return_passkey || '1234').toString().trim();
+    const inputPasskey = (req.body?.void_passkey || req.body?.voidPasskey || req.body?.passkey || req.headers['x-void-passkey'] || req.query?.passkey || '').toString().trim();
+    const isValid = inputPasskey && storedPasskey && inputPasskey === storedPasskey;
+    if (!isValid) {
+      return res.status(403).json({ error: 'Invalid Passkey! Access Denied.' });
     }
     next();
   } catch (err) {
     res.status(500).json({ error: 'Passkey verification failed: ' + err.message });
   }
 }
+
+app.post(['/api/settings/verify-passkey', '/api/verify-passkey'], async (req, res) => {
+  try {
+    const settings = await getRuntimeSettingsSnapshot();
+    const storedPasskey = (settings.void_passkey || settings.return_passkey || '1234').toString().trim();
+    const inputPasskey = (req.body?.passkey || req.body?.void_passkey || '').toString().trim();
+    const isValid = inputPasskey && storedPasskey && inputPasskey === storedPasskey;
+    if (!isValid) {
+      return res.status(403).json({ valid: false, error: 'Invalid Passkey! Access Denied.' });
+    }
+    res.json({ valid: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 async function getRuntimeSettingsSnapshot() {
   let settings = null;
@@ -2296,8 +2320,23 @@ async function initializeDatabase() {
   try { await db.exec("UPDATE products SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch (e) { }
   try { await db.exec("UPDATE customers SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch (e) { }
   try { await db.exec("UPDATE suppliers SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch (e) { }
-  try { await db.exec("UPDATE profiles SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch (e) { }
   try { await db.exec("UPDATE users SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch (e) { }
+
+  // Safe SQLite Column Migrations on Startup
+  const safeMigrations = [
+    "ALTER TABLE audit_logs ADD COLUMN user_name TEXT",
+    "ALTER TABLE audit_logs ADD COLUMN user_role TEXT",
+    "ALTER TABLE sales ADD COLUMN voided_at TEXT",
+    "ALTER TABLE sales ADD COLUMN voided_by TEXT",
+    "ALTER TABLE sales ADD COLUMN void_reason TEXT"
+  ];
+  for (const query of safeMigrations) {
+    try {
+      await db.exec(query);
+    } catch (err) {
+      // Column already exists or table updated, safe to ignore
+    }
+  }
 
   await seedInitialData();
 
@@ -4191,7 +4230,12 @@ app.post('/api/customers', async (req, res) => {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
       [id, name, email, phone, address, nic, credit_limit, credit_period, type, loyalty_points, total_purchases, join_date, credit_balance, current_credit]
     );
-    enqueueSync(db, 'customers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
+    await enqueueSync(db, 'customers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
+    await logAudit(
+      req,
+      'CREATE_CUSTOMER',
+      `Registered customer: ${name} (${phone || 'No phone'})`
+    );
     res.json({ success: true, id });
   } catch (err) {
     console.error('Error saving customer:', err);
@@ -4313,7 +4357,7 @@ app.put('/api/customers/:id', async (req, res) => {
       'UPDATE customers SET name = ?, email = ?, phone = ?, address = ?, nic = ?, loyalty_points = ?, total_purchases = ?, join_date = ? WHERE id = ?',
       [c.name, c.email, c.phone, c.address, c.nic, c.loyalty_points !== undefined ? c.loyalty_points : c.loyaltyPoints, c.total_purchases !== undefined ? c.total_purchases : c.totalPurchases, c.join_date !== undefined ? c.join_date : c.joinDate, id]
     );
-    await logAudit(c.user_email || 'system', 'CUSTOMER_UPDATED', `Customer ${c.name} details were updated.`);
+    await logAudit(req, 'CUSTOMER_UPDATED', `Customer ${c.name || 'details'} were updated.`);
     enqueueSync(db, 'customers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
@@ -9753,28 +9797,27 @@ app.post('/api/system/reset-data', async (req, res) => {
 });
 
 // AUDIT LOGS API
-app.get('/api/audit_logs', async (req, res) => {
+app.get(['/api/audit_logs', '/api/audit-logs'], async (req, res) => {
   try {
     const data = await db.all(`
       SELECT 
-        a.*,
+        a.id, 
+        a.timestamp, 
         COALESCE(
           NULLIF(a.user_name, ''),
           p.name,
           p.full_name,
-          CASE 
-            WHEN a.user_email = 'Automated Background Sync' OR a.user_email = 'system_trigger' THEN 'Automated Background Sync'
-            ELSE a.user_email 
-          END
-        ) as user_name,
+          NULLIF(a.user_email, ''),
+          'System'
+        ) AS user_name, 
         COALESCE(
           NULLIF(a.user_role, ''),
           p.role,
-          CASE 
-            WHEN a.user_email = 'Automated Background Sync' OR a.user_email = 'system_trigger' THEN 'SYSTEM'
-            ELSE 'STAFF' 
-          END
-        ) as user_role
+          'ADMIN'
+        ) AS user_role, 
+        a.user_email,
+        a.action, 
+        a.details 
       FROM audit_logs a
       LEFT JOIN profiles p ON (
         (a.user_email IS NOT NULL AND a.user_email != '' AND (a.user_email = p.email OR a.user_email = p.username))
@@ -10725,8 +10768,10 @@ app.post('/api/shifts/close', async (req, res) => {
       ]
     );
 
-    const logDetails = `Shift closed on ${todayStr} by ${cashierName} (${cashierEmail}). Expected: Rs. ${Number(expected_cash || 0).toFixed(2)}, Actual: Rs. ${Number(actual_cash || 0).toFixed(2)}, Discrepancy: Rs. ${Number(discrepancy || 0).toFixed(2)}.`;
-    await logAudit(cashierEmail, 'SHIFT_CLOSED', logDetails);
+    const expStr = Number(expected_cash || 0).toFixed(2);
+    const actStr = Number(actual_cash || 0).toFixed(2);
+    const diffStr = Number(discrepancy || 0).toFixed(2);
+    await logAudit(req, 'CLOSE_SHIFT', `Closed shift - Expected: Rs. ${expStr}, Counted: Rs. ${actStr}, Diff: Rs. ${diffStr}`);
 
     res.json({ success: true, shift_id: id, message: 'Shift balancing completed and archived successfully.' });
   } catch (err) {
@@ -10839,7 +10884,12 @@ if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.
             "ALTER TABLE purchase_orders ADD COLUMN debit_note_applied REAL DEFAULT 0;",
             "ALTER TABLE system_settings ADD COLUMN key TEXT;",
             "ALTER TABLE system_settings ADD COLUMN value TEXT;",
-            "ALTER TABLE system_settings ADD COLUMN system_wipe_timestamp TEXT;"
+            "ALTER TABLE system_settings ADD COLUMN system_wipe_timestamp TEXT;",
+            "ALTER TABLE audit_logs ADD COLUMN user_name TEXT;",
+            "ALTER TABLE audit_logs ADD COLUMN user_role TEXT;",
+            "ALTER TABLE sales ADD COLUMN voided_at TEXT;",
+            "ALTER TABLE sales ADD COLUMN voided_by TEXT;",
+            "ALTER TABLE sales ADD COLUMN void_reason TEXT;"
           ];
           for (const colSql of tursoExtendedCols) {
             try { await tursoClient.execute(colSql); } catch (_) {}

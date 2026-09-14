@@ -27,8 +27,13 @@ import {
   ArrowDownRightIcon,
   ActivityIcon,
   PercentIcon,
-  TrendingDownIcon
+  TrendingDownIcon,
+  PrinterIcon,
+  ClockIcon,
+  CheckCircle2Icon,
+  AlertCircleIcon
 } from 'lucide-react';
+import { API_URL, fetchWithTimeout } from '../lib/api';
 import XLSX from 'xlsx-js-style';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -61,7 +66,7 @@ const getLocalDateString = (d: Date = new Date()) => toSriLankaDateStr(d) || get
 
 const safeGetDateString = (dateVal: any): string => toSriLankaDateStr(dateVal);
 
-type Tab = 'sales' | 'inventory' | 'financial';
+type Tab = 'sales' | 'inventory' | 'financial' | 'shifts';
 
 interface ReportsProps {
   currentUser?: any;
@@ -78,6 +83,7 @@ let cachedReportsData: {
   creditPayments?: any[];
   profiles?: any[];
   shopName?: string;
+  shiftLogs?: any[];
 } | null = null;
 
 export function Reports({ currentUser }: ReportsProps = {}) {
@@ -107,6 +113,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   const [salesReturns, setSalesReturns] = useState<any[]>(() => getCachedData<any[]>('returns') || cachedReportsData?.salesReturns || []);
   const [creditPayments, setCreditPayments] = useState<any[]>(() => cachedReportsData?.creditPayments || []);
   const [profiles, setProfiles] = useState<any[]>(() => cachedReportsData?.profiles || []);
+  const [shiftLogs, setShiftLogs] = useState<any[]>(() => cachedReportsData?.shiftLogs || []);
   const [shopName, setShopName] = useState(() => cachedReportsData?.shopName || 'Sanoj Hardware');
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
@@ -122,7 +129,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       const { data: prData } = await supabase.from('profiles').select('*');
 
       if (!cachedReportsData) cachedReportsData = {};
-
       if (sData) { setSales(sData); cachedReportsData.sales = sData; setCachedData('sales', sData); }
       if (pData) { setProducts(pData); cachedReportsData.products = pData; setCachedData('products', pData); }
       if (tData) { setTransactions(tData); cachedReportsData.transactions = tData; setCachedData('transactions', tData); }
@@ -131,9 +137,75 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       if (srData) { setSalesReturns(srData); cachedReportsData.salesReturns = srData; setCachedData('returns', srData); }
       if (cpData) { setCreditPayments(cpData); cachedReportsData.creditPayments = cpData; }
       if (prData) { setProfiles(prData); cachedReportsData.profiles = prData; }
+
+      try {
+        const res = await fetchWithTimeout(`${API_URL}/shifts`);
+        if (res.ok) {
+          const shiftData = await res.json();
+          const list = Array.isArray(shiftData) ? shiftData : [];
+          setShiftLogs(list);
+          cachedReportsData.shiftLogs = list;
+        }
+      } catch (_) {}
     } catch (e) {
       console.error('Failed to load reports data:', e);
     }
+  };
+
+  const handlePrintShiftSummary = (shift: any) => {
+    const printWin = window.open('', '_blank', 'width=650,height=800');
+    if (!printWin) return alert("Please allow popups to print shift summary.");
+    const diff = Number(shift.discrepancy || 0);
+    const statusText = diff === 0 ? 'BALANCED' : diff > 0 ? `OVERAGE (+Rs. ${diff.toFixed(2)})` : `SHORTAGE (-Rs. ${Math.abs(diff).toFixed(2)})`;
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Shift Register Summary - ${shift.id}</title>
+        <style>
+          body { font-family: monospace, sans-serif; padding: 24px; color: #111; font-size: 13px; line-height: 1.6; max-width: 480px; margin: 0 auto; }
+          .header { text-align: center; border-bottom: 2px dashed #000; padding-bottom: 14px; margin-bottom: 16px; }
+          .title { font-size: 17px; font-weight: 900; letter-spacing: 1px; }
+          .subtitle { font-size: 12px; font-weight: bold; margin-top: 3px; }
+          .row { display: flex; justify-content: space-between; margin: 5px 0; }
+          .bold { font-weight: bold; }
+          .divider { border-top: 1px dashed #000; margin: 12px 0; }
+          .status-box { text-align: center; font-weight: 900; padding: 10px; border: 2px solid #000; margin: 16px 0; font-size: 14px; }
+          .remarks { margin-top: 12px; padding: 8px; border: 1px solid #ccc; font-size: 11px; }
+          .sig-row { display: flex; justify-content: space-between; margin-top: 50px; }
+          .sig-box { border-top: 1px solid #000; width: 45%; text-align: center; font-size: 11px; padding-top: 4px; }
+          @media print { body { padding: 0; } }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="title">${shopName}</div>
+          <div class="subtitle">DAILY CASH DRAWER SHIFT CLOSE SUMMARY</div>
+          <div>Shift ID: <strong>${shift.id}</strong></div>
+        </div>
+        <div class="row"><span>Close Time:</span><span>${new Date(shift.created_at || shift.date).toLocaleString()}</span></div>
+        <div class="row"><span>Cashier Name:</span><span class="bold">${shift.cashier_name || shift.cashier_id || 'Cashier'}</span></div>
+        <div class="row"><span>Station Terminal:</span><span>${shift.station_id || 'STATION-01'}</span></div>
+        <div class="divider"></div>
+        <div class="row"><span>1. Opening Float:</span><span>Rs. ${Number(shift.opening_float || 0).toFixed(2)}</span></div>
+        <div class="row"><span>2. + Cash Sales:</span><span>+Rs. ${Number(shift.cash_sales || 0).toFixed(2)}</span></div>
+        <div class="row"><span>3. - Cash Returns:</span><span>-Rs. ${Number(shift.cash_returns || 0).toFixed(2)}</span></div>
+        <div class="row"><span>4. - Petty Expenses:</span><span>-Rs. ${Number(shift.petty_expenses || 0).toFixed(2)}</span></div>
+        <div class="divider"></div>
+        <div class="row bold" style="font-size: 14px;"><span>Expected Drawer Cash:</span><span>Rs. ${Number(shift.expected_cash || 0).toFixed(2)}</span></div>
+        <div class="row bold" style="font-size: 14px;"><span>Actual Counted Cash:</span><span>Rs. ${Number(shift.actual_cash || 0).toFixed(2)}</span></div>
+        <div class="status-box">${statusText}</div>
+        ${shift.notes ? `<div class="remarks"><strong>Remarks:</strong> ${shift.notes}</div>` : ''}
+        <div class="sig-row">
+          <div class="sig-box">Cashier Signature</div>
+          <div class="sig-box">Supervisor Signature</div>
+        </div>
+        <script>window.onload = function() { window.print(); };</script>
+      </body>
+      </html>
+    `;
+    printWin.document.write(html);
+    printWin.document.close();
   };
 
   const fetchSettings = async () => {
@@ -1058,11 +1130,12 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       {/* Tab Navigation & Language Switcher Header wrapper */}
       <div className="flex flex-col lg:flex-row justify-between items-stretch lg:items-center bg-gradient-to-r from-slate-900 via-slate-800 to-slate-950 p-4 rounded-3xl shadow-xl border border-slate-800 gap-4 mb-4">
         <div className="flex gap-2 p-1 bg-slate-950/60 rounded-2xl border border-slate-850 overflow-x-auto max-w-full custom-scrollbar">
-          {(['sales', 'inventory', 'financial'] as Tab[]).map((tValue) => {
+          {(['sales', 'inventory', 'financial', 'shifts'] as Tab[]).map((tValue) => {
             const isActive = tab === tValue;
             let IconComponent = BarChart3Icon;
             if (tValue === 'inventory') IconComponent = PackageIcon;
             if (tValue === 'financial') IconComponent = CoinsIcon;
+            if (tValue === 'shifts') IconComponent = ClockIcon;
             
             return (
               <button 
@@ -1079,7 +1152,9 @@ export function Reports({ currentUser }: ReportsProps = {}) {
                   ? t('Sales Report', 'විකුණුම් වාර්තාව') 
                   : tValue === 'inventory' 
                   ? t('Inventory Report', 'තොග වාර්තාව') 
-                  : t('Financial Report', 'මූල්‍ය වාර්තාව')}
+                  : tValue === 'financial' 
+                  ? t('Financial Report', 'මූල්‍ය වාර්තාව')
+                  : t('Shift History', 'කාර්ය මුර ඉතිහාසය')}
               </button>
             );
           })}
@@ -1818,6 +1893,167 @@ export function Reports({ currentUser }: ReportsProps = {}) {
                   </p>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SHIFT REGISTER ARCHIVE VIEW */}
+      {tab === 'shifts' && (
+        <div className="space-y-6 animate-in fade-in duration-300">
+          {/* Header Card */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-xl overflow-hidden">
+            <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 px-6 py-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[#DAA520] flex items-center justify-center shrink-0">
+                  <ClockIcon className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-white flex items-center gap-2">
+                    {t('Shift Register History Archive', 'කාර්ය මුර ලේඛන ඉතිහාසය')}
+                  </h3>
+                  <p className="text-xs text-slate-400 font-medium mt-0.5">
+                    {t('Audited record of daily POS drawer balancing, collections, discrepancies, and shift closures.', 'දෛනික මුදල් ලාච්චු ශේෂ සැසඳුම්, එකතු කිරීම් සහ කාර්ය මුර අවසන් කිරීම් පිළිබඳ වාර්තාව.')}
+                  </p>
+                </div>
+              </div>
+              <span className="px-3.5 py-1.5 bg-slate-800 text-slate-300 font-mono text-xs font-black rounded-full border border-slate-700">
+                {shiftLogs.length} {t('Shifts Closed', 'මුර අවසන් කර ඇත')}
+              </span>
+            </div>
+
+            {/* Quick Metrics */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-slate-100 border-b border-slate-100 bg-slate-50/50">
+              <div className="p-4 sm:p-5 text-center">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">{t('Total Shift Logs', 'මුළු මුර ගණන')}</span>
+                <span className="text-xl font-black text-slate-900 font-mono mt-1 block">{shiftLogs.length}</span>
+              </div>
+              <div className="p-4 sm:p-5 text-center">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">{t('Total Cash Sales', 'මුළු මුදල් විකුණුම්')}</span>
+                <span className="text-xl font-black text-emerald-600 font-mono mt-1 block">
+                  Rs. {shiftLogs.reduce((sum, s) => sum + Number(s.cash_sales || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </div>
+              <div className="p-4 sm:p-5 text-center">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">{t('Cash Returns & Refunds', 'මුදල් ආපසු ගෙවීම්')}</span>
+                <span className="text-xl font-black text-rose-600 font-mono mt-1 block">
+                  Rs. {shiftLogs.reduce((sum, s) => sum + Number(s.cash_returns || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
+              </div>
+              <div className="p-4 sm:p-5 text-center">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">{t('Net Discrepancies', 'ශුද්ධ වෙනස්කම්')}</span>
+                {(() => {
+                  const netDiff = shiftLogs.reduce((sum, s) => sum + Number(s.discrepancy || 0), 0);
+                  return (
+                    <span className={`text-xl font-black font-mono mt-1 block ${netDiff === 0 ? 'text-emerald-600' : netDiff > 0 ? 'text-amber-600' : 'text-rose-600'}`}>
+                      {netDiff > 0 ? '+' : ''}Rs. {netDiff.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  );
+                })()}
+              </div>
+            </div>
+
+            {/* Archive Table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-100/70 border-b border-slate-200 text-[9px] font-black uppercase tracking-wider text-slate-500">
+                  <tr>
+                    <th className="p-3.5 sm:px-4">{t('Shift Closed', 'අවසන් කළ වේලාව')}</th>
+                    <th className="p-3.5 sm:px-4">{t('Cashier / Station', 'කැෂියර් / පර්යන්තය')}</th>
+                    <th className="p-3.5 sm:px-4 text-right">{t('Opening Float', 'ආරම්භක පාවෙන')}</th>
+                    <th className="p-3.5 sm:px-4 text-right">{t('Cash Sales', 'මුදල් විකුණුම්')}</th>
+                    <th className="p-3.5 sm:px-4 text-right">{t('Cash Returns', 'මුදල් ආපසු')}</th>
+                    <th className="p-3.5 sm:px-4 text-right">{t('Petty Expenses', 'සුළු වියදම්')}</th>
+                    <th className="p-3.5 sm:px-4 text-right">{t('Expected Cash', 'බලාපොරොත්තු මුදල')}</th>
+                    <th className="p-3.5 sm:px-4 text-right">{t('Counted Cash', 'සත්‍ය මුදල')}</th>
+                    <th className="p-3.5 sm:px-4 text-center">{t('Status', 'තත්ත්වය')}</th>
+                    <th className="p-3.5 sm:px-4">{t('Remarks', 'සටහන්')}</th>
+                    <th className="p-3.5 sm:px-4 text-center">{t('Action', 'ක්‍රියා')}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {shiftLogs.map((shift: any) => {
+                    const diff = Number(shift.discrepancy || 0);
+                    const isBalanced = Math.abs(diff) < 0.01;
+                    const isOverage = diff > 0.01;
+
+                    return (
+                      <tr key={shift.id} className="hover:bg-slate-50/70 transition-colors">
+                        <td className="p-3.5 sm:px-4 font-mono font-medium text-slate-600 whitespace-nowrap">
+                          {new Date(shift.created_at || shift.date).toLocaleString(undefined, {
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </td>
+                        <td className="p-3.5 sm:px-4 whitespace-nowrap">
+                          <span className="font-bold text-slate-900 block">{shift.cashier_name || shift.cashier_id || 'Cashier'}</span>
+                          <span className="text-[10px] font-mono text-slate-400 block">{shift.station_id || 'STATION-01'}</span>
+                        </td>
+                        <td className="p-3.5 sm:px-4 font-mono font-bold text-slate-700 text-right whitespace-nowrap">
+                          Rs. {Number(shift.opening_float || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-3.5 sm:px-4 font-mono font-bold text-emerald-600 text-right whitespace-nowrap">
+                          +Rs. {Number(shift.cash_sales || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-3.5 sm:px-4 font-mono font-bold text-rose-500 text-right whitespace-nowrap">
+                          -Rs. {Number(shift.cash_returns || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-3.5 sm:px-4 font-mono font-bold text-amber-600 text-right whitespace-nowrap">
+                          -Rs. {Number(shift.petty_expenses || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-3.5 sm:px-4 font-mono font-black text-slate-900 text-right whitespace-nowrap">
+                          Rs. {Number(shift.expected_cash || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-3.5 sm:px-4 font-mono font-black text-slate-900 text-right whitespace-nowrap">
+                          Rs. {Number(shift.actual_cash || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-3.5 sm:px-4 text-center whitespace-nowrap">
+                          {isBalanced ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              <CheckCircle2Icon className="w-3 h-3 text-emerald-600" />
+                              {t('Balanced', 'සමබරයි')}
+                            </span>
+                          ) : isOverage ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
+                              <AlertCircleIcon className="w-3 h-3 text-amber-600" />
+                              {t('Overage', 'අතිරික්ත')}: +Rs. {diff.toFixed(2)}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-rose-100 text-rose-800 border border-rose-200">
+                              <AlertCircleIcon className="w-3 h-3 text-rose-600" />
+                              {t('Shortage', 'අඩුපාඩුව')}: -Rs. {Math.abs(diff).toFixed(2)}
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-3.5 sm:px-4 text-slate-600 max-w-xs truncate" title={shift.notes || ''}>
+                          {shift.notes || '—'}
+                        </td>
+                        <td className="p-3.5 sm:px-4 text-center whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => handlePrintShiftSummary(shift)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-amber-400 hover:text-white font-bold text-[10px] rounded-lg transition-all shadow-sm"
+                            title={t('Print Shift Summary', 'මුර සාරාංශය මුද්‍රණය කරන්න')}
+                          >
+                            <PrinterIcon className="w-3.5 h-3.5" />
+                            <span>{t('Print Summary', 'මුද්‍රණය')}</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {shiftLogs.length === 0 && (
+                    <tr>
+                      <td colSpan={11} className="p-16 text-center text-slate-400 font-bold text-xs uppercase tracking-wider">
+                        {t('No shift balancing records found. Complete a shift close in POS to view archives here.', 'කාර්ය මුර වාර්තා කිසිවක් හමු නොවීය.')}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

@@ -1214,6 +1214,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   const [voidPasskeyInput, setVoidPasskeyInput] = useState('');
   const [targetVoidInvoiceId, setTargetVoidInvoiceId] = useState<string | null>(null);
   const [targetVoidReturnId, setTargetVoidReturnId] = useState<string | null>(null);
+  const [targetDeleteInvoiceId, setTargetDeleteInvoiceId] = useState<string | null>(null);
 
   // Sales Returns & Exchange & Credit Notes State
   const returnSearchInputRef = useRef<HTMLInputElement>(null);
@@ -2154,22 +2155,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     return res.json();
   };
 
-  const handleDeleteOrder = async (orderId: string) => {
-    if (!window.confirm(t('Delete this sales record?', 'මෙම විකිණීම් වාර්තාව මකන්නද?'))) {
-      return;
-    }
-    const passkey = window.prompt(t('Enter void/delete passkey to confirm:', 'තහවුරු කිරීමට මුරපදය ඇතුළත් කරන්න:')) || '';
-
-    setIsLoading(true);
-    try {
-      await deleteSaleWithPasskey(orderId, passkey.trim());
-      setOrders((prev) => prev.filter((order) => order.id !== orderId));
-      alert(t('Sales record deleted successfully.', 'විකිණීම් වාර්තාව සාර්ථකව මකා දමන ලදි.'));
-    } catch (err: any) {
-      alert(t('Failed to delete sales record: ', 'විකිණීම් වාර්තාව මකා ගැනීමට අසමත් විය: ') + (err?.message || err));
-    } finally {
-      setIsLoading(false);
-    }
+  const handleDeleteOrder = (orderId: string) => {
+    setTargetDeleteInvoiceId(orderId);
+    setVoidPasskeyInput('');
+    setShowVoidModal(true);
   };
 
   useEffect(() => { 
@@ -3082,8 +3071,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (cartItems.length > 0) {
         e.preventDefault();
-        e.returnValue = 'You have unsaved items in your cart. Leave without saving?';
-        return e.returnValue;
+        e.returnValue = ''; // Required standard for Chromium/Firefox/Electron prompts
+        return '';
       }
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -3279,12 +3268,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       const matchDate = (!salesHistoryFromDate || sDate >= salesHistoryFromDate) && 
                         (!salesHistoryToDate || sDate <= salesHistoryToDate);
 
-      const method = (o.payment_method || o.paymentMethod || '').toLowerCase();
+      const method = (o.payment_method || (o as any).paymentMethod || '').toString().toLowerCase().trim();
       const matchPaymentMethod = 
         historyPaymentMethodFilter === 'all' ||
-        (historyPaymentMethodFilter === 'cash' && (method === 'cash' || (!method && !isCreditOrder(o)))) ||
+        (historyPaymentMethodFilter === 'cash' && (method === 'cash' || !method)) ||
         (historyPaymentMethodFilter === 'card' && method.includes('card')) ||
-        (historyPaymentMethodFilter === 'credit' && (method.includes('credit') || isCreditOrder(o))) ||
         (historyPaymentMethodFilter === 'bank transfer' && (method.includes('bank') || method.includes('transfer')));
 
       return matchSearch && matchStatus && matchDate && matchPaymentMethod;
@@ -3674,7 +3662,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             </div>
 
             {/* Inventory Search & Cart */}
-            <div className="bg-white rounded-2xl border-l-4 border-l-amber-500 border-y border-r border-slate-100 shadow-xl shadow-slate-100/40 p-6 text-left hover:shadow-2xl hover:shadow-slate-200/40 transition-all duration-300 transform hover:-translate-y-0.5">
+            <div className="bg-white rounded-2xl border-l-4 border-l-amber-500 border-y border-r border-slate-100 shadow-xl shadow-slate-100/40 p-6 text-left hover:shadow-2xl hover:shadow-slate-200/40 transition-all duration-300 transform hover:-translate-y-0.5 relative z-30">
               <div className="flex justify-between items-center mb-5">
                 <h3 className="text-sm font-black text-slate-800 flex items-center gap-2.5 uppercase tracking-wider">
                   <div className="w-8 h-8 bg-amber-50 rounded-xl flex items-center justify-center border border-amber-100/60 shadow-sm">
@@ -3694,7 +3682,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 )}
               </div>
               
-              <div className="relative">
+              <div className="relative z-30">
                 <div className="flex items-center gap-3 bg-slate-50/50 hover:bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus-within:border-amber-500 focus-within:ring-1 focus-within:ring-amber-500 transition-all duration-200 shadow-inner">
                   <SearchIcon className="w-5 h-5 text-slate-400" />
                   <input 
@@ -3744,7 +3732,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 
                 {/* Search Results Dropdown */}
                 {filteredProducts.length > 0 && (
-                  <div className="absolute top-full left-0 right-0 mt-2 bg-white/95 backdrop-blur-md border border-slate-200/80 rounded-2xl shadow-2xl z-[100] max-h-64 overflow-y-auto divide-y divide-slate-100/60 animate-in slide-in-from-top-3 duration-300">
+                  <div className="absolute top-full left-0 right-0 mt-2 z-50 shadow-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-h-64 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 animate-in slide-in-from-top-3 duration-300">
                     {filteredProducts.map((p, index) => {
                       const stockLevel = p.stock;
                       let stockBadge = "bg-emerald-50 text-emerald-600 border border-emerald-100/80";
@@ -4483,7 +4471,6 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   { id: 'all', label: t('All Modes', 'සියල්ල') },
                   { id: 'cash', label: t('Cash', 'මුදල්') },
                   { id: 'card', label: t('Card', 'කාඩ්පත්') },
-                  { id: 'credit', label: t('Credit / Ledger', 'ණය / ලෙජරය') },
                   { id: 'bank transfer', label: t('Bank Transfer', 'බැංකු හුවමාරු') }
                 ].map(mode => (
                   <button
@@ -4799,7 +4786,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             </div>
 
             {/* Inventory Search & Items */}
-            <div className="bg-white rounded-2xl border-l-4 border-l-amber-500 border-y border-r border-slate-100 shadow-xl shadow-slate-100/40 p-6 text-left hover:shadow-2xl hover:shadow-slate-200/40 transition-all duration-300 transform hover:-translate-y-0.5">
+            <div className="bg-white rounded-2xl border-l-4 border-l-amber-500 border-y border-r border-slate-100 shadow-xl shadow-slate-100/40 p-6 text-left hover:shadow-2xl hover:shadow-slate-200/40 transition-all duration-300 transform hover:-translate-y-0.5 relative z-30">
               <h3 className="text-sm font-black text-slate-800 mb-5 flex items-center gap-2.5 uppercase tracking-wider">
                 <div className="w-8 h-8 bg-amber-50 rounded-xl flex items-center justify-center border border-amber-100/60 shadow-sm">
                   <ShoppingCartIcon className="w-4 h-4 text-amber-500" />
@@ -4807,7 +4794,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 {t('Inventory Search & Items', 'තොග සෙවීම සහ භාණ්ඩ')}
               </h3>
               
-              <div className="relative">
+              <div className="relative z-30">
                 <div className="flex items-center gap-3 bg-slate-50/50 hover:bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus-within:border-amber-500 focus-within:ring-1 focus-within:ring-amber-500 transition-all duration-200 shadow-inner">
                   <SearchIcon className="w-5 h-5 text-slate-400" />
                   <input 
@@ -4855,7 +4842,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 
                 {/* Search Results Dropdown */}
                 {creditProductSearch && creditFilteredProducts.length > 0 && (
-                  <div className="absolute top-full left-0 right-0 mt-2 bg-white/95 backdrop-blur-md border border-slate-200/80 rounded-2xl shadow-2xl z-[100] max-h-64 overflow-y-auto divide-y divide-slate-100/60 animate-in slide-in-from-top-3 duration-300">
+                  <div className="absolute top-full left-0 right-0 mt-2 z-50 shadow-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-h-64 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 animate-in slide-in-from-top-3 duration-300">
                     {creditFilteredProducts.map((p, index) => {
                       const stockLevel = p.stock;
                       let stockBadge = "bg-emerald-50 text-emerald-600 border border-emerald-100/80";
@@ -7829,14 +7816,17 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             setShowVoidModal(false);
             setTargetVoidInvoiceId(null);
             setTargetVoidReturnId(null);
+            setTargetDeleteInvoiceId(null);
           }} 
-          title={targetVoidReturnId ? t('Confirm Void Sales Return', 'ආපසු භාරගැනීම අවලංගු කිරීම') : t('Confirm Void Invoice', 'ඉන්වොයිසිය අවලංගු කිරීම')}
+          title={targetDeleteInvoiceId ? t('Confirm Delete Invoice', 'ඉන්වොයිසිය මකා දැමීම තහවුරු කරන්න') : targetVoidReturnId ? t('Confirm Void Sales Return', 'ආපසු භාරගැනීම අවලංගු කිරීම') : t('Confirm Void Invoice', 'ඉන්වොයිසිය අවලංගු කිරීම')}
         >
           <div className="space-y-4 p-2">
             <p className="text-xs font-bold text-slate-600">
-              {targetVoidReturnId 
-                ? t('Enter Security Passkey to void sales return and reverse inventory & financials:', 'ආපසු භාරගැනීම අවලංගු කිරීමට මුරපදය ඇතුළත් කරන්න:')
-                : t('Enter Security Passkey to void invoice and reverse inventory & financials:', 'ඉන්වොයිසිය අවලංගු කිරීමට මුරපදය ඇතුළත් කරන්න:')}
+              {targetDeleteInvoiceId
+                ? t('Enter Security Passkey to authorize invoice deletion / voiding and reverse inventory & financials:', 'ඉන්වොයිසිය මකා දැමීම හෝ අවලංගු කිරීම තහවුරු කිරීමට මුරපදය ඇතුළත් කරන්න:')
+                : targetVoidReturnId 
+                  ? t('Enter Security Passkey to void sales return and reverse inventory & financials:', 'ආපසු භාරගැනීම අවලංගු කිරීමට මුරපදය ඇතුළත් කරන්න:')
+                  : t('Enter Security Passkey to void invoice and reverse inventory & financials:', 'ඉන්වොයිසිය අවලංගු කිරීමට මුරපදය ඇතුළත් කරන්න:')}
             </p>
             <input
               type="password"
@@ -7852,6 +7842,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   setShowVoidModal(false);
                   setTargetVoidInvoiceId(null);
                   setTargetVoidReturnId(null);
+                  setTargetDeleteInvoiceId(null);
                 }}
                 className="px-4 py-2 bg-slate-100 text-slate-600 font-bold rounded-xl text-xs uppercase"
               >
@@ -7865,7 +7856,20 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     return alert(t('Invalid Passkey! Access Denied.', 'වලංගු නොවන මුරපදයකි! අවලංගු කිරීමට නොහැක.'));
                   }
                   setShowVoidModal(false);
-                  if (targetVoidInvoiceId) {
+                  if (targetDeleteInvoiceId) {
+                    const idToDelete = targetDeleteInvoiceId;
+                    setTargetDeleteInvoiceId(null);
+                    setIsLoading(true);
+                    try {
+                      await deleteSaleWithPasskey(idToDelete, voidPasskeyInput.trim());
+                      setOrders((prev) => prev.map((order) => order.id === idToDelete ? { ...order, status: 'VOIDED' as any } : order));
+                      alert(t('Sales invoice voided/deleted successfully.', 'විකිණීම් ඉන්වොයිසිය සාර්ථකව අවලංගු කරන ලදි.'));
+                    } catch (err: any) {
+                      alert(t('Failed to delete sales record: ', 'විකිණීම් වාර්තාව මකා ගැනීමට අසමත් විය: ') + (err?.message || err));
+                    } finally {
+                      setIsLoading(false);
+                    }
+                  } else if (targetVoidInvoiceId) {
                     await handleVoidOrder(targetVoidInvoiceId, voidPasskeyInput.trim());
                     setTargetVoidInvoiceId(null);
                   } else if (targetVoidReturnId) {
@@ -7875,7 +7879,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 }}
                 className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-xs uppercase shadow-md"
               >
-                {t('Confirm Void', 'අවලංගු කිරීම තහවුරු කරන්න')}
+                {targetDeleteInvoiceId ? t('Confirm Delete', 'මකා දැමීම තහවුරු කරන්න') : t('Confirm Void', 'අවලංගු කිරීම තහවුරු කරන්න')}
               </button>
             </div>
           </div>
@@ -8629,7 +8633,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             <div className="bg-slate-900 text-white p-4 rounded-2xl border border-slate-800 flex justify-between items-center gap-3">
               <div>
                 <h4 className="text-xs font-black text-amber-400 uppercase tracking-widest flex items-center gap-2">
-                  <DollarSignIcon className="w-4 h-4 text-amber-400" />
+                  <span className="px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-400 font-mono font-black text-xs">Rs.</span>
                   {t('Daily Cash Drawer Register', 'දෛනික මුදල් ලාච්චු ලේඛනය')}
                 </h4>
                 <p className="text-[11px] text-slate-300 font-medium mt-0.5">
@@ -8723,9 +8727,6 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
               <div>
                 <span className="text-[10px] font-black text-amber-400 uppercase tracking-widest block">
                   {t('Expected Drawer Cash (System Total)', 'පද්ධතිය අනුව ලාච්චුවේ තිබිය යුතු මුදල')}
-                </span>
-                <span className="text-xs text-slate-400">
-                  {t('Formula: Float + Cash Sales - Refunds - Expenses', 'සූත්‍රය: පාවෙන මුදල + විකිණුම් - ආපසු - වියදම්')}
                 </span>
               </div>
               <div className="text-2xl font-black text-emerald-400 font-mono tracking-tight">

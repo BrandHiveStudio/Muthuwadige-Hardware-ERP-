@@ -376,8 +376,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (poItems.length > 0) {
         e.preventDefault();
-        e.returnValue = 'You have unsaved items in your Purchase Order. Leave without saving?';
-        return e.returnValue;
+        e.returnValue = ''; // Required standard for Chromium/Firefox/Electron prompts
+        return '';
       }
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -1811,7 +1811,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                     {products.filter(p => p.name.toLowerCase().includes(productSearch.toLowerCase()) && productSearch.length > 0).map((p) => (
                       <button key={p.id} onClick={() => addItem(p)} className="w-full flex justify-between items-center px-5 py-4 hover:bg-gray-50 text-sm transition-colors border-b border-gray-50 last:border-0 text-left">
                         <span className="font-black text-[#464646]">{p.name}</span>
-                        <span className="font-black text-[#DAA520]">{symbol} {convert(p.costPrice || p.cost_price || 0).toLocaleString()}</span>
+                        <span className="font-black text-[#DAA520]">{symbol} {convert(p.costPrice || p.cost_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                       </button>
                     ))}
                   </div>
@@ -2084,76 +2084,41 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                     </label>
                     {activeDebitBalance > 0 && (
                       <span className="text-[9px] font-black text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full">
-                        Avail: {symbol} {convert(activeDebitBalance).toLocaleString()}
+                        Avail: {symbol} {convert(activeDebitBalance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </span>
                     )}
                   </div>
 
-                  {/* Dropdown / Code Input Combo */}
+                  {/* Dropdown Selector */}
                   <div className="space-y-1.5">
-                    {availableSupplierDebitNotes.length > 0 && (
-                      <select
-                        value={selectedDebitNoteCode}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setSelectedDebitNoteCode(val);
-                          if (val) {
-                            const found = purchaseReturns.find((pr: any) => (pr.return_number || pr.returnNumber || pr.id) === val);
-                            if (found) {
-                              const bal = Number(found.balance_remaining !== undefined && found.balance_remaining !== null ? found.balance_remaining : (found.total_returned_cost || found.totalReturnedCost || found.total || 0));
-                              setDebitNoteApplied(Math.min(bal, poTotal));
-                            }
-                          } else {
-                            setDebitNoteApplied(0);
-                          }
-                        }}
-                        className="w-full px-3 py-2 bg-white border border-indigo-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 shadow-sm"
-                      >
-                        <option value="">-- Select Active Supplier Debit Note --</option>
-                        {availableSupplierDebitNotes.map((pr: any) => {
-                          const code = pr.return_number || pr.returnNumber || pr.id;
-                          const bal = Number(pr.balance_remaining !== undefined && pr.balance_remaining !== null ? pr.balance_remaining : (pr.total_returned_cost || pr.totalReturnedCost || pr.total || 0));
-                          return (
-                            <option key={pr.id} value={code}>
-                              {code} - {symbol} {convert(bal).toLocaleString()}
-                            </option>
-                          );
-                        })}
-                      </select>
-                    )}
-
-                    <div className="relative">
-                      <input
-                        type="text"
-                        placeholder="Enter/Scan Debit Note Code (e.g. DN-XXXXXX)"
-                        value={selectedDebitNoteCode}
-                        onChange={(e) => {
-                          const val = e.target.value.toUpperCase();
-                          setSelectedDebitNoteCode(val);
-                          const found = purchaseReturns.find((pr: any) => (pr.return_number || pr.returnNumber || pr.id || '').toUpperCase() === val.trim() && (pr.status || 'ACTIVE').toUpperCase() !== 'VOIDED' && (pr.status || 'ACTIVE').toUpperCase() !== 'REDEEMED');
+                    <select
+                      value={selectedDebitNoteCode}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setSelectedDebitNoteCode(val);
+                        if (val) {
+                          const found = purchaseReturns.find((pr: any) => (pr.return_number || pr.returnNumber || pr.id) === val);
                           if (found) {
                             const bal = Number(found.balance_remaining !== undefined && found.balance_remaining !== null ? found.balance_remaining : (found.total_returned_cost || found.totalReturnedCost || found.total || 0));
                             setDebitNoteApplied(Math.min(bal, poTotal));
-                          } else {
-                            setDebitNoteApplied(0);
                           }
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            const val = selectedDebitNoteCode.trim().toUpperCase();
-                            const found = purchaseReturns.find((pr: any) => (pr.return_number || pr.returnNumber || pr.id || '').toUpperCase() === val && (pr.status || 'ACTIVE').toUpperCase() !== 'VOIDED' && (pr.status || 'ACTIVE').toUpperCase() !== 'REDEEMED');
-                            if (found) {
-                              const bal = Number(found.balance_remaining !== undefined && found.balance_remaining !== null ? found.balance_remaining : (found.total_returned_cost || found.totalReturnedCost || found.total || 0));
-                              setDebitNoteApplied(Math.min(bal, poTotal));
-                            } else if (val) {
-                              alert("Debit Note code not found or already redeemed.");
-                            }
-                          }
-                        }}
-                        className="w-full px-3 py-2 bg-white border border-indigo-200 rounded-xl text-xs font-mono font-bold text-indigo-900 outline-none placeholder-slate-400 focus:border-indigo-500 shadow-sm"
-                      />
-                    </div>
+                        } else {
+                          setDebitNoteApplied(0);
+                        }
+                      }}
+                      className="w-full px-3 py-2 bg-white border border-indigo-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 shadow-sm"
+                    >
+                      <option value="">{availableSupplierDebitNotes.length > 0 ? '-- Select Active Supplier Debit Note --' : '-- No Active Supplier Debit Notes --'}</option>
+                      {availableSupplierDebitNotes.map((pr: any) => {
+                        const code = pr.return_number || pr.returnNumber || pr.id;
+                        const bal = Number(pr.balance_remaining !== undefined && pr.balance_remaining !== null ? pr.balance_remaining : (pr.total_returned_cost || pr.totalReturnedCost || pr.total || 0));
+                        return (
+                          <option key={pr.id} value={code}>
+                            {code} - {symbol} {convert(bal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </option>
+                        );
+                      })}
+                    </select>
                   </div>
 
                   {/* Auto-Detected Debit Note Banner */}
@@ -2181,12 +2146,12 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                         </div>
                         <div className="flex justify-between items-center text-[10px] font-bold text-slate-600">
                           <span>Available Balance:</span>
-                          <span className="font-black text-slate-800">{symbol} {convert(availBal).toLocaleString()}</span>
+                          <span className="font-black text-slate-800">{symbol} {convert(availBal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
                         {!isFullyUsed && poTotal > 0 && (
                           <div className="flex justify-between items-center text-[10px] font-bold text-indigo-700 bg-indigo-50/80 px-2 py-1 rounded-lg">
                             <span>Applied to this PO:</span>
-                            <span className="font-black">-{symbol} {convert(debitNoteApplied).toLocaleString()}</span>
+                            <span className="font-black">-{symbol} {convert(debitNoteApplied).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                           </div>
                         )}
                       </div>
@@ -2321,7 +2286,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                       <td className="px-6 py-4 font-black text-slate-800">{order.supplierName}</td>
                       <td className="px-6 py-4 text-center"><span className="bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider">{order.items?.length || 0} ITEMS</span></td>
                       <td className="px-6 py-4 text-slate-500 font-bold">{order.dueDate}</td>
-                      <td className="px-6 py-4 text-right font-black text-[#DAA520]">{symbol} {convert(order.total).toLocaleString()}</td>
+                      <td className="px-6 py-4 text-right font-black text-[#DAA520]">{symbol} {convert(order.total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       <td className="px-6 py-4 text-center">
                           <span className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest ${statusColors[order.status]}`}>{order.status}</span>
                       </td>
@@ -3214,7 +3179,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                             <span className={`inline-block px-2.5 py-0.5 rounded-md text-xs font-black ${onHand > 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'}`}>
                               Stock: {onHand}
                             </span>
-                            <p className="text-xs font-black text-[#DAA520] mt-0.5">Cost: {symbol} {Number(p.costPrice || p.cost_price || 0).toLocaleString()}</p>
+                            <p className="text-xs font-black text-[#DAA520] mt-0.5">Cost: {symbol} {Number(p.costPrice || p.cost_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
                           </div>
                         </button>
                       );
@@ -3785,8 +3750,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                       <tr key={idx} className="hover:bg-slate-50/50">
                         <td className="py-2.5 px-4 font-bold text-slate-800">{item.productName}</td>
                         <td className="py-2.5 px-2 text-center font-black text-emerald-600">+{item.qty}</td>
-                        <td className="py-2.5 px-2 text-right font-medium text-slate-600">{symbol} {convert(item.costPrice).toLocaleString()}</td>
-                        <td className="py-2.5 px-4 text-right font-black text-slate-800">{symbol} {convert(item.total).toLocaleString()}</td>
+                        <td className="py-2.5 px-2 text-right font-medium text-slate-600">{symbol} {convert(item.costPrice).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                        <td className="py-2.5 px-4 text-right font-black text-slate-800">{symbol} {convert(item.total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       </tr>
                     ))}
                   </tbody>
