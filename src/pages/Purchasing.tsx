@@ -371,18 +371,29 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     }
   }, [selectedDebitNoteCode, purchaseReturns, poTotalWithTransport]);
 
-  // Unsaved Changes Warning Guard
+  // Unsaved Changes Warning Guard (Electron-Compatible)
   useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (poItems.length > 0) {
+    const handleBeforeUnload = (e: any) => {
+      const hasUnsaved = poItems && poItems.length > 0;
+      if (!hasUnsaved) return;
+
+      const isElectron = window.navigator.userAgent.toLowerCase().includes('electron');
+      if (isElectron) {
+        const confirmLeave = window.confirm("You have unsaved changes in your active cart/order. Are you sure you want to discard and reload?");
+        if (!confirmLeave) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+      } else {
         e.preventDefault();
-        e.returnValue = ''; // Required standard for Chromium/Firefox/Electron prompts
+        e.returnValue = '';
         return '';
       }
     };
+
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [poItems.length]);
+  }, [poItems]);
 
   // Filtered Returns List
   const filteredPurchaseReturns = useMemo(() => {

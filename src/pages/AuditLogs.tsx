@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
+import { api } from '../lib/api';
 import {
   ShieldIcon,
   SearchIcon,
@@ -28,11 +29,27 @@ export function AuditLogs() {
   const fetchLogs = async () => {
     setLoading(true);
     try {
-      const { data } = await supabase.from('audit_logs').select('*');
-      if (data) {
+      let records: any[] = [];
+      try {
+        const localLogs = await api.auditLogs.getAll();
+        if (Array.isArray(localLogs) && localLogs.length > 0) {
+          records = localLogs;
+        }
+      } catch (localErr) {
+        console.warn("Direct audit API notice, falling back to Supabase:", localErr);
+      }
+
+      if (!records || records.length === 0) {
+        const { data } = await supabase.from('audit_logs').select('*');
+        if (data && Array.isArray(data)) {
+          records = data;
+        }
+      }
+
+      if (records) {
         // Sort by timestamp desc
-        const sorted = [...data].sort((a: any, b: any) => 
-          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        const sorted = [...records].sort((a: any, b: any) => 
+          new Date(b?.timestamp || 0).getTime() - new Date(a?.timestamp || 0).getTime()
         );
         setLogs(sorted);
       }

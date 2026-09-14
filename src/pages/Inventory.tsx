@@ -1489,7 +1489,7 @@ export function Inventory() {
             <select 
               value={actionType} 
               onChange={(e) => setActionType(e.target.value)} 
-              className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm font-bold text-[#464646] outline-none focus:ring-2 focus:ring-[#DAA520] bg-white cursor-pointer"
+              className="w-full truncate text-sm px-4 py-3 border border-gray-200 rounded-xl font-bold text-[#464646] outline-none focus:ring-2 focus:ring-[#DAA520] bg-white cursor-pointer"
             >
               {stockType === 'in' ? (
                 <>
@@ -1513,8 +1513,17 @@ export function Inventory() {
               min={isDecimalUnit(stockProduct?.unit) ? 0.01 : 1} 
               step={isDecimalUnit(stockProduct?.unit) ? 'any' : '1'} 
               autoFocus 
-              value={stockQty} 
-              onChange={(e) => setStockQty(isDecimalUnit(stockProduct?.unit) ? parseFloat(e.target.value) || 0 : parseInt(e.target.value) || 0)} 
+              value={stockQty === 0 ? '' : stockQty} 
+              placeholder="Enter quantity"
+              onFocus={(e) => e.target.select()}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === '') {
+                  setStockQty(0);
+                } else {
+                  setStockQty(isDecimalUnit(stockProduct?.unit) ? parseFloat(val) || 0 : parseInt(val) || 0);
+                }
+              }} 
               className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm font-bold text-[#464646] outline-none focus:ring-2 focus:ring-[#DAA520]" 
             />
             {(() => {
