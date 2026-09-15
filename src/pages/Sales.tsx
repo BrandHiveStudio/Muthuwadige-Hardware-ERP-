@@ -285,16 +285,16 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
               <span className="font-bold text-red-600">-{symbol} {formatNum(order.discount || 0)}</span>
             </div>
           )}
-          {Number(order.transportation_fee || order.transportationFee || 0) > 0 && (
-            <div className="flex justify-between font-semibold text-gray-500">
-              <span>{isSinhala ? 'ප්‍රවාහන ගාස්තුව:' : 'Transportation Fee:'}</span>
-              <span className="font-bold text-[#4b5563]">+{symbol} {formatNum(order.transportation_fee || order.transportationFee || 0)}</span>
-            </div>
-          )}
           {Number(order.credit_note_applied || order.creditNoteApplied || 0) > 0 && (
             <div className="flex justify-between font-semibold text-emerald-600">
               <span>{isSinhala ? 'ණය සටහන:' : 'Credit Note Applied:'}</span>
               <span className="font-bold text-emerald-600">-{symbol} {formatNum(order.credit_note_applied || order.creditNoteApplied || 0)}</span>
+            </div>
+          )}
+          {(Number(order.transportation_fee || order.delivery_fee || order.transportationFee || 0) > 0) && (
+            <div className="flex justify-between text-slate-600">
+              <span>{isSinhala ? 'ප්‍රවාහන ගාස්තුව:' : 'Transportation Fee:'}</span>
+              <span className="font-semibold">+LKR {Number(order.transportation_fee || order.delivery_fee || order.transportationFee).toFixed(2)}</span>
             </div>
           )}
           <div className="flex justify-between items-center py-2.5 px-3 bg-[#f3f4f6] rounded-lg text-sm font-black text-[#464646] mt-2 border border-gray-100">

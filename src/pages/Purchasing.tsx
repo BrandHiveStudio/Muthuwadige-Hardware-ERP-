@@ -57,8 +57,11 @@ const SRI_LANKA_BANKS = [
 
 const statusColors: Record<string, string> = {
   received: 'bg-emerald-100 text-emerald-700',
+  Received: 'bg-emerald-100 text-emerald-700',
   pending: 'bg-[#464646]/10 text-[#464646]',
-  cancelled: 'bg-red-100 text-red-700'
+  Pending: 'bg-[#464646]/10 text-[#464646]',
+  cancelled: 'bg-red-100 text-red-700',
+  Cancelled: 'bg-red-100 text-red-700'
 };
 
 const settlementModeBadges: Record<string, { label: string; bg: string; text: string }> = {
@@ -418,6 +421,109 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       .reduce((sum, r) => sum + Number(r.total_returned_cost || r.totalReturnedCost || r.total || 0), 0);
   }, [purchaseReturns]);
 
+  // --- HTML PURCHASE ORDER GENERATOR ---
+  const generatePOPrintHTML = (order: PurchaseOrder) => {
+    const shippingFee = Number(order.shipping_cost || (order as any).transportation_fee || (order as any).delivery_fee || 0);
+    const shippingRow = shippingFee > 0 ? `
+  <tr>
+    <td style="padding: 4px 8px; text-align: right; color: #475569;">Transport / Delivery:</td>
+    <td style="padding: 4px 8px; text-align: right; font-weight: 600;">+Rs. ${shippingFee.toFixed(2)}</td>
+  </tr>` : '';
+
+    const receivedDate = order.received_at || (order as any).received_date || (order as any).updated_at 
+      ? new Date(order.received_at || (order as any).received_date || (order as any).updated_at).toLocaleDateString() 
+      : 'N/A';
+    const receivedBy = order.received_by || (order as any).received_by_name || currentUser?.name || 'Staff';
+    const paymentMethod = (order.payment_method || order.settlement_type || (order as any).settlement_mode || 'CREDIT').toUpperCase();
+
+    const computedGross = (order.items || []).reduce((sum: number, it: any) => {
+      const q = Number(it.qty || it.quantity || 0);
+      const c = Number(it.costPrice || it.cost_price || 0);
+      return sum + (q * c);
+    }, 0);
+    const computedLineDisc = (order.items || []).reduce((sum: number, it: any) => {
+      const itemData = calculateLineItem(it.qty, it.costPrice, it.discount || 0, it.discountType);
+      return sum + itemData.lineDiscountTotal;
+    }, 0);
+
+    const subtotalVal = Number(order.subtotal || order.original_total || order.originalTotal || computedGross);
+    const discountVal = Number(order.discount_amount || order.discountAmount || computedLineDisc);
+    const debitVal = Number(order.debit_note_applied || order.debitNoteApplied || 0);
+    const netTotalVal = Number(order.net_total !== undefined && order.net_total !== null ? order.net_total : order.total);
+
+    return `
+      <div style="font-family: Arial, sans-serif; padding: 24px; color: #1e293b; max-width: 800px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; background: #fff;">
+        <div style="display: flex; justify-content: space-between; border-bottom: 2px solid #DAA520; padding-bottom: 12px;">
+          <div>
+            <h2 style="margin: 0; font-size: 20px; font-weight: 800; color: #0f172a;">PURCHASE ORDER</h2>
+            <p style="margin: 4px 0 0; font-weight: 700; color: #DAA520;">#${order.poNumber || order.id}</p>
+          </div>
+          <div style="text-align: right; font-size: 11px; color: #475569;">
+            <div><strong>Date:</strong> ${order.date || 'N/A'}</div>
+            <div><strong>Due Date:</strong> ${order.dueDate || 'N/A'}</div>
+            <div><strong>Supplier:</strong> ${order.supplierName || 'N/A'}</div>
+          </div>
+        </div>
+
+        <table style="width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 11px;">
+          <thead>
+            <tr style="background: #DAA520; color: #fff;">
+              <th style="padding: 6px 8px; text-align: left;">Product</th>
+              <th style="padding: 6px 8px; text-align: center;">Qty</th>
+              <th style="padding: 6px 8px; text-align: right;">Unit Cost</th>
+              <th style="padding: 6px 8px; text-align: center;">Discount</th>
+              <th style="padding: 6px 8px; text-align: right;">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(order.items || []).map((it: any) => `
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 6px 8px;">${it.productName || 'Item'}</td>
+                <td style="padding: 6px 8px; text-align: center;">${it.qty || it.quantity || 0}</td>
+                <td style="padding: 6px 8px; text-align: right;">Rs. ${Number(it.costPrice || it.cost_price || 0).toFixed(2)}</td>
+                <td style="padding: 6px 8px; text-align: center;">${it.discount ? (it.discountType === 'percent' ? it.discount + '%' : 'Rs. ' + it.discount) : '—'}</td>
+                <td style="padding: 6px 8px; text-align: right; font-weight: 700;">Rs. ${Number(it.total || ((it.qty || 0) * (it.costPrice || 0))).toFixed(2)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+
+        <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+          <table style="font-size: 11px; min-width: 260px;">
+            <tr>
+              <td style="padding: 4px 8px; text-align: right; color: #475569;">Gross Subtotal:</td>
+              <td style="padding: 4px 8px; text-align: right; font-weight: 600;">Rs. ${subtotalVal.toFixed(2)}</td>
+            </tr>
+            ${discountVal > 0 ? `
+            <tr>
+              <td style="padding: 4px 8px; text-align: right; color: #dc2626;">Supplier Discount:</td>
+              <td style="padding: 4px 8px; text-align: right; color: #dc2626; font-weight: 600;">-Rs. ${discountVal.toFixed(2)}</td>
+            </tr>` : ''}
+            ${shippingRow}
+            ${debitVal > 0 ? `
+            <tr>
+              <td style="padding: 4px 8px; text-align: right; color: #4338ca;">Debit Note Applied:</td>
+              <td style="padding: 4px 8px; text-align: right; color: #4338ca; font-weight: 600;">-Rs. ${debitVal.toFixed(2)}</td>
+            </tr>` : ''}
+            <tr style="background: #f8fafc; border-top: 2px solid #334155; font-size: 13px;">
+              <td style="padding: 8px; text-align: right; font-weight: 800; color: #1e293b;">Net Total Payable:</td>
+              <td style="padding: 8px; text-align: right; font-weight: 900; color: #b45309;">Rs. ${netTotalVal.toFixed(2)}</td>
+            </tr>
+          </table>
+        </div>
+
+        ${(order.status || '').toLowerCase() === 'received' ? `
+          <div style="margin-top: 18px; border-top: 1px dashed #cbd5e1; padding-top: 10px;">
+            <div style="font-weight: 800; color: #15803d; font-size: 10px; text-transform: uppercase;">RECEIPT CONFIRMATION</div>
+            <div style="color: #475569; font-size: 10px; margin-top: 2px;">
+              Received: ${receivedDate} | By: ${receivedBy} | Settlement: ${paymentMethod}
+            </div>
+          </div>
+        ` : ''}
+      </div>
+    `;
+  };
+
   // --- PDF PURCHASE ORDER GENERATOR ---
   const downloadPO_PDF = (order: PurchaseOrder) => {
     const doc = new jsPDF();
@@ -549,7 +655,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
     const subtotalVal = Number(order.subtotal || order.original_total || order.originalTotal || computedGross);
     const discountVal = Number(order.discount_amount || order.discountAmount || computedLineDisc);
-    const transportVal = Number((order as any).transportation_fee || (order as any).transportationFee || 0);
+    const shippingFee = Number(order.shipping_cost || (order as any).transportation_fee || (order as any).delivery_fee || (order as any).transportationFee || 0);
     const debitVal = Number(order.debit_note_applied || order.debitNoteApplied || 0);
     const netTotalVal = Number(order.net_total !== undefined && order.net_total !== null ? order.net_total : order.total);
 
@@ -569,10 +675,10 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       curY += 6;
     }
 
-    if (transportVal > 0) {
+    if (shippingFee > 0) {
       doc.setTextColor(37, 99, 235);
-      doc.text("Transportation Fee:", summaryXText, curY);
-      doc.text(`+Rs. ${convert(transportVal).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, summaryXValue, curY, { align: 'right' });
+      doc.text("Transport / Delivery:", summaryXText, curY);
+      doc.text(`+Rs. ${shippingFee.toFixed(2)}`, summaryXValue, curY, { align: 'right' });
       curY += 6;
     }
 
@@ -603,9 +709,11 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
     // Received Info (only shown for received POs)
     if ((order.status || '').toLowerCase() === 'received') {
-      const recAt = (order as any).received_at || (order as any).receivedAt ? new Date((order as any).received_at || (order as any).receivedAt).toLocaleDateString() : 'N/A';
-      const recBy = (order as any).received_by || (order as any).receivedBy || (order as any).created_by || 'Staff';
-      const settleMode = ((order as any).settlement_mode || (order as any).settlementMode || 'CREDIT').replace(/_/g, ' ');
+      const receivedDate = order.received_at || (order as any).received_date || (order as any).updated_at 
+        ? new Date(order.received_at || (order as any).received_date || (order as any).updated_at).toLocaleDateString() 
+        : 'N/A';
+      const receivedBy = order.received_by || (order as any).received_by_name || currentUser?.name || 'Staff';
+      const paymentMethod = (order.payment_method || order.settlement_type || (order as any).settlement_mode || (order as any).settlementMode || 'CREDIT').toUpperCase();
 
       doc.setTextColor(34, 139, 34);
       doc.setFont('helvetica', 'bold');
@@ -614,7 +722,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8);
       doc.setTextColor(80, 80, 80);
-      doc.text(`Received: ${recAt} | By: ${recBy} | Settlement: ${settleMode}`, 15, finalY + 33);
+      doc.text(`Received: ${receivedDate} | By: ${receivedBy} | Settlement: ${paymentMethod}`, 15, finalY + 33);
     }
 
     doc.setDrawColor(150, 150, 150);
@@ -1028,12 +1136,19 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     setIsSubmittingReceive(true);
     try {
       const staffEmail = currentUser?.email || currentUser?.name || 'admin@hardware.com';
+      const staffName = currentUser?.name || currentUser?.username || 'Admin';
+      const nowIso = new Date().toISOString();
+      const settlementPaymentMethod = receiveSettlementMode || (receivingOrder as any).payment_method || 'CREDIT';
 
       // 1. Attempt Atomic Backend Settlement
       try {
         const result = await api.purchasing.receivePo({
           po_id: receivingOrder.id,
           po_number: receivingOrder.poNumber,
+          status: 'Received',
+          received_at: nowIso,
+          received_by: staffName,
+          payment_method: settlementPaymentMethod,
           settlement_mode: receiveSettlementMode,
           payment_date: receivePaymentDate,
           reference: receiveRef,
@@ -1064,13 +1179,13 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       const { data: { user } } = await supabase.auth.getUser();
 
       // 1. Update PO Status
-      const nowIso = new Date().toISOString();
       const { error: poError } = await supabase
         .from('purchase_orders')
         .update({
-          status: 'received',
+          status: 'Received',
           received_at: nowIso,
-          received_by: staffEmail,
+          received_by: staffName,
+          payment_method: settlementPaymentMethod,
           settlement_mode: receiveSettlementMode
         })
         .eq('id', receivingOrder.id);
@@ -2339,10 +2454,10 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                           <div className="flex gap-2 justify-center items-center">
                             <button onClick={() => setViewOrder(order)} className="text-[10px] font-black uppercase tracking-widest bg-slate-50 border border-slate-200 hover:bg-slate-200 px-4 py-2.5 rounded-xl text-slate-600 transition-all shadow-sm">Details</button>
                             <button onClick={() => downloadPO_PDF(order)} className="p-2.5 rounded-xl bg-slate-50 text-slate-500 hover:bg-[#DAA520] hover:text-white border border-slate-100 transition-all shadow-sm" title="Download PDF"><DownloadIcon className="w-5 h-5" /></button>
-                            {order.status === 'pending' && (
+                            {(order.status || '').toLowerCase() === 'pending' && (
                                 <button onClick={() => openReceiveModal(order)} className="text-[10px] font-black uppercase tracking-widest bg-emerald-50 text-emerald-600 hover:bg-emerald-600 hover:text-white border border-emerald-100 px-4 py-2.5 rounded-xl transition-all flex items-center gap-1.5 shadow-sm shadow-emerald-500/10"><CheckCircleIcon className="w-3.5 h-3.5" /> Receive & Settle</button>
                             )}
-                            {order.status === 'received' && (
+                            {(order.status || '').toLowerCase() === 'received' && (
                                 <button onClick={() => handleRevertPurchaseOrderReceipt(order.poNumber || order.id)} className="text-[10px] font-black uppercase tracking-widest bg-amber-50 text-amber-800 hover:bg-amber-600 hover:text-white border border-amber-200 px-4 py-2.5 rounded-xl transition-all flex items-center gap-1.5 shadow-sm shadow-amber-500/10" title="Revert PO Receipt & Restock Deduct"><RotateCcwIcon className="w-3.5 h-3.5" /> Revert Receipt</button>
                             )}
                             <button onClick={() => handleDeleteOrder(order.id)} className="p-2.5 rounded-xl bg-red-50 text-red-600 hover:bg-red-500 hover:text-white border border-red-100 transition-all shadow-sm shadow-red-500/10" title="Delete Order"><Trash2Icon className="w-5 h-5" /></button>
@@ -3685,7 +3800,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
             {/* Summary Breakdown */}
             {(() => {
-              const orderItems = viewOrder.items || [];
+              const order = viewOrder;
+              const orderItems = order.items || [];
               const computedGross = orderItems.reduce((sum, it) => {
                 const q = Number(it.qty || (it as any).quantity || 0);
                 const c = Number(it.costPrice || (it as any).cost_price || 0);
@@ -3696,11 +3812,10 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                 return sum + itemData.lineDiscountTotal;
               }, 0);
 
-              const grossVal = Number(viewOrder.subtotal || viewOrder.original_total || viewOrder.originalTotal || computedGross);
-              const totalDiscVal = Number(viewOrder.discount_amount || viewOrder.discountAmount || computedLineDiscounts);
-              const transportVal = Number((viewOrder as any).transportation_fee || (viewOrder as any).transportationFee || 0);
-              const debitVal = Number(viewOrder.debit_note_applied || viewOrder.debitNoteApplied || 0);
-              const netTotalVal = Number(viewOrder.net_total !== undefined && viewOrder.net_total !== null ? viewOrder.net_total : viewOrder.total);
+              const grossVal = Number(order.subtotal || order.original_total || (order as any).originalTotal || computedGross);
+              const totalDiscVal = Number(order.discount_amount || (order as any).discountAmount || computedLineDiscounts);
+              const debitVal = Number(order.debit_note_applied || (order as any).debitNoteApplied || 0);
+              const netTotalVal = Number(order.net_total !== undefined && order.net_total !== null ? order.net_total : order.total);
 
               return (
                 <div className="space-y-4">
@@ -3715,10 +3830,10 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                         <span className="font-black font-mono">-{symbol} {convert(totalDiscVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                       </div>
                     )}
-                    {transportVal > 0 && (
-                      <div className="flex justify-between font-bold text-blue-600 uppercase tracking-wider">
-                        <span>Transport:</span>
-                        <span className="font-black font-mono">+{symbol} {convert(transportVal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    {(Number(order.shipping_cost || order.transportation_fee || order.delivery_fee || 0) > 0) && (
+                      <div className="flex justify-between text-sm text-slate-600">
+                        <span>TRANSPORT / SHIPPING:</span>
+                        <span className="font-semibold">+Rs. {Number(order.shipping_cost || order.transportation_fee || order.delivery_fee).toFixed(2)}</span>
                       </div>
                     )}
                     {debitVal > 0 && (

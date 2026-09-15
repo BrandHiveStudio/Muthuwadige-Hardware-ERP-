@@ -2344,6 +2344,9 @@ async function initializeDatabase() {
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN created_by TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN received_by TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN settlement_mode TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN payment_method TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN shipping_cost REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN delivery_fee REAL DEFAULT 0"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN status TEXT DEFAULT 'ACTIVE'"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN void_reason TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN updated_at DATETIME"); } catch (e) { }
@@ -6922,7 +6925,13 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
 
 app.put('/api/purchase-orders/:id', async (req, res) => {
   const { id } = req.params;
-  const { status } = req.body;
+  const { 
+    status,
+    received_at,
+    received_by,
+    payment_method,
+    settlement_mode
+  } = req.body || {};
   try {
     await db.run('BEGIN TRANSACTION');
 
@@ -6933,10 +6942,29 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
       return res.status(404).json({ error: 'Purchase order not found' });
     }
 
-    await db.run('UPDATE purchase_orders SET status = ? WHERE id = ?', [status, id]);
+    const isReceived = (status || '').toLowerCase() === 'received';
+    const recAt = received_at || req.body.receivedAt || (isReceived ? new Date().toISOString() : null);
+    const recBy = received_by || req.body.receivedBy || (isReceived ? (req.user?.name || req.user?.username || 'Admin') : null);
+    const payMethod = (payment_method || settlement_mode || req.body.settlementMode || (isReceived ? 'CREDIT' : null))?.toString().toUpperCase();
+
+    if (isReceived) {
+      await db.run(
+        `UPDATE purchase_orders SET 
+          status = 'Received', 
+          received_at = COALESCE(?, received_at, CURRENT_TIMESTAMP), 
+          received_by = COALESCE(?, received_by, 'Admin'), 
+          settlement_mode = COALESCE(?, settlement_mode, 'CREDIT'), 
+          payment_method = COALESCE(?, payment_method, 'CREDIT'),
+          updated_at = CURRENT_TIMESTAMP 
+        WHERE id = ?`,
+        [recAt, recBy, payMethod, payMethod, id]
+      );
+    } else {
+      await db.run('UPDATE purchase_orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [status, id]);
+    }
 
     // If marked received, allocate stock using Batch Versioning and update weighted average cost
-    if (status === 'received') {
+    if (isReceived) {
       let items = [];
       try {
         items = typeof po.items === 'string' ? JSON.parse(po.items) : (po.items || []);
@@ -8011,7 +8039,11 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
   const {
     po_id,
     po_number,
+    status = 'Received',
     settlement_mode = 'CREDIT',
+    payment_method,
+    received_at,
+    received_by,
     payment_date,
     reference,
     notes = '',
@@ -8025,13 +8057,13 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
     return res.status(400).json({ error: 'Purchase Order ID or PO Number is required.' });
   }
 
-  const validMode = ['CREDIT', 'CASH', 'BANK', 'CHEQUE'].includes((settlement_mode || '').toUpperCase())
-    ? settlement_mode.toUpperCase()
+  const validMode = ['CREDIT', 'CASH', 'BANK', 'CHEQUE'].includes(((payment_method || settlement_mode) || '').toUpperCase())
+    ? (payment_method || settlement_mode).toUpperCase()
     : 'CREDIT';
 
-  const staffUser = user_email || req.headers['x-user-email'] || 'system';
+  const staffUser = received_by || req.body.receivedBy || user_email || req.headers['x-user-email'] || 'Admin';
   const todayStr = payment_date || new Date().toLocaleDateString('sv-SE');
-  const nowIso = new Date().toISOString();
+  const nowIso = received_at || new Date().toISOString();
   let txn = null;
 
   try {
@@ -8171,8 +8203,8 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
 
     // 3. Update Purchase Order Status and items with batch metadata
     await db.run(
-      `UPDATE purchase_orders SET status = 'received', received_at = ?, received_by = ?, settlement_mode = ?, items = ? WHERE id = ?`,
-      [nowIso, staffUser, validMode, JSON.stringify(updatedPoItems), po.id]
+      `UPDATE purchase_orders SET status = 'Received', received_at = ?, received_by = ?, settlement_mode = ?, payment_method = ?, items = ?, updated_at = ? WHERE id = ?`,
+      [nowIso, staffUser, validMode, validMode, JSON.stringify(updatedPoItems), nowIso, po.id]
     );
 
     // 4. Execute Settlement Mode

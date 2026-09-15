@@ -126,7 +126,7 @@ export function getReturnSellingSubtotal(r: any): number {
             : (r.amount || 0))))
   );
 
-  const retTrans = Number(r.transportation_fee || r.transportationFee || 0);
+  const retTrans = Number(r.transportation_fee || r.delivery_fee || r.delivery_charges || r.transportationFee || 0);
   if (retAmt > 0) {
     return Math.max(0, retAmt - retTrans);
   }
@@ -198,7 +198,7 @@ export function computeFinancialSummary(params: {
     }
 
     customerDiscounts += Number(s.discount_amount || s.discount || 0);
-    transportFees += Number(s.transportation_fee || s.transportationFee || s.delivery_fee || 0);
+    transportFees += Number(s.transportation_fee || s.delivery_fee || s.delivery_charges || s.transportationFee || 0);
   });
 
   let returnsSellingRevenue = 0;

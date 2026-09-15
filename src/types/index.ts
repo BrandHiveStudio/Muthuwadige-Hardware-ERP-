@@ -106,6 +106,8 @@ export interface SaleOrder {
   payment_received?: number;
   transportation_fee?: number;
   transportationFee?: number;
+  delivery_fee?: number;
+  delivery_charges?: number;
   customer_phone?: string;
   customerPhone?: string;
   customer_address?: string;
@@ -165,7 +167,11 @@ export interface PurchaseOrder {
   debitNoteApplied?: number;
   transportation_fee?: number;
   transportationFee?: number;
-  status: 'received' | 'pending' | 'cancelled';
+  shipping_cost?: number;
+  delivery_fee?: number;
+  payment_method?: string;
+  settlement_type?: string;
+  status: 'received' | 'pending' | 'cancelled' | 'Received' | 'Pending' | 'Cancelled';
   date: string;
   dueDate: string;
   received_at?: string;

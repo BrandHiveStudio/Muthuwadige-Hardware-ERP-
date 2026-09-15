@@ -461,11 +461,17 @@ export const api = {
       if (!res.ok) throw new Error('Failed to insert purchase order');
       return res.json();
     },
-    receive: async (id: string) => {
+    receive: async (id: string, metadata?: any) => {
       const res = await fetchWithTimeout(`${API_URL}/purchase-orders/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'received' })
+        body: JSON.stringify({
+          status: 'Received',
+          received_at: new Date().toISOString(),
+          received_by: metadata?.received_by || 'Admin',
+          payment_method: metadata?.payment_method || 'CREDIT',
+          ...metadata
+        })
       });
       if (!res.ok) throw new Error('Failed to check in purchase order stock');
       return res.json();
@@ -867,6 +873,10 @@ export const api = {
     receivePo: async (data: {
       po_id: string;
       po_number?: string;
+      status?: string;
+      received_at?: string;
+      received_by?: string;
+      payment_method?: string;
       settlement_mode: 'CREDIT' | 'CASH' | 'BANK' | 'CHEQUE';
       payment_date?: string;
       reference?: string;

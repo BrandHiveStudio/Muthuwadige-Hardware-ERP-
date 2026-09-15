@@ -324,7 +324,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   const getSaleSellingSubtotal = (s: any) => {
     const tot = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
     const tax = Number(s.tax || 0);
-    const trans = Number(s.transportation_fee || s.transportationFee || 0);
+    const trans = Number(s.transportation_fee || s.delivery_fee || s.delivery_charges || s.transportationFee || 0);
     return Math.max(0, tot - tax - trans);
   };
 
@@ -339,7 +339,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
             ? r.totalRefunded
             : (r.amount || 0)))));
     const retTax = Number(r.tax || 0);
-    const retTrans = Number(r.transportation_fee || r.transportationFee || 0);
+    const retTrans = Number(r.transportation_fee || r.delivery_fee || r.delivery_charges || r.transportationFee || 0);
     if (retAmt > 0) {
       return Math.max(0, retAmt - retTax - retTrans);
     }
@@ -646,11 +646,17 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       products
     });
 
+    const deliveryFees = filteredSales.reduce((sum, sale) => {
+      const statusLower = (sale.status || '').toString().toLowerCase().trim();
+      if (statusLower === 'cancelled' || statusLower === 'voided') return sum;
+      return sum + Number(sale.transportation_fee || sale.delivery_fee || sale.delivery_charges || 0);
+    }, 0);
+
     return {
       grossStickerSales: summary.grossStickerSales,
       customerDiscounts: summary.customerDiscounts,
       salesReturnsRefunds: summary.returnsSellingRevenue,
-      transportFees: summary.transportFees,
+      transportFees: deliveryFees > 0 ? deliveryFees : summary.transportFees,
       grossSalesRevenue: summary.grossStickerSales,
       netSalesRevenue: summary.netSalesRevenue,
       cogs: summary.netCOGS,
