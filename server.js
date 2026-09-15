@@ -813,6 +813,7 @@ async function authenticate(req, res, next) {
     }
 
     if (!session || new Date(session.expires_at).getTime() < Date.now()) {
+      const isDesktopLocal = !process.env.VERCEL && process.env.APP_ROLE !== 'web' && (!isTurso || !isTurso());
       if (isDesktopLocal && session) {
         const authUser = { id: session.user_id, email: session.email, role: session.role, username: session.email === 'sanojhardware@gmail.com' ? 'super_admin' : (session.username || '') };
         req.authUser = authUser;
@@ -4366,7 +4367,8 @@ app.post('/api/customers', async (req, res) => {
 app.post(['/api/customers/bulk-import', '/api/customers/bulk', '/api/customers/import'], async (req, res) => {
   const user_email = req.headers['x-user-email'] || 'system';
   try {
-    await ensureBulkImportColumns(db);
+    const activeDb = typeof getDb === 'function' ? await getDb() : db;
+    await ensureBulkImportColumns(activeDb);
     const rawItems = Array.isArray(req.body) ? req.body : (req.body?.customers || req.body?.items || [req.body]);
     if (!Array.isArray(rawItems) || rawItems.length === 0) {
       return res.status(400).json({ error: 'No customer records provided for import.' });
@@ -4389,8 +4391,19 @@ app.post(['/api/customers/bulk-import', '/api/customers/bulk', '/api/customers/i
       return '';
     };
 
-    let importedCount = 0;
+    // Pre-cache existing customers for fast batch matching
+    const existingCustomers = await activeDb.all("SELECT id, phone, LOWER(TRIM(name)) as clean_name FROM customers").catch(() => []);
+    const phoneMap = new Map();
+    const nameMap = new Map();
+    (existingCustomers || []).forEach(c => {
+      if (c.phone) phoneMap.set(String(c.phone).trim(), c.id);
+      if (c.clean_name) nameMap.set(String(c.clean_name).trim(), c.id);
+    });
+
+    const preparedStatements = [];
+    const customerPayloads = [];
     const insertedIds = [];
+    const nowIso = new Date().toISOString();
 
     for (let idx = 0; idx < rawItems.length; idx++) {
       const row = rawItems[idx];
@@ -4426,46 +4439,94 @@ app.post(['/api/customers/bulk-import', '/api/customers/bulk', '/api/customers/i
       const totalPurchases = parseFloat(rawPurchases !== '' ? rawPurchases : (row.total_purchases || 0)) || 0;
 
       const rawDate = getValue(row, ['joindate', 'join_date', 'date', 'createdat']) || row.join_date;
-      const joinDate = rawDate ? String(rawDate).trim() : new Date().toISOString().split('T')[0];
+      const joinDate = rawDate ? String(rawDate).trim() : nowIso.split('T')[0];
 
-      // Check if existing customer matches phone or name
-      let existing = null;
-      if (phone) {
-        existing = await db.get('SELECT id FROM customers WHERE phone != "" AND phone = ?', [phone]).catch(() => null);
-      }
-      if (!existing && name) {
-        existing = await db.get('SELECT id FROM customers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))', [name]).catch(() => null);
-      }
+      const matchedId = (phone && phoneMap.get(phone)) || (name && nameMap.get(name.toLowerCase().trim()));
+      const id = matchedId || row.id || crypto.randomUUID();
 
-      const id = (existing && existing.id) ? existing.id : (row.id || crypto.randomUUID());
+      const args = [
+        id, name, email, phone, address, nic, creditLimit, creditPeriod, type,
+        loyaltyPoints, totalPurchases, joinDate, nowIso
+      ];
 
-      await db.run(
-        `INSERT OR REPLACE INTO customers (
-          id, name, email, phone, address, nic, credit_limit, credit_period, type,
-          loyalty_points, total_purchases, join_date, credit_balance, current_credit, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, CURRENT_TIMESTAMP)`,
-        [id, name, email, phone, address, nic, creditLimit, creditPeriod, type, loyaltyPoints, totalPurchases, joinDate]
-      );
+      const insertSql = `INSERT OR REPLACE INTO customers (
+        id, name, email, phone, address, nic, credit_limit, credit_period, type,
+        loyalty_points, total_purchases, join_date, credit_balance, current_credit, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)`;
 
-      enqueueSync(db, 'customers', id, 'UPSERT').catch(() => { });
+      preparedStatements.push({ id, sql: insertSql, args });
+
+      const payload = {
+        id,
+        name,
+        email,
+        phone,
+        address,
+        nic,
+        credit_limit: creditLimit,
+        credit_period: creditPeriod,
+        type,
+        loyalty_points: loyaltyPoints,
+        total_purchases: totalPurchases,
+        join_date: joinDate,
+        credit_balance: 0,
+        current_credit: 0,
+        updated_at: nowIso
+      };
+      customerPayloads.push({ id, payload });
       insertedIds.push(id);
-      importedCount++;
     }
 
-    // Trigger immediate upstream sync cycle asynchronously
-    triggerPush(db).catch(() => { });
-    await logAudit(user_email, 'CUSTOMER_BULK_IMPORT', `Bulk imported/updated ${importedCount} customer records.`);
+    if (preparedStatements.length === 0) {
+      return res.status(400).json({ error: 'No valid customers could be processed from the payload.' });
+    }
 
-    res.json({
+    const turso = getTursoClient();
+    if (turso && isTurso()) {
+      // Direct Turso Cloud Batch Persistence (Web / Vercel Serverless)
+      const BATCH_SIZE = 50;
+      for (let i = 0; i < preparedStatements.length; i += BATCH_SIZE) {
+        const slice = preparedStatements.slice(i, i + BATCH_SIZE);
+        await turso.batch(slice.map(s => ({ sql: s.sql, args: s.args })));
+      }
+    } else {
+      // Local SQLite / Desktop mode: execute within a single transaction with durable sync queue entries
+      await activeDb.run('BEGIN TRANSACTION');
+      try {
+        for (let i = 0; i < preparedStatements.length; i++) {
+          const s = preparedStatements[i];
+          const cp = customerPayloads[i];
+          await activeDb.run(s.sql, s.args);
+          await enqueueSync(activeDb, 'customers', cp.id, 'UPSERT', cp.payload);
+        }
+        await activeDb.run('COMMIT');
+      } catch (txnErr) {
+        await activeDb.run('ROLLBACK').catch(() => { });
+        throw txnErr;
+      }
+
+      // Flush upstream immediately and await completion if connected
+      if (turso) {
+        await pushUpstreamChanges(activeDb, turso).catch(err => {
+          console.warn('[CustomerImport] Immediate push notice (will retry in background):', err.message);
+        });
+      } else {
+        await triggerPush(activeDb).catch(() => { });
+      }
+    }
+
+    await logAudit(user_email, 'CUSTOMER_BULK_IMPORT', `Bulk imported/updated ${preparedStatements.length} customer records.`);
+
+    return res.json({
       success: true,
-      count: importedCount,
-      imported: importedCount,
+      count: preparedStatements.length,
+      imported: preparedStatements.length,
       ids: insertedIds,
-      message: `Successfully imported and synced ${importedCount} customer profiles.`
+      message: `Successfully imported and synced ${preparedStatements.length} customer profiles.`
     });
   } catch (err) {
     console.error('Error importing customers:', err);
-    res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: 'Bulk customer import failed: ' + err.message });
   }
 });
 
@@ -5551,30 +5612,109 @@ app.get('/api/credit-settlements', async (req, res) => {
 
 app.delete('/api/sales/:id', requireVoidPasskey, async (req, res) => {
   const { id } = req.params;
-  const now = new Date().toISOString();
   const supervisor = req.authUser?.name || req.authUser?.username || 'Supervisor';
   let txn = null;
   try {
-    const sale = await db.get('SELECT * FROM sales WHERE id = ?', [id]);
+    const activeDb = typeof getDb === 'function' ? await getDb().catch(() => db) : db;
+    const sale = await activeDb.get('SELECT * FROM sales WHERE id = ?', [id]);
     if (sale) {
-      txn = await beginTxn(db, `Void Sale ${sale.invoice_no}`);
-      await removeRuntimeTransactionsForSale(sale.invoice_no);
-      // Soft-void instead of hard-deleting the record from database
-      await db.run(
-        "UPDATE sales SET status = 'VOIDED', voided_at = ?, voided_by = ?, void_reason = 'Passkey Delete Request' WHERE id = ?",
-        [now, supervisor, id]
-      );
-      await commitTxn(db, txn);
+      txn = await beginTxn(activeDb, `Delete Sale ${sale.invoice_no}`);
+
+      const wasVoided = sale.status === 'VOIDED' || sale.status === 'cancelled';
+
+      if (!wasVoided) {
+        // Reverse inventory only if not already voided (prevent double restock)
+        const items = safeParseJson(sale.items, []);
+        for (const item of items) {
+          const convRate = Number(item.conversionRate) || 1;
+          const baseQtyRestock = convRate > 0 ? (Number(item.qty || 0) / convRate) : Number(item.qty || 0);
+          if (item.productId && baseQtyRestock > 0) {
+            await activeDb.run(
+              'UPDATE products SET stock = stock + ? WHERE id = ?',
+              [baseQtyRestock, item.productId]
+            );
+            await enqueueSync(activeDb, 'products', item.productId, 'UPSERT').catch(() => {});
+          }
+        }
+
+        // Adjust customer total purchases if customer_id is present
+        if (sale.customer_id) {
+          const totalAmt = Number(sale.total_amount !== undefined ? sale.total_amount : (sale.total || 0));
+          await activeDb.run(
+            'UPDATE customers SET total_purchases = MAX(0, total_purchases - ?) WHERE id = ?',
+            [totalAmt, sale.customer_id]
+          ).catch(() => {});
+          await enqueueSync(activeDb, 'customers', sale.customer_id, 'UPSERT').catch(() => {});
+        }
+      }
+
+      // 1. Transactions cleanup: remove runtime and persistent ledger rows
+      await removeRuntimeTransactionsForSale(sale.invoice_no).catch(() => {});
+      const orphanedTxRows = await activeDb.all(
+        "SELECT id FROM transactions WHERE reference = ? OR reference = ? OR description LIKE ?",
+        [sale.invoice_no, id, `%${sale.invoice_no}%`]
+      ).catch(() => []);
+      for (const row of orphanedTxRows) {
+        await enqueueSync(activeDb, 'transactions', row.id, 'DELETE').catch(() => {});
+      }
+      await activeDb.run(
+        "DELETE FROM transactions WHERE reference = ? OR reference = ? OR description LIKE ?",
+        [sale.invoice_no, id, `%${sale.invoice_no}%`]
+      ).catch(() => {});
+
+      // 2. Linked sales_returns and sales_return_items cleanup
+      const linkedReturns = await activeDb.all(
+        'SELECT id FROM sales_returns WHERE invoice_no = ?',
+        [sale.invoice_no]
+      ).catch(() => []);
+      for (const ret of linkedReturns) {
+        await activeDb.run('DELETE FROM sales_return_items WHERE return_id = ?', [ret.id]).catch(() => {});
+        await enqueueSync(activeDb, 'sales_returns', ret.id, 'DELETE').catch(() => {});
+      }
+      if (linkedReturns.length > 0) {
+        await activeDb.run('DELETE FROM sales_returns WHERE invoice_no = ?', [sale.invoice_no]).catch(() => {});
+      }
+
+      // 3. Linked credit payments cleanup
+      const linkedCreditPayments = await activeDb.all(
+        'SELECT id FROM credit_payments WHERE invoice_no = ?',
+        [sale.invoice_no]
+      ).catch(() => []);
+      for (const cp of linkedCreditPayments) {
+        await enqueueSync(activeDb, 'credit_payments', cp.id, 'DELETE').catch(() => {});
+      }
+      if (linkedCreditPayments.length > 0) {
+        await activeDb.run('DELETE FROM credit_payments WHERE invoice_no = ?', [sale.invoice_no]).catch(() => {});
+      }
+
+      // 4. Physical deletion of the sales invoice
+      await activeDb.run('DELETE FROM sales WHERE id = ?', [id]);
+      await enqueueSync(activeDb, 'sales', id, 'DELETE');
+
+      await commitTxn(activeDb, txn);
+      txn = null;
+
       await logAudit(
         req.authUser?.email || 'Supervisor',
-        'VOID_INVOICE',
-        `Voided invoice ${sale.invoice_no} (Total: Rs. ${sale.total_amount}). Cashier: ${sale.user_id || 'N/A'}, Supervisor: ${supervisor}`,
+        'DELETE_INVOICE',
+        `Deleted invoice ${sale.invoice_no} (Total: Rs. ${sale.total_amount}). Cashier: ${sale.user_id || 'N/A'}, Supervisor: ${supervisor}`,
         supervisor,
         req.authUser?.role || 'SUPERVISOR'
       );
-      enqueueSync(db, 'sales', id, 'UPSERT').then(() => triggerPush(db)).catch(() => { });
+    } else {
+      // Sale not found locally, ensure it is deleted and enqueued for sync
+      await activeDb.run('DELETE FROM sales WHERE id = ?', [id]).catch(() => {});
+      await enqueueSync(activeDb, 'sales', id, 'DELETE').catch(() => {});
     }
-    res.json({ success: true, status: 'VOIDED' });
+
+    const tursoClient = getTursoClient();
+    if (tursoClient) {
+      await pushUpstreamChanges(activeDb, tursoClient).catch(err => console.warn('[Sale Delete Immediate Push Notice]:', err.message));
+    } else {
+      triggerPush(activeDb).catch(() => {});
+    }
+
+    res.json({ success: true, id, status: 'DELETED', message: 'Sales invoice deleted permanently' });
   } catch (err) {
     if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
     res.status(500).json({ error: err.message });

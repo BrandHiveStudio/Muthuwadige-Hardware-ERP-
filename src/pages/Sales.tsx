@@ -8054,7 +8054,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     setIsLoading(true);
                     try {
                       await deleteSaleWithPasskey(idToDelete, enteredPass);
-                      setOrders((prev) => prev.map((order) => order.id === idToDelete ? { ...order, status: 'VOIDED' as any } : order));
+                      setOrders((prev) => prev.filter((order) => order.id !== idToDelete));
+                      fetchData();
                       alert(t('Sales invoice voided/deleted successfully.', 'විකිණීම් ඉන්වොයිසිය සාර්ථකව අවලංගු කරන ලදි.'));
                     } catch (err: any) {
                       alert(t('Failed to delete sales record: ', 'විකිණීම් වාර්තාව මකා ගැනීමට අසමත් විය: ') + (err?.message || err));
