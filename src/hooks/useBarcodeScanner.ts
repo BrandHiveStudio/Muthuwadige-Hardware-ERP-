@@ -34,16 +34,38 @@ export const isUserTyping = (target: EventTarget | null): boolean => {
 };
 
 /**
+ * Helper to strip injected barcode characters from active input field
+ */
+function cleanInjectedBarcodeFromActiveInput(scannedCode: string) {
+  try {
+    const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
+    if (activeEl && (activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement)) {
+      const val = activeEl.value;
+      if (val.endsWith(scannedCode)) {
+        activeEl.value = val.slice(0, -scannedCode.length);
+        activeEl.dispatchEvent(new Event('input', { bubbles: true }));
+        activeEl.dispatchEvent(new Event('change', { bubbles: true }));
+      } else if (val === scannedCode) {
+        activeEl.value = '';
+        activeEl.dispatchEvent(new Event('input', { bubbles: true }));
+        activeEl.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }
+  } catch (_) { }
+}
+
+/**
  * Global Hardware Barcode Scanner Hook
  * 
  * CRITICAL SAFETY & PERFORMANCE RULES:
- * 1. Bypasses buffering entirely when user is focused on any input/textarea/editable.
- * 2. Rapid timing detection (< 50ms buffer reset) so typing doesn't buffer.
- * 3. Passive event listener to prevent UI thread blocking.
+ * 1. Rapid-keystroke interval detection (< 35ms) intercepts hardware scanners even if focused in text input.
+ * 2. Human typing (> 45ms) is 100% untouched and passes through naturally.
+ * 3. Prevents corruption of active input fields and ensures scanned barcode reaches cart.
  */
 export function useGlobalBarcodeScanner(onBarcodeScanned: (barcode: string) => void) {
   const bufferRef = useRef<string>('');
   const lastKeyTimeRef = useRef<number>(Date.now());
+  const rapidInputBufferRef = useRef<{ key: string; time: number }[]>([]);
   const onBarcodeScannedRef = useRef(onBarcodeScanned);
 
   useEffect(() => {
@@ -52,7 +74,6 @@ export function useGlobalBarcodeScanner(onBarcodeScanned: (barcode: string) => v
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // 1. CRITICAL: If the user is actively focused on an input or typing area, bypass barcode buffering entirely
       const target = e.target as HTMLElement | null;
       const isInputField =
         target?.tagName === 'INPUT' ||
@@ -66,10 +87,39 @@ export function useGlobalBarcodeScanner(onBarcodeScanned: (barcode: string) => v
         document.activeElement?.tagName === 'TEXTAREA' ||
         document.activeElement?.tagName === 'SELECT' ||
         (document.activeElement as HTMLElement)?.isContentEditable ||
-        document.activeElement?.getAttribute?.('role') === 'textbox';
+        document.activeElement?.getAttribute?.('role') === 'textbox' ||
+        isUserTyping(e.target);
 
+      // 1. Hardware Scanner Buffer Protection for focused input fields (OPS-03)
       if (isInputField) {
-        // Let the native input handle the keypress directly without triggering global scanner overhead
+        const now = Date.now();
+        const last = rapidInputBufferRef.current[rapidInputBufferRef.current.length - 1];
+        const interval = last ? now - last.time : 0;
+
+        if (e.key === 'Enter') {
+          const chars = rapidInputBufferRef.current.filter(k => k.key !== 'Enter').map(k => k.key).join('').trim();
+          const fastCount = rapidInputBufferRef.current.length;
+          rapidInputBufferRef.current = [];
+
+          // If a burst of >= 5 characters arrived at hardware scanner speed (<35ms average)
+          if (chars.length >= 5 && fastCount >= 5) {
+            e.preventDefault();
+            e.stopPropagation();
+            cleanInjectedBarcodeFromActiveInput(chars);
+            onBarcodeScannedRef.current(chars);
+            return;
+          }
+          return;
+        }
+
+        if (e.key.length === 1) {
+          // If interval between consecutive keys exceeds 45ms, reset (normal human typing)
+          if (last && interval > 45) {
+            rapidInputBufferRef.current = [{ key: e.key, time: now }];
+          } else {
+            rapidInputBufferRef.current.push({ key: e.key, time: now });
+          }
+        }
         return;
       }
 
@@ -107,7 +157,7 @@ export function useGlobalBarcodeScanner(onBarcodeScanned: (barcode: string) => v
       }
     };
 
-    // Use passive event listener to prevent UI thread blocking
+    // Use passive: false to allow preventing default on rapid scanner burst
     window.addEventListener('keydown', handleKeyDown, { passive: false });
 
     return () => {
@@ -134,6 +184,7 @@ export function useBarcodeScanner(
 
   const bufferRef = useRef<string>('');
   const lastKeyTimeRef = useRef<number>(0);
+  const rapidInputBufferRef = useRef<{ key: string; time: number }[]>([]);
   const timeoutIdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const callbackRef = useRef(callback);
 
@@ -145,7 +196,6 @@ export function useBarcodeScanner(
     if (!enabled) return;
 
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      // 1. CRITICAL: If focused on any input or typing field, bypass completely
       const target = e.target as HTMLElement | null;
       const isInputField =
         target?.tagName === 'INPUT' ||
@@ -162,7 +212,33 @@ export function useBarcodeScanner(
         isUserTyping(e.target);
 
       if (isInputField) {
-        return; // Allow 100% normal typing
+        const now = Date.now();
+        const last = rapidInputBufferRef.current[rapidInputBufferRef.current.length - 1];
+        const interval = last ? now - last.time : 0;
+
+        if (e.key === 'Enter') {
+          const chars = rapidInputBufferRef.current.filter(k => k.key !== 'Enter').map(k => k.key).join('').trim();
+          const fastCount = rapidInputBufferRef.current.length;
+          rapidInputBufferRef.current = [];
+
+          if (chars.length >= Math.max(5, minLength) && fastCount >= 5) {
+            e.preventDefault();
+            e.stopPropagation();
+            cleanInjectedBarcodeFromActiveInput(chars);
+            callbackRef.current(chars);
+            return;
+          }
+          return;
+        }
+
+        if (e.key.length === 1) {
+          if (last && interval > 45) {
+            rapidInputBufferRef.current = [{ key: e.key, time: now }];
+          } else {
+            rapidInputBufferRef.current.push({ key: e.key, time: now });
+          }
+        }
+        return;
       }
 
       // Ignore navigation, functional, and modifier keys

@@ -465,6 +465,32 @@ export function Customers({ currentUser }: CustomersProps = {}) {
         }
       }
 
+      // If there is excess remaining payment after fully settling all debts, preserve it as Customer Advance (FIN-02)
+      if (remainingToPay > 0.009) {
+        const advanceAmount = Math.round(remainingToPay * 100) / 100;
+        try {
+          // 1. Update customers.advance_balance in database
+          const currentCust = customers.find(c => c.id === settleCustomer.id);
+          const currentAdvance = Number((currentCust as any)?.advance_balance || 0);
+          const newAdvance = currentAdvance + advanceAmount;
+          await supabase.from('customers').update({ advance_balance: newAdvance }).eq('id', settleCustomer.id);
+
+          // 2. Record explicit credit payment / cash flow transaction log for the advance
+          await recordCreditSettlement({
+            sale_id: `ADVANCE-${settleCustomer.id}-${Date.now()}`,
+            invoice_no: 'ADVANCE-PAYMENT',
+            customer_id: settleCustomer.id,
+            customer_name: settleCustomer.name,
+            amount_paid: advanceAmount,
+            remaining_balance: 0,
+            payment_method: settlementPaymentMethod,
+            payment_date: new Date().toISOString()
+          } as any, currentUser);
+        } catch (advErr) {
+          console.warn("Notice saving customer advance:", advErr);
+        }
+      }
+
       // Automatically register inward cheque into cheque registry if payment method is Cheque
       if (settlementPaymentMethod === 'Cheque') {
         const bankNameToUse = settlementChequeBank === 'Other' ? (settlementCustomBank.trim() || 'Other') : settlementChequeBank;

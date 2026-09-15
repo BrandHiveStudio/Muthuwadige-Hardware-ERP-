@@ -39,6 +39,10 @@ export interface Customer {
   credit_balance?: number;
   current_credit?: number;
   creditBalance?: number;
+  credit_limit?: number;
+  creditLimit?: number;
+  advance_balance?: number;
+  advanceBalance?: number;
 }
 
 export interface Supplier {
@@ -164,6 +168,12 @@ export interface PurchaseOrder {
   status: 'received' | 'pending' | 'cancelled';
   date: string;
   dueDate: string;
+  received_at?: string;
+  receivedAt?: string;
+  received_by?: string;
+  receivedBy?: string;
+  settlement_mode?: string;
+  settlementMode?: string;
 }
 
 export interface Employee {

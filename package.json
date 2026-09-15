@@ -15,6 +15,7 @@
     "electron:dev": "npm run electron-dev",
     "electron:start": "electron .",
     "dist": "npm run build && node build-dist.js",
+    "build:electron": "npm run build && node build-dist.js",
     "package-win": "npm run build && electron-packager . MuthuwadigeHardwareERP --platform=win32 --arch=x64 --out=release-dist --overwrite --icon=build/icon.ico"
   },
   "dependencies": {

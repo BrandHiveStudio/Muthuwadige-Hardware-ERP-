@@ -197,6 +197,8 @@ export async function ensureSyncSchema(db) {
         );
       `);
     } catch(_) {}
+    try { await db.exec("ALTER TABLE sync_queue ADD COLUMN retry_count INTEGER DEFAULT 0;"); } catch(_) {}
+    try { await db.exec("ALTER TABLE sync_queue ADD COLUMN error_message TEXT;"); } catch(_) {}
     try { await db.exec("ALTER TABLE system_settings ADD COLUMN last_counter_sync_timestamp TEXT;"); } catch(_) {}
     try { await db.exec("ALTER TABLE system_settings ADD COLUMN last_sync_timestamp TEXT;"); } catch(_) {}
     try { await db.exec("ALTER TABLE system_settings ADD COLUMN counter_sync_status TEXT DEFAULT 'IDLE';"); } catch(_) {}
@@ -246,8 +248,8 @@ export async function enqueueSync(db, tableName, recordId, action = 'INSERT', pa
   }
 }
 
-/**
- * Run a full sync cycle: Ping -> Push Pending Queue -> Pull Remote Updates -> Update Timestamps
+let isPushing = false;
+
 /**
  * Push pending local mutations to Turso Cloud
  */
@@ -263,13 +265,19 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
   // would immediately read that phantom queue entry back and overwrite the row it just correctly
   // inserted with that partial snapshot - the same corruption bug, entirely within the cloud side.
   if (isWebClient) return;
-  const nowIso = new Date().toISOString();
+  if (isPushing) {
+    console.log('[BackgroundSync] Upstream push already in progress, skipping concurrent run.');
+    return;
+  }
+  isPushing = true;
+  try {
+    const nowIso = new Date().toISOString();
 
-  await ensureTursoSchema(tursoClient);
+    await ensureTursoSchema(tursoClient);
 
-  const pendingItems = await localDb.all(
-    "SELECT * FROM sync_queue WHERE status = 'PENDING' ORDER BY created_at ASC LIMIT 100"
-  );
+    const pendingItems = await localDb.all(
+      "SELECT * FROM sync_queue WHERE status = 'PENDING' AND COALESCE(retry_count, 0) < 5 ORDER BY created_at ASC LIMIT 100"
+    );
 
   if (pendingItems && pendingItems.length > 0) {
     console.log(`[BackgroundSync] Transmitting ${pendingItems.length} queued record(s) to Turso Cloud...`);
@@ -387,13 +395,6 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
             directSuccessfulIds.push(item.id);
             continue;
           }
-
-          // 2. If unmodified local product (identical price, cost_price, and stock), skip upstream push
-          if (cloudPrice === localPrice && cloudCost === localCost && cloudStock === localStock) {
-            console.log(`[BackgroundSync] Skipping upstream push for unmodified product ${row.sku || item.record_id}.`);
-            directSuccessfulIds.push(item.id);
-            continue;
-          }
         }
 
         const cleanRow = { ...row };
@@ -417,11 +418,18 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
         const stmt = {
           sql: `INSERT INTO "products" (${colNames}) VALUES (${placeholders})
                 ON CONFLICT("sku") DO UPDATE SET
-                  "stock" = excluded."stock",
-                  "stock_quantity" = excluded."stock_quantity",
+                  "name" = excluded."name",
+                  "category" = excluded."category",
                   "price" = excluded."price",
                   "selling_price" = excluded."selling_price",
                   "cost_price" = excluded."cost_price",
+                  "stock" = excluded."stock",
+                  "stock_quantity" = excluded."stock_quantity",
+                  "min_stock" = excluded."min_stock",
+                  "supplier" = excluded."supplier",
+                  "unit" = excluded."unit",
+                  "barcode" = excluded."barcode",
+                  "brand" = excluded."brand",
                   "updated_at" = excluded."updated_at"`,
           args
         };
@@ -461,6 +469,16 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
             successfulIds.push(entry.itemId);
           } catch (singleErr) {
             console.error(`[BackgroundSync] Failed to push upstream for table "${entry.table}" (item: ${entry.itemId}):`, singleErr.message);
+            try {
+              await localDb.run(
+                `UPDATE sync_queue 
+                 SET retry_count = COALESCE(retry_count, 0) + 1,
+                     error_message = ?,
+                     status = CASE WHEN COALESCE(retry_count, 0) + 1 >= 5 THEN 'FAILED' ELSE status END
+                 WHERE id = ?`,
+                [singleErr.message || 'Push failed', entry.itemId]
+              );
+            } catch (_) {}
           }
         }
         if (successfulIds.length > directSuccessfulIds.length) {
@@ -482,7 +500,7 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
   // Update remaining count & timestamps
   let remainingPending = 0;
   try {
-    const qCount = await localDb.get("SELECT COUNT(*) as count FROM sync_queue WHERE status = 'PENDING'");
+    const qCount = await localDb.get("SELECT COUNT(*) as count FROM sync_queue WHERE status = 'PENDING' AND COALESCE(retry_count, 0) < 5");
     remainingPending = Number(qCount?.count ?? 0);
   } catch (_) {}
 
@@ -499,6 +517,9 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
       args: [nowIso, remainingPending]
     });
   } catch (_) {}
+  } finally {
+    isPushing = false;
+  }
 }
 
 /**

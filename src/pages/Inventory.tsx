@@ -19,7 +19,7 @@ import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabaseClient';
 import { api } from '../lib/api';
 import { useCurrency } from '../context/CurrencyContext';
-import { getCachedData, setCachedData } from '../services/dataCache';
+import { getCachedData, setCachedData, invalidateCache } from '../services/dataCache';
 import type { Product } from '../types';
 import { formatStock } from '../utils/formatters';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
@@ -728,6 +728,7 @@ export function Inventory() {
         } else {
           setToast({ type: 'success', message: t("Product updated successfully!", "නිෂ්පාදනය සාර්ථකව යාවත්කාලීන කරන ලදී!") });
           setTimeout(() => setToast(null), 5000);
+          invalidateCache('products');
           setShowAddModal(false);
           fetchProducts();
         }
@@ -745,6 +746,7 @@ export function Inventory() {
         } else {
           setToast({ type: 'success', message: t("Product added successfully!", "නිෂ්පාදනය සාර්ථකව එක් කරන ලදී!") });
           setTimeout(() => setToast(null), 5000);
+          invalidateCache('products');
           setShowAddModal(false);
           fetchProducts();
         }
@@ -872,34 +874,27 @@ export function Inventory() {
     const userEmail = user?.email || 'sanojhardware@gmail.com';
 
     const isIncrement = actionType === 'Adjustment (Increase)' || actionType === 'Sale Return';
-    const newQty = isIncrement 
-      ? stockProduct.stock + stockQty 
-      : Math.max(0, stockProduct.stock - stockQty);
+    const deltaQty = isIncrement ? stockQty : -stockQty;
+    const estimatedNewQty = Math.max(0, stockProduct.stock + deltaQty);
 
     setIsSaving(true);
 
     try {
-      // 1. Update stock
-      const { error: stockError } = await supabase
-        .from('products')
-        .update({ stock: newQty })
-        .eq('id', stockProduct.id);
-
-      if (stockError) throw stockError;
-
-      // 2. Log in stock_adjustments (SQLite REST API + Supabase)
+      // 1. Atomic adjustment record with delta (avoids race condition with live sales)
       const adjustmentRecord = {
         id: 'sa_' + Date.now(),
         product_id: stockProduct.id,
         product_name: stockProduct.name,
         old_qty: stockProduct.stock,
-        new_qty: newQty,
+        new_qty: estimatedNewQty,
+        delta: deltaQty,
         reason: reasonNotes.trim() || actionType,
         type: actionType,
         user_email: userEmail,
         created_at: new Date().toISOString()
       };
 
+      // Atomic delta update executed server-side: UPDATE products SET stock = MAX(0, stock + ?)
       try {
         await api.stockAdjustments.create(adjustmentRecord);
       } catch (e) {
@@ -910,7 +905,7 @@ export function Inventory() {
         .from('stock_adjustments')
         .insert([adjustmentRecord]);
 
-      if (adjustError) throw adjustError;
+      if (adjustError) console.warn("Supabase stock_adjustments sync notice:", adjustError);
 
       // 3. Log expense in transactions if Damage / Breakage / Wastage
       if (actionType === 'Damage' || actionType === 'Damaged / Breakage / Wastage') {

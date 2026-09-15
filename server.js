@@ -18,7 +18,7 @@ import https from 'https';
 import selfsigned from 'selfsigned';
 import dbAdapter, { initDb, isTurso, getTursoClient, getDb, DEFAULT_TURSO_DATABASE_URL, DEFAULT_TURSO_AUTH_TOKEN } from './src/db/connection.js';
 import { createClient } from '@libsql/client';
-import { startBackgroundSyncWorker, getSyncStatus, runSyncCycle, enqueueSync, pullDownstreamChanges, reconcileLocalCatalogWithCloud, pushUpstreamChanges, pingTurso } from './src/services/syncService.js';
+import { startBackgroundSyncWorker, getSyncStatus, runSyncCycle, enqueueSync, pullDownstreamChanges, reconcileLocalCatalogWithCloud, pushUpstreamChanges, pingTurso, triggerPush } from './src/services/syncService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -767,42 +767,7 @@ async function authenticate(req, res, next) {
     }
   }
 
-  // 3. Standalone desktop mode failsafe: if running on local counter desktop and request carries user credentials
-  const isDesktopLocal = !process.env.VERCEL && process.env.APP_ROLE !== 'web' && (typeof isTurso === 'function' ? !isTurso() : true);
-  const userEmail = (req.headers['x-user-email'] || '').toLowerCase().trim();
-  const userRole = (req.headers['x-user-role'] || '').toLowerCase().trim();
-  const userName = (req.headers['x-user-name'] || '').toLowerCase().trim();
-
-  if (isDesktopLocal && (userEmail || userName || userRole)) {
-    const isRootCandidate = userName === 'super_admin' || userEmail === 'sanojhardware@gmail.com' || userEmail === 'super_admin' || userRole === 'super_admin';
-    let resolvedId = isRootCandidate ? 'u1' : null;
-    try {
-      if (!resolvedId && userEmail) {
-        const p = await db.get('SELECT id, role FROM profiles WHERE LOWER(email) = ? OR LOWER(username) = ?', [userEmail, userEmail]);
-        if (p) resolvedId = p.id;
-        if (!p) {
-          const u = await db.get('SELECT id, role FROM users WHERE LOWER(email) = ? OR LOWER(username) = ?', [userEmail, userEmail]);
-          if (u) resolvedId = u.id;
-        }
-      }
-      if (!resolvedId && userName) {
-        const p = await db.get('SELECT id, role FROM profiles WHERE LOWER(name) = ? OR LOWER(username) = ?', [userName, userName]);
-        if (p) resolvedId = p.id;
-      }
-    } catch (_) {}
-
-    const authUser = {
-      id: resolvedId || (isRootCandidate ? 'u1' : (userEmail === 'manager@mhardware.lk' ? 'u_manager' : 'u_' + Date.now())),
-      email: userEmail || (isRootCandidate ? 'sanojhardware@gmail.com' : ''),
-      username: userName || (isRootCandidate ? 'super_admin' : ''),
-      name: req.headers['x-user-name'] || (isRootCandidate ? 'Root Administrator' : ''),
-      role: isRootCandidate ? 'super_admin' : (userRole || 'admin')
-    };
-    req.authUser = authUser;
-    req.user = authUser;
-    return next();
-  }
-
+  // Require valid session token or JWT; unverified client headers cannot elevate roles
   if (!token) {
     // GET /api/settings is allowed through unauthenticated so the login screen can fetch shop
     // branding; the handler itself returns a reduced, non-sensitive payload in that case.
@@ -918,19 +883,14 @@ async function requireVoidPasskey(req, res, next) {
     const validPasskey = (storedSetting?.void_passkey || storedSetting?.value || storedSetting?.return_passkey || '1234').toString().trim();
     const enteredPasskey = (req.body?.passkey || req.body?.void_passkey || req.body?.voidPasskey || req.headers['x-void-passkey'] || req.query?.passkey || '').toString().trim();
     const caller = req.user || req.authUser || {};
-    const callerRole = (caller.role || req.headers['x-user-role'] || '').toUpperCase();
-    const callerName = (caller.username || caller.name || req.headers['x-user-name'] || '').toLowerCase();
+    const callerRole = (caller.role || '').toUpperCase();
+    const callerName = (caller.username || caller.name || '').toLowerCase();
 
     const isAuthorized = (enteredPasskey && enteredPasskey === validPasskey) || 
-      (enteredPasskey === '1234') || 
       (callerRole === 'SUPER_ADMIN') || 
       (callerRole === 'ADMIN') || 
       (callerRole === 'ADMINISTRATOR') || 
-      (callerName === 'super_admin') || 
-      (req.user?.role?.toUpperCase() === 'SUPER_ADMIN') || 
-      (req.user?.role?.toUpperCase() === 'ADMIN') || 
-      (req.authUser?.role?.toUpperCase() === 'SUPER_ADMIN') ||
-      (req.authUser?.role?.toUpperCase() === 'ADMIN');
+      (callerName === 'super_admin');
     if (!isAuthorized) {
       return res.status(403).json({ error: 'Invalid Passkey! Access Denied.' });
     }
@@ -953,19 +913,14 @@ app.post(['/api/settings/verify-passkey', '/api/verify-passkey'], async (req, re
     const validPasskey = (storedSetting?.void_passkey || storedSetting?.value || storedSetting?.return_passkey || '1234').toString().trim();
     const enteredPasskey = (req.body?.passkey || req.body?.void_passkey || req.body?.voidPasskey || req.headers['x-void-passkey'] || req.query?.passkey || '').toString().trim();
     const caller = req.user || req.authUser || {};
-    const callerRole = (caller.role || req.headers['x-user-role'] || '').toUpperCase();
-    const callerName = (caller.username || caller.name || req.headers['x-user-name'] || '').toLowerCase();
+    const callerRole = (caller.role || '').toUpperCase();
+    const callerName = (caller.username || caller.name || '').toLowerCase();
 
     const isAuthorized = (enteredPasskey && enteredPasskey === validPasskey) || 
-      (enteredPasskey === '1234') || 
       (callerRole === 'SUPER_ADMIN') || 
       (callerRole === 'ADMIN') || 
       (callerRole === 'ADMINISTRATOR') || 
-      (callerName === 'super_admin') || 
-      (req.user?.role?.toUpperCase() === 'SUPER_ADMIN') || 
-      (req.user?.role?.toUpperCase() === 'ADMIN') || 
-      (req.authUser?.role?.toUpperCase() === 'SUPER_ADMIN') ||
-      (req.authUser?.role?.toUpperCase() === 'ADMIN');
+      (callerName === 'super_admin');
     if (!isAuthorized) {
       return res.status(403).json({ valid: false, error: 'Invalid Passkey! Access Denied.' });
     }
@@ -1476,6 +1431,9 @@ async function initializeDatabase() {
       status TEXT, -- 'received' | 'pending' | 'cancelled'
       due_date TEXT,
       user_id TEXT,
+      received_at TEXT,
+      received_by TEXT,
+      settlement_mode TEXT,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -1943,6 +1901,7 @@ async function initializeDatabase() {
   try { await db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT;"); } catch (e) { }
   try { await db.exec("ALTER TABLE customers ADD COLUMN credit_limit REAL DEFAULT 0;"); } catch (e) { }
   try { await db.exec("ALTER TABLE customers ADD COLUMN credit_period INTEGER DEFAULT 0;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE customers ADD COLUMN advance_balance REAL DEFAULT 0;"); } catch (e) { }
   try { await db.exec("ALTER TABLE customers ADD COLUMN type TEXT DEFAULT 'registered';"); } catch (e) { }
   try { await db.exec("ALTER TABLE suppliers ADD COLUMN updated_at TEXT;"); } catch (e) { }
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN return_no TEXT"); } catch (e) { }
@@ -2158,12 +2117,27 @@ async function initializeDatabase() {
       updated_at DATETIME
     )
   `);
+  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN date TEXT;"); } catch (_) { }
   try { await db.exec("ALTER TABLE shift_logs ADD COLUMN station_id TEXT DEFAULT 'STATION-01';"); } catch (_) { }
+  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN cashier_id TEXT;"); } catch (_) { }
+  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN cashier_name TEXT;"); } catch (_) { }
+  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN cashier_email TEXT;"); } catch (_) { }
+  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN opening_float REAL DEFAULT 0;"); } catch (_) { }
+  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN cash_sales REAL DEFAULT 0;"); } catch (_) { }
+  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN cash_returns REAL DEFAULT 0;"); } catch (_) { }
+  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN debt_cash_collected REAL DEFAULT 0;"); } catch (_) { }
+  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN petty_expenses REAL DEFAULT 0;"); } catch (_) { }
+  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN expected_cash REAL DEFAULT 0;"); } catch (_) { }
+  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN actual_cash REAL DEFAULT 0;"); } catch (_) { }
+  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN counted_cash REAL DEFAULT 0;"); } catch (_) { }
+  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN discrepancy REAL DEFAULT 0;"); } catch (_) { }
   try { await db.exec("ALTER TABLE shift_logs ADD COLUMN discrepancy_status TEXT DEFAULT 'Balanced';"); } catch (_) { }
   try { await db.exec("ALTER TABLE shift_logs ADD COLUMN remarks TEXT;"); } catch (_) { }
-  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN counted_cash REAL DEFAULT 0;"); } catch (_) { }
+  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN notes TEXT;"); } catch (_) { }
+  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN status TEXT DEFAULT 'CLOSED';"); } catch (_) { }
   try { await db.exec("ALTER TABLE shift_logs ADD COLUMN opened_at DATETIME;"); } catch (_) { }
   try { await db.exec("ALTER TABLE shift_logs ADD COLUMN closed_at DATETIME;"); } catch (_) { }
+  try { await db.exec("ALTER TABLE shift_logs ADD COLUMN updated_at TEXT;"); } catch (_) { }
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_shift_logs_date ON shift_logs(date)"); } catch (e) { }
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_shift_logs_cashier ON shift_logs(cashier_email)"); } catch (e) { }
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_shift_logs_closed_at ON shift_logs(closed_at)"); } catch (e) { }
@@ -2368,6 +2342,8 @@ async function initializeDatabase() {
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN received_at TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN updated_at TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN created_by TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN received_by TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN settlement_mode TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN status TEXT DEFAULT 'ACTIVE'"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN void_reason TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN updated_at DATETIME"); } catch (e) { }
@@ -2406,9 +2382,19 @@ async function initializeDatabase() {
   const safeMigrations = [
     "ALTER TABLE audit_logs ADD COLUMN user_name TEXT",
     "ALTER TABLE audit_logs ADD COLUMN user_role TEXT",
+    "ALTER TABLE audit_logs ADD COLUMN created_at TEXT",
     "ALTER TABLE sales ADD COLUMN voided_at TEXT",
     "ALTER TABLE sales ADD COLUMN voided_by TEXT",
-    "ALTER TABLE sales ADD COLUMN void_reason TEXT"
+    "ALTER TABLE sales ADD COLUMN void_reason TEXT",
+    "ALTER TABLE purchase_orders ADD COLUMN subtotal REAL DEFAULT 0",
+    "ALTER TABLE purchase_orders ADD COLUMN discount_type TEXT DEFAULT 'fixed'",
+    "ALTER TABLE purchase_orders ADD COLUMN discount_value REAL DEFAULT 0",
+    "ALTER TABLE purchase_orders ADD COLUMN discount_amount REAL DEFAULT 0",
+    "ALTER TABLE purchase_orders ADD COLUMN net_total REAL DEFAULT 0",
+    "ALTER TABLE purchase_orders ADD COLUMN transportation_fee REAL DEFAULT 0",
+    "ALTER TABLE sync_queue ADD COLUMN retry_count INTEGER DEFAULT 0",
+    "ALTER TABLE sync_queue ADD COLUMN error_message TEXT",
+    "CREATE VIEW IF NOT EXISTS purchases AS SELECT * FROM purchase_orders"
   ];
   for (const query of safeMigrations) {
     try {
@@ -2950,27 +2936,50 @@ app.get('/api/trigger-backup', async (req, res) => {
 
 // DOWNLOAD LOCAL DATABASE BACKUP SNAPSHOT (.sqlite)
 app.get(['/api/database/backup', '/api/backup/download'], async (req, res) => {
+  let tempBackupPath = null;
   try {
-    const candidatePaths = [
-      DB_FILE,
-      path.join(__dirname, 'hardware.db'),
-      process.env.USER_DATA_PATH ? path.join(process.env.USER_DATA_PATH, 'hardware.db') : null
-    ].filter(Boolean);
+    const today = new Date().toISOString().slice(0, 10);
+    const filename = `muthuwadige-hardware-backup-${today}.sqlite`;
+    tempBackupPath = path.join(os.tmpdir(), `hardware-backup-${Date.now()}.db`);
 
-    const existingFile = candidatePaths.find(p => fs.existsSync(p));
-
-    if (existingFile) {
-      const today = new Date().toISOString().slice(0, 10);
-      const filename = `muthuwadige-hardware-backup-${today}.sqlite`;
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.setHeader('Content-Type', 'application/x-sqlite3');
-      const fileStream = fs.createReadStream(existingFile);
-      return fileStream.pipe(res);
-    } else {
-      return res.status(404).json({ error: 'Local database backup file not found.' });
+    // Ensure all WAL changes are fully checkpointed into the database file
+    try {
+      await db.run('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch (ckptErr) {
+      console.warn('[Backup] Notice on wal_checkpoint:', ckptErr.message);
     }
+
+    // Atomically snapshot the active database using SQLite's VACUUM INTO
+    await db.run('VACUUM INTO ?', [tempBackupPath]);
+
+    res.download(tempBackupPath, filename, (err) => {
+      if (err && !res.headersSent) {
+        console.error('[Backup] Error streaming backup snapshot:', err);
+      }
+      if (tempBackupPath && fs.existsSync(tempBackupPath)) {
+        fs.unlink(tempBackupPath, () => {});
+      }
+    });
   } catch (err) {
-    console.error('Error streaming database backup:', err);
+    console.error('Error creating safe database backup snapshot:', err);
+    if (tempBackupPath && fs.existsSync(tempBackupPath)) {
+      fs.unlink(tempBackupPath, () => {});
+    }
+    // Safe fallback to raw file stream only if VACUUM INTO is unsupported in runtime
+    try {
+      const candidatePaths = [
+        DB_FILE,
+        path.join(__dirname, 'hardware.db'),
+        process.env.USER_DATA_PATH ? path.join(process.env.USER_DATA_PATH, 'hardware.db') : null
+      ].filter(Boolean);
+      const existingFile = candidatePaths.find(p => fs.existsSync(p));
+      if (existingFile) {
+        const today = new Date().toISOString().slice(0, 10);
+        res.setHeader('Content-Disposition', `attachment; filename="muthuwadige-hardware-backup-${today}.sqlite"`);
+        res.setHeader('Content-Type', 'application/x-sqlite3');
+        return fs.createReadStream(existingFile).pipe(res);
+      }
+    } catch (_) {}
     return res.status(500).json({ error: 'Failed to download database backup: ' + err.message });
   }
 });
@@ -3513,7 +3522,7 @@ app.post(['/api/auth/register', '/api/users'], requireAdmin, async (req, res) =>
 
     // Propagate changes upstream/downstream
     enqueueSync(db, 'users', id, 'UPSERT').catch(() => { });
-    enqueueSync(db, 'profiles', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'profiles', id, 'UPSERT').then(() => triggerPush(db)).catch(() => { });
 
     res.json({
       success: true,
@@ -4071,7 +4080,7 @@ app.post(['/api/products/bulk-import', '/api/products/bulk', '/api/products/impo
         await activeDb.run('ROLLBACK').catch(() => { });
         throw txnErr;
       }
-      runSyncCycle(activeDb).catch(() => { });
+      triggerPush(activeDb).catch(() => { });
     }
 
     await logAudit(user_email, 'PRODUCT_BULK_IMPORT', `Bulk imported/updated ${preparedStatements.length} product records.`);
@@ -4192,7 +4201,7 @@ app.post('/api/products', async (req, res) => {
     const finalId = finalRecord ? finalRecord.id : effectiveId;
 
     await logAudit(user_email, 'PRODUCT_CREATED', `Product ${p.name} (SKU: ${effectiveSku}) was added/updated in the inventory.`);
-    enqueueSync(db, 'products', finalId, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'products', finalId, 'UPSERT').then(() => triggerPush(db)).catch(() => { });
     res.json({ success: true, id: finalId });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4252,11 +4261,11 @@ app.put('/api/products/:id', async (req, res) => {
     }
 
     await db.run(
-      'UPDATE products SET name = ?, sku = ?, category = ?, price = ?, cost_price = ?, stock = ?, min_stock = ?, supplier = ?, unit = ?, barcode = ?, brand = ?, serial_no = ?, batch_code = ?, expiry_date = ?, supplier_phone = ?, measure_details = ? WHERE id = ?',
+      'UPDATE products SET name = ?, sku = ?, category = ?, price = ?, cost_price = ?, stock = ?, min_stock = ?, supplier = ?, unit = ?, barcode = ?, brand = ?, serial_no = ?, batch_code = ?, expiry_date = ?, supplier_phone = ?, measure_details = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
       [name, sku, category, price, cost_price, stock, min_stock, supplier, unit, barcode, brand, serial_no, batch_code, expiry_date, supplier_phone, measure_details, targetId]
     );
     await logAudit(user_email, 'PRODUCT_UPDATED', `Product ${name} (SKU: ${sku}) details were updated.`);
-    enqueueSync(db, 'products', targetId, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'products', targetId, 'UPSERT').then(() => triggerPush(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4272,7 +4281,7 @@ app.delete('/api/products/:id', async (req, res) => {
     const prodSku = existing ? existing.sku : '';
     await db.run('DELETE FROM products WHERE id = ?', [id]);
     await logAudit(user_email, 'PRODUCT_DELETED', `Product ${prodName} (SKU: ${prodSku}) was deleted.`);
-    enqueueSync(db, 'products', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'products', id, 'DELETE').then(() => triggerPush(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4334,7 +4343,7 @@ app.post('/api/customers', async (req, res) => {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
       [id, name, email, phone, address, nic, credit_limit, credit_period, type, loyalty_points, total_purchases, join_date, credit_balance, current_credit]
     );
-    await enqueueSync(db, 'customers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
+    await enqueueSync(db, 'customers', id, 'UPSERT').then(() => triggerPush(db)).catch(() => { });
     const actorName = req.user?.name || req.authUser?.name || req.headers['x-user-name'] || null;
     const actorRole = req.user?.role || req.authUser?.role || req.headers['x-user-role'] || null;
     await logAudit(
@@ -4441,7 +4450,7 @@ app.post(['/api/customers/bulk-import', '/api/customers/bulk', '/api/customers/i
     }
 
     // Trigger immediate upstream sync cycle asynchronously
-    runSyncCycle(db).catch(() => { });
+    triggerPush(db).catch(() => { });
     await logAudit(user_email, 'CUSTOMER_BULK_IMPORT', `Bulk imported/updated ${importedCount} customer records.`);
 
     res.json({
@@ -4468,7 +4477,7 @@ app.put('/api/customers/:id', async (req, res) => {
     const actorName = req.user?.name || req.authUser?.name || req.headers['x-user-name'] || null;
     const actorRole = req.user?.role || req.authUser?.role || req.headers['x-user-role'] || null;
     await logAudit(req, 'CUSTOMER_UPDATED', `Customer ${c.name || 'details'} were updated.`, actorName, actorRole);
-    enqueueSync(db, 'customers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'customers', id, 'UPSERT').then(() => triggerPush(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4479,7 +4488,7 @@ app.delete('/api/customers/:id', async (req, res) => {
   const { id } = req.params;
   try {
     await db.run('DELETE FROM customers WHERE id = ?', [id]);
-    enqueueSync(db, 'customers', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'customers', id, 'DELETE').then(() => triggerPush(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4585,7 +4594,7 @@ app.post(['/api/suppliers/bulk-import', '/api/suppliers/bulk', '/api/suppliers/i
       importedCount++;
     }
 
-    runSyncCycle(db).catch(() => { });
+    triggerPush(db).catch(() => { });
     await logAudit(user_email, 'SUPPLIER_BULK_IMPORT', `Bulk imported/updated ${importedCount} supplier records.`);
 
     return res.json({
@@ -4614,7 +4623,7 @@ app.post('/api/suppliers', async (req, res) => {
       'INSERT INTO suppliers (id, name, email, phone, address, credit_terms, payable_balance, nic) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       [id, s.name, s.email, s.phone, s.address, s.creditTerms || s.credit_terms, s.payableBalance !== undefined ? s.payableBalance : s.payable_balance || 0, s.nic]
     );
-    enqueueSync(db, 'suppliers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'suppliers', id, 'UPSERT').then(() => triggerPush(db)).catch(() => { });
     res.json({ success: true, id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4662,7 +4671,7 @@ app.put('/api/suppliers/:id', async (req, res) => {
     }
 
     await logAudit(s.user_email || 'system', 'SUPPLIER_UPDATED', `Supplier ${name} details were updated.`);
-    enqueueSync(db, 'suppliers', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'suppliers', id, 'UPSERT').then(() => triggerPush(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4673,7 +4682,7 @@ app.delete('/api/suppliers/:id', async (req, res) => {
   const { id } = req.params;
   try {
     await db.run('DELETE FROM suppliers WHERE id = ?', [id]);
-    enqueueSync(db, 'suppliers', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'suppliers', id, 'DELETE').then(() => triggerPush(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4861,22 +4870,23 @@ app.get(['/api/reports/summary', '/api/sales/summary'], async (req, res) => {
   }
 });
 
-function generateNextInvoiceNumber(currentInvoiceNumber) {
-  if (!currentInvoiceNumber) return 'INV001';
+function generateNextInvoiceNumber(currentInvoiceNumber, stationPrefix = 'POS1') {
+  if (!currentInvoiceNumber) return `${stationPrefix}-INV-00001`;
 
   // Extract trailing digits
   const match = currentInvoiceNumber.match(/^(.*?)(\d+)$/);
   if (!match) {
-    // If no trailing numbers, e.g. "INV", append "001"
-    return currentInvoiceNumber + '001';
+    // If no trailing numbers, append standard 5-digit suffix
+    return currentInvoiceNumber + '-00001';
   }
 
   const prefix = match[1];
   const numStr = match[2];
   const nextNum = parseInt(numStr, 10) + 1;
 
-  // Pad the incremented number to match the original width
-  const paddedNum = String(nextNum).padStart(numStr.length, '0');
+  // Pad the incremented number to match the original width (minimum 5 digits)
+  const minPad = Math.max(numStr.length, 5);
+  const paddedNum = String(nextNum).padStart(minPad, '0');
 
   return prefix + paddedNum;
 }
@@ -4964,30 +4974,32 @@ app.post('/api/sales', async (req, res) => {
     let finalInvoiceNo = s.invoice_no;
     const isTempInvoice = !s.invoice_no || s.invoice_no.startsWith('INV-');
     if (isTempInvoice) {
-      // Fetch current next_invoice_number from system_settings
-      const settings = await db.get('SELECT next_invoice_number FROM system_settings WHERE id = ?', ['global']);
-      let candidate = (settings && settings.next_invoice_number) ? settings.next_invoice_number : 'INV001';
+      // Fetch station prefix and current next_invoice_number from system_settings
+      const stationRow = await db.get("SELECT value FROM system_settings WHERE key = 'STATION_ID' OR key = 'terminal_id' OR key = 'station_prefix' OR id = 'terminal_id'");
+      const stationPrefix = (stationRow && stationRow.value && stationRow.value.trim()) ? stationRow.value.trim().toUpperCase() : 'POS1';
 
-      // Self-healing reconciliation: the counter above only ever advances when a sale is created
-      // ON THIS DEVICE. If sales were instead imported by downstream sync (e.g. pulled from the
-      // cloud into a fresh/reinstalled local database, or after a counter reset), the counter can
-      // point at a number that already exists in the local sales table, causing a UNIQUE
-      // constraint failure on insert. Keep advancing with the exact same existing
-      // generateNextInvoiceNumber() format/business rule until a genuinely free number is found,
-      // rather than trusting the stored counter blindly. This is a read against the real sales
-      // table, inside the same transaction, so it also serializes correctly against concurrent
-      // local requests.
+      const settings = await db.get('SELECT next_invoice_number FROM system_settings WHERE id = ?', ['global']);
+      let candidate = (settings && settings.next_invoice_number) ? settings.next_invoice_number : `${stationPrefix}-INV-00001`;
+
+      // If candidate is a legacy 'INV001' or doesn't have station prefix, reformat into standard POS prefix
+      if (!candidate.includes('-INV-')) {
+        const digits = candidate.match(/\d+$/);
+        const seq = digits ? parseInt(digits[0], 10) : 1;
+        candidate = `${stationPrefix}-INV-${String(seq).padStart(5, '0')}`;
+      }
+
+      // Self-healing reconciliation: ensure candidate does not collide with existing local or synced sales
       let guard = 0;
       while (guard < 100000) {
         const collision = await db.get('SELECT 1 FROM sales WHERE invoice_no = ?', [candidate]);
         if (!collision) break;
-        candidate = generateNextInvoiceNumber(candidate);
+        candidate = generateNextInvoiceNumber(candidate, stationPrefix);
         guard++;
       }
       finalInvoiceNo = candidate;
 
       // Persist the number AFTER it, so the next sale starts from a known-free position too.
-      const nextInv = generateNextInvoiceNumber(finalInvoiceNo);
+      const nextInv = generateNextInvoiceNumber(finalInvoiceNo, stationPrefix);
       await db.run('UPDATE system_settings SET next_invoice_number = ? WHERE id = ?', [nextInv, 'global']);
     }
 
@@ -5047,37 +5059,92 @@ app.post('/api/sales', async (req, res) => {
     });
 
     // Independently recalculate item subtotals and final payable total (fail-safe calculation safeguard)
-    let recomputedSubtotal = 0;
+    let grossSubtotal = 0;
+    let totalLineDiscounts = 0;
+    let recomputedNetSubtotal = 0;
     for (const item of enrichedItems) {
       const q = Number(item.qty || 0);
       const p = Number(item.price !== undefined ? item.price : (item.unit_price || 0));
       const d = Number(item.discount || 0);
       const isPct = item.discountType === 'percent' || item.discountType === 'percentage';
       const unitDisc = isPct ? (p * d) / 100 : d;
-      const netLine = Math.max(0, (p - unitDisc) * q);
-      recomputedSubtotal += netLine;
+      const lineGross = Math.round((p * q) * 100) / 100;
+      const netLine = Math.max(0, Math.round(((p - unitDisc) * q) * 100) / 100);
+      const lineDisc = Math.max(0, Math.round((lineGross - netLine) * 100) / 100);
+      grossSubtotal += lineGross;
+      totalLineDiscounts += lineDisc;
+      recomputedNetSubtotal += netLine;
     }
-    recomputedSubtotal = Math.round(recomputedSubtotal * 100) / 100;
+    grossSubtotal = Math.round(grossSubtotal * 100) / 100;
+    totalLineDiscounts = Math.round(totalLineDiscounts * 100) / 100;
+    recomputedNetSubtotal = Math.round(recomputedNetSubtotal * 100) / 100;
 
-    const globalDiscountVal = Number(s.discount || 0);
+    // Check if s.discount represents line discounts already factored in, or an additional whole-invoice discount
+    const clientDiscountVal = Number(s.discount || 0);
     const rawDiscountType = (s.discount_type || s.discountType || 'fixed').toLowerCase();
-    let globalDiscountAmt = 0;
-    if (rawDiscountType === 'percent' || rawDiscountType === 'percentage') {
-      globalDiscountAmt = Math.round(((recomputedSubtotal * globalDiscountVal) / 100) * 100) / 100;
+    let invoiceDiscountAmt = 0;
+
+    if (s.invoice_discount !== undefined && s.invoice_discount !== null) {
+      const invVal = Number(s.invoice_discount || 0);
+      if (rawDiscountType === 'percent' || rawDiscountType === 'percentage') {
+        invoiceDiscountAmt = Math.round(((recomputedNetSubtotal * invVal) / 100) * 100) / 100;
+      } else {
+        invoiceDiscountAmt = Math.min(recomputedNetSubtotal, Math.round(invVal * 100) / 100);
+      }
+    } else if (rawDiscountType === 'percent' || rawDiscountType === 'percentage') {
+      // Whole-invoice percentage discount
+      invoiceDiscountAmt = Math.round(((recomputedNetSubtotal * clientDiscountVal) / 100) * 100) / 100;
+    } else if (clientDiscountVal > totalLineDiscounts + 0.01) {
+      // Fixed discount exceeds total item discounts: only surplus is an additional invoice discount
+      invoiceDiscountAmt = Math.min(recomputedNetSubtotal, Math.round((clientDiscountVal - totalLineDiscounts) * 100) / 100);
     } else {
-      globalDiscountAmt = Math.min(recomputedSubtotal, globalDiscountVal);
+      // clientDiscountVal represents line discounts that are already factored into recomputedNetSubtotal
+      invoiceDiscountAmt = 0;
     }
 
-    const recomputedPayable = Math.max(0, Math.round((recomputedSubtotal - globalDiscountAmt + transportationFeeVal - creditNoteApplied) * 100) / 100);
+    const recomputedPayable = Math.max(0, Math.round((recomputedNetSubtotal - invoiceDiscountAmt + transportationFeeVal - creditNoteApplied) * 100) / 100);
     const finalTotalAmount = enrichedItems.length > 0 ? recomputedPayable : Number(s.total_amount || 0);
-    const finalSubtotal = enrichedItems.length > 0 ? recomputedSubtotal : Number(s.subtotal || 0);
+    const finalSubtotal = enrichedItems.length > 0 ? grossSubtotal : Number(s.subtotal || 0);
+    const totalRecordedDiscount = enrichedItems.length > 0 ? Math.round((totalLineDiscounts + invoiceDiscountAmt) * 100) / 100 : clientDiscountVal;
+
+    // Credit Limit Verification for Credit Sales
+    if ((s.payment_method || '').toLowerCase() === 'credit' && s.customer_id) {
+      try {
+        const cust = await db.get('SELECT credit_limit, name FROM customers WHERE id = ?', [s.customer_id]);
+        const limitVal = Number(cust?.credit_limit || 0);
+        if (limitVal > 0) {
+          const unpaidRow = await db.get(
+            `SELECT COALESCE(SUM(total_amount - COALESCE(payment_received, 0)), 0) AS current_unpaid
+             FROM sales
+             WHERE customer_id = ? 
+               AND (status IS NULL OR (UPPER(status) != 'VOIDED' AND UPPER(status) != 'VOID' AND UPPER(status) != 'CANCELLED'))
+               AND LOWER(payment_method) = 'credit'`,
+            [s.customer_id]
+          );
+          const currentDebt = Math.max(0, Number(unpaidRow?.current_unpaid || 0));
+          const projectedDebt = Math.round((currentDebt + finalTotalAmount) * 100) / 100;
+          if (projectedDebt > limitVal && !s.supervisor_override && !s.supervisorOverride) {
+            await rollbackTxn(db, txn);
+            return res.status(400).json({
+              error: `Credit limit of Rs. ${limitVal.toLocaleString(undefined, { minimumFractionDigits: 2 })} exceeded for ${cust?.name || 'Customer'}. Current debt: Rs. ${currentDebt.toLocaleString(undefined, { minimumFractionDigits: 2 })}, Projected total: Rs. ${projectedDebt.toLocaleString(undefined, { minimumFractionDigits: 2 })}. Supervisor override required.`,
+              credit_limit_exceeded: true,
+              credit_limit: limitVal,
+              current_debt: currentDebt,
+              projected_debt: projectedDebt
+            });
+          }
+        }
+      } catch (chkErr) {
+        console.warn('[Sales] Notice checking customer credit limit:', chkErr.message);
+      }
+    }
 
     // 2. Insert Sale Order
     const cashierName = s.cashier || s.cashier_name || s.user_name || (s.user_email ? s.user_email.split('@')[0] : 'Krish');
     const userEmail = s.user_email || (s.user_id ? `${s.user_id}@hardware.erp` : 'admin@hardware.erp');
     await db.run(
       'INSERT INTO sales (id, invoice_no, customer_id, customer_name, customer_phone, customer_address, items, subtotal, discount, tax, tax_rate, total_amount, status, user_id, user_email, cashier, payment_method, created_at, due_date, credit_period_days, payment_received, transportation_fee, credit_note_applied, credit_note_code, client_tx_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, finalInvoiceNo, s.customer_id, customerNameVal, customerPhoneVal, customerAddressVal, JSON.stringify(enrichedItems), finalSubtotal, globalDiscountAmt, 0, 0, finalTotalAmount, s.status, s.user_id, userEmail, cashierName, s.payment_method || 'Cash', created_at, s.due_date || null, s.credit_period_days || 0, s.payment_received || 0, transportationFeeVal, creditNoteApplied, creditNoteCode, clientTxId]
+      [id, finalInvoiceNo, s.customer_id, customerNameVal, customerPhoneVal, customerAddressVal, JSON.stringify(enrichedItems), finalSubtotal, totalRecordedDiscount, 0, 0, finalTotalAmount, s.status, s.user_id, userEmail, cashierName, s.payment_method || 'Cash', created_at, s.due_date || null, s.credit_period_days || 0, s.payment_received || 0, transportationFeeVal, creditNoteApplied, creditNoteCode, clientTxId]
     );
 
     // 3. Decrement Product Stock levels & validate available stock
@@ -5237,7 +5304,7 @@ app.post('/api/sales', async (req, res) => {
       if (tursoClient) {
         pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Checkout Immediate Push Notice]:', err.message));
       } else {
-        runSyncCycle(db).catch(() => { });
+        triggerPush(db).catch(() => { });
       }
     } catch (_) { }
 
@@ -5450,7 +5517,7 @@ const handleCreditPaymentInsert = async (req, res) => {
     if (tursoClient) {
       pushUpstreamChanges(db, tursoClient).catch(() => { });
     } else {
-      runSyncCycle(db).catch(() => { });
+      triggerPush(db).catch(() => { });
     }
 
     res.json({ success: true, id, authorName });
@@ -5502,7 +5569,7 @@ app.delete('/api/sales/:id', requireVoidPasskey, async (req, res) => {
         supervisor,
         req.authUser?.role || 'SUPERVISOR'
       );
-      enqueueSync(db, 'sales', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
+      enqueueSync(db, 'sales', id, 'UPSERT').then(() => triggerPush(db)).catch(() => { });
     }
     res.json({ success: true, status: 'VOIDED' });
   } catch (err) {
@@ -5546,6 +5613,28 @@ app.post('/api/sales/:id/void', requireVoidPasskey, async (req, res) => {
         [baseQtyRestock, item.productId]
       );
       enqueueSync(db, 'products', item.productId, 'UPSERT').catch(() => { });
+
+      const saId = 'sa_void_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      try {
+        await db.run(
+          `INSERT INTO stock_adjustments (
+            id, product_id, product_name, old_qty, new_qty, reason, type, user_email, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            saId,
+            item.productId,
+            item.name || item.productName || 'Voided Item',
+            0,
+            baseQtyRestock,
+            `Void Sale Invoice (${sale.invoice_no}): ${void_reason || 'Manual Void'}`,
+            'Sale Void Restock',
+            user_email || req.authUser?.email || supervisor || 'Supervisor',
+            now
+          ]
+        );
+      } catch (saErr) {
+        console.warn('[Void Sale] Stock adjustment log error:', saErr?.message);
+      }
     }
 
     await logAudit(
@@ -5567,7 +5656,7 @@ app.post('/api/sales/:id/void', requireVoidPasskey, async (req, res) => {
     await removeRuntimeTransactionsForSale(sale.invoice_no);
 
     await db.run('COMMIT');
-    runSyncCycle(db).catch(() => { });
+    triggerPush(db).catch(() => { });
     res.json({ success: true, status: 'VOIDED' });
   } catch (err) {
     await safeRollback(db);
@@ -5811,6 +5900,28 @@ app.post('/api/sales/returns', async (req, res) => {
         [baseQtyRestock, pId]
       );
       await enqueueSync(db, 'products', pId, 'UPDATE');
+
+      const saId = 'sa_ret_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      try {
+        await db.run(
+          `INSERT INTO stock_adjustments (
+            id, product_id, product_name, old_qty, new_qty, reason, type, user_email, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            saId,
+            pId,
+            item.productName || item.name || origItem?.name || origItem?.productName || 'Returned Item',
+            0,
+            baseQtyRestock,
+            `Sale Return (Inv: ${invoiceNo}): ${reason || finalReturnMethod || 'Customer Return'}`,
+            'Sale Return Restock',
+            userEmail || req.authUser?.email || 'system',
+            new Date().toISOString()
+          ]
+        );
+      } catch (saErr) {
+        console.warn('[Sales Return] Stock adjustment log error:', saErr?.message);
+      }
     }
 
     // 4. Handle Exchange items stock deduction with ATOMIC AVAILABILITY GUARD
@@ -5836,6 +5947,28 @@ app.post('/api/sales/returns', async (req, res) => {
           [baseQtyDeduction, prod.id]
         );
         await enqueueSync(db, 'products', prod.id, 'UPDATE');
+
+        const saExId = 'sa_exch_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        try {
+          await db.run(
+            `INSERT INTO stock_adjustments (
+              id, product_id, product_name, old_qty, new_qty, reason, type, user_email, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              saExId,
+              prod.id,
+              prod.name,
+              Number(prod.stock || 0),
+              Math.max(0, Number(prod.stock || 0) - baseQtyDeduction),
+              `Exchange Outflow (Inv: ${invoiceNo}): Replaced with ${exItem.qty} pcs`,
+              'Sale Return Exchange',
+              userEmail || req.authUser?.email || 'system',
+              new Date().toISOString()
+            ]
+          );
+        } catch (saErr) {
+          console.warn('[Sales Exchange] Stock adjustment log error:', saErr?.message);
+        }
       }
     }
 
@@ -6779,7 +6912,7 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
     }
 
     await commitTxn(db, txn);
-    enqueueSync(db, 'purchase_orders', id, 'INSERT').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'purchase_orders', id, 'INSERT').then(() => triggerPush(db)).catch(() => { });
     res.json({ success: true, id, subtotal, discountAmount, netTotal, originalTotal, debitNoteApplied });
   } catch (err) {
     if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
@@ -6885,7 +7018,7 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
     }
 
     await db.run('COMMIT');
-    enqueueSync(db, 'purchase_orders', id, 'UPDATE').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'purchase_orders', id, 'UPDATE').then(() => triggerPush(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     await safeRollback(db);
@@ -6906,7 +7039,7 @@ app.delete('/api/purchase-orders/:id', async (req, res) => {
     } else {
       await db.run('DELETE FROM purchase_orders WHERE id = ?', [id]);
     }
-    enqueueSync(db, 'purchase_orders', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'purchase_orders', id, 'DELETE').then(() => triggerPush(db)).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
@@ -7432,7 +7565,7 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
             const linkedSale = await db.get('SELECT * FROM sales WHERE invoice_no = ? OR id = ?', [cheque.reference_id, cheque.reference_id]);
             if (linkedSale) {
               const newReceived = Math.max(0, Number(linkedSale.payment_received || 0) - Number(cheque.amount));
-              const newSaleStatus = newReceived <= 0 ? 'pending' : (newReceived < linkedSale.total_amount ? 'pending' : 'paid');
+              const newSaleStatus = newReceived <= 0 ? 'Non Paid' : (newReceived < linkedSale.total_amount ? 'Non Paid' : 'Paid');
               await db.run(
                 'UPDATE sales SET payment_received = ?, status = ? WHERE id = ?',
                 [newReceived, newSaleStatus, linkedSale.id]
@@ -8038,8 +8171,8 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
 
     // 3. Update Purchase Order Status and items with batch metadata
     await db.run(
-      `UPDATE purchase_orders SET status = 'received', items = ? WHERE id = ?`,
-      [JSON.stringify(updatedPoItems), po.id]
+      `UPDATE purchase_orders SET status = 'received', received_at = ?, received_by = ?, settlement_mode = ?, items = ? WHERE id = ?`,
+      [nowIso, staffUser, validMode, JSON.stringify(updatedPoItems), po.id]
     );
 
     // 4. Execute Settlement Mode
@@ -8128,7 +8261,7 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
     );
 
     await commitTxn(db, txn);
-    enqueueSync(db, 'purchase_orders', po.id, 'UPDATE').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'purchase_orders', po.id, 'UPDATE').then(() => triggerPush(db)).catch(() => { });
 
     res.json({
       success: true,
@@ -8455,10 +8588,21 @@ async function executeRevertPurchaseOrderReceipt({ po_ref, user_email }) {
           const prod = await db.get('SELECT * FROM products WHERE id = ?', [prodId]);
           if (prod) {
             const prevStock = Number(prod.stock || 0);
+            const prevCost = Number(prod.cost_price || 0);
             const newStock = Math.max(0, prevStock - qty);
+
+            // Reverse weighted average cost: remove the received batch's contribution
+            let restoredCost = prevCost;
+            const itemNetCost = Number(item.netUnitCost || item.costPrice || item.cost_price || prevCost);
+            if (newStock > 0 && prevStock > 0 && prevCost > 0) {
+              restoredCost = Math.round(Math.max(0, ((prevStock * prevCost) - (qty * itemNetCost)) / newStock) * 100) / 100;
+            } else if (newStock <= 0) {
+              restoredCost = 0;
+            }
+
             await db.run(
-              'UPDATE products SET stock = ? WHERE id = ?',
-              [newStock, prodId]
+              'UPDATE products SET stock = ?, cost_price = ? WHERE id = ?',
+              [newStock, restoredCost, prodId]
             );
 
             // If batch item reaches 0 stock with no sales history, safely clean/archive it
@@ -8506,17 +8650,23 @@ async function executeRevertPurchaseOrderReceipt({ po_ref, user_email }) {
       );
     }
 
-    // 3. Remove linked transactions
+    // 3. Remove linked transactions (targeted by reference only — no unsafe LIKE)
     const poNum = po.po_number || po.po_no || po.id;
     await db.run(
-      'DELETE FROM transactions WHERE (reference = ? OR description LIKE ?)',
-      [poNum, `%${poNum}%`]
+      'DELETE FROM transactions WHERE reference = ?',
+      [poNum]
+    );
+
+    // 3b. Remove linked cheque_registry entries for this PO
+    await db.run(
+      'DELETE FROM cheque_registry WHERE reference_type = ? AND (reference_id = ? OR reference_id = ?)',
+      ['PURCHASE_ORDER', po.id, poNum]
     );
 
     // 4. Reset PO status to pending
     const nowIso = new Date().toISOString();
     await db.run(
-      'UPDATE purchase_orders SET status = ?, received_at = NULL, updated_at = ? WHERE id = ?',
+      'UPDATE purchase_orders SET status = ?, received_at = NULL, received_by = NULL, settlement_mode = NULL, updated_at = ? WHERE id = ?',
       ['pending', nowIso, po.id]
     );
 
@@ -9711,7 +9861,7 @@ app.put(['/api/profiles/:id', '/api/users/:id'], requireAdmin, async (req, res) 
       );
     } catch (_) { }
 
-    enqueueSync(db, 'profiles', id, 'UPSERT').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'profiles', id, 'UPSERT').then(() => triggerPush(db)).catch(() => { });
     enqueueSync(db, 'users', id, 'UPSERT').catch(() => { });
     res.json({ success: true });
   } catch (err) {
@@ -9741,7 +9891,7 @@ app.delete(['/api/profiles/:id', '/api/users/:id'], requireAdmin, async (req, re
     try {
       await db.run('DELETE FROM users WHERE id = ?', [id]);
     } catch (_) { }
-    enqueueSync(db, 'profiles', id, 'DELETE').then(() => runSyncCycle(db)).catch(() => { });
+    enqueueSync(db, 'profiles', id, 'DELETE').then(() => triggerPush(db)).catch(() => { });
     enqueueSync(db, 'users', id, 'DELETE').catch(() => { });
     res.json({ success: true });
   } catch (err) {
@@ -10293,6 +10443,23 @@ app.post(['/api/stock_adjustments', '/api/inventory/adjust', '/api/inventory/adj
   const effEmail = user_email || caller.email || '';
 
   try {
+    // Concurrency-safe delta stock update on products
+    let delta = null;
+    if (req.body.delta !== undefined && req.body.delta !== null) {
+      delta = Number(req.body.delta);
+    } else if (req.body.delta_qty !== undefined && req.body.delta_qty !== null) {
+      delta = Number(req.body.delta_qty);
+    } else if (new_qty !== undefined && old_qty !== undefined) {
+      delta = Number(new_qty) - Number(old_qty);
+    }
+
+    if (delta !== null && !isNaN(delta) && product_id) {
+      await db.run(
+        'UPDATE products SET stock = MAX(0, stock + ?) WHERE id = ?',
+        [delta, product_id]
+      );
+    }
+
     await db.run(
       `INSERT INTO stock_adjustments (id, product_id, product_name, old_qty, new_qty, reason, type, user_email, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -10331,9 +10498,20 @@ app.post(['/api/stock_adjustments', '/api/inventory/adjust', '/api/inventory/adj
       }
     }
 
-    runSyncCycle(db).catch(() => { });
+    triggerPush(db).catch(() => { });
 
     res.json({ success: true, id: adjId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ESC/POS HARDWARE DRAWER KICK PULSE API
+app.post('/api/hardware/open-drawer', async (req, res) => {
+  try {
+    // ESC/POS RJ11 kick pulse: ESC p m t1 t2 (\x1b\x70\x00\x19\xfa)
+    const kickBytes = Buffer.from([0x1B, 0x70, 0x00, 0x19, 0xFA]);
+    res.json({ success: true, command: kickBytes.toString('base64'), hex: '1b700019fa' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -10534,7 +10712,7 @@ function getLocalNetworkAddresses() {
     if (!nets) continue;
     for (const net of nets) {
       const isIPv4 = net.family === 'IPv4' || net.family === 4;
-      if (isIPv4 && !net.internal) {
+      if (isIPv4 && !net.internal && !net.address.startsWith('169.254.')) {
         addresses.push({
           name,
           address: net.address,
@@ -10602,6 +10780,24 @@ async function getOrCreateSslCertificate() {
 
 // 1. GET /api/scanner/local-ip
 app.get('/api/scanner/local-ip', (req, res) => {
+  const isCloud = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || Boolean(req.headers['x-forwarded-host']);
+  if (isCloud) {
+    const host = req.headers['x-forwarded-host'] || req.headers.host || 'erp.mhardware.lk';
+    const proto = req.headers['x-forwarded-proto'] || 'https';
+    const cloudScannerUrl = `${proto}://${host}/mobile-scanner`;
+    return res.json({
+      success: true,
+      ip: host,
+      port: 443,
+      httpsPort: 443,
+      ips: [{ name: 'Cloud Public Host', address: host, isWifi: true }],
+      scannerUrl: cloudScannerUrl,
+      httpScannerUrl: cloudScannerUrl,
+      protocol: proto,
+      isCloud: true
+    });
+  }
+
   const { primaryIp, addresses } = getLocalNetworkAddresses();
   const scannerUrl = `https://${primaryIp}:${HTTPS_PORT}/mobile-scanner`;
   const httpScannerUrl = `http://${primaryIp}:${PORT}/mobile-scanner`;
@@ -10613,7 +10809,8 @@ app.get('/api/scanner/local-ip', (req, res) => {
     ips: addresses,
     scannerUrl,
     httpScannerUrl,
-    protocol: 'https'
+    protocol: 'https',
+    isCloud: false
   });
 });
 
@@ -10729,7 +10926,7 @@ app.get('/api/scanner/clients', (req, res) => {
 });
 
 // 4. POST /api/scanner/broadcast
-app.post('/api/scanner/broadcast', (req, res) => {
+app.post('/api/scanner/broadcast', async (req, res) => {
   const { barcode, sessionId, scannerName, format } = req.body || {};
 
   if (!barcode || typeof barcode !== 'string' || !barcode.trim()) {
@@ -10738,6 +10935,7 @@ app.post('/api/scanner/broadcast', (req, res) => {
 
   const cleanBarcode = barcode.trim();
   const targetSession = (sessionId || 'default').toString().trim();
+  const nowTs = Date.now();
   const sessionSet = scannerClients.get(targetSession);
 
   const payload = JSON.stringify({
@@ -10746,7 +10944,7 @@ app.post('/api/scanner/broadcast', (req, res) => {
     sessionId: targetSession,
     scannerName: scannerName || 'Mobile Camera',
     format: format || 'AUTO',
-    timestamp: Date.now()
+    timestamp: nowTs
   });
 
   let deliveredCount = 0;
@@ -10772,6 +10970,34 @@ app.post('/api/scanner/broadcast', (req, res) => {
     });
   }
 
+  // Persist signal to database for cross-instance serverless relay and offline polling fallback
+  try {
+    const activeDb = typeof getDb === 'function' ? await getDb().catch(() => db) : db;
+    if (activeDb) {
+      try {
+        await activeDb.exec(`
+          CREATE TABLE IF NOT EXISTS scanner_signals (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            barcode TEXT NOT NULL,
+            format TEXT DEFAULT 'AUTO',
+            scanner_name TEXT DEFAULT 'Mobile Scanner',
+            timestamp INTEGER NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+          );
+        `);
+      } catch (_) {}
+      const signalId = 'sig_' + nowTs + '_' + Math.random().toString(36).slice(2, 8);
+      await activeDb.run(
+        'INSERT INTO scanner_signals (id, session_id, barcode, format, scanner_name, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
+        [signalId, targetSession, cleanBarcode, format || 'AUTO', scannerName || 'Mobile Camera', nowTs]
+      );
+      activeDb.run('DELETE FROM scanner_signals WHERE timestamp < ?', [nowTs - 120000]).catch(() => {});
+    }
+  } catch (sigErr) {
+    console.warn('[Scanner Broadcast] Notice saving signal relay:', sigErr.message);
+  }
+
   console.log(`📱 [Scanner Broadcast] Barcode "${cleanBarcode}" sent to session "${targetSession}" (Delivered to ${deliveredCount} client(s))`);
 
   return res.json({
@@ -10780,6 +11006,49 @@ app.post('/api/scanner/broadcast', (req, res) => {
     barcode: cleanBarcode,
     sessionId: targetSession
   });
+});
+
+// 5. GET /api/scanner/poll (Polling Fallback for Serverless / Cloud Cross-Instance Sync)
+app.get('/api/scanner/poll', async (req, res) => {
+  const sessionId = (req.query.sessionId || req.query.session || '').toString().trim();
+  const after = Number(req.query.after) || (Date.now() - 5000);
+  if (!sessionId) {
+    return res.status(400).json({ error: 'sessionId query parameter is required' });
+  }
+
+  try {
+    const activeDb = typeof getDb === 'function' ? await getDb().catch(() => db) : db;
+    if (!activeDb) {
+      return res.json({ success: true, signals: [] });
+    }
+
+    try {
+      await activeDb.exec(`
+        CREATE TABLE IF NOT EXISTS scanner_signals (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          barcode TEXT NOT NULL,
+          format TEXT DEFAULT 'AUTO',
+          scanner_name TEXT DEFAULT 'Mobile Scanner',
+          timestamp INTEGER NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+    } catch (_) {}
+
+    const rows = await activeDb.all(
+      'SELECT id, session_id, barcode, format, scanner_name, timestamp FROM scanner_signals WHERE (session_id = ? OR session_id = "*") AND timestamp > ? ORDER BY timestamp ASC',
+      [sessionId, after]
+    );
+
+    return res.json({
+      success: true,
+      sessionId,
+      signals: rows || []
+    });
+  } catch (err) {
+    return res.json({ success: true, signals: [] });
+  }
 });
 
 // 4. Standalone Mobile Scanner HTML Client Route
@@ -10855,8 +11124,8 @@ app.get('/api/shifts/today', async (req, res) => {
   }
 });
 
-// Section 5: Shift Sales Isolation to Active Window
-app.get('/api/shifts/current', async (req, res) => {
+// Section 5: Shift Sales Isolation to Active Window & Cash Debt Reconciliation
+app.get(['/api/shifts/current', '/api/shifts/summary'], async (req, res) => {
   try {
     const todayStr = new Date().toISOString().split('T')[0];
     const latestClosed = await db.get(
@@ -10881,6 +11150,14 @@ app.get('/api/shifts/current', async (req, res) => {
         AND created_at > ?
     `, [lastClosedAt]);
 
+    // Cash collected on credit debt settlements during active shift window
+    const debtRow = await db.get(`
+      SELECT COALESCE(SUM(amount), 0) AS debt_cash_collected 
+      FROM credit_payments 
+      WHERE LOWER(payment_method) = 'cash' 
+        AND created_at > ?
+    `, [lastClosedAt]);
+
     let openingFloat = 0;
     try {
       const floatSetting = await db.get("SELECT value FROM system_settings WHERE key = ? OR id = ?", [`OPENING_FLOAT_${todayStr}`, `OPENING_FLOAT_${todayStr}`]);
@@ -10889,13 +11166,20 @@ app.get('/api/shifts/current', async (req, res) => {
       }
     } catch (_) { }
 
+    const totalCashSales = Number(salesRow?.total_cash_sales || 0);
+    const totalCashReturns = Number(returnsRow?.total_cash_returns || 0);
+    const debtCashCollected = Number(debtRow?.debt_cash_collected || 0);
+    const expectedCash = Math.max(0, Math.round((openingFloat + totalCashSales + debtCashCollected - totalCashReturns) * 100) / 100);
+
     res.json({
       date: todayStr,
       station_id: 'STATION-01',
       last_closed_at: lastClosedAt,
-      total_cash_sales: Number(salesRow?.total_cash_sales || 0),
-      total_cash_returns: Number(returnsRow?.total_cash_returns || 0),
-      opening_float: openingFloat
+      total_cash_sales: totalCashSales,
+      total_cash_returns: totalCashReturns,
+      debt_cash_collected: debtCashCollected,
+      opening_float: openingFloat,
+      expected_cash: expectedCash
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -10982,6 +11266,8 @@ app.post('/api/shifts/close', async (req, res) => {
     const resolvedOpenedAt = opened_at || openedAt || todayStr;
     const resolvedClosedAt = closed_at || closedAt || nowIso;
 
+    const resolvedDebtCashCollected = Number(req.body?.debt_cash_collected !== undefined ? req.body.debt_cash_collected : (req.body?.debtCashCollected || 0));
+
     const shiftRecord = {
       id: resolvedId,
       date: todayStr,
@@ -10992,6 +11278,7 @@ app.post('/api/shifts/close', async (req, res) => {
       opening_float: resolvedOpeningFloat,
       cash_sales: resolvedCashSales,
       cash_returns: resolvedCashReturns,
+      debt_cash_collected: resolvedDebtCashCollected,
       petty_expenses: resolvedPettyExpenses,
       expected_cash: resolvedExpectedCash,
       actual_cash: resolvedCountedCash,
@@ -11010,10 +11297,10 @@ app.post('/api/shifts/close', async (req, res) => {
     await db.run(
       `INSERT OR REPLACE INTO shift_logs (
         id, date, station_id, cashier_id, cashier_name, cashier_email,
-        opening_float, cash_sales, cash_returns, petty_expenses,
+        opening_float, cash_sales, cash_returns, debt_cash_collected, petty_expenses,
         expected_cash, actual_cash, counted_cash, discrepancy, discrepancy_status,
         remarks, notes, status, opened_at, closed_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         shiftRecord.id,
         shiftRecord.date,
@@ -11024,6 +11311,7 @@ app.post('/api/shifts/close', async (req, res) => {
         shiftRecord.opening_float,
         shiftRecord.cash_sales,
         shiftRecord.cash_returns,
+        shiftRecord.debt_cash_collected,
         shiftRecord.petty_expenses,
         shiftRecord.expected_cash,
         shiftRecord.actual_cash,
@@ -11059,7 +11347,7 @@ app.post('/api/shifts/close', async (req, res) => {
     );
 
     if (typeof enqueueSync === 'function') {
-      enqueueSync(db, 'shift_logs', shiftRecord.id, 'INSERT').then(() => runSyncCycle(db)).catch(() => { });
+      enqueueSync(db, 'shift_logs', shiftRecord.id, 'INSERT').then(() => triggerPush(db)).catch(() => { });
     }
 
     res.json({ success: true, shift_id: shiftRecord.id, shift: shiftRecord, message: 'Shift balancing completed and archived successfully.' });
@@ -11199,6 +11487,9 @@ if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.
             "ALTER TABLE purchase_orders ADD COLUMN original_total REAL;",
             "ALTER TABLE purchase_orders ADD COLUMN debit_note_code TEXT;",
             "ALTER TABLE purchase_orders ADD COLUMN debit_note_applied REAL DEFAULT 0;",
+            "ALTER TABLE purchase_orders ADD COLUMN received_at TEXT;",
+            "ALTER TABLE purchase_orders ADD COLUMN received_by TEXT;",
+            "ALTER TABLE purchase_orders ADD COLUMN settlement_mode TEXT;",
             "ALTER TABLE system_settings ADD COLUMN key TEXT;",
             "ALTER TABLE system_settings ADD COLUMN value TEXT;",
             "ALTER TABLE system_settings ADD COLUMN system_wipe_timestamp TEXT;",

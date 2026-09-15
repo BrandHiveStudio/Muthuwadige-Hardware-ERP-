@@ -1298,7 +1298,8 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
   const custPhone = order.customerPhone || order.customer_phone || matchedCust?.phone || '';
   const custAddress = order.customerAddress || order.customer_address || matchedCust?.address || '';
 
-  if (paperSize === '80mm') {
+  if (paperSize === '80mm' || paperSize === '58mm') {
+    const is58mm = paperSize === '58mm';
     const symbolStr = isSi ? 'රු.' : 'Rs.';
     const formatNum = (num: number) => num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const isCredit = order.payment_method === 'Credit' || order.status === 'Non Paid';
@@ -1317,23 +1318,23 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
         const parts: string[] = [];
         if (i.serialNo) parts.push(`S/N: ${i.serialNo}`);
         if (i.batchCode) parts.push(`Batch: ${i.batchCode}`);
-        trackingInfo = `<div style="font-size: 10px; font-weight: normal; color: #6b7280; margin-top: 1px;">${parts.join(' | ')}</div>`;
+        trackingInfo = `<div style="font-size: ${is58mm ? '8px' : '10px'}; font-weight: normal; color: #6b7280; margin-top: 1px;">${parts.join(' | ')}</div>`;
       }
       const qty = Number(i.quantity || i.qty || 1);
       const unitPrice = Number(i.unit_price || i.price || 0);
       const grossLineTotal = qty * unitPrice;
       return `
         <tr style="border-bottom: 1px dashed #e5e7eb;">
-          <td colspan="2" style="padding: 5px 0 2px 0; font-weight: bold; text-align: left; color: #1f2937; font-size: 13px;">
+          <td colspan="2" style="padding: ${is58mm ? '3px 0 1px 0' : '5px 0 2px 0'}; font-weight: bold; text-align: left; color: #1f2937; font-size: ${is58mm ? '10px' : '13px'};">
             ${i.productName || i.name || i.description}
             ${trackingInfo}
           </td>
         </tr>
         <tr style="border-bottom: 1px dashed #e5e7eb;">
-          <td style="padding: 2px 0 6px 0; text-align: left; color: #374151; font-size: 12px;">
+          <td style="padding: 2px 0 ${is58mm ? '3px' : '6px'} 0; text-align: left; color: #374151; font-size: ${is58mm ? '9px' : '12px'};">
             ${qty} ${i.unit || ''} x ${symbolStr} ${formatNum(unitPrice)}
           </td>
-          <td style="padding: 2px 0 6px 0; text-align: right; color: #1f2937; font-weight: bold; font-size: 13px;">
+          <td style="padding: 2px 0 ${is58mm ? '3px' : '6px'} 0; text-align: right; color: #1f2937; font-weight: bold; font-size: ${is58mm ? '10px' : '13px'};">
             ${symbolStr} ${formatNum(grossLineTotal)}
           </td>
         </tr>
@@ -1350,7 +1351,7 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
           <style>
             @page {
               margin: 0;
-              size: 80mm auto;
+              size: ${is58mm ? '58mm auto' : '80mm auto'};
             }
             html, body {
               font-family: 'Inter', 'Noto Sans Sinhala', sans-serif;
@@ -1361,58 +1362,62 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               -webkit-print-color-adjust: exact;
               print-color-adjust: exact;
             }
+            body.paper-58mm {
+              width: 48mm;
+              font-size: 10px;
+            }
             .receipt-container {
-              max-width: 80mm;
+              max-width: ${is58mm ? '58mm' : '80mm'};
               width: 100%;
               margin: 0 auto;
-              padding: 0 6mm;
+              padding: ${is58mm ? '0 2mm' : '0 6mm'};
               box-sizing: border-box;
             }
             .header {
               text-align: center;
               border-bottom: 2px dashed #4b5563;
-              padding-bottom: 8px;
-              margin-bottom: 8px;
+              padding-bottom: ${is58mm ? '4px' : '8px'};
+              margin-bottom: ${is58mm ? '4px' : '8px'};
             }
             .shop-logo-img {
-              width: 2in;
-              height: 2in;
+              width: ${is58mm ? '1.2in' : '2in'};
+              height: ${is58mm ? '1.2in' : '2in'};
               object-fit: contain;
               display: block;
-              margin: 0 auto 6px auto;
+              margin: 0 auto 4px auto;
               image-rendering: -webkit-optimize-contrast;
             }
             .shop-address {
-              font-size: 14px;
+              font-size: ${is58mm ? '10px' : '14px'};
               font-weight: 800;
               color: #111827;
               margin: 2px 0;
               text-align: center;
-              line-height: 1.3;
+              line-height: 1.2;
             }
             .shop-phone {
-              font-size: 14px;
+              font-size: ${is58mm ? '10px' : '14px'};
               font-weight: 800;
               color: #111827;
               margin: 2px 0 4px 0;
               text-align: center;
-              line-height: 1.3;
+              line-height: 1.2;
             }
             .title-badge {
               text-align: center;
-              font-size: 13px;
+              font-size: ${is58mm ? '10px' : '13px'};
               font-weight: 800;
               text-transform: uppercase;
-              margin: 8px 0;
+              margin: ${is58mm ? '4px 0' : '8px 0'};
               letter-spacing: 1px;
               border: 1px solid #1f2937;
-              padding: 4px;
+              padding: ${is58mm ? '2px' : '4px'};
               background: #f9fafb;
             }
             .meta-table {
               width: 100%;
-              font-size: 12px;
-              margin-bottom: 8px;
+              font-size: ${is58mm ? '9px' : '12px'};
+              margin-bottom: ${is58mm ? '4px' : '8px'};
               border-collapse: collapse;
             }
             .meta-table td {
@@ -1423,17 +1428,17 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               text-align: right;
               font-weight: 700;
               color: #1f2937;
-              font-size: 13px;
+              font-size: ${is58mm ? '10px' : '13px'};
             }
             .items-table {
               width: 100%;
               border-collapse: collapse;
-              margin-bottom: 10px;
+              margin-bottom: ${is58mm ? '6px' : '10px'};
             }
             .items-table th {
               border-bottom: 1.5px solid #1f2937;
-              padding: 5px 0;
-              font-size: 13px;
+              padding: ${is58mm ? '3px 0' : '5px 0'};
+              font-size: ${is58mm ? '10px' : '13px'};
               font-weight: 800;
               text-align: left;
               color: #1f2937;
@@ -1446,8 +1451,8 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               padding-top: 5px;
             }
             .summary-table td {
-              padding: 4px 0;
-              font-size: 13px;
+              padding: ${is58mm ? '2px 0' : '4px 0'};
+              font-size: ${is58mm ? '10px' : '13px'};
               color: #4b5563;
             }
             .summary-table td.value {
@@ -1456,26 +1461,26 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               color: #1f2937;
             }
             .summary-table tr.total-row td {
-              font-size: 16px;
+              font-size: ${is58mm ? '12px' : '16px'};
               font-weight: 800;
               color: #111827;
               border-top: 1px dashed #4b5563;
-              padding-top: 6px;
+              padding-top: ${is58mm ? '3px' : '6px'};
             }
             .seal-divider {
               border-bottom: 2px dashed #4b5563;
               margin-top: 6px;
             }
             .seal-space {
-              height: 4cm;
-              min-height: 4cm;
+              height: ${is58mm ? '2.5cm' : '4cm'};
+              min-height: ${is58mm ? '2.5cm' : '4cm'};
             }
             .footer {
               text-align: center;
               margin-top: 5px;
               border-top: 1px dashed #4b5563;
-              padding-top: 8px;
-              font-size: 12px;
+              padding-top: ${is58mm ? '4px' : '8px'};
+              font-size: ${is58mm ? '9px' : '12px'};
               color: #4b5563;
             }
             .footer p {
@@ -1484,6 +1489,7 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
             @media print {
               @page {
                 margin: 0;
+                size: ${is58mm ? '58mm auto' : '80mm auto'};
               }
               html, body {
                 padding: 0 !important;
@@ -1492,17 +1498,17 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               .receipt-container {
                 width: 100%;
                 max-width: 100%;
-                padding: 0 6mm !important;
+                padding: ${is58mm ? '0 2mm !important' : '0 6mm !important'};
                 box-sizing: border-box;
               }
             }
           </style>
         </head>
-        <body>
+        <body class="${is58mm ? 'paper-58mm' : 'paper-80mm'}">
           <div class="receipt-container">
             <div class="header">
               <img class="shop-logo-img" src="${branding.logoPath}" alt="Shop Logo" onerror="this.style.display='none';" />
-              <div style="font-size: 16px; font-weight: 800; text-align: center; text-transform: uppercase; color: #111827; margin-bottom: 2px;">${branding.shopName}</div>
+              <div style="font-size: ${is58mm ? '13px' : '16px'}; font-weight: 800; text-align: center; text-transform: uppercase; color: #111827; margin-bottom: 2px;">${branding.shopName}</div>
               <div class="shop-address">${branding.address}</div>
               <div class="shop-phone">Tel: ${branding.phone}</div>
             </div>
@@ -1595,6 +1601,32 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
                 <td>${isSi ? 'ගෙවිය යුතු මුළු මුදල:' : 'Total Amount:'}</td>
                 <td class="value">${symbolStr} ${formatNum(order.total_amount !== undefined ? order.total_amount : order.total)}</td>
               </tr>
+              ${Number((order as any).amount_tendered || (order as any).amountTendered || (order as any).tenderedAmount || 0) > 0 ? `
+              <tr style="border-top: 1px dashed #9ca3af; padding-top: 3px;">
+                <td style="color: #111827; font-weight: 600;">${isSi ? 'භාරගත් මුදල (Cash):' : 'Tendered Cash:'}</td>
+                <td class="value" style="color: #111827; font-weight: 700;">${symbolStr} ${formatNum(Number((order as any).amount_tendered || (order as any).amountTendered || (order as any).tenderedAmount))}</td>
+              </tr>
+              <tr>
+                <td style="color: #15803d; font-weight: 600;">${isSi ? 'ඉතිරි මුදල (Change):' : 'Change Returned:'}</td>
+                <td class="value" style="color: #15803d; font-weight: 700;">${symbolStr} ${formatNum(Number((order as any).change_returned || (order as any).changeReturned || (order as any).change || 0))}</td>
+              </tr>
+              ` : ''}
+              ${isCredit ? `
+              <tr style="border-top: 1px dashed #9ca3af; padding-top: 3px;">
+                <td style="color: #4b5563;">${isSi ? 'පෙර හිඟ ශේෂය:' : 'Previous Balance:'}</td>
+                <td class="value" style="color: #4b5563;">${symbolStr} ${formatNum(Number((order as any).previous_balance ?? (order as any).previousBalance ?? matchedCust?.credit_balance ?? 0))}</td>
+              </tr>
+              <tr style="font-weight: 800; color: #b91c1c;">
+                <td>${isSi ? 'වත්මන් හිඟ ශේෂය:' : 'Updated Outstanding:'}</td>
+                <td class="value" style="color: #b91c1c;">${symbolStr} ${formatNum(
+                  ((order as any).updated_balance !== undefined && (order as any).updated_balance !== null)
+                    ? Number((order as any).updated_balance)
+                    : ((order as any).updatedBalance !== undefined && (order as any).updatedBalance !== null)
+                      ? Number((order as any).updatedBalance)
+                      : (Number((order as any).previous_balance ?? (order as any).previousBalance ?? matchedCust?.credit_balance ?? 0) + Number(order.total_amount !== undefined ? order.total_amount : order.total || 0))
+                )}</td>
+              </tr>
+              ` : ''}
             </table>
             
             <div class="seal-divider"></div>
@@ -2041,6 +2073,32 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
                   <td class="label">${isSi ? 'ගෙවිය යුතු මුළු මුදල:' : 'Total Amount:'}</td>
                   <td class="value">${symbolStr} ${formatNum(order.total_amount !== undefined ? order.total_amount : order.total)}</td>
                 </tr>
+                ${Number((order as any).amount_tendered || (order as any).amountTendered || (order as any).tenderedAmount || 0) > 0 ? `
+                <tr>
+                  <td class="label" style="font-weight: 600; color: #111827;">${isSi ? 'භාරගත් මුදල (Cash):' : 'Tendered Cash:'}</td>
+                  <td class="value" style="font-weight: 700; color: #111827;">${symbolStr} ${formatNum(Number((order as any).amount_tendered || (order as any).amountTendered || (order as any).tenderedAmount))}</td>
+                </tr>
+                <tr>
+                  <td class="label" style="font-weight: 600; color: #15803d;">${isSi ? 'ඉතිරි මුදල (Change):' : 'Change Returned:'}</td>
+                  <td class="value" style="font-weight: 700; color: #15803d;">${symbolStr} ${formatNum(Number((order as any).change_returned || (order as any).changeReturned || (order as any).change || 0))}</td>
+                </tr>
+                ` : ''}
+                ${isCredit ? `
+                <tr>
+                  <td class="label" style="color: #4b5563;">${isSi ? 'පෙර හිඟ ශේෂය:' : 'Previous Balance:'}</td>
+                  <td class="value" style="color: #4b5563;">${symbolStr} ${formatNum(Number((order as any).previous_balance ?? (order as any).previousBalance ?? matchedCust?.credit_balance ?? 0))}</td>
+                </tr>
+                <tr style="font-weight: 800; color: #b91c1c;">
+                  <td class="label" style="color: #b91c1c;">${isSi ? 'වත්මන් හිඟ ශේෂය:' : 'Updated Outstanding:'}</td>
+                  <td class="value" style="color: #b91c1c;">${symbolStr} ${formatNum(
+                    ((order as any).updated_balance !== undefined && (order as any).updated_balance !== null)
+                      ? Number((order as any).updated_balance)
+                      : ((order as any).updatedBalance !== undefined && (order as any).updatedBalance !== null)
+                        ? Number((order as any).updatedBalance)
+                        : (Number((order as any).previous_balance ?? (order as any).previousBalance ?? matchedCust?.credit_balance ?? 0) + Number(order.total_amount !== undefined ? order.total_amount : order.total || 0))
+                  )}</td>
+                </tr>
+                ` : ''}
               </table>
             </div>
           </div>

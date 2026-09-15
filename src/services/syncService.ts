@@ -120,6 +120,8 @@ export async function ensureSyncSchema(db: any): Promise<void> {
         );
       `);
     } catch {}
+    try { await db.exec("ALTER TABLE sync_queue ADD COLUMN retry_count INTEGER DEFAULT 0;"); } catch {}
+    try { await db.exec("ALTER TABLE sync_queue ADD COLUMN error_message TEXT;"); } catch {}
     try { await db.exec("ALTER TABLE system_settings ADD COLUMN last_counter_sync_timestamp TEXT;"); } catch {}
     try { await db.exec("ALTER TABLE system_settings ADD COLUMN last_sync_timestamp TEXT;"); } catch {}
     try { await db.exec("ALTER TABLE system_settings ADD COLUMN counter_sync_status TEXT DEFAULT 'IDLE';"); } catch {}
@@ -169,16 +171,25 @@ export async function enqueueSync(
   }
 }
 
+let isPushing = false;
+
 /**
  * Push pending local mutations to Turso Cloud
  */
 export async function pushUpstreamChanges(localDb: any, tursoClient: Client | null): Promise<void> {
   if (!localDb || !tursoClient) return;
-  const nowIso = new Date().toISOString();
+  if (isWebClient) return;
+  if (isPushing) {
+    console.log('[BackgroundSync] Upstream push already in progress, skipping concurrent run.');
+    return;
+  }
+  isPushing = true;
+  try {
+    const nowIso = new Date().toISOString();
 
-  const pendingItems: SyncQueueItem[] = await localDb.all(
-    "SELECT * FROM sync_queue WHERE status = 'PENDING' ORDER BY created_at ASC LIMIT 100"
-  );
+    const pendingItems: SyncQueueItem[] = await localDb.all(
+      "SELECT * FROM sync_queue WHERE status = 'PENDING' AND COALESCE(retry_count, 0) < 5 ORDER BY created_at ASC LIMIT 100"
+    );
 
   if (pendingItems && pendingItems.length > 0) {
     const statements: Array<{ sql: string; args: any[] }> = [];
@@ -334,7 +345,7 @@ export async function pushUpstreamChanges(localDb: any, tursoClient: Client | nu
 
   let remainingPending = 0;
   try {
-    const qCount = await localDb.get("SELECT COUNT(*) as count FROM sync_queue WHERE status = 'PENDING'");
+    const qCount = await localDb.get("SELECT COUNT(*) as count FROM sync_queue WHERE status = 'PENDING' AND COALESCE(retry_count, 0) < 5");
     remainingPending = Number(qCount?.count ?? 0);
   } catch {}
 
@@ -351,6 +362,9 @@ export async function pushUpstreamChanges(localDb: any, tursoClient: Client | nu
       args: [nowIso, remainingPending]
     });
   } catch {}
+  } finally {
+    isPushing = false;
+  }
 }
 
 export async function runSyncCycle(localDb: any): Promise<void> {

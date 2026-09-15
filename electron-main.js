@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, ipcMain, utilityProcess, dialog } from 'electron';
+import { app, BrowserWindow, shell, ipcMain, utilityProcess, dialog, powerMonitor } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { fork } from 'child_process';
@@ -7,6 +7,13 @@ import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Enforce single-instance lock to prevent secondary processes from corrupting or locking hardware.db
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  console.warn('[Electron] Another instance of Muthuwadige Hardware ERP is already running. Quitting.');
+  app.quit();
+}
 
 // Top-level startup crash guard & logging
 process.on('uncaughtException', (error) => {
@@ -265,12 +272,22 @@ function createWindow() {
     });
   }
 
-  // Open all external links (https://, wa.me, etc.) in the system default browser
+  // Handle new window requests: allow printing and report popups, open external links in system browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('https://') || url.startsWith('http://') || url.startsWith('wa.me')) {
+    if (url && (url.startsWith('https://') || (url.startsWith('http://') && !url.includes('localhost') && !url.includes('127.0.0.1')) || url.startsWith('wa.me'))) {
       shell.openExternal(url);
+      return { action: 'deny' };
     }
-    return { action: 'deny' };
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        autoHideMenuBar: true,
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+        }
+      }
+    };
   });
 
   mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
@@ -282,10 +299,51 @@ function createWindow() {
     }
   });
 
+  mainWindow.on('close', (e) => {
+    if (app.isQuitting) return;
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: 'question',
+      buttons: ['Cancel', 'Exit Application'],
+      defaultId: 0,
+      cancelId: 0,
+      title: 'Exit Confirmation',
+      message: 'Are you sure you want to close Muthuwadige Hardware ERP?',
+      detail: 'Make sure all active counter shifts are closed and pending transactions are saved before exiting.'
+    });
+    if (choice === 0) {
+      e.preventDefault();
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
+
+// Restore & focus primary window if a second instance attempts to launch
+app.on('second-instance', (event, commandLine, workingDirectory) => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
+
+app.on('before-quit', () => {
+  app.isQuitting = true;
+});
+
+// Re-verify backend database health and sync when PC wakes from sleep/hibernation
+powerMonitor.on('resume', () => {
+  console.log('[Electron] System resumed from sleep. Triggering database health check and sync reconnect.');
+  http.get('http://localhost:5001/api/health', (res) => {
+    console.log(`[Electron] Health check after sleep: status ${res.statusCode}`);
+  }).on('error', (err) => {
+    console.warn('[Electron] Health check warning on resume:', err.message);
+  });
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('system:resume');
+  }
+});
 
 app.whenReady().then(async () => {
   try {

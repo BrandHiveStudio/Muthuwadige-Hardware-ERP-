@@ -250,6 +250,45 @@ export const ScannerProvider = ({ children }: { children: React.ReactNode }) => 
     };
   }, [scannerSessionId, applyClientsUpdate]);
 
+  // Cross-instance polling fallback for cloud/serverless environments (Vercel multi-instance support)
+  useEffect(() => {
+    let lastPolledTimestamp = Date.now() - 3000;
+    const isCloudWeb = typeof window !== 'undefined' && window.location.protocol === 'https:' && !Boolean((window as any).electronAPI);
+
+    const pollInterval = setInterval(async () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      try {
+        const res = await fetchWithTimeout(
+          `${API_URL}/scanner/poll?sessionId=${encodeURIComponent(scannerSessionId)}&after=${lastPolledTimestamp}`,
+          {},
+          3000
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.signals) && data.signals.length > 0) {
+            for (const sig of data.signals) {
+              if (sig.timestamp > lastPolledTimestamp) {
+                lastPolledTimestamp = sig.timestamp;
+                // Deduplicate: check if this barcode was already received in the last 1.5 seconds
+                const recentMatch = recentScansBufferRef.current.find(
+                  r => r.barcode === sig.barcode && Math.abs(r.timestamp - sig.timestamp) < 1500
+                );
+                if (!recentMatch) {
+                  dispatchIncomingBarcodeRef.current(sig.barcode, {
+                    scannerName: sig.scanner_name || 'Mobile Scanner',
+                    format: sig.format || 'AUTO'
+                  });
+                }
+              }
+            }
+          }
+        }
+      } catch (_) {}
+    }, isCloudWeb ? 1800 : 8000);
+
+    return () => clearInterval(pollInterval);
+  }, [scannerSessionId]);
+
   const sendTestBarcode = useCallback(async (barcode: string) => {
     const clean = barcode.trim();
     if (!clean) return false;

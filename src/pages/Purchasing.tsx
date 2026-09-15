@@ -601,6 +601,22 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     doc.setFont('helvetica', 'bold');
     doc.text("Thank you for your partnership!", 15, finalY + 19);
 
+    // Received Info (only shown for received POs)
+    if ((order.status || '').toLowerCase() === 'received') {
+      const recAt = (order as any).received_at || (order as any).receivedAt ? new Date((order as any).received_at || (order as any).receivedAt).toLocaleDateString() : 'N/A';
+      const recBy = (order as any).received_by || (order as any).receivedBy || (order as any).created_by || 'Staff';
+      const settleMode = ((order as any).settlement_mode || (order as any).settlementMode || 'CREDIT').replace(/_/g, ' ');
+
+      doc.setTextColor(34, 139, 34);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.text("RECEIPT CONFIRMATION", 15, finalY + 27);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(80, 80, 80);
+      doc.text(`Received: ${recAt} | By: ${recBy} | Settlement: ${settleMode}`, 15, finalY + 33);
+    }
+
     doc.setDrawColor(150, 150, 150);
     doc.line(pageWidth - 60, finalY + 45, pageWidth - 15, finalY + 45);
     doc.setFont('helvetica', 'italic');
@@ -1048,9 +1064,15 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       const { data: { user } } = await supabase.auth.getUser();
 
       // 1. Update PO Status
+      const nowIso = new Date().toISOString();
       const { error: poError } = await supabase
         .from('purchase_orders')
-        .update({ status: 'received' })
+        .update({
+          status: 'received',
+          received_at: nowIso,
+          received_by: staffEmail,
+          settlement_mode: receiveSettlementMode
+        })
         .eq('id', receivingOrder.id);
       if (poError) throw poError;
 
@@ -1063,6 +1085,12 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
           const currentCost = Number(product.cost_price !== undefined && product.cost_price !== null ? product.cost_price : (product.costPrice || 0));
           const itemCost = Number(item.costPrice || (item as any).cost_price || 0);
           const qty = Number(item.qty || 0);
+
+          // Weighted average cost recalculation
+          if (itemCost > 0 && currentStock > 0 && currentCost > 0) {
+            const weightedCost = Math.round(((currentStock * currentCost) + (qty * itemCost)) / (currentStock + qty) * 100) / 100;
+            await supabase.from('products').update({ cost_price: weightedCost }).eq('id', product.id);
+          }
 
           if (itemCost > 0 && Math.abs(itemCost - currentCost) >= 0.01) {
             // Divergent cost: check for existing batch with matching cost or create new batch
@@ -1231,6 +1259,16 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
           }]);
         } catch (_txErr) {}
       }
+
+      // 4. Audit Log (Fallback Path)
+      try {
+        await api.auditLogs?.create?.({
+          action: 'PO_RECEIVED_AND_SETTLED',
+          details: `Received PO #${receivingOrder.poNumber} for "${receivingOrder.supplierName}" (Total: Rs. ${Number(receivingOrder.total || 0).toLocaleString()}, Settlement: ${receiveSettlementMode}) [Fallback Path]`,
+          user_name: currentUser?.name || currentUser?.full_name || staffEmail,
+          user_email: staffEmail
+        });
+      } catch (_) {}
 
       alert(`✅ Purchase Order #${receivingOrder.poNumber} received & restocked successfully (${receiveSettlementMode})!`);
       setReceivingOrder(null);

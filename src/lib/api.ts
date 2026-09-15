@@ -613,6 +613,15 @@ export const api = {
       });
       if (!res.ok) throw new Error('Failed to log audit details');
       return res.json();
+    },
+    create: async (data: { user_email?: string; user_name?: string; action: string; details: string; user_role?: string }) => {
+      const res = await fetchWithTimeout(`${API_URL}/audit_logs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (!res.ok) throw new Error('Failed to log audit details');
+      return res.json();
     }
   },
 

@@ -153,8 +153,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   };
 
   const handlePrintShiftSummary = (shift: any) => {
-    const printWin = window.open('', '_blank', 'width=650,height=800');
-    if (!printWin) return alert("Please allow popups to print shift summary.");
     const diff = Number(shift.discrepancy || 0);
     const statusText = diff === 0 ? 'BALANCED' : diff > 0 ? `OVERAGE (+Rs. ${diff.toFixed(2)})` : `SHORTAGE (-Rs. ${Math.abs(diff).toFixed(2)})`;
     const html = `
@@ -189,8 +187,9 @@ export function Reports({ currentUser }: ReportsProps = {}) {
         <div class="divider"></div>
         <div class="row"><span>1. Opening Float:</span><span>Rs. ${Number(shift.opening_float || 0).toFixed(2)}</span></div>
         <div class="row"><span>2. + Cash Sales:</span><span>+Rs. ${Number(shift.cash_sales || 0).toFixed(2)}</span></div>
-        <div class="row"><span>3. - Cash Returns:</span><span>-Rs. ${Number(shift.cash_returns || 0).toFixed(2)}</span></div>
-        <div class="row"><span>4. - Petty Expenses:</span><span>-Rs. ${Number(shift.petty_expenses || 0).toFixed(2)}</span></div>
+        <div class="row"><span>3. + Debt Cash Collected:</span><span>+Rs. ${Number(shift.debt_cash_collected || 0).toFixed(2)}</span></div>
+        <div class="row"><span>4. - Cash Returns:</span><span>-Rs. ${Number(shift.cash_returns || 0).toFixed(2)}</span></div>
+        <div class="row"><span>5. - Petty Expenses:</span><span>-Rs. ${Number(shift.petty_expenses || 0).toFixed(2)}</span></div>
         <div class="divider"></div>
         <div class="row bold" style="font-size: 14px;"><span>Expected Drawer Cash:</span><span>Rs. ${Number(shift.expected_cash || 0).toFixed(2)}</span></div>
         <div class="row bold" style="font-size: 14px;"><span>Actual Counted Cash:</span><span>Rs. ${Number(shift.actual_cash || 0).toFixed(2)}</span></div>
@@ -204,8 +203,52 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       </body>
       </html>
     `;
-    printWin.document.write(html);
-    printWin.document.close();
+
+    try {
+      const printWin = window.open('', '_blank', 'width=650,height=800');
+      if (printWin && printWin.document) {
+        printWin.document.write(html);
+        printWin.document.close();
+        return;
+      }
+    } catch (e) {
+      console.warn('window.open blocked or failed, falling back to hidden iframe:', e);
+    }
+
+    // Seamless fallback to hidden iframe for desktop / popup-blocked environments
+    try {
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'fixed';
+      iframe.style.right = '0';
+      iframe.style.bottom = '0';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = '0';
+      document.body.appendChild(iframe);
+
+      const doc = iframe.contentWindow?.document || iframe.contentDocument;
+      if (doc) {
+        doc.open();
+        doc.write(html);
+        doc.close();
+        setTimeout(() => {
+          try {
+            iframe.contentWindow?.focus();
+            iframe.contentWindow?.print();
+          } catch (printErr) {
+            console.error('Print iframe error:', printErr);
+          } finally {
+            setTimeout(() => {
+              if (document.body.contains(iframe)) {
+                document.body.removeChild(iframe);
+              }
+            }, 1000);
+          }
+        }, 250);
+      }
+    } catch (err) {
+      console.error('Print iframe fallback failed:', err);
+    }
   };
 
   const fetchSettings = async () => {

@@ -1272,6 +1272,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   const [shiftNotes, setShiftNotes] = useState<string>('');
   const [isSavingShift, setIsSavingShift] = useState(false);
   const [shiftSuccessMsg, setShiftSuccessMsg] = useState<string | null>(null);
+  const [shiftDebtCashCollected, setShiftDebtCashCollected] = useState<number>(0);
 
   const fetchTodayShift = useCallback(async () => {
     try {
@@ -1283,6 +1284,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
         }
         if (currentData?.opening_float !== undefined) {
           setOpeningFloat(currentData.opening_float);
+        }
+        if (currentData?.debt_cash_collected !== undefined) {
+          setShiftDebtCashCollected(Number(currentData.debt_cash_collected) || 0);
         }
       }
 
@@ -1365,8 +1369,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   const shiftExpectedCash = useMemo(() => {
     const numOpening = Math.max(0, Number(openingFloat) || 0);
     const numPetty = Math.max(0, Number(drawerPettyExpenses) || 0);
-    return Math.max(0, Math.round((numOpening + shiftTodayCashSales - shiftTodayCashReturns - numPetty) * 100) / 100);
-  }, [openingFloat, shiftTodayCashSales, shiftTodayCashReturns, drawerPettyExpenses]);
+    const numDebt = Math.max(0, Number(shiftDebtCashCollected) || 0);
+    return Math.max(0, Math.round((numOpening + shiftTodayCashSales + numDebt - shiftTodayCashReturns - numPetty) * 100) / 100);
+  }, [openingFloat, shiftTodayCashSales, shiftDebtCashCollected, shiftTodayCashReturns, drawerPettyExpenses]);
 
   const shiftDiscrepancy = useMemo(() => {
     if (actualCountedCash === '' || actualCountedCash === undefined || actualCountedCash === null) return null;
@@ -1407,6 +1412,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
           cashSales: shiftTodayCashSales,
           cash_returns: shiftTodayCashReturns,
           cashReturns: shiftTodayCashReturns,
+          debt_cash_collected: shiftDebtCashCollected,
+          debtCashCollected: shiftDebtCashCollected,
           petty_expenses: numPettyExpenses,
           pettyExpenses: numPettyExpenses,
           expected_cash: expectedCash,
@@ -2617,8 +2624,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     let targetQty = newQty;
 
     if (forceValidate) {
-      if (isNaN(targetQty) || targetQty < 1) {
-        targetQty = 1;
+      if (isNaN(targetQty) || targetQty <= 0) {
+        targetQty = 0.01;
       } else if (targetQty > stockAvailableInSelectedUnit) {
         alert(t(
           `Only ${stockAvailableInSelectedUnit} ${item?.unit || 'unit(s)'} available in stock!`,
@@ -2781,6 +2788,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
   // Compute live scanner URL pointing to secure HTTPS
   const mobileScannerUrl = useMemo(() => {
+    if (typeof window !== 'undefined' && window.location.protocol === 'https:' && !Boolean((window as any).electronAPI)) {
+      return `${window.location.origin}/mobile-scanner?session=${encodeURIComponent(scannerSessionId)}`;
+    }
     const ip = selectedScannerIp || localScannerInfo?.ip || '127.0.0.1';
     const httpsPort = localScannerInfo?.httpsPort || 5443;
     return `https://${ip}:${httpsPort}/mobile-scanner?session=${encodeURIComponent(scannerSessionId)}`;
@@ -2916,6 +2926,27 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       }
       if (!chequeDate) {
         return alert(t("Please select the Cheque Date.", "කරුණාකර චෙක්පත් දිනය තෝරන්න."));
+      }
+    }
+
+    // Strict Customer Credit Limit Verification
+    if (paymentMethod === 'Credit') {
+      if (isGuest || !selectedCustomer) {
+        return alert(t("Credit sales are not permitted for Guest Checkout. Please select a registered customer.", "අමුත්තන් සඳහා ණය විකුණුම් කළ නොහැක. කරුණාකර ලියාපදිංචි පාරිභෝගිකයෙකු තෝරන්න."));
+      }
+      const creditLimit = Number((selectedCustomer as any).credit_limit || (selectedCustomer as any).creditLimit || 0);
+      const currentDebt = Number((selectedCustomer as any).totalOutstanding || (selectedCustomer as any).current_credit || (selectedCustomer as any).balance || 0);
+      const projectedBalance = Math.round((currentDebt + totalAmountValue) * 100) / 100;
+      if (creditLimit > 0 && projectedBalance > creditLimit) {
+        const confirmed = window.confirm(
+          t(
+            `⚠️ Credit limit of Rs. ${creditLimit.toLocaleString(undefined, { minimumFractionDigits: 2 })} exceeded for ${selectedCustomer.name}.\nCurrent Debt: Rs. ${currentDebt.toLocaleString(undefined, { minimumFractionDigits: 2 })}\nProjected Total: Rs. ${projectedBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n\nDo you want to proceed with supervisor override?`,
+            `⚠️ ${selectedCustomer.name} සඳහා රු. ${creditLimit.toLocaleString(undefined, { minimumFractionDigits: 2 })} ණය සීමාව ඉක්මවා ඇත.\nදැනට ණය: රු. ${currentDebt.toLocaleString(undefined, { minimumFractionDigits: 2 })}\nනව මුළු ණය: රු. ${projectedBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n\nඔබට අධීක්ෂක අවසරය සමඟ ඉදිරියට යාමට අවශ්‍යද?`
+          )
+        );
+        if (!confirmed) {
+          return;
+        }
       }
     }
 
@@ -3213,6 +3244,92 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     }
   };
 
+  const handleLoadQuoteToCart = (quote: any) => {
+    try {
+      if (!quote) return;
+      const rawItems = quote.items;
+      const items = Array.isArray(rawItems)
+        ? rawItems
+        : typeof rawItems === 'string'
+        ? JSON.parse(rawItems)
+        : [];
+
+      if (!items || items.length === 0) {
+        notify(t('This quotation contains no items to load.', 'මෙම මිල ගණන් ලැයිස්තුවේ භාණ්ඩ නොමැත.'));
+        return;
+      }
+
+      // Map quotation items into active cart items with full product references
+      const loadedCart: SaleItem[] = items.map((item: any, idx: number) => {
+        const prodId = item.productId || item.product_id || item.id;
+        const matchingProd = products.find(p => p.id === prodId || p.sku === item.sku || p.barcode === item.barcode);
+        const unitPrice = Number(item.price !== undefined ? item.price : (item.unit_price || item.unitPrice || 0));
+        const qty = Number(item.qty || item.quantity || 1);
+        const discountVal = Number(item.discount || 0);
+        const dType = item.discountType || item.discount_type || 'fixed';
+        const isPct = dType === 'percent' || dType === 'percentage';
+        const discountAmt = isPct ? (unitPrice * qty * discountVal) / 100 : (discountVal * qty);
+        const lineTotal = Math.max(0, (unitPrice * qty) - discountAmt);
+
+        return {
+          productId: prodId || `prod_${Date.now()}_${idx}`,
+          productName: item.productName || item.name || item.description || matchingProd?.name || 'Item',
+          name: item.productName || item.name || item.description || matchingProd?.name || 'Item',
+          price: unitPrice,
+          unit_price: unitPrice,
+          costPrice: Number(matchingProd?.costPrice || matchingProd?.cost_price || item.costPrice || item.cost_price || 0),
+          qty,
+          quantity: qty,
+          unit: item.unit || matchingProd?.unit || 'Units',
+          taxRate: Number(item.taxRate || item.tax_rate || 0),
+          discount: discountVal,
+          discountType: isPct ? 'percent' : 'amount',
+          total: lineTotal,
+          sku: item.sku || matchingProd?.sku || '',
+          barcode: item.barcode || matchingProd?.barcode || '',
+          conversionRate: Number(item.conversionRate) || 1,
+          selectedUnit: item.selectedUnit || item.unit || matchingProd?.unit || 'Units',
+          serialNo: item.serialNo || '',
+          batchCode: item.batchCode || ''
+        } as unknown as SaleItem;
+      });
+
+      setCartItems(loadedCart);
+
+      if (quote.customer_id) {
+        const cust = customers.find(c => c.id === quote.customer_id);
+        if (cust) {
+          setSelectedCustomer(cust);
+          setIsGuest(false);
+        }
+      } else if (quote.customer_name || quote.customerName) {
+        const cName = (quote.customer_name || quote.customerName || '').trim();
+        const matched = customers.find(c => c.name.toLowerCase() === cName.toLowerCase());
+        if (matched) {
+          setSelectedCustomer(matched);
+          setIsGuest(false);
+        } else if (cName && cName !== 'Guest Customer') {
+          setIsGuest(true);
+          setGuestName(cName);
+          setGuestPhone(quote.customer_phone || quote.customerPhone || '');
+          setGuestAddress(quote.customer_address || quote.customerAddress || '');
+          setSelectedCustomer(null);
+        }
+      }
+
+      if (quote.transportation_fee !== undefined || quote.transportFee !== undefined) {
+        setTransportationFee(Number(quote.transportation_fee || quote.transportFee || 0));
+      }
+
+      setShowQuotePreviewModal(false);
+      setTab('new');
+      notify(t(`Quotation ${quote.quote_no || quote.quoteNo || ''} loaded to Cart (${loadedCart.length} items)!`, `මිල ගණන් ලැයිස්තුව සාර්ථකව කාඩ්පතට ඇතුළත් කරන ලදී!`));
+    } catch (err: any) {
+      console.error('Failed to load quotation to cart:', err);
+      alert('Failed to load quotation to cart: ' + err.message);
+    }
+  };
+
   const handleVoidOrder = async (orderId: string, voidPasskey: string) => {
     try {
       setIsLoading(true);
@@ -3357,19 +3474,28 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     });
   }, [orders, creditHistoryFromDate, creditHistoryToDate, creditSearchQuery]);
 
+  const isUnpaidCreditStatus = (status?: string) => {
+    const s = (status || '').toLowerCase().trim();
+    return s === 'non paid' || s === 'non-paid' || s === 'pending' || s === 'unpaid' || s === 'partially paid';
+  };
+  const isPaidCreditStatus = (status?: string) => {
+    const s = (status || '').toLowerCase().trim();
+    return s === 'paid';
+  };
+
   const creditSubFiltered = useMemo(() => {
     const now = new Date();
     return filteredCreditOrders.filter(o => {
-      const isOverdue = o.status === 'Non Paid' && o.due_date && new Date(o.due_date) < now;
-      if (creditSubView === 'unpaid') return o.status === 'Non Paid';
+      const isOverdue = isUnpaidCreditStatus(o.status) && o.due_date && new Date(o.due_date) < now;
+      if (creditSubView === 'unpaid') return isUnpaidCreditStatus(o.status);
       if (creditSubView === 'overdue') return isOverdue;
-      if (creditSubView === 'paid') return o.status === 'Paid';
+      if (creditSubView === 'paid') return isPaidCreditStatus(o.status);
       return true;
     });
   }, [filteredCreditOrders, creditSubView]);
 
-  const unpaidCreditOrders = useMemo(() => creditOrders.filter(o => o.status === 'Non Paid'), [creditOrders]);
-  const paidCreditOrders = useMemo(() => creditOrders.filter(o => o.status === 'Paid'), [creditOrders]);
+  const unpaidCreditOrders = useMemo(() => creditOrders.filter(o => isUnpaidCreditStatus(o.status)), [creditOrders]);
+  const paidCreditOrders = useMemo(() => creditOrders.filter(o => isPaidCreditStatus(o.status)), [creditOrders]);
   const totalOutstanding = useMemo(() => unpaidCreditOrders.reduce((sum, o) => sum + (o.total || 0), 0), [unpaidCreditOrders]);
   const overdueCreditOrders = useMemo(() => {
     const now = new Date();
@@ -3908,7 +4034,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                 <div className="inline-flex items-center bg-slate-50 border border-slate-200 rounded-xl p-1 shadow-inner">
                                   <button
                                     type="button"
-                                    onClick={() => updateQty(item.productId, Math.max(0.5, Math.round((item.qty - 0.5) * 100) / 100))}
+                                    onClick={() => updateQty(item.productId, Math.max(0.01, Math.round((item.qty <= 0.5 ? Math.max(0.01, item.qty - 0.1) : item.qty - 0.5) * 100) / 100))}
                                     className="w-7 h-7 bg-white hover:bg-slate-100 active:scale-95 text-slate-600 rounded-lg flex items-center justify-center font-black transition-all border border-slate-200 shadow-sm"
                                   >
                                     -
@@ -6081,6 +6207,16 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                             <td className="px-6 py-4 text-center flex items-center justify-center gap-2">
                               <button
                                 type="button"
+                                onClick={() => handleLoadQuoteToCart(quote)}
+                                className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-xs rounded-xl border border-emerald-200 transition-colors flex items-center gap-1 shadow-sm"
+                                title={t('Load items into POS Cart', 'භාණ්ඩ කාඩ්පතට ඇතුළත් කරන්න')}
+                              >
+                                <ShoppingCartIcon className="w-3.5 h-3.5 text-emerald-600" />
+                                {t('Load to Cart', 'කාඩ්පතට')}
+                              </button>
+
+                              <button
+                                type="button"
                                 onClick={() => {
                                   setSelectedQuotePreview(quote);
                                   setShowQuotePreviewModal(true);
@@ -7956,6 +8092,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs uppercase"
               >
                 {t('Close', 'වහන්න')}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleLoadQuoteToCart(selectedQuotePreview)}
+                className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-xs uppercase tracking-wider shadow-md flex items-center gap-1.5"
+              >
+                <ShoppingCartIcon className="w-4 h-4" />
+                {t('Load to Cart', 'කාඩ්පතට ගන්න')}
               </button>
               <button
                 type="button"
