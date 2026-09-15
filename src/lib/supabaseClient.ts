@@ -147,8 +147,8 @@ const updateTable = async (table: string, payload: any, val: any) => {
         result = await res.json();
       }
     } else if (table === 'purchase_orders') {
-      if (payload.status === 'received') {
-        result = await api.purchaseOrders.receive(val);
+      if ((payload.status || '').toLowerCase() === 'received') {
+        result = await api.purchaseOrders.receive(val, payload);
       } else {
         const res = await fetchWithTimeout(`${API_URL}/purchase-orders/${val}`, {
           method: 'PUT',

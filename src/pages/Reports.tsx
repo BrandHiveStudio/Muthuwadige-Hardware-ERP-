@@ -649,7 +649,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     const deliveryFees = filteredSales.reduce((sum, sale) => {
       const statusLower = (sale.status || '').toString().toLowerCase().trim();
       if (statusLower === 'cancelled' || statusLower === 'voided') return sum;
-      return sum + Number(sale.transportation_fee || sale.delivery_fee || sale.delivery_charges || 0);
+      return sum + Number(sale.transportation_fee || sale.delivery_fee || sale.delivery_charges || sale.transportationFee || 0);
     }, 0);
 
     return {

@@ -190,6 +190,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
           poNumber: po.po_number !== undefined ? po.po_number : po.poNumber,
           supplierName: po.supplier_name !== undefined ? po.supplier_name : po.supplierName,
           dueDate: po.due_date !== undefined ? po.due_date : po.dueDate,
+          transportation_fee: Number(po.transportation_fee ?? po.transportationFee ?? po.shipping_cost ?? po.delivery_fee ?? 0),
+          transportationFee: Number(po.transportation_fee ?? po.transportationFee ?? po.shipping_cost ?? po.delivery_fee ?? 0),
           date: po.created_at ? new Date(po.created_at).toLocaleDateString() : (po.date || new Date().toLocaleDateString())
         }));
         setOrders(mappedOrders);
@@ -423,7 +425,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
   // --- HTML PURCHASE ORDER GENERATOR ---
   const generatePOPrintHTML = (order: PurchaseOrder) => {
-    const shippingFee = Number(order.shipping_cost || (order as any).transportation_fee || (order as any).delivery_fee || 0);
+    const shippingFee = Number(order.shipping_cost || (order as any).transportation_fee || (order as any).delivery_fee || (order as any).transportationFee || 0);
     const shippingRow = shippingFee > 0 ? `
   <tr>
     <td style="padding: 4px 8px; text-align: right; color: #475569;">Transport / Delivery:</td>
@@ -434,7 +436,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       ? new Date(order.received_at || (order as any).received_date || (order as any).updated_at).toLocaleDateString() 
       : 'N/A';
     const receivedBy = order.received_by || (order as any).received_by_name || currentUser?.name || 'Staff';
-    const paymentMethod = (order.payment_method || order.settlement_type || (order as any).settlement_mode || 'CREDIT').toUpperCase();
+    const paymentMethod = (order.payment_method || order.settlement_type || (order as any).settlement_mode || (order as any).settlementMode || 'CREDIT').toUpperCase();
 
     const computedGross = (order.items || []).reduce((sum: number, it: any) => {
       const q = Number(it.qty || it.quantity || 0);
@@ -1571,6 +1573,10 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
   // Handle PO selection for return
   const handleSelectReturnPO = (po: PurchaseOrder) => {
+    if ((po.status || '').toLowerCase() !== 'received') {
+      alert(`Cannot return Purchase Order #${po.poNumber || po.id}: Only received orders can be returned.`);
+      return;
+    }
     setTargetReturnPO(po);
     setIncludeReturnDiscount(true);
     setIncludeReturnTransport(false);
@@ -1591,6 +1597,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       return;
     }
     const matches = orders.filter(o => {
+      if ((o.status || '').toLowerCase() !== 'received') return false;
       if ((o.poNumber || '').toLowerCase().includes(q)) return true;
       if ((o.supplierName || '').toLowerCase().includes(q)) return true;
       const items = Array.isArray(o.items) ? o.items : [];
@@ -1758,7 +1765,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
   // Revert Received PO Action
   const handleRevertPurchaseOrderReceipt = async (poRef: string) => {
-    if (!window.confirm(`Are you sure you want to revert received Purchase Order #${poRef} back to PENDING?\n\nThis will:\n- Deduct received stock from inventory\n- Deduct supplier payable liability balance\n- Reset status to PENDING`)) {
+    if (!window.confirm(`Are you sure you want to revert received Purchase Order #${poRef} back to PENDING?\n\nThis will:\n- Deduct received stock from inventory\n- Restore original payment/supplier accounting\n- Reset status to PENDING`)) {
       return;
     }
 
@@ -1770,7 +1777,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       if (error || !data?.success) {
         alert(error?.message || data?.message || 'Failed to revert purchase order receipt.');
       } else {
-        alert('PO receipt reverted to PENDING and stock/payables restored.');
+        alert(data?.message || 'PO receipt reverted to PENDING and stock/accounting restored.');
         await fetchData();
         window.dispatchEvent(new CustomEvent('refresh-inventory'));
         window.dispatchEvent(new CustomEvent('refresh-all-data'));
@@ -3756,6 +3763,13 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                 <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1.5">Order Status</p>
                 <span className={`inline-block px-4 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest ${statusColors[viewOrder.status]} shadow-sm`}>{viewOrder.status}</span>
                 <p className="text-[10px] font-bold text-gray-500 mt-3 uppercase tracking-widest">ETA: {viewOrder.dueDate}</p>
+                {(viewOrder.status || '').toLowerCase() === 'received' && (
+                  <p className="text-[10px] font-bold text-emerald-600 mt-1 uppercase tracking-wider">
+                    Received: {viewOrder.received_at ? new Date(viewOrder.received_at).toLocaleDateString() : (viewOrder.updated_at ? new Date(viewOrder.updated_at).toLocaleDateString() : 'Yes')}
+                    {viewOrder.received_by ? ` | By: ${viewOrder.received_by}` : ''}
+                    {` | Settlement: ${(viewOrder.settlement_mode || viewOrder.payment_method || (viewOrder as any).settlementMode || 'CREDIT').toUpperCase()}`}
+                  </p>
+                )}
               </div>
             </div>
             

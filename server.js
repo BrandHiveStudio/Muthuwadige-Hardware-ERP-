@@ -4724,10 +4724,10 @@ app.get('/api/sales', async (req, res) => {
       due_date: s.due_date,
       credit_period_days: s.credit_period_days || 0,
       payment_received: s.payment_received || 0,
-      transportation_fee: Number(s.transportation_fee || 0),
-      transportationFee: Number(s.transportation_fee || 0),
-      delivery_fee: Number(s.transportation_fee || 0),
-      deliveryFee: Number(s.transportation_fee || 0),
+      transportation_fee: Number(s.transportation_fee || s.delivery_fee || 0),
+      transportationFee: Number(s.transportation_fee || s.delivery_fee || 0),
+      delivery_fee: Number(s.delivery_fee || s.transportation_fee || 0),
+      deliveryFee: Number(s.delivery_fee || s.transportation_fee || 0),
       credit_note_applied: Number(s.credit_note_applied || 0),
       creditNoteApplied: Number(s.credit_note_applied || 0),
       credit_note_code: s.credit_note_code || '',
@@ -6584,10 +6584,22 @@ app.get(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
       debit_note_code: po.debit_note_code || '',
       debitNoteApplied: Number(po.debit_note_applied || 0),
       debit_note_applied: Number(po.debit_note_applied || 0),
+      transportation_fee: Number(po.transportation_fee ?? po.shipping_cost ?? po.delivery_fee ?? 0),
+      transportationFee: Number(po.transportation_fee ?? po.shipping_cost ?? po.delivery_fee ?? 0),
+      shipping_cost: Number(po.shipping_cost ?? po.transportation_fee ?? po.delivery_fee ?? 0),
+      delivery_fee: Number(po.delivery_fee ?? po.transportation_fee ?? po.shipping_cost ?? 0),
       status: po.status,
       dueDate: po.due_date,
+      due_date: po.due_date,
+      user_id: po.user_id || null,
       date: new Date(po.created_at).toLocaleDateString(),
-      created_at: po.created_at
+      created_at: po.created_at,
+      received_at: po.received_at || null,
+      received_by: po.received_by || null,
+      payment_method: po.payment_method || po.settlement_mode || null,
+      settlement_mode: po.settlement_mode || po.payment_method || null,
+      created_by: po.created_by || null,
+      updated_at: po.updated_at || null
     }));
     res.json(mapped);
   } catch (err) {
@@ -6906,10 +6918,21 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
         }
       }
 
-      if (po.supplier_name) {
+      const validMode = (po.payment_method || po.settlement_mode || 'CREDIT').toString().toUpperCase();
+      if (validMode === 'CREDIT') {
+        if (po.supplier_name) {
+          await db.run(
+            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+            [netTotal, po.supplier_id || '', po.supplier_name]
+          );
+        }
+      } else if (validMode === 'CASH' || validMode === 'BANK') {
+        const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        const payDesc = `Supplier Payment - ${po.supplier_name || 'Vendor'} (PO #${po.po_number || id}) [${validMode === 'CASH' ? 'Cash Drawer' : 'Bank Transfer'}]`;
         await db.run(
-          'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE name = ?',
-          [netTotal, po.supplier_name]
+          `INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [txId, 'expense', 'Supplier Payment', payDesc, netTotal, todayStr, `PO-SETTLE-${po.po_number || id}`, po.user_id || 'Admin', created_at]
         );
       }
     }
@@ -7027,22 +7050,83 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
         }
       }
 
-      if (po.supplier_name) {
-        // Increment supplier's payable_balance by net total (deducting discounts)
+      if (payMethod === 'CREDIT') {
+        if (po.supplier_name) {
+          await db.run(
+            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+            [poNetTotal, po.supplier_id || '', po.supplier_name]
+          );
+          const supp = await db.get(
+            'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+            [po.supplier_id || '', po.supplier_name]
+          );
+          if (supp?.id) {
+            enqueueSync(db, 'suppliers', supp.id, 'UPSERT').catch(() => { });
+          }
+        }
+      } else if (payMethod === 'CASH' || payMethod === 'BANK') {
+        const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        const payDesc = `Supplier Payment - ${po.supplier_name || 'Vendor'} (PO #${po.po_number || id}) [${payMethod === 'CASH' ? 'Cash Drawer' : 'Bank Transfer'}]`;
+        const txRef = req.body.reference || `PO-SETTLE-${po.po_number || id}`;
+        const todayStr = req.body.payment_date || new Date().toLocaleDateString('sv-SE');
         await db.run(
-          'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE name = ?',
-          [poNetTotal, po.supplier_name]
+          `INSERT INTO transactions (
+            id, type, category, description, amount, date, reference, user_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            txId,
+            'expense',
+            'Supplier Payment',
+            payDesc,
+            poNetTotal,
+            todayStr,
+            txRef,
+            recBy,
+            recAt
+          ]
         );
+        enqueueSync(db, 'transactions', txId, 'INSERT').catch(() => { });
+      } else if (payMethod === 'CHEQUE') {
+        const chqNo = req.body.cheque_number || req.body.chequeNo;
+        if (chqNo) {
+          const chqId = 'CHQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
+          const chqBank = (req.body.bank_name || req.body.bankName || 'Commercial Bank of Ceylon').toString().trim();
+          const chqDate = req.body.cheque_date || req.body.chequeDate || new Date().toLocaleDateString('sv-SE');
+          await db.run(
+            `INSERT INTO cheque_registry (
+              id, direction, cheque_type, cheque_number, bank_name, branch,
+              cheque_date, amount, party_id, party_name, reference_type,
+              reference_id, status, notes, created_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              chqId,
+              'OUTWARD',
+              'CROSSED_ACCOUNT_PAYEE',
+              chqNo.toString().trim(),
+              chqBank,
+              '',
+              chqDate,
+              poNetTotal,
+              po.supplier_id || null,
+              po.supplier_name || 'Vendor',
+              'PURCHASE_ORDER',
+              po.id || po.po_number,
+              'PENDING',
+              req.body.notes || `Issued for Purchase Order #${po.po_number || id}`,
+              recBy,
+              recAt
+            ]
+          );
+          enqueueSync(db, 'cheque_registry', chqId, 'INSERT').catch(() => { });
+        }
       }
 
-      await replaceRuntimeTransactionByDescription(`Stock Check-in ${po.po_number}`, {
-        type: 'expense',
-        category: 'Purchases',
-        amount: poNetTotal,
-        date: new Date().toLocaleDateString('sv-SE'),
-        reference: po.po_number,
-        user_id: po.user_id
-      });
+      for (const it of updatedItems) {
+        const pId = it.receivedProductId || it.productId || it.product_id;
+        if (pId) {
+          enqueueSync(db, 'products', pId, 'UPSERT').catch(() => { });
+        }
+      }
     }
 
     await db.run('COMMIT');
@@ -7796,6 +7880,22 @@ app.post(['/api/purchasing/return', '/api/purchase-returns'], async (req, res) =
     return res.status(400).json({ error: `Invalid settlement mode: ${finalSettlementMode}. Allowed: ${validSettlementModes.join(', ')}` });
   }
 
+  // Safety: If linked to a specific Purchase Order, ensure the PO was actually received
+  if (finalPoId) {
+    const parentPo = await db.get(
+      'SELECT * FROM purchase_orders WHERE id = ? OR po_number = ? OR po_no = ?',
+      [finalPoId, finalPoId, finalPoId]
+    );
+    if (parentPo) {
+      const poStatus = (parentPo.status || '').toLowerCase().trim();
+      if (poStatus !== 'received') {
+        return res.status(400).json({
+          error: `Cannot process purchase return against Purchase Order #${parentPo.po_number || parentPo.po_no}: Order status is '${parentPo.status}'. Only received purchase orders can be returned.`
+        });
+      }
+    }
+  }
+
   let txn = null;
 
   try {
@@ -7947,6 +8047,7 @@ app.post(['/api/purchasing/return', '/api/purchase-returns'], async (req, res) =
     }
 
     // 4. Handle Settlement Mode
+    let refundTxId = null;
     if (finalSettlementMode === 'SUPPLIER_DEBIT_NOTE') {
       // Deduct from supplier payable balance
       if (finalSupplierId) {
@@ -7977,6 +8078,7 @@ app.post(['/api/purchasing/return', '/api/purchase-returns'], async (req, res) =
           createdAt
         ]
       );
+      refundTxId = txId;
     } else if (finalSettlementMode === 'BANK_REFUND') {
       // Record bank income transaction
       const txId = 't_pr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
@@ -7994,6 +8096,7 @@ app.post(['/api/purchasing/return', '/api/purchase-returns'], async (req, res) =
           createdAt
         ]
       );
+      refundTxId = txId;
     }
 
     // 5. Insert audit log
@@ -8004,6 +8107,25 @@ app.post(['/api/purchasing/return', '/api/purchase-returns'], async (req, res) =
     );
 
     await commitTxn(db, txn);
+
+    // 6. Background Sync
+    try {
+      await enqueueSync(db, 'purchase_returns', returnId, 'INSERT');
+      if (finalSettlementMode === 'SUPPLIER_DEBIT_NOTE' && finalSupplierId) {
+        await enqueueSync(db, 'suppliers', finalSupplierId, 'UPSERT');
+      }
+      if (refundTxId) {
+        await enqueueSync(db, 'transactions', refundTxId, 'INSERT');
+      }
+      for (const it of processedItems) {
+        if (it.productId) {
+          await enqueueSync(db, 'products', it.productId, 'UPSERT');
+        }
+      }
+      triggerPush(db).catch(() => {});
+    } catch (_syncErr) {
+      console.warn('[Sync] Non-blocking notice enqueuing return sync:', _syncErr?.message);
+    }
 
     res.json({
       success: true,
@@ -8113,6 +8235,7 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
     const orderDiscountAmount = Math.max(0, poDiscountAmount - totalLineDisc);
     const poOrderDiscountRatio = netAfterLines > 0 ? (orderDiscountAmount / netAfterLines) : 0;
 
+    let transSyncTxId = null;
     const transportFee = Math.max(0, Number(po.transportation_fee || po.transportationFee || 0));
     if (transportFee > 0) {
       const existingTx = await db.get(
@@ -8120,13 +8243,13 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
         [po.po_number || po.po_no || po.id, 'Transportation']
       );
       if (!existingTx) {
-        const txId = 'tx_trans_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        const transTxId = 'tx_trans_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
         await db.run(
           `INSERT INTO transactions (
             id, type, category, description, amount, date, reference, user_id, created_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
-            txId,
+            transTxId,
             'expense',
             'Transportation',
             `Transportation Fee for PO #${po.po_number || po.po_no} (${supplierName})`,
@@ -8137,6 +8260,7 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
             nowIso
           ]
         );
+        transSyncTxId = transTxId;
       }
     }
 
@@ -8208,14 +8332,19 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
     );
 
     // 4. Execute Settlement Mode
+    let suppSyncId = null;
+    let settleTxId = null;
+    let settleChqId = null;
+
     if (validMode === 'CREDIT') {
       // Increase Supplier's Payable Balance
       const supp = await db.get(
-        'SELECT * FROM suppliers WHERE name = ? OR id = ?',
-        [supplierName, supplierName]
+        'SELECT * FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+        [po.supplier_id || supplierName, supplierName]
       );
 
       if (supp) {
+        suppSyncId = supp.id;
         await db.run(
           'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE id = ?',
           [poGrandTotal, supp.id]
@@ -8248,6 +8377,7 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
           nowIso
         ]
       );
+      settleTxId = txId;
     } else if (validMode === 'CHEQUE') {
       if (!cheque_number || !cheque_number.toString().trim()) {
         await rollbackTxn(db, txn);
@@ -8283,6 +8413,7 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
           nowIso
         ]
       );
+      settleChqId = chqId;
     }
 
     // 5. Audit Log
@@ -8293,7 +8424,32 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
     );
 
     await commitTxn(db, txn);
-    enqueueSync(db, 'purchase_orders', po.id, 'UPDATE').then(() => triggerPush(db)).catch(() => { });
+
+    // 6. Enqueue Sync
+    try {
+      await enqueueSync(db, 'purchase_orders', po.id, 'UPDATE');
+      if (suppSyncId) {
+        await enqueueSync(db, 'suppliers', suppSyncId, 'UPSERT');
+      }
+      if (settleTxId) {
+        await enqueueSync(db, 'transactions', settleTxId, 'INSERT');
+      }
+      if (settleChqId) {
+        await enqueueSync(db, 'cheque_registry', settleChqId, 'INSERT');
+      }
+      if (transSyncTxId) {
+        await enqueueSync(db, 'transactions', transSyncTxId, 'INSERT');
+      }
+      for (const it of updatedPoItems) {
+        const pId = it.receivedProductId || it.productId || it.product_id;
+        if (pId) {
+          await enqueueSync(db, 'products', pId, 'UPSERT');
+        }
+      }
+      triggerPush(db).catch(() => {});
+    } catch (_syncErr) {
+      console.warn('[Sync] Non-blocking notice enqueuing receive-po sync:', _syncErr?.message);
+    }
 
     res.json({
       success: true,
@@ -8415,6 +8571,22 @@ async function executeVoidPurchaseReturn({ return_no, void_reason, user_email })
     );
 
     await commitTxn(db, txn);
+
+    try {
+      await enqueueSync(db, 'purchase_returns', pr.id, 'UPDATE');
+      if (pr.supplier_id) {
+        await enqueueSync(db, 'suppliers', pr.supplier_id, 'UPSERT');
+      }
+      for (const item of items) {
+        if (item.product_id) {
+          await enqueueSync(db, 'products', item.product_id, 'UPSERT');
+        }
+      }
+      triggerPush(db).catch(() => {});
+    } catch (_syncErr) {
+      console.warn('[Sync] Non-blocking notice enqueuing void return sync:', _syncErr?.message);
+    }
+
     return { success: true, message: 'Purchase return successfully voided and balances restored.' };
   } catch (err) {
     if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
@@ -8601,6 +8773,44 @@ async function executeRevertPurchaseOrderReceipt({ po_ref, user_email }) {
       return { success: false, message: 'Only received purchase orders can be reverted.' };
     }
 
+    const poNum = po.po_number || po.po_no || po.id;
+    const settleMode = (po.settlement_mode || po.payment_method || 'CREDIT').toString().trim().toUpperCase();
+
+    // 0. Safety Check for Cheque settlement:
+    // If settled via CHEQUE, verify that no associated outward cheque has already cleared
+    if (settleMode === 'CHEQUE') {
+      const linkedCheques = await db.all(
+        'SELECT * FROM cheque_registry WHERE reference_type = ? AND (reference_id = ? OR reference_id = ?)',
+        ['PURCHASE_ORDER', po.id, poNum]
+      );
+      const clearedCheque = (linkedCheques || []).find(c => (c.status || '').toUpperCase() === 'CLEARED');
+      if (clearedCheque) {
+        await rollbackTxn(db, txn);
+        return {
+          success: false,
+          message: `Cannot revert Purchase Order #${poNum}: Outward Cheque #${clearedCheque.cheque_number} has already CLEARED the bank. A cleared cheque cannot be reverted automatically.`
+        };
+      }
+    }
+
+    // 0b. Safety Check for Active Purchase Returns:
+    // If active (non-voided) purchase returns exist for this PO, block automatic revert
+    // to prevent double-deducting stock and double-reversing supplier liabilities.
+    const activeReturns = await db.all(
+      `SELECT return_number, id FROM purchase_returns 
+       WHERE (purchase_order_id = ? OR purchase_order_id = ?) 
+         AND UPPER(status) != 'VOIDED'`,
+      [po.id, poNum]
+    );
+    if (activeReturns && activeReturns.length > 0) {
+      await rollbackTxn(db, txn);
+      const retNumbers = activeReturns.map(r => r.return_number || r.id).join(', ');
+      return {
+        success: false,
+        message: `Cannot revert Purchase Order #${poNum}: Active Purchase Return(s) [${retNumbers}] exist for this order. Please void the purchase return voucher(s) first before reverting the purchase order receipt.`
+      };
+    }
+
     // 1. Deduct stock that was received
     let poItems = [];
     if (po.items) {
@@ -8611,6 +8821,7 @@ async function executeRevertPurchaseOrderReceipt({ po_ref, user_email }) {
       }
     }
 
+    const affectedProductIds = [];
     if (Array.isArray(poItems)) {
       for (const item of poItems) {
         const prodId = item.receivedProductId || item.productId || item.product_id || item.id;
@@ -8636,6 +8847,7 @@ async function executeRevertPurchaseOrderReceipt({ po_ref, user_email }) {
               'UPDATE products SET stock = ?, cost_price = ? WHERE id = ?',
               [newStock, restoredCost, prodId]
             );
+            affectedProductIds.push(prodId);
 
             // If batch item reaches 0 stock with no sales history, safely clean/archive it
             const isBatchItem = Boolean(item.isNewBatch || prod.is_batch || (prod.sku && /-B\d+$/i.test(prod.sku)));
@@ -8673,43 +8885,116 @@ async function executeRevertPurchaseOrderReceipt({ po_ref, user_email }) {
       }
     }
 
-    // 2. Deduct the supplier payable liability
-    const poTotal = Number(po.total || 0);
-    if (po.supplier_name) {
-      await db.run(
-        'UPDATE suppliers SET payable_balance = MAX(0, COALESCE(payable_balance, 0) - ?) WHERE name = ? OR id = ?',
-        [poTotal, po.supplier_name, po.supplier_id || '']
+    // 2. Settlement-Specific Accounting Reversal:
+    // CREDIT: Reverse supplier payable liability (exact net amount originally added)
+    // CASH / BANK: Reverse corresponding transaction, DO NOT touch supplier balance
+    // CHEQUE: Cancel/remove pending outward cheque, DO NOT touch supplier balance
+    let affectedSupplierId = null;
+    const deletedTxIds = [];
+    const deletedChequeIds = [];
+    const poNetTotal = Number(po.net_total !== null && po.net_total !== undefined ? po.net_total : (po.total || 0));
+
+    if (settleMode === 'CREDIT') {
+      if (po.supplier_name || po.supplier_id) {
+        const supp = await db.get(
+          'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+          [po.supplier_id || '', po.supplier_name || '']
+        );
+        if (supp) affectedSupplierId = supp.id;
+
+        await db.run(
+          'UPDATE suppliers SET payable_balance = MAX(0, COALESCE(payable_balance, 0) - ?) WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+          [poNetTotal, po.supplier_id || '', po.supplier_name || '']
+        );
+      }
+    } else if (settleMode === 'CASH' || settleMode === 'BANK') {
+      // Find linked expense transactions for this PO using exact reference candidates
+      const rawPoNum = (po.po_number || po.po_no || '').toString();
+      const strippedPoNum = rawPoNum.startsWith('PO-') ? rawPoNum.slice(3) : rawPoNum;
+      const candidateRefs = Array.from(new Set([
+        poNum,
+        'PO-SETTLE-' + poNum,
+        'PO-REC-' + poNum,
+        po.id,
+        rawPoNum ? ('PO-SETTLE-' + rawPoNum) : null,
+        rawPoNum ? ('PO-REC-' + rawPoNum) : null,
+        strippedPoNum ? ('PO-SETTLE-' + strippedPoNum) : null,
+        strippedPoNum ? ('PO-REC-' + strippedPoNum) : null
+      ])).filter(Boolean);
+
+      const placeholders = candidateRefs.map(() => '?').join(', ');
+      const txsToDelete = await db.all(
+        `SELECT id FROM transactions 
+         WHERE reference IN (${placeholders})
+           AND (category IN ('Supplier Payment', 'Purchases') OR reference LIKE 'PO-SETTLE-%' OR reference LIKE 'PO-REC-%')`,
+        candidateRefs
       );
+
+      if (txsToDelete && txsToDelete.length > 0) {
+        const txIds = txsToDelete.map(t => t.id);
+        const delPlaceholders = txIds.map(() => '?').join(', ');
+        await db.run(
+          `DELETE FROM transactions WHERE id IN (${delPlaceholders})`,
+          txIds
+        );
+        deletedTxIds.push(...txIds);
+      }
+    } else if (settleMode === 'CHEQUE') {
+      // Remove pending outward cheque in cheque_registry
+      const pendingCheques = await db.all(
+        `SELECT id FROM cheque_registry 
+         WHERE reference_type = ? 
+           AND (reference_id = ? OR reference_id = ?) 
+           AND UPPER(status) = 'PENDING'`,
+        ['PURCHASE_ORDER', po.id, poNum]
+      );
+      if (pendingCheques && pendingCheques.length > 0) {
+        const chqIds = pendingCheques.map(c => c.id);
+        const delPlaceholders = chqIds.map(() => '?').join(', ');
+        await db.run(
+          `DELETE FROM cheque_registry WHERE id IN (${delPlaceholders})`,
+          chqIds
+        );
+        deletedChequeIds.push(...chqIds);
+      }
     }
 
-    // 3. Remove linked transactions (targeted by reference only — no unsafe LIKE)
-    const poNum = po.po_number || po.po_no || po.id;
-    await db.run(
-      'DELETE FROM transactions WHERE reference = ?',
-      [poNum]
-    );
-
-    // 3b. Remove linked cheque_registry entries for this PO
-    await db.run(
-      'DELETE FROM cheque_registry WHERE reference_type = ? AND (reference_id = ? OR reference_id = ?)',
-      ['PURCHASE_ORDER', po.id, poNum]
-    );
-
-    // 4. Reset PO status to pending
+    // 3. Reset PO status to pending and clear receipt metadata
     const nowIso = new Date().toISOString();
     await db.run(
-      'UPDATE purchase_orders SET status = ?, received_at = NULL, received_by = NULL, settlement_mode = NULL, updated_at = ? WHERE id = ?',
+      'UPDATE purchase_orders SET status = ?, received_at = NULL, received_by = NULL, settlement_mode = NULL, payment_method = NULL, updated_at = ? WHERE id = ?',
       ['pending', nowIso, po.id]
     );
 
     await logAudit(
       staffUser,
       'PO_RECEIPT_REVERTED',
-      `Purchase Order #${poNum} receipt reverted to PENDING (Total: Rs. ${poTotal.toLocaleString()}). Received stock deducted and supplier payable rolled back.`
+      `Purchase Order #${poNum} receipt reverted to PENDING (Settlement: ${settleMode}, Net Total: Rs. ${poNetTotal.toLocaleString()}).`
     );
 
     await commitTxn(db, txn);
-    return { success: true, message: 'PO receipt reverted to PENDING and stock/payables restored.' };
+
+    // 4. Background Sync: Enqueue all affected records to synchronize to Cloud
+    try {
+      await enqueueSync(db, 'purchase_orders', po.id, 'UPDATE');
+      if (affectedSupplierId) {
+        await enqueueSync(db, 'suppliers', affectedSupplierId, 'UPSERT');
+      }
+      for (const pId of affectedProductIds) {
+        await enqueueSync(db, 'products', pId, 'UPSERT');
+      }
+      for (const txId of deletedTxIds) {
+        await enqueueSync(db, 'transactions', txId, 'DELETE');
+      }
+      for (const chqId of deletedChequeIds) {
+        await enqueueSync(db, 'cheque_registry', chqId, 'DELETE');
+      }
+      triggerPush(db).catch(() => {});
+    } catch (_syncErr) {
+      console.warn('[Sync] Non-blocking notice enqueuing revert sync:', _syncErr?.message);
+    }
+
+    return { success: true, message: 'PO receipt reverted to PENDING and stock/accounting restored.' };
   } catch (err) {
     if (txn) await rollbackTxn(db, txn); else await safeRollback(db);
     return { success: false, message: err.message };
