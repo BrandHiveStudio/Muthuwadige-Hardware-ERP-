@@ -893,8 +893,17 @@ export const api = {
       });
       if (!res.ok) {
         let msg = 'Failed to receive and settle purchase order';
-        try { const j = await res.json(); if (j.error) msg = j.error; } catch (_) {}
-        throw new Error(msg);
+        let isAlreadyReceived = false;
+        try {
+          const j = await res.json();
+          if (j.error) msg = j.error;
+          if (j.alreadyReceived || (j.error && j.error.toLowerCase().includes('already received'))) {
+            isAlreadyReceived = true;
+          }
+        } catch (_) {}
+        const err: any = new Error(msg);
+        err.alreadyReceived = isAlreadyReceived;
+        throw err;
       }
       return res.json();
     },

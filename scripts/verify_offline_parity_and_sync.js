@@ -1,3 +1,4 @@
+import "./b01/legacy-block.cjs";
 import dbAdapter, { initDb, getTursoClient } from '../src/db/connection.js';
 import { enqueueSync, pushUpstreamChanges, pullDownstreamChanges, pingTurso } from '../src/services/syncService.js';
 
