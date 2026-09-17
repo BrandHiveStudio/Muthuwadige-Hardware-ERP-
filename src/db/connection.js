@@ -185,8 +185,35 @@ function normalizeParams(params) {
   return p === undefined ? [null] : [p];
 }
 
+export function resolveEngineMode() {
+  const isVercel = Boolean(process.env.VERCEL);
+  const appRole = process.env.APP_ROLE;
+  const dbEngine = process.env.DATABASE_ENGINE;
+
+  // Conflict detection: Contradictory configuration must fail closed
+  if (dbEngine === 'sqlite' && (isVercel || appRole === 'web')) {
+    throw new Error('[CONFIG-CONFLICT] Contradictory configuration: DATABASE_ENGINE=sqlite cannot be combined with VERCEL or APP_ROLE=web');
+  }
+  if (dbEngine === 'turso' && appRole === 'desktop') {
+    throw new Error('[CONFIG-CONFLICT] Contradictory configuration: DATABASE_ENGINE=turso cannot be combined with APP_ROLE=desktop');
+  }
+
+  // Explicit directives
+  if (isVercel || appRole === 'web' || dbEngine === 'turso') {
+    return 'turso';
+  }
+
+  if (appRole === 'desktop' || dbEngine === 'sqlite') {
+    return 'sqlite';
+  }
+
+  // Standalone Local Node default: SQLite
+  return 'sqlite';
+}
+
 function resolveLocalDbPath() {
-  if (process.env.VERCEL || process.env.APP_ROLE === 'web' || process.env.DATABASE_ENGINE === 'turso') {
+  const engine = resolveEngineMode();
+  if (engine === 'turso') {
     throw new Error('Local SQLite is disabled in web/serverless environment. All database operations must target Turso Cloud.');
   }
   if (process.env.NODE_ENV === 'test') {
@@ -213,21 +240,16 @@ function resolveLocalDbPath() {
   return workspaceDb;
 }
 
-export const DEFAULT_TURSO_DATABASE_URL = 'libsql://mwhardware-db-sanoj-hardware.aws-ap-south-1.turso.io';
-export const DEFAULT_TURSO_AUTH_TOKEN = 'eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODkyNTY3MzAsImlkIjoiMDFhMDY3Y2YtZWQwMS03MDYzLWE3MjQtNmIyZTE1ZjJmZWU5Iiwia2lkIjoiSUNBcmxEQWtuSmRPOVBfalA3WG03dDlvdE91NGI1SjFTbWpmY281b1dJayIsInJpZCI6IjQzNzRjMmFjLThiZjQtNDczNi05NzllLTdlYTUyNTk1MWVjNiJ9.Rhr2wtm6EDBOJC959E4ZL_Ta7vp1brzJ6FsEcriblyAKYvbd3b3a2HBryb12qHxfKUEQ7o-QfOvabsukXFwICw';
+// Default Turso database URL and token fallbacks (defaults to empty string for offline local SQLite operation)
+export const DEFAULT_TURSO_DATABASE_URL = process.env.TURSO_DATABASE_URL || '';
+export const DEFAULT_TURSO_AUTH_TOKEN = process.env.TURSO_AUTH_TOKEN || '';
 
 export function getTursoClient() {
-  let tursoUrl = process.env.TURSO_DATABASE_URL || DEFAULT_TURSO_DATABASE_URL;
-  let tursoToken = process.env.TURSO_AUTH_TOKEN || DEFAULT_TURSO_AUTH_TOKEN;
+  let tursoUrl = process.env.TURSO_DATABASE_URL;
+  let tursoToken = process.env.TURSO_AUTH_TOKEN;
 
   if (typeof tursoUrl === 'string') {
     tursoUrl = tursoUrl.trim().replace(/^["']|["']$/g, '');
-    if (tursoUrl.includes('mhardware-db-sanoj-hardware') && !tursoUrl.includes('mwhardware-db-sanoj-hardware')) {
-      tursoUrl = tursoUrl.replace('mhardware-db-sanoj-hardware', 'mwhardware-db-sanoj-hardware');
-    }
-    if (tursoUrl.includes('mydb-user.turso.io')) {
-      tursoUrl = 'https://mwhardware-db-sanoj-hardware.aws-ap-south-1.turso.io';
-    }
     if (tursoUrl.startsWith('libsql://')) {
       tursoUrl = tursoUrl.replace('libsql://', 'https://');
     }
@@ -259,25 +281,22 @@ export function getDbGeneration() {
 }
 
 export async function initDb(customDbPath) {
-  const isWebEnvironment = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.DATABASE_ENGINE === 'turso';
-  let tursoUrl = process.env.TURSO_DATABASE_URL || DEFAULT_TURSO_DATABASE_URL;
-  let tursoToken = process.env.TURSO_AUTH_TOKEN || DEFAULT_TURSO_AUTH_TOKEN;
+  const engine = resolveEngineMode();
+  let tursoUrl = process.env.TURSO_DATABASE_URL;
+  let tursoToken = process.env.TURSO_AUTH_TOKEN;
 
   if (typeof tursoUrl === 'string') {
     tursoUrl = tursoUrl.trim().replace(/^["']|["']$/g, '');
-    if (tursoUrl.includes('mhardware-db-sanoj-hardware') && !tursoUrl.includes('mwhardware-db-sanoj-hardware')) {
-      tursoUrl = tursoUrl.replace('mhardware-db-sanoj-hardware', 'mwhardware-db-sanoj-hardware');
-    }
-    if (tursoUrl.includes('mydb-user.turso.io')) {
-      tursoUrl = 'https://mwhardware-db-sanoj-hardware.aws-ap-south-1.turso.io';
-    }
     if (tursoUrl.startsWith('libsql://')) {
       tursoUrl = tursoUrl.replace('libsql://', 'https://');
     }
   }
 
-  // Cloud/Serverless environment or valid Turso configuration in Web mode
-  if (isWebEnvironment || (tursoUrl && tursoToken && (process.env.VERCEL || process.env.APP_ROLE === 'web'))) {
+  if (typeof tursoToken === 'string') {
+    tursoToken = tursoToken.trim().replace(/^["']|["']$/g, '');
+  }
+
+  if (engine === 'turso') {
     if (!tursoUrl || !tursoToken) {
       throw new Error('Vercel serverless environment detected, but TURSO_DATABASE_URL or TURSO_AUTH_TOKEN environment variable is missing.');
     }
@@ -344,13 +363,8 @@ export async function getDb() {
 }
 
 export function isTurso() {
-  return Boolean(
-    isTursoActive ||
-    process.env.VERCEL ||
-    process.env.APP_ROLE === 'web' ||
-    process.env.DATABASE_ENGINE === 'turso' ||
-    (process.env.TURSO_DATABASE_URL && process.env.TURSO_AUTH_TOKEN && !localSqliteDb)
-  );
+  if (isTursoActive) return true;
+  return resolveEngineMode() === 'turso';
 }
 
 export async function all(sql, ...params) {
@@ -882,6 +896,7 @@ export function __resetForTesting() {
 
 export const db = {
   isTurso,
+  resolveEngineMode,
   isInTransaction,
   getDbGeneration,
   all,

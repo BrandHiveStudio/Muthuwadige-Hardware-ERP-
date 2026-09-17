@@ -247,8 +247,14 @@ function startBackendServer() {
   const serverEnv = {
     ...process.env,
     NODE_ENV: isPackaged ? 'production' : (process.env.NODE_ENV || 'development'),
-    JWT_SECRET: process.env.JWT_SECRET || machineSecret
+    JWT_SECRET: process.env.JWT_SECRET || machineSecret,
+    DATABASE_ENGINE: 'sqlite',
+    APP_ROLE: 'desktop'
   };
+
+  // Sanitization: explicitly prevent inherited OS-level flags from converting the desktop process to cloud/serverless
+  delete serverEnv.VERCEL;
+  delete serverEnv.IS_WEB_CLIENT;
 
   if (process.env.TURSO_DATABASE_URL) {
     serverEnv.TURSO_DATABASE_URL = process.env.TURSO_DATABASE_URL;

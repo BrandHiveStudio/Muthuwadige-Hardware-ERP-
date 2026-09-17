@@ -16,6 +16,7 @@ export interface RunResult {
 
 export interface UnifiedDatabase {
   isTurso: () => boolean;
+  resolveEngineMode?: () => 'turso' | 'sqlite';
   isInTransaction?: () => boolean;
   getDbGeneration?: () => number;
   all: <T = any>(sql: string, ...params: any[]) => Promise<T[]>;
@@ -215,8 +216,35 @@ function normalizeParams(params: any[]): any {
   return p === undefined ? [null] : [p];
 }
 
+export function resolveEngineMode(): 'turso' | 'sqlite' {
+  const isVercel = Boolean(process.env.VERCEL);
+  const appRole = process.env.APP_ROLE;
+  const dbEngine = process.env.DATABASE_ENGINE;
+
+  // Conflict detection: Contradictory configuration must fail closed
+  if (dbEngine === 'sqlite' && (isVercel || appRole === 'web')) {
+    throw new Error('[CONFIG-CONFLICT] Contradictory configuration: DATABASE_ENGINE=sqlite cannot be combined with VERCEL or APP_ROLE=web');
+  }
+  if (dbEngine === 'turso' && appRole === 'desktop') {
+    throw new Error('[CONFIG-CONFLICT] Contradictory configuration: DATABASE_ENGINE=turso cannot be combined with APP_ROLE=desktop');
+  }
+
+  // Explicit directives
+  if (isVercel || appRole === 'web' || dbEngine === 'turso') {
+    return 'turso';
+  }
+
+  if (appRole === 'desktop' || dbEngine === 'sqlite') {
+    return 'sqlite';
+  }
+
+  // Standalone Local Node default: SQLite
+  return 'sqlite';
+}
+
 function resolveLocalDbPath(): string {
-  if (process.env.VERCEL || process.env.APP_ROLE === 'web' || process.env.DATABASE_ENGINE === 'turso') {
+  const engine = resolveEngineMode();
+  if (engine === 'turso') {
     throw new Error('Local SQLite is disabled in web/serverless environment. All database operations must target Turso Cloud.');
   }
   if (process.env.NODE_ENV === 'test') {
@@ -280,7 +308,7 @@ export function getDbGeneration(): number {
 }
 
 export async function initDb(customDbPath?: string): Promise<UnifiedDatabase> {
-  const isWebEnvironment = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.DATABASE_ENGINE === 'turso';
+  const engine = resolveEngineMode();
   let tursoUrl = process.env.TURSO_DATABASE_URL;
   const tursoToken = process.env.TURSO_AUTH_TOKEN;
 
@@ -288,7 +316,7 @@ export async function initDb(customDbPath?: string): Promise<UnifiedDatabase> {
     tursoUrl = tursoUrl.replace('libsql://', 'https://');
   }
 
-  if (isWebEnvironment || (tursoUrl && tursoToken && (process.env.VERCEL || process.env.APP_ROLE === 'web'))) {
+  if (engine === 'turso') {
     if (!tursoUrl || !tursoToken) {
       throw new Error('Vercel serverless environment detected, but TURSO_DATABASE_URL or TURSO_AUTH_TOKEN environment variable is missing.');
     }
@@ -355,13 +383,8 @@ export async function getDb(): Promise<UnifiedDatabase> {
 }
 
 export function isTurso(): boolean {
-  return Boolean(
-    isTursoActive ||
-    process.env.VERCEL ||
-    process.env.APP_ROLE === 'web' ||
-    process.env.DATABASE_ENGINE === 'turso' ||
-    (process.env.TURSO_DATABASE_URL && process.env.TURSO_AUTH_TOKEN && !localSqliteDb)
-  );
+  if (isTursoActive) return true;
+  return resolveEngineMode() === 'turso';
 }
 
 export async function all<T = any>(sql: string, ...params: any[]): Promise<T[]> {
@@ -893,6 +916,7 @@ export function __resetForTesting() {
 
 export const db: UnifiedDatabase = {
   isTurso,
+  resolveEngineMode,
   isInTransaction,
   getDbGeneration,
   all,

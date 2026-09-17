@@ -1,43 +1,61 @@
 export function getBaseUrl(): string {
-  if (typeof window === 'undefined') return 'http://localhost:5001/api';
+  if (typeof window === 'undefined') return 'http://127.0.0.1:5001/api';
 
-  // 1. ELECTRON DESKTOP APP CHECK (MUST COME FIRST)
+  // 1. ELECTRON DESKTOP APP CHECK (D01.1: Immutable Local Lock)
   const isElectron = Boolean((window as any).electronAPI) || 
                      window.location.protocol === 'file:' || 
                      (typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron'));
   
   if (isElectron) {
-    const stored = localStorage.getItem('erp_host_address') || localStorage.getItem('api_server_url') || localStorage.getItem('server_address');
-    return (stored ? stored.replace(/\/+$/, '').replace(/\/api$/, '') : 'http://localhost:5001') + '/api';
+    // D01.1 & D01.5: Electron desktop UI must use ONLY loopback backend.
+    // Never allow localStorage overrides (erp_host_address, api_server_url, server_address) to hijack local POS authority.
+    return 'http://127.0.0.1:5001/api';
   }
 
-  // 2. LIVE WEB DEPLOYMENT (Vercel, custom domain)
+  // 2. LIVE WEB DEPLOYMENT / SAME-ORIGIN (Vercel, custom domain, or direct LAN browser)
   const hostname = window.location.hostname || '';
   const isLocalWeb = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '';
   
   if (!isLocalWeb) {
+    const stored = localStorage.getItem('erp_host_address') || localStorage.getItem('api_server_url') || localStorage.getItem('server_address');
+    if (stored) {
+      return stored.replace(/\/+$/, '').replace(/\/api$/, '') + '/api';
+    }
     return `${window.location.origin}/api`;
   }
 
   // 3. LOCAL DEV BROWSER (Vite on :5173 connecting to backend on :5001)
   const stored = localStorage.getItem('erp_host_address') || localStorage.getItem('api_server_url') || localStorage.getItem('server_address');
-  return (stored ? stored.replace(/\/+$/, '').replace(/\/api$/, '') : 'http://localhost:5001') + '/api';
+  return (stored ? stored.replace(/\/+$/, '').replace(/\/api$/, '') : 'http://127.0.0.1:5001') + '/api';
 }
 
 export let API_URL = getBaseUrl();
 export let BASE_URL = API_URL.replace(/\/api$/, '');
 
 export const setApiUrl = (newUrl: string | null) => {
+  const isElectron = typeof window !== 'undefined' && (
+    Boolean((window as any).electronAPI) ||
+    window.location.protocol === 'file:' ||
+    (typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron'))
+  );
+
   if (newUrl) {
     const cleanUrl = newUrl.replace(/\/+$/, '');
     localStorage.setItem('erp_host_address', cleanUrl);
     localStorage.setItem('api_server_url', cleanUrl);
-    API_URL = cleanUrl.endsWith('/api') ? cleanUrl : `${cleanUrl}/api`;
+    if (!isElectron) {
+      API_URL = cleanUrl.endsWith('/api') ? cleanUrl : `${cleanUrl}/api`;
+    }
   } else {
     localStorage.removeItem('erp_host_address');
     localStorage.removeItem('api_server_url');
     localStorage.removeItem('server_address');
-    API_URL = getBaseUrl();
+    if (!isElectron) {
+      API_URL = getBaseUrl();
+    }
+  }
+  if (isElectron) {
+    API_URL = 'http://127.0.0.1:5001/api';
   }
   BASE_URL = API_URL.replace(/\/api$/, '');
 };

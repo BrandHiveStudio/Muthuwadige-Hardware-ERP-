@@ -16,7 +16,7 @@ import bcrypt from 'bcryptjs';
 import os from 'os';
 import https from 'https';
 import selfsigned from 'selfsigned';
-import dbAdapter, { initDb, isTurso, getTursoClient, getDb, DEFAULT_TURSO_DATABASE_URL, DEFAULT_TURSO_AUTH_TOKEN } from './src/db/connection.js';
+import dbAdapter, { initDb, isTurso, resolveEngineMode, getTursoClient, getDb, DEFAULT_TURSO_DATABASE_URL, DEFAULT_TURSO_AUTH_TOKEN } from './src/db/connection.js';
 import { createClient } from '@libsql/client';
 import { startBackgroundSyncWorker, getSyncStatus, runSyncCycle, enqueueSync, pullDownstreamChanges, reconcileLocalCatalogWithCloud, pushUpstreamChanges, pingTurso, triggerPush, ensureSyncSchema } from './src/services/syncService.js';
 
@@ -279,7 +279,7 @@ async function ensureDbInitialized() {
   if (!dbInitPromise) {
     dbInitPromise = (async () => {
       try {
-        const isServerless = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.DATABASE_ENGINE === 'turso';
+        const isServerless = resolveEngineMode() === 'turso';
         if (isServerless) {
           // Fast path for serverless / Vercel cloud:
           // The database schema is already migrated and active in Turso Cloud.
@@ -2665,7 +2665,7 @@ Muthuwadige Hardware ERP System`;
 }
 
 const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDate = null) => {
-  const isServerless = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || (typeof isTurso === 'function' && isTurso());
+  const isServerless = resolveEngineMode() === 'turso';
   if (isServerless) {
     console.log(`\n📦 [Serverless Backup] Executing in-memory backup task directly (Main PID: ${process.pid})...`);
     try {
@@ -10189,7 +10189,7 @@ app.get('/api/sync/status', async (req, res) => {
       online: true,
       synced: true,
       isOnline: true,
-      isWebClient: Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web',
+      isWebClient: resolveEngineMode() === 'turso',
       queuedCount: 0,
       pendingCount: 0,
       isSyncing: false
@@ -10250,7 +10250,7 @@ app.all(['/api/sync/acknowledge-reset', '/api/sync/reset-acknowledge'], async (r
 
 app.all(['/api/sync/pull', '/api/sync/downstream'], async (req, res) => {
   try {
-    const isWeb = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.IS_WEB_CLIENT === '1';
+    const isWeb = resolveEngineMode() === 'turso' || process.env.IS_WEB_CLIENT === '1';
     if (isWeb) {
       const status = await getSyncStatus(db);
       return res.json({
