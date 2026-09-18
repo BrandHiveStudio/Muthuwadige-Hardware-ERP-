@@ -176,6 +176,7 @@ export interface PurchaseOrder {
   dueDate: string;
   received_at?: string;
   receivedAt?: string;
+  updated_at?: string | null;
   received_by?: string;
   receivedBy?: string;
   settlement_mode?: string;

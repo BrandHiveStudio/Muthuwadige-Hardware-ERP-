@@ -1119,7 +1119,14 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
   };
 
   const handleConfirmReceiveAndSettle = async () => {
-    if (!receivingOrder) return;
+    if (isSubmittingReceive || !receivingOrder) return;
+    const currentPoStatus = (receivingOrder.status || '').toLowerCase().trim();
+    if (currentPoStatus === 'received' || currentPoStatus === 'completed') {
+      alert(`ℹ️ Purchase Order #${receivingOrder.poNumber} is already received.`);
+      setReceivingOrder(null);
+      return;
+    }
+
     if (receiveSettlementMode === 'CHEQUE') {
       if (!receiveChequeNo.trim()) {
         alert("Please enter a valid Cheque Number.");
@@ -1174,13 +1181,48 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
           return;
         }
       } catch (apiErr: any) {
-        console.warn("Backend atomic receive-po notice, applying fallback:", apiErr);
+        console.warn("Backend atomic receive-po notice:", apiErr);
+
+        // Case A: The PO is already marked received in the database
+        if (apiErr?.alreadyReceived || (apiErr?.message && apiErr.message.toLowerCase().includes('already received'))) {
+          alert(`ℹ️ Purchase Order #${receivingOrder.poNumber} is already marked as received. Stock was not duplicated.`);
+          setReceivingOrder(null);
+          await fetchData();
+          window.dispatchEvent(new CustomEvent('refresh-all-data'));
+          window.dispatchEvent(new CustomEvent('refresh-purchasing'));
+          window.dispatchEvent(new CustomEvent('refresh-inventory'));
+          window.dispatchEvent(new CustomEvent('refresh-finance'));
+          window.dispatchEvent(new CustomEvent('refresh-dashboard'));
+          window.dispatchEvent(new CustomEvent('suppliers-updated'));
+          return;
+        }
+
+        // Case B: Lost response / Timeout recovery check - verify if backend committed the receipt before timing out
+        try {
+          const allPos = await api.purchaseOrders.getAll();
+          const serverPo = allPos.find((p: any) => p.id === receivingOrder.id || p.poNumber === receivingOrder.poNumber);
+          if (serverPo && ((serverPo.status || '').toLowerCase() === 'received' || (serverPo.status || '').toLowerCase() === 'completed')) {
+            alert(`✅ Purchase Order #${receivingOrder.poNumber} was received on the server.`);
+            setReceivingOrder(null);
+            await fetchData();
+            window.dispatchEvent(new CustomEvent('refresh-all-data'));
+            window.dispatchEvent(new CustomEvent('refresh-purchasing'));
+            window.dispatchEvent(new CustomEvent('refresh-inventory'));
+            window.dispatchEvent(new CustomEvent('refresh-finance'));
+            window.dispatchEvent(new CustomEvent('refresh-dashboard'));
+            window.dispatchEvent(new CustomEvent('suppliers-updated'));
+            return;
+          }
+        } catch (_) {}
       }
 
-      // Fallback Direct Operations
+      // Fallback Direct Operations (only if backend receive-po was unreachable and PO is not yet received)
       const { data: { user } } = await supabase.auth.getUser();
 
-      // 1. Update PO Status
+      // 1. Update PO Status via backend receive route (PUT /api/purchase-orders/:id)
+      // Note: Backend PUT /api/purchase-orders/:id performs stock allocation, batch versioning,
+      // weighted cost recalculation, supplier balance updates, and cheque/transaction recording atomically.
+      // We must NOT execute duplicate client-side stock or settlement calls here, as that would duplicate stock.
       const { error: poError } = await supabase
         .from('purchase_orders')
         .update({
@@ -1188,178 +1230,16 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
           received_at: nowIso,
           received_by: staffName,
           payment_method: settlementPaymentMethod,
-          settlement_mode: receiveSettlementMode
+          settlement_mode: receiveSettlementMode,
+          notes: receiveNotes,
+          reference: receiveRef,
+          cheque_number: receiveChequeNo,
+          bank_name: receiveBankName,
+          cheque_date: receiveChequeDate,
+          payment_date: receivePaymentDate
         })
         .eq('id', receivingOrder.id);
       if (poError) throw poError;
-
-      // 2. Increase Stock Levels & Log Adjustments using Batch Versioning (preserve original cost, fork batch SKU if costs diverge)
-      const updatedOrderItems: any[] = [];
-      for (const item of receivingOrder.items) {
-        const product = products.find(p => p.id === item.productId);
-        if (product) {
-          const currentStock = Number(product.stock || 0);
-          const currentCost = Number(product.cost_price !== undefined && product.cost_price !== null ? product.cost_price : (product.costPrice || 0));
-          const itemCost = Number(item.costPrice || (item as any).cost_price || 0);
-          const qty = Number(item.qty || 0);
-
-          // Weighted average cost recalculation
-          if (itemCost > 0 && currentStock > 0 && currentCost > 0) {
-            const weightedCost = Math.round(((currentStock * currentCost) + (qty * itemCost)) / (currentStock + qty) * 100) / 100;
-            await supabase.from('products').update({ cost_price: weightedCost }).eq('id', product.id);
-          }
-
-          if (itemCost > 0 && Math.abs(itemCost - currentCost) >= 0.01) {
-            // Divergent cost: check for existing batch with matching cost or create new batch
-            const baseSku = (product.sku || 'SKU').replace(/-B\d+$/i, '').trim();
-            const baseName = (product.name || 'Product').replace(/\s*\(Batch\s*\d+\)$/i, '').trim();
-            const rootParentId = product.parent_product_id || product.id;
-
-            const existingBatch = products.find(p => {
-              const pBase = (p.sku || '').replace(/-B\d+$/i, '').trim();
-              const pCost = Number(p.cost_price !== undefined && p.cost_price !== null ? p.cost_price : (p.costPrice || 0));
-              return (pBase === baseSku || p.parent_product_id === rootParentId) && Math.abs(pCost - itemCost) < 0.01;
-            });
-
-            if (existingBatch) {
-              const newStock = Number(existingBatch.stock || 0) + qty;
-              await supabase.from('products').update({ stock: newStock }).eq('id', existingBatch.id);
-              updatedOrderItems.push({
-                ...item,
-                receivedProductId: existingBatch.id,
-                receivedSku: existingBatch.sku,
-                isNewBatch: false
-              });
-            } else {
-              // Calculate next batch number
-              const familyBatches = products.filter(p => (p.sku || '').startsWith(baseSku) || p.parent_product_id === rootParentId);
-              let maxBatch = 1;
-              familyBatches.forEach(p => {
-                const m = (p.sku || '').match(/-B(\d+)$/i);
-                if (m) {
-                  const n = parseInt(m[1], 10);
-                  if (n > maxBatch) maxBatch = n;
-                }
-              });
-              const nextBatch = maxBatch + 1;
-              const newSku = `${baseSku}-B${nextBatch}`;
-              const newName = `${baseName} (Batch ${nextBatch})`;
-              const catalogPrice = Number(product.price || 0);
-              const markupRatio = currentCost > 0 ? (catalogPrice / currentCost) : 1.25;
-              const newSellingPrice = Math.round(itemCost * Math.max(1.0, markupRatio) * 100) / 100;
-              const baseBarcode = (product.barcode || 'HW' + Date.now().toString().slice(-6)).trim();
-              const newBarcode = `${baseBarcode}-B${nextBatch}`;
-              const newBatchId = 'p_batch_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-
-              await supabase.from('products').insert([{
-                id: newBatchId,
-                name: newName,
-                sku: newSku,
-                category: product.category || 'General',
-                price: newSellingPrice,
-                cost_price: itemCost,
-                stock: qty,
-                min_stock: product.minStock !== undefined ? product.minStock : (product.min_stock !== undefined ? product.min_stock : 5),
-                supplier: receivingOrder.supplierName || product.supplier,
-                unit: product.unit || 'PCS',
-                barcode: newBarcode,
-                brand: product.brand || '',
-                measure_details: product.measureDetails || (product as any).measure_details,
-                parent_product_id: rootParentId,
-                is_batch: true,
-                batch_number: nextBatch
-              }]);
-
-              updatedOrderItems.push({
-                ...item,
-                receivedProductId: newBatchId,
-                receivedSku: newSku,
-                isNewBatch: true,
-                batchNumber: nextBatch
-              });
-            }
-          } else {
-            // Cost matches: standard stock increment, cost unchanged
-            const newStock = currentStock + qty;
-            await supabase.from('products').update({ stock: newStock }).eq('id', item.productId);
-            updatedOrderItems.push({
-              ...item,
-              receivedProductId: item.productId,
-              receivedSku: product.sku,
-              isNewBatch: false
-            });
-          }
-
-          try {
-            await api.stockAdjustments.create({
-              product_id: item.productId,
-              product_name: item.productName || product.name,
-              previous_stock: currentStock,
-              new_stock: currentStock + qty,
-              adjustment: Number(item.qty || 0),
-              adjustment_type: 'INCREASE',
-              reason: `PO Received #${receivingOrder.poNumber}`,
-              user_name: currentUser?.name || currentUser?.full_name || currentUser?.username || 'Sanoj Hardware'
-            });
-          } catch (_saErr) {
-            console.warn("Stock adjustment log notice:", _saErr);
-          }
-        } else {
-          updatedOrderItems.push(item);
-        }
-      }
-
-      try {
-        await supabase.from('purchase_orders').update({ items: updatedOrderItems }).eq('id', receivingOrder.id);
-      } catch (_e) {}
-
-      // 3. Process Settlement Action
-      const poAmount = Number(receivingOrder.total || 0);
-      const supplierObj = supplierList.find(s => 
-        s.name.toLowerCase().trim() === (receivingOrder.supplierName || '').toLowerCase().trim()
-      );
-
-      if (receiveSettlementMode === 'CREDIT') {
-        if (supplierObj) {
-          const currentBal = Number(supplierObj.payableBalance || 0);
-          await supabase.from('suppliers').update({
-            payable_balance: Math.round((currentBal + poAmount) * 100) / 100
-          }).eq('id', supplierObj.id);
-        } else {
-          const { data: supps } = await supabase.from('suppliers').select('*').eq('name', receivingOrder.supplierName);
-          if (supps && supps.length > 0) {
-            const currentBal = Number(supps[0].payable_balance || 0);
-            await supabase.from('suppliers').update({
-              payable_balance: Math.round((currentBal + poAmount) * 100) / 100
-            }).eq('id', supps[0].id);
-          }
-        }
-      } else if (receiveSettlementMode === 'CASH' || receiveSettlementMode === 'BANK') {
-        await supabase.from('transactions').insert([{
-          type: 'expense',
-          category: 'Supplier Payment',
-          description: `PO #${receivingOrder.poNumber} Received & Settled (${receiveSettlementMode === 'CASH' ? 'Cash' : 'Bank Transfer'}) - ${receivingOrder.supplierName}`,
-          amount: poAmount,
-          date: receivePaymentDate || getTodaySriLankaDate(),
-          reference: receiveRef || receivingOrder.poNumber,
-          user_id: user?.id || null
-        }]);
-      } else if (receiveSettlementMode === 'CHEQUE') {
-        await api.cheques.create({
-          direction: 'OUTWARD',
-          cheque_type: 'CROSSED_ACCOUNT_PAYEE',
-          cheque_number: receiveChequeNo.trim(),
-          bank_name: receiveBankName.trim(),
-          cheque_date: receiveChequeDate,
-          amount: poAmount,
-          party_id: supplierObj?.id || null,
-          party_name: receivingOrder.supplierName,
-          reference_type: 'PURCHASE_ORDER',
-          reference_id: receivingOrder.id || receivingOrder.poNumber,
-          status: 'PENDING',
-          notes: receiveNotes.trim() || `Issued for Purchase Order #${receivingOrder.poNumber}`
-        });
-      }
 
       // Log Transport Fee as expense in fallback if not already recorded
       const transportFee = Math.max(0, Number(receivingOrder.transportation_fee || (receivingOrder as any).transportationFee || 0));
