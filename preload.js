@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+const { contextBridge, ipcRenderer } = require('electron');
 
 console.log('⚡ Muthuwadige Hardware ERP Preload initialized.');
 

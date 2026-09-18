@@ -1,6 +1,6 @@
 {
   "name": "muthuwadige-hardware-erp",
-  "version": "0.0.2",
+  "version": "1.0.0",
   "main": "electron-main.js",
   "private": true,
   "type": "module",
@@ -14,9 +14,10 @@
     "electron-dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:dev": "npm run electron-dev",
     "electron:start": "electron .",
-    "dist": "npm run build && node build-dist.js",
-    "build:electron": "npm run build && node build-dist.js",
-    "package-win": "npm run build && electron-packager . MuthuwadigeHardwareERP --platform=win32 --arch=x64 --out=release-dist --overwrite --icon=build/icon.ico"
+    "verify:release-gate": "node scripts/verify_no_legacy_transactions.js",
+    "dist": "npm run verify:release-gate && npm run build && node build-dist.js",
+    "build:electron": "npm run verify:release-gate && npm run build && node build-dist.js",
+    "package-win": "npm run verify:release-gate && npm run build && electron-packager . MuthuwadigeHardwareERP --platform=win32 --arch=x64 --out=release-dist --overwrite --icon=build/icon.ico"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
@@ -91,7 +92,8 @@
       "!*.db",
       "!*.db-wal",
       "!*.db-shm",
-      ".env"
+      "!**/.env*",
+      "!*.env"
     ],
     "asarUnpack": [
       "**/*.node"
