@@ -46,7 +46,7 @@ export const getSystemBranding = (shopSettings?: any) => {
     shopName: settings?.shop_name || settings?.storeName || settings?.shopName || 'MUTHUWADIGE HARDWARE',
     address: settings?.address || 'No: 80, Mahahunupitiya, Negombo',
     phone: settings?.phone || settings?.telephone || '077 076 076 7',
-    email: settings?.email || 'sanojhardware@gmail.com',
+    email: settings?.email || 'muthuwadigehardware@gmail.com',
     footer: settings?.invoice_footer || settings?.receiptFooter || settings?.footer_text || 'Thank you for your business! Come again.',
     logoPath: settings?.logoUrl || settings?.logo_path || settings?.logoPath || './images/logo.png',
     currency: settings?.currency || settings?.currency_symbol || 'Rs.',

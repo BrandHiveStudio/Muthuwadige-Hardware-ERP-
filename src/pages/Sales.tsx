@@ -179,7 +179,7 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
           {((order.payment_method || (order as any).paymentMethod || '').toLowerCase() === 'cheque' || (order as any).cheque_number || (order as any).chequeNumber) && (
             <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'චෙක් විස්තර:' : 'CHEQUE:'}</span> <strong className="text-slate-800 font-bold text-[10px]">#{(order as any).cheque_number || (order as any).chequeNumber || 'CHQ'} {((order as any).cheque_bank || (order as any).chequeBank) ? `(${(order as any).cheque_bank || (order as any).chequeBank})` : ''}</strong></p>
           )}
-          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'අයකැමි:' : 'CASHIER:'}</span> <strong className="text-slate-800 font-black">{order.cashier || (order as any).cashier_name || (order as any).user_name || (order as any).created_by || 'Sanoj Hardware'}</strong></p>
+          <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'අයකැමි:' : 'CASHIER:'}</span> <strong className="text-slate-800 font-black">{order.cashier || (order as any).cashier_name || (order as any).user_name || (order as any).created_by || 'Muthuwadige Hardware'}</strong></p>
           {((order.payment_method || (order as any).paymentMethod || '').toLowerCase() === 'credit' || order.status === 'Non Paid') && (
             <p><span className="text-[#595959] font-black uppercase tracking-wider text-[9px] mr-2">{isSinhala ? 'තත්ත්වය:' : 'STATUS:'}</span> <span className="inline-block bg-rose-50 border border-rose-200 text-rose-700 text-[10px] font-black px-2.5 py-0.5 rounded uppercase">{isSinhala ? `නොගෙවූ / හිඟ (ණය කාලය: ${(order as any).credit_period || (order as any).payment_terms || order.credit_period_days || 30} දින)` : `UNPAID / OUTSTANDING (Credit Period: ${(order as any).credit_period || (order as any).payment_terms || order.credit_period_days || 30} Days)`}</span></p>
           )}
@@ -3334,7 +3334,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     try {
       setIsLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
-      const userEmail = user?.email || 'sanojhardware@gmail.com';
+      const userEmail = user?.email || 'muthuwadigehardware@gmail.com';
 
       const res = await fetchWithTimeout(`${API_URL}/sales/${orderId}/void`, {
         method: 'POST',

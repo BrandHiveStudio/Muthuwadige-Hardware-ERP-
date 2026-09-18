@@ -29,7 +29,7 @@ const defaultSettings: StoreSettings = {
   address: 'No: 80, Mahahunupitiya, Negombo',
   phone: '077 076 076 7',
   telephone: '077 076 076 7',
-  email: 'sanojhardware@gmail.com',
+  email: 'muthuwadigehardware@gmail.com',
   logoUrl: './images/logo.png',
   logo_path: './images/logo.png',
   currency: 'Rs.',

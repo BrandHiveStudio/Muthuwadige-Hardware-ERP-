@@ -538,7 +538,7 @@ export async function executeBackupTask({
     let rawSettings = rawSettingsList.find(s => s.id === 'global') || rawSettingsList[0] || {};
     const smtpUser = rawSettings.smtp_user || rawSettings.gmail_user || process.env.SMTP_USER || process.env.GMAIL_USER || '';
     const smtpPass = rawSettings.smtp_pass || rawSettings.gmail_pass || process.env.SMTP_PASS || process.env.GMAIL_PASS || '';
-    const smtpDest = targetEmail || rawSettings.smtp_destination || rawSettings.backup_email || rawSettings.email || smtpUser || 'sanojhardware@gmail.com';
+    const smtpDest = targetEmail || rawSettings.smtp_destination || rawSettings.backup_email || rawSettings.email || smtpUser || 'muthuwadigehardware@gmail.com';
 
     rawSettings = {
       ...rawSettings,
@@ -555,7 +555,7 @@ export async function executeBackupTask({
       rawSettings.shop_name = 'Muthuwadige Hardware';
       rawSettings.address = 'No: 80, Mahahunupitiya, Negombo';
       rawSettings.phone = '077 076 076 7';
-      rawSettings.email = 'sanojhardware@gmail.com';
+      rawSettings.email = 'muthuwadigehardware@gmail.com';
       rawSettings.currency = 'Rs.';
       rawSettings.tax_rate = 0;
       rawSettings.backup_email = targetEmail;

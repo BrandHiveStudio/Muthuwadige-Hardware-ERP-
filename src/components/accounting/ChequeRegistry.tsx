@@ -467,8 +467,8 @@ export function ChequeRegistry({ currentUser, shopSettings }: ChequeRegistryProp
         reference_id: finalRefId,
         status: initialStatus,
         notes: finalNotes,
-        created_by: currentUser?.name || currentUser?.full_name || currentUser?.username || 'Sanoj Hardware',
-        processed_by: currentUser?.name || currentUser?.full_name || currentUser?.username || 'Sanoj Hardware'
+        created_by: currentUser?.name || currentUser?.full_name || currentUser?.username || 'Muthuwadige Hardware',
+        processed_by: currentUser?.name || currentUser?.full_name || currentUser?.username || 'Muthuwadige Hardware'
       });
 
       setToast({ message: `Cheque #${formData.cheque_number} registered successfully!`, type: 'success' });
@@ -556,7 +556,7 @@ export function ChequeRegistry({ currentUser, shopSettings }: ChequeRegistryProp
     doc.setTextColor(120, 120, 120);
     doc.setFontSize(8);
     doc.line(16, 136, 65, 136);
-    const preparedByStaff = cheque.processed_by || (cheque as any).processedBy || (cheque as any).created_by || currentUser?.name || currentUser?.full_name || 'Sanoj Hardware';
+    const preparedByStaff = cheque.processed_by || (cheque as any).processedBy || (cheque as any).created_by || currentUser?.name || currentUser?.full_name || 'Muthuwadige Hardware';
     doc.text(`Prepared By: ${preparedByStaff}`, 40, 140, { align: 'center' });
 
     doc.line(pageWidth - 65, 136, pageWidth - 16, 136);

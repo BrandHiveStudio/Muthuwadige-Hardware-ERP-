@@ -559,7 +559,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
     doc.text("No: 80, Mahahunupitiya, Negombo", 15, 27);
-    doc.text("Contact: 077 076 076 7 | sanojhardware@gmail.com", 15, 32);
+    doc.text("Contact: 077 076 076 7 | muthuwadigehardware@gmail.com", 15, 32);
 
     doc.setTextColor(50, 50, 50);
     doc.setFontSize(10);
@@ -731,7 +731,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     doc.line(pageWidth - 60, finalY + 45, pageWidth - 15, finalY + 45);
     doc.setFont('helvetica', 'italic');
     doc.setFontSize(8);
-    const createdByStaff = (order as any).created_by || (order as any).createdBy || currentUser?.name || currentUser?.full_name || 'Sanoj Hardware';
+    const createdByStaff = (order as any).created_by || (order as any).createdBy || currentUser?.name || currentUser?.full_name || 'Muthuwadige Hardware';
     doc.text(`Prepared By: ${createdByStaff}`, pageWidth - 37.5, finalY + 50, { align: 'center' });
 
     doc.setFillColor(darkSilver[0], darkSilver[1], darkSilver[2]);
@@ -775,7 +775,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
     doc.text("No: 80, Mahahunupitiya, Negombo", 15, 27);
-    doc.text("Contact: 077 076 076 7 | sanojhardware@gmail.com", 15, 32);
+    doc.text("Contact: 077 076 076 7 | muthuwadigehardware@gmail.com", 15, 32);
 
     // Supplier Info
     const sName = ret.supplier_name || ret.supplierName || 'Supplier';
@@ -918,7 +918,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     doc.line(pageWidth - 75, sY + 35, pageWidth - 15, sY + 35);
     doc.setFont('helvetica', 'italic');
     doc.setFontSize(8);
-    const handledByStaff = ret.handled_by || (ret as any).handledBy || (ret as any).created_by_name || currentUser?.name || currentUser?.full_name || 'Sanoj Hardware';
+    const handledByStaff = ret.handled_by || (ret as any).handledBy || (ret as any).created_by_name || currentUser?.name || currentUser?.full_name || 'Muthuwadige Hardware';
     doc.text(`Prepared By: ${handledByStaff}`, 45, sY + 40, { align: 'center' });
     doc.text("Supplier Acknowledgment", pageWidth - 45, sY + 40, { align: 'center' });
 
@@ -1061,7 +1061,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     setIsLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      const staffName = currentUser?.name || currentUser?.full_name || currentUser?.username || 'Sanoj Hardware';
+      const staffName = currentUser?.name || currentUser?.full_name || currentUser?.username || 'Muthuwadige Hardware';
       const { error } = await supabase.from('purchase_orders').insert([{
         po_number: `PO-${Date.now().toString().slice(-6)}`,
         supplier_name: selectedSupplier,
@@ -1404,7 +1404,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
     setIsSubmittingReturn(true);
     try {
-      const staffName = currentUser?.name || currentUser?.full_name || currentUser?.username || 'Sanoj Hardware';
+      const staffName = currentUser?.name || currentUser?.full_name || currentUser?.username || 'Muthuwadige Hardware';
       const effectiveReason = returnReason === 'Other' ? (returnCustomReason || 'Other Return') : returnReason;
 
       const payload = {
@@ -1538,7 +1538,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
     setIsSubmittingReturn(true);
     try {
-      const staffName = currentUser?.name || currentUser?.full_name || currentUser?.username || 'Sanoj Hardware';
+      const staffName = currentUser?.name || currentUser?.full_name || currentUser?.username || 'Muthuwadige Hardware';
       const effectiveReason = returnReason === 'Other' && returnCustomReason.trim() ? returnCustomReason.trim() : returnReason;
 
       const payload = {
@@ -3489,7 +3489,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                 <div>
                   <h2 className="text-xl font-black text-slate-900 tracking-tight">MUTHUWADIGE HARDWARE</h2>
                   <p className="text-xs text-slate-600 font-bold mt-0.5">No: 80, Mahahunupitiya, Negombo</p>
-                  <p className="text-xs text-slate-600 font-bold">Contact: 077 076 076 7 | sanojhardware@gmail.com</p>
+                  <p className="text-xs text-slate-600 font-bold">Contact: 077 076 076 7 | muthuwadigehardware@gmail.com</p>
                 </div>
                 <div className="text-right">
                   <span className="inline-block px-3 py-1 bg-amber-100 text-amber-900 text-xs font-black uppercase tracking-wider rounded border border-amber-300">
@@ -3522,7 +3522,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                     {(viewDebitNote.settlement_mode || viewDebitNote.settlementMode || '').replace(/_/g, ' ')}
                   </span>
                   <p className="text-[11px] text-slate-500 font-semibold mt-1">
-                    Handled By: <span className="font-bold text-slate-800">{viewDebitNote.handled_by || viewDebitNote.handledBy || viewDebitNote.created_by_name || currentUser?.name || currentUser?.full_name || 'Sanoj Hardware'}</span>
+                    Handled By: <span className="font-bold text-slate-800">{viewDebitNote.handled_by || viewDebitNote.handledBy || viewDebitNote.created_by_name || currentUser?.name || currentUser?.full_name || 'Muthuwadige Hardware'}</span>
                   </p>
                 </div>
               </div>
@@ -3590,7 +3590,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
               <div className="grid grid-cols-2 gap-8 pt-12 text-center text-xs">
                 <div>
                   <div className="border-b border-dashed border-slate-400 pb-1 mb-1"></div>
-                  <p className="font-black text-slate-800">{viewDebitNote.handled_by || viewDebitNote.handledBy || viewDebitNote.created_by_name || currentUser?.name || currentUser?.full_name || 'Sanoj Hardware'}</p>
+                  <p className="font-black text-slate-800">{viewDebitNote.handled_by || viewDebitNote.handledBy || viewDebitNote.created_by_name || currentUser?.name || currentUser?.full_name || 'Muthuwadige Hardware'}</p>
                   <p className="text-[10px] text-slate-400">Authorized Staff</p>
                 </div>
 

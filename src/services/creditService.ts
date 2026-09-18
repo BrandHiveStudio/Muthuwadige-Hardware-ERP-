@@ -29,7 +29,7 @@ export interface CurrentUserSession {
 
 /**
  * Resolves the display/author name from the active session user.
- * When operating under the baseline Super Admin account, attributes to 'Sanoj Hardware'.
+ * When operating under the baseline Super Admin account, attributes to 'Muthuwadige Hardware'.
  * When a dedicated secondary staff account is logged in, attributes to that staff member's name.
  */
 export function resolveAuthorName(currentUser?: CurrentUserSession | null): string {
@@ -49,7 +49,7 @@ export function resolveAuthorName(currentUser?: CurrentUserSession | null): stri
 
   const isSuperAdmin = !active || 
     active.email === 'admin@hardware.com' || 
-    active.email === 'sanojhardware@gmail.com' ||
+    active.email === 'muthuwadigehardware@gmail.com' ||
     (active.role || '').toLowerCase() === 'super_admin' || 
     (active.role || '').toLowerCase() === 'super admin' ||
     active.id === 'u1' || 
@@ -57,13 +57,13 @@ export function resolveAuthorName(currentUser?: CurrentUserSession | null): stri
     active.id === 'admin_super';
 
   if (isSuperAdmin) {
-    return 'Sanoj Hardware';
+    return 'Muthuwadige Hardware';
   }
 
   if (active?.name && active.name.trim()) return active.name.trim();
   if (active?.fullName && active.fullName.trim()) return active.fullName.trim();
   if (active?.username && active.username.trim()) return active.username.trim();
-  return 'Sanoj Hardware';
+  return 'Muthuwadige Hardware';
 }
 
 /**

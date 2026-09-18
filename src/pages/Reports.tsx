@@ -114,7 +114,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   const [creditPayments, setCreditPayments] = useState<any[]>(() => cachedReportsData?.creditPayments || []);
   const [profiles, setProfiles] = useState<any[]>(() => cachedReportsData?.profiles || []);
   const [shiftLogs, setShiftLogs] = useState<any[]>(() => cachedReportsData?.shiftLogs || []);
-  const [shopName, setShopName] = useState(() => cachedReportsData?.shopName || 'Sanoj Hardware');
+  const [shopName, setShopName] = useState(() => cachedReportsData?.shopName || 'Muthuwadige Hardware');
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
   const fetchData = async () => {

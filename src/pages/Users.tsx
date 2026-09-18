@@ -46,7 +46,7 @@ export function Users({ currentUser: propCurrentUser }: UsersProps = {}) {
     }
   }, [propCurrentUser]);
 
-  const isCallerRootAdmin = currentUser?.username === 'super_admin' || currentUser?.role === 'super_admin' || (currentUser?.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com';
+  const isCallerRootAdmin = currentUser?.username === 'super_admin' || currentUser?.role === 'super_admin' || (currentUser?.email || '').toLowerCase().trim() === 'muthuwadigehardware@gmail.com';
 
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);

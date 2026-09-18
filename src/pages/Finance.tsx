@@ -293,7 +293,7 @@ export function Finance({ currentUser }: FinanceProps = {}) {
     doc.setTextColor(120, 120, 120);
     doc.setFontSize(7.5);
     doc.line(15, 120, 60, 120);
-    const preparedByStaff = currentUser?.name || currentUser?.full_name || currentUser?.username || 'Sanoj Hardware';
+    const preparedByStaff = currentUser?.name || currentUser?.full_name || currentUser?.username || 'Muthuwadige Hardware';
     doc.text(`Prepared By: ${preparedByStaff}`, 30, 124, { align: 'center' });
 
     doc.line(pageWidth - 60, 120, pageWidth - 15, 120);

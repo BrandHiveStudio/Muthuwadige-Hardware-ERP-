@@ -30,7 +30,7 @@ export const ReceiptTemplate: React.FC<ReceiptTemplateProps> = ({ invoice, isSin
   const transportFee = Number(invoice.transportation_fee || invoice.transportationFee || 0);
   const customerName = invoice.customerName || invoice.customer_name || 'Guest Customer';
   const invoiceNo = invoice.invoiceNo || invoice.invoice_no || `INV-${Date.now()}`;
-  const cashier = invoice.cashier || invoice.cashier_name || invoice.user_name || invoice.created_by || 'Sanoj Hardware';
+  const cashier = invoice.cashier || invoice.cashier_name || invoice.user_name || invoice.created_by || 'Muthuwadige Hardware';
   const paymentMethod = invoice.payment_method || invoice.paymentMethod || 'Cash';
   const invoiceDate = invoice.created_at || invoice.date || new Date().toISOString();
 
@@ -273,7 +273,7 @@ export const ReturnReceiptTemplate: React.FC<ReturnReceiptTemplateProps> = ({ re
         </div>
         <div className="flex justify-between">
           <span>{isSinhala ? 'අයකැමි:' : 'Cashier:'}</span>
-          <span className="font-bold">{returnData.cashier || returnData.cashier_name || returnData.user_name || returnData.handled_by || 'Sanoj Hardware'}</span>
+          <span className="font-bold">{returnData.cashier || returnData.cashier_name || returnData.user_name || returnData.handled_by || 'Muthuwadige Hardware'}</span>
         </div>
         <div className="flex justify-between">
           <span>Method:</span>
