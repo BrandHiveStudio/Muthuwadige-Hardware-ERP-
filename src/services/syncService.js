@@ -51,7 +51,8 @@ export const TABLES_TO_SYNC = [
   'shift_logs',
   'audit_logs',
   'expenses',
-  'system_settings'
+  'system_settings',
+  'stock_adjustments'
 ];
 
 /**
@@ -85,6 +86,25 @@ export async function pingTurso(tursoClient) {
 }
 
 /**
+ * Normalizes any timestamp representation (SQLite UTC string, ISO 8601, or epoch number)
+ * into UTC milliseconds, preventing timezone distortion and false ordering.
+ */
+export function parseUtcTimestamp(ts) {
+  if (!ts) return 0;
+  if (typeof ts === 'number') return ts;
+  let s = String(ts).trim();
+  if (!s) return 0;
+  // If space-delimited SQLite format 'YYYY-MM-DD HH:MM:SS' or without timezone offset, force UTC interpretation
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(s)) {
+    s = s.replace(' ', 'T') + 'Z';
+  } else if (!s.endsWith('Z') && !/[+-]\d{2}:?\d{2}$/.test(s)) {
+    s = s + 'Z';
+  }
+  const t = new Date(s).getTime();
+  return isNaN(t) ? 0 : t;
+}
+
+/**
  * Execute a Turso query with a strict 5-second timeout to prevent UI/server hangs
  */
 async function executeWithTimeout(tursoClient, sqlOrObj, timeoutMs = 15000) {
@@ -93,6 +113,29 @@ async function executeWithTimeout(tursoClient, sqlOrObj, timeoutMs = 15000) {
     setTimeout(() => reject(new Error(`Query timeout after ${timeoutMs}ms`)), timeoutMs)
   );
   return Promise.race([queryPromise, timeoutPromise]);
+}
+
+// A stock delta and its idempotency marker are one business operation. Do not
+// send this pair through the generic statement fallback, which may retry its
+// statements independently after an uncertain batch acknowledgement.
+async function pushStockAdjustmentAtomically(tursoClient, deltaStmt, insertStmt) {
+  if (typeof tursoClient.transaction !== 'function') {
+    throw new Error('Turso client does not provide transactions required for stock adjustment sync');
+  }
+
+  const tx = await tursoClient.transaction('write');
+  let committed = false;
+  try {
+    if (deltaStmt) await tx.execute(deltaStmt);
+    await tx.execute(insertStmt);
+    await tx.commit();
+    committed = true;
+  } catch (err) {
+    if (!committed) {
+      try { await tx.rollback(); } catch (_) {}
+    }
+    throw err;
+  }
 }
 
 let tursoSchemaEnsured = false;
@@ -126,6 +169,19 @@ export async function ensureTursoSchema(tursoClient) {
         details TEXT,
         ip_address TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );`,
+      `CREATE TABLE IF NOT EXISTS stock_adjustments (
+        id TEXT PRIMARY KEY,
+        product_id TEXT,
+        product_name TEXT,
+        old_qty REAL DEFAULT 0,
+        new_qty REAL DEFAULT 0,
+        reason TEXT,
+        type TEXT,
+        user_email TEXT,
+        branch_id TEXT,
+        station_id TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
       );`
     ], 'write');
     const cols = [
@@ -137,86 +193,348 @@ export async function ensureTursoSchema(tursoClient) {
       "ALTER TABLE shift_logs ADD COLUMN cashier_email TEXT;",
       "ALTER TABLE shift_logs ADD COLUMN updated_at TEXT;",
       "ALTER TABLE audit_logs ADD COLUMN timestamp TEXT DEFAULT CURRENT_TIMESTAMP;",
-      "ALTER TABLE audit_logs ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP;"
+      "ALTER TABLE audit_logs ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP;",
+      "ALTER TABLE stock_adjustments ADD COLUMN old_qty REAL DEFAULT 0;",
+      "ALTER TABLE stock_adjustments ADD COLUMN new_qty REAL DEFAULT 0;",
+      "ALTER TABLE stock_adjustments ADD COLUMN user_email TEXT;",
+      "ALTER TABLE stock_adjustments ADD COLUMN branch_id TEXT;",
+      "ALTER TABLE stock_adjustments ADD COLUMN station_id TEXT;",
+      "ALTER TABLE sales ADD COLUMN branch_id TEXT;",
+      "ALTER TABLE sales ADD COLUMN station_id TEXT;",
+      "ALTER TABLE purchase_orders ADD COLUMN branch_id TEXT;",
+      "ALTER TABLE transactions ADD COLUMN branch_id TEXT;"
     ];
     for (const c of cols) {
       try { await tursoClient.execute(c); } catch (_) {}
     }
     tursoSchemaEnsured = true;
   } catch (e) {
-    console.warn('[BackgroundSync] Warning: Failed to ensure Turso shift_logs/audit_logs schema:', e?.message);
+    console.warn('[BackgroundSync] Warning: Failed to ensure Turso schema:', e?.message);
   }
 }
 
-let schemaEnsured = false;
-export async function ensureSyncSchema(db) {
-  if (!db || schemaEnsured) return;
-  try {
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS sync_queue (
-        id TEXT PRIMARY KEY,
-        table_name TEXT NOT NULL,
-        record_id TEXT NOT NULL,
-        action TEXT NOT NULL,
-        payload JSON NOT NULL,
-        status TEXT DEFAULT 'PENDING',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status, created_at);"); } catch(_) {}
-    try {
-      await db.exec(`
-        CREATE TABLE IF NOT EXISTS users (
-          id TEXT PRIMARY KEY,
-          email TEXT UNIQUE,
-          password TEXT,
-          role TEXT,
-          name TEXT,
-          created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-      `);
-    } catch(_) {}
-    try {
-      await db.exec(`
-        CREATE TABLE IF NOT EXISTS shift_logs (
-          id TEXT PRIMARY KEY,
-          station_id TEXT,
-          cashier_name TEXT,
-          opening_float REAL DEFAULT 0,
-          cash_sales REAL DEFAULT 0,
-          cash_returns REAL DEFAULT 0,
-          petty_expenses REAL DEFAULT 0,
-          expected_cash REAL DEFAULT 0,
-          counted_cash REAL DEFAULT 0,
-          discrepancy REAL DEFAULT 0,
-          discrepancy_status TEXT,
-          remarks TEXT,
-          opened_at TEXT,
-          closed_at TEXT,
-          created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-      `);
-    } catch(_) {}
-    try { await db.exec("ALTER TABLE sync_queue ADD COLUMN retry_count INTEGER DEFAULT 0;"); } catch(_) {}
-    try { await db.exec("ALTER TABLE sync_queue ADD COLUMN error_message TEXT;"); } catch(_) {}
-    try { await db.exec("ALTER TABLE system_settings ADD COLUMN last_counter_sync_timestamp TEXT;"); } catch(_) {}
-    try { await db.exec("ALTER TABLE system_settings ADD COLUMN last_sync_timestamp TEXT;"); } catch(_) {}
-    try { await db.exec("ALTER TABLE system_settings ADD COLUMN counter_sync_status TEXT DEFAULT 'IDLE';"); } catch(_) {}
-    try { await db.exec("ALTER TABLE system_settings ADD COLUMN counter_pending_count INTEGER DEFAULT 0;"); } catch(_) {}
-    try { await db.exec("ALTER TABLE products ADD COLUMN updated_at TEXT;"); } catch(_) {}
-    try { await db.exec("ALTER TABLE products ADD COLUMN selling_price REAL;"); } catch(_) {}
-    try { await db.exec("ALTER TABLE products ADD COLUMN stock_quantity REAL;"); } catch(_) {}
-    try { await db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT;"); } catch(_) {}
-    try { await db.exec("ALTER TABLE customers ADD COLUMN credit_limit REAL DEFAULT 0;"); } catch(_) {}
-    try { await db.exec("ALTER TABLE customers ADD COLUMN credit_period INTEGER DEFAULT 0;"); } catch(_) {}
-    try { await db.exec("ALTER TABLE customers ADD COLUMN type TEXT DEFAULT 'registered';"); } catch(_) {}
-    try { await db.exec("ALTER TABLE suppliers ADD COLUMN updated_at TEXT;"); } catch(_) {}
-    try { await db.exec("ALTER TABLE profiles ADD COLUMN updated_at TEXT;"); } catch(_) {}
-    try { await db.exec("ALTER TABLE users ADD COLUMN updated_at TEXT;"); } catch(_) {}
-    schemaEnsured = true;
-  } catch (e) {
-    // best-effort schema bootstrap
+// Database Generation Readiness and In-Flight Concurrency Management
+let resetEpoch = 0;
+const clientReadyGenerations = new WeakMap();
+const clientInFlightInits = new WeakMap();
+
+function getDbInfo(db) {
+  if (!db) return { client: null, gen: 0 };
+  const client = typeof db.getUnderlyingClient === 'function' ? db.getUnderlyingClient() : db;
+  const gen = typeof db.getDbGeneration === 'function' 
+    ? db.getDbGeneration() 
+    : (typeof db.__dbGeneration === 'number' ? db.__dbGeneration : (client && typeof client.__dbGeneration === 'number' ? client.__dbGeneration : 0));
+  return { client, gen };
+}
+
+export function isSyncSchemaReady(db) {
+  const { client, gen } = getDbInfo(db);
+  if (!client || typeof client !== 'object') return false;
+  const readyGens = clientReadyGenerations.get(client);
+  return Boolean(readyGens && readyGens.has(`${gen}_${resetEpoch}`));
+}
+
+export function invalidateSyncSchema(db = null) {
+  resetEpoch++;
+  if (db) {
+    const { client } = getDbInfo(db);
+    if (client && typeof client === 'object') {
+      const readyGens = clientReadyGenerations.get(client);
+      if (readyGens) readyGens.clear();
+      const inFlightMap = clientInFlightInits.get(client);
+      if (inFlightMap) inFlightMap.clear();
+    }
   }
+}
+
+export function __resetSyncSchemaForTesting(db = null) {
+  invalidateSyncSchema(db);
+}
+
+export async function ensureSyncSchema(db) {
+  if (!db || isWebClient) return;
+  const { client, gen } = getDbInfo(db);
+  if (!client || typeof client !== 'object') return;
+
+  // 1. Transaction Safety Check:
+  // Never execute sync schema DDL inside an active managed transaction.
+  if (typeof db.isInTransaction === 'function' && db.isInTransaction()) {
+    if (isSyncSchemaReady(db)) {
+      return;
+    }
+    throw new Error('[SyncSchema] Database sync schema is not ready and cannot be prepared inside an active managed transaction. Schema preparation must complete before transaction entry.');
+  }
+
+  // 2. Already ready check for this exact client, generation, and epoch:
+  if (isSyncSchemaReady(db)) {
+    return;
+  }
+
+  // 3. Concurrent in-flight coalescing per database generation:
+  let inFlightMap = clientInFlightInits.get(client);
+  if (!inFlightMap) {
+    inFlightMap = new Map();
+    clientInFlightInits.set(client, inFlightMap);
+  }
+
+  const currentEpoch = resetEpoch;
+  const inFlightKey = `${gen}_${currentEpoch}`;
+
+  if (inFlightMap.has(inFlightKey)) {
+    // Concurrent callers await the same shared in-flight promise
+    await inFlightMap.get(inFlightKey);
+    return;
+  }
+
+  const targetClient = client;
+  const initialGen = gen;
+  const initialEpoch = currentEpoch;
+
+  const initPromise = (async () => {
+    try {
+      // Helper to assert that database connection or generation has not changed
+      const assertConnectionValid = () => {
+        const current = getDbInfo(db);
+        if (current.client !== targetClient || current.gen !== initialGen || resetEpoch !== initialEpoch) {
+          throw new Error(`[SyncSchema] Database connection or generation changed during schema initialization (gen ${initialGen} -> ${current.gen}). Initialization rejected.`);
+        }
+      };
+
+      // Helper to execute SQL strictly against the pinned targetClient
+      // Never falls back to global mutable db adapter
+      const targetExec = async (sql) => {
+        assertConnectionValid();
+        if (typeof targetClient.exec === 'function') {
+          await targetClient.exec(sql);
+        } else if (typeof targetClient.executeMultiple === 'function') {
+          await targetClient.executeMultiple(sql);
+        } else if (typeof targetClient.execute === 'function') {
+          await targetClient.execute(sql);
+        } else if (typeof targetClient.run === 'function') {
+          await targetClient.run(sql);
+        } else {
+          throw new Error('[SyncSchema] Unsupported database client interface: targetClient does not expose exec, executeMultiple, execute, or run.');
+        }
+        assertConnectionValid();
+      };
+
+      // Helper to query rows strictly against the pinned targetClient
+      // Never falls back to global mutable db adapter
+      const targetQueryAll = async (sql, params = []) => {
+        assertConnectionValid();
+        let rows;
+        if (typeof targetClient.all === 'function') {
+          rows = await targetClient.all(sql, params);
+        } else if (typeof targetClient.execute === 'function') {
+          const res = await targetClient.execute({ sql, args: params });
+          rows = res?.rows || [];
+        } else {
+          throw new Error('[SyncSchema] Unsupported database client interface: targetClient does not expose all or execute.');
+        }
+        assertConnectionValid();
+        return rows;
+      };
+
+      // Helper to execute safe column additions that distinguish genuine "column already exists"
+      // from operational failures (e.g. SQLITE_BUSY, SQLITE_LOCKED, disk full, etc.)
+      const safeAddColumn = async (sql, tableName) => {
+        try {
+          await targetExec(sql);
+        } catch (err) {
+          const msg = (err?.message || String(err)).toLowerCase();
+          // Genuinely harmless: duplicate column name (column already exists)
+          if (msg.includes('duplicate column name')) {
+            return;
+          }
+          // For auxiliary non-sync tables, if table doesn't exist yet in isolated tests, that's fine
+          if (tableName !== 'sync_queue' && msg.includes('no such table')) {
+            return;
+          }
+          // Any other error is an operational or integrity failure; do NOT swallow!
+          throw err;
+        }
+      };
+
+      // 1. Create core sync_queue table
+      await targetExec(`
+        CREATE TABLE IF NOT EXISTS sync_queue (
+          id TEXT PRIMARY KEY,
+          table_name TEXT NOT NULL,
+          record_id TEXT NOT NULL,
+          action TEXT NOT NULL,
+          payload JSON NOT NULL,
+          status TEXT DEFAULT 'PENDING',
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+
+      // 2. Create index on status & created_at
+      await targetExec("CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status, created_at);");
+
+      // 3. Create supplementary tables if not exist
+      try {
+        await targetExec(`
+          CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            email TEXT UNIQUE,
+            password TEXT,
+            role TEXT,
+            name TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+          );
+        `);
+      } catch (uErr) {
+        const msg = (uErr?.message || String(uErr)).toLowerCase();
+        if (!msg.includes('already exists')) throw uErr;
+      }
+
+      try {
+        await targetExec(`
+          CREATE TABLE IF NOT EXISTS shift_logs (
+            id TEXT PRIMARY KEY,
+            station_id TEXT,
+            cashier_name TEXT,
+            opening_float REAL DEFAULT 0,
+            cash_sales REAL DEFAULT 0,
+            cash_returns REAL DEFAULT 0,
+            petty_expenses REAL DEFAULT 0,
+            expected_cash REAL DEFAULT 0,
+            counted_cash REAL DEFAULT 0,
+            discrepancy REAL DEFAULT 0,
+            discrepancy_status TEXT,
+            remarks TEXT,
+            opened_at TEXT,
+            closed_at TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+          );
+        `);
+      } catch (sErr) {
+        const msg = (sErr?.message || String(sErr)).toLowerCase();
+        if (!msg.includes('already exists')) throw sErr;
+      }
+
+      try {
+        await targetExec(`
+          CREATE TABLE IF NOT EXISTS stock_adjustments (
+            id TEXT PRIMARY KEY,
+            product_id TEXT,
+            product_name TEXT,
+            old_qty REAL DEFAULT 0,
+            new_qty REAL DEFAULT 0,
+            reason TEXT,
+            type TEXT,
+            user_email TEXT,
+            branch_id TEXT,
+            station_id TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+        `);
+      } catch (saErr) {
+        const msg = (saErr?.message || String(saErr)).toLowerCase();
+        if (!msg.includes('already exists')) throw saErr;
+      }
+
+      try {
+        await targetExec(`
+          CREATE TABLE IF NOT EXISTS deleted_records (
+            table_name TEXT NOT NULL,
+            record_id TEXT NOT NULL,
+            deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (table_name, record_id)
+          );
+        `);
+      } catch (drErr) {
+        const msg = (drErr?.message || String(drErr)).toLowerCase();
+        if (!msg.includes('already exists')) throw drErr;
+      }
+
+      // 4. Safe column additions (harmless duplicate column ignored, operational errors thrown)
+      await safeAddColumn("ALTER TABLE sync_queue ADD COLUMN retry_count INTEGER DEFAULT 0;", 'sync_queue');
+      await safeAddColumn("ALTER TABLE sync_queue ADD COLUMN error_message TEXT;", 'sync_queue');
+      await safeAddColumn("ALTER TABLE system_settings ADD COLUMN last_counter_sync_timestamp TEXT;", 'system_settings');
+      await safeAddColumn("ALTER TABLE system_settings ADD COLUMN last_sync_timestamp TEXT;", 'system_settings');
+      await safeAddColumn("ALTER TABLE system_settings ADD COLUMN counter_sync_status TEXT DEFAULT 'IDLE';", 'system_settings');
+      await safeAddColumn("ALTER TABLE system_settings ADD COLUMN counter_pending_count INTEGER DEFAULT 0;", 'system_settings');
+      await safeAddColumn("ALTER TABLE products ADD COLUMN updated_at TEXT;", 'products');
+      await safeAddColumn("ALTER TABLE products ADD COLUMN selling_price REAL;", 'products');
+      await safeAddColumn("ALTER TABLE products ADD COLUMN stock_quantity REAL;", 'products');
+      await safeAddColumn("ALTER TABLE customers ADD COLUMN updated_at TEXT;", 'customers');
+      await safeAddColumn("ALTER TABLE customers ADD COLUMN credit_limit REAL DEFAULT 0;", 'customers');
+      await safeAddColumn("ALTER TABLE customers ADD COLUMN credit_period INTEGER DEFAULT 0;", 'customers');
+      await safeAddColumn("ALTER TABLE customers ADD COLUMN type TEXT DEFAULT 'registered';", 'customers');
+      await safeAddColumn("ALTER TABLE suppliers ADD COLUMN updated_at TEXT;", 'suppliers');
+      await safeAddColumn("ALTER TABLE profiles ADD COLUMN updated_at TEXT;", 'profiles');
+      await safeAddColumn("ALTER TABLE users ADD COLUMN updated_at TEXT;", 'users');
+      await safeAddColumn("ALTER TABLE stock_adjustments ADD COLUMN old_qty REAL DEFAULT 0;", 'stock_adjustments');
+      await safeAddColumn("ALTER TABLE stock_adjustments ADD COLUMN new_qty REAL DEFAULT 0;", 'stock_adjustments');
+      await safeAddColumn("ALTER TABLE stock_adjustments ADD COLUMN user_email TEXT;", 'stock_adjustments');
+      await safeAddColumn("ALTER TABLE stock_adjustments ADD COLUMN branch_id TEXT;", 'stock_adjustments');
+      await safeAddColumn("ALTER TABLE stock_adjustments ADD COLUMN station_id TEXT;", 'stock_adjustments');
+      await safeAddColumn("ALTER TABLE sales ADD COLUMN branch_id TEXT;", 'sales');
+      await safeAddColumn("ALTER TABLE sales ADD COLUMN station_id TEXT;", 'sales');
+      await safeAddColumn("ALTER TABLE purchase_orders ADD COLUMN branch_id TEXT;", 'purchase_orders');
+      await safeAddColumn("ALTER TABLE transactions ADD COLUMN branch_id TEXT;", 'transactions');
+
+      // 5. Verify sync_queue completeness before marking ready
+      assertConnectionValid();
+
+      const columns = await targetQueryAll("PRAGMA table_info('sync_queue');");
+      if (!columns || columns.length === 0) {
+        throw new Error('[SyncSchema] Verification failed: table sync_queue does not exist or has no columns.');
+      }
+
+      const existingCols = new Set(columns.map(c => (c.name || '').toLowerCase()));
+      const requiredCols = [
+        'id',
+        'table_name',
+        'record_id',
+        'action',
+        'payload',
+        'status',
+        'created_at',
+        'retry_count',
+        'error_message'
+      ];
+
+      const missingCols = requiredCols.filter(col => !existingCols.has(col));
+      if (missingCols.length > 0) {
+        throw new Error(`[SyncSchema] Verification failed: sync_queue is missing required column(s): ${missingCols.join(', ')}`);
+      }
+
+      const indexes = await targetQueryAll("PRAGMA index_list('sync_queue');");
+      const existingIndexes = new Set((indexes || []).map(idx => (idx.name || '').toLowerCase()));
+      if (!existingIndexes.has('idx_sync_queue_status')) {
+        throw new Error('[SyncSchema] Verification failed: missing required index idx_sync_queue_status on sync_queue.');
+      }
+
+      // If system_settings exists, verify required sync columns are present
+      const sysSettingsInfo = await targetQueryAll("PRAGMA table_info('system_settings');");
+      if (sysSettingsInfo && sysSettingsInfo.length > 0) {
+        const sysCols = new Set(sysSettingsInfo.map(c => (c.name || '').toLowerCase()));
+        const requiredSysCols = ['last_counter_sync_timestamp', 'last_sync_timestamp', 'counter_sync_status', 'counter_pending_count'];
+        const missingSysCols = requiredSysCols.filter(col => !sysCols.has(col));
+        if (missingSysCols.length > 0) {
+          throw new Error(`[SyncSchema] Verification failed: system_settings table exists but is missing required sync column(s): ${missingSysCols.join(', ')}`);
+        }
+      }
+
+      // 6. Final connection & generation re-verification
+      assertConnectionValid();
+
+      let readyGens = clientReadyGenerations.get(targetClient);
+      if (!readyGens) {
+        readyGens = new Set();
+        clientReadyGenerations.set(targetClient, readyGens);
+      }
+      readyGens.add(inFlightKey);
+    } finally {
+      // Always clear in-flight state so retries on failure can proceed
+      inFlightMap.delete(inFlightKey);
+    }
+  })();
+
+  inFlightMap.set(inFlightKey, initPromise);
+  await initPromise;
 }
 
 /**
@@ -224,7 +542,12 @@ export async function ensureSyncSchema(db) {
  */
 export async function enqueueSync(db, tableName, recordId, action = 'INSERT', payload = null) {
   if (!db || isWebClient) return; // Web client writes directly to Turso
-  await ensureSyncSchema(db);
+  if (!isSyncSchemaReady(db)) {
+    if (typeof db.isInTransaction === 'function' && db.isInTransaction()) {
+      throw new Error(`[SyncQueue] Cannot enqueue sync for ${tableName} (${recordId}): sync schema is not ready for this database generation and cannot run DDL inside an active transaction.`);
+    }
+    await ensureSyncSchema(db);
+  }
   try {
     const id = `sq_${tableName}_${recordId}`;
     let jsonStr = '{}';
@@ -245,6 +568,9 @@ export async function enqueueSync(db, tableName, recordId, action = 'INSERT', pa
     );
   } catch (err) {
     console.error(`[SyncQueue] Failed to enqueue ${tableName} (${recordId}):`, err.message);
+    if (typeof db.isInTransaction === 'function' && db.isInTransaction()) {
+      throw err;
+    }
   }
 }
 
@@ -283,6 +609,7 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
     console.log(`[BackgroundSync] Transmitting ${pendingItems.length} queued record(s) to Turso Cloud...`);
     const statements = [];
     const statementItemMap = [];
+    const stockAdjustmentOperations = [];
     const directSuccessfulIds = [];
 
     for (const item of pendingItems) {
@@ -359,44 +686,6 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
         statements.push(stmt);
         statementItemMap.push({ statement: stmt, itemId: item.id, table: targetTable });
       } else if (row && typeof row === 'object' && targetTable === 'products') {
-        // Enforce Cloud Wins (LWW) on Master Data:
-        // Never allow an unmodified local product row to push up and overwrite newer cloud prices or stock counts.
-        let cloudProd = null;
-        try {
-          const cRes = await executeWithTimeout(tursoClient, {
-            sql: 'SELECT id, sku, price, selling_price, cost_price, stock, stock_quantity, updated_at, created_at FROM products WHERE id = ? OR sku = ? LIMIT 1',
-            args: [item.record_id, row.sku || item.record_id]
-          }, 3000);
-          if (cRes?.rows?.[0]) cloudProd = cRes.rows[0];
-        } catch (_) {}
-
-        if (cloudProd) {
-          const cloudPrice = Number(cloudProd.price !== undefined ? cloudProd.price : cloudProd.selling_price);
-          const localPrice = Number(row.price !== undefined ? row.price : row.selling_price);
-          const cloudCost = Number(cloudProd.cost_price !== undefined ? cloudProd.cost_price : 0);
-          const localCost = Number(row.cost_price !== undefined ? row.cost_price : 0);
-          const cloudStock = Number(cloudProd.stock !== undefined ? cloudProd.stock : cloudProd.stock_quantity);
-          const localStock = Number(row.stock !== undefined ? row.stock : row.stock_quantity);
-
-          const cloudUpdated = cloudProd.updated_at || cloudProd.created_at;
-          const localUpdated = row.updated_at || row.created_at;
-          const cloudTime = cloudUpdated ? new Date(cloudUpdated).getTime() : 0;
-          const localTime = localUpdated ? new Date(localUpdated).getTime() : 0;
-
-          // 1. If cloud product is newer, cloud wins! Do not push stale local data up.
-          if (cloudTime > localTime) {
-            console.log(`[BackgroundSync] Cloud Wins (LWW): Cloud product ${cloudProd.sku || item.record_id} is newer (${cloudUpdated} > ${localUpdated}). Skipping upstream push.`);
-            try {
-              await localDb.run(
-                'UPDATE products SET price = ?, selling_price = ?, cost_price = ?, stock = ?, stock_quantity = ?, updated_at = ? WHERE id = ?',
-                [cloudPrice, cloudPrice, cloudCost, cloudStock, cloudStock, cloudUpdated, row.id || item.record_id]
-              );
-            } catch (_) {}
-            directSuccessfulIds.push(item.id);
-            continue;
-          }
-        }
-
         const cleanRow = { ...row };
         if (cleanRow.price !== undefined && cleanRow.selling_price === undefined) {
           cleanRow.selling_price = cleanRow.price;
@@ -423,8 +712,6 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
                   "price" = excluded."price",
                   "selling_price" = excluded."selling_price",
                   "cost_price" = excluded."cost_price",
-                  "stock" = excluded."stock",
-                  "stock_quantity" = excluded."stock_quantity",
                   "min_stock" = excluded."min_stock",
                   "supplier" = excluded."supplier",
                   "unit" = excluded."unit",
@@ -435,6 +722,55 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
         };
         statements.push(stmt);
         statementItemMap.push({ statement: stmt, itemId: item.id, table: targetTable });
+      } else if (row && typeof row === 'object' && targetTable === 'stock_adjustments') {
+        const cleanRow = { ...row };
+        const columns = Object.keys(cleanRow);
+        const colNames = columns.map(c => `"${c}"`).join(', ');
+        const placeholders = columns.map(() => '?').join(', ');
+        const args = columns.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
+
+        // Concurrency-safe delta propagation to Turso products table
+        let delta = 0;
+        if (cleanRow.delta !== undefined && cleanRow.delta !== null) {
+          delta = Number(cleanRow.delta);
+        } else if (cleanRow.delta_qty !== undefined && cleanRow.delta_qty !== null) {
+          delta = Number(cleanRow.delta_qty);
+        } else if (cleanRow.new_qty !== undefined && cleanRow.old_qty !== undefined) {
+          delta = Number(cleanRow.new_qty) - Number(cleanRow.old_qty);
+        }
+
+        // P0 DEFECT 2 FIX: Idempotent database-side execution on Turso:
+        // Execute the delta UPDATE FIRST with a NOT EXISTS guard checking stock_adjustments.
+        // If cleanRow.id already exists on Turso (e.g. on a retry after lost ACK),
+        // NOT EXISTS is false, so products stock is NOT modified again!
+        let stockDeltaStmt = null;
+        if (delta !== 0 && !isNaN(delta) && cleanRow.product_id) {
+          const adjId = cleanRow.id || item.record_id || '';
+          const deltaStmt = {
+            sql: `UPDATE "products" SET
+                    "stock" = MAX(0, COALESCE("stock", 0) + ?),
+                    "stock_quantity" = MAX(0, COALESCE("stock_quantity", 0) + ?),
+                    "updated_at" = ?
+                  WHERE ("id" = ? OR "sku" = ?)
+                    AND NOT EXISTS (SELECT 1 FROM "stock_adjustments" WHERE "id" = ?)`,
+            args: [
+              delta,
+              delta,
+              cleanRow.created_at || new Date().toISOString(),
+              cleanRow.product_id,
+              cleanRow.product_id,
+              adjId
+            ]
+          };
+          stockDeltaStmt = deltaStmt;
+        }
+
+        // Statement 2: INSERT OR IGNORE the adjustment record
+        const stmt = {
+          sql: `INSERT OR IGNORE INTO "stock_adjustments" (${colNames}) VALUES (${placeholders})`,
+          args
+        };
+        stockAdjustmentOperations.push({ itemId: item.id, deltaStmt: stockDeltaStmt, insertStmt: stmt });
       } else if (row && typeof row === 'object') {
         const columns = Object.keys(row);
         const colNames = columns.map(c => `"${c}"`).join(', ');
@@ -453,6 +789,25 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
     }
 
     const successfulIds = [...directSuccessfulIds];
+
+    for (const operation of stockAdjustmentOperations) {
+      try {
+        await pushStockAdjustmentAtomically(tursoClient, operation.deltaStmt, operation.insertStmt);
+        successfulIds.push(operation.itemId);
+      } catch (stockErr) {
+        console.error(`[BackgroundSync] Failed to atomically push stock adjustment (item: ${operation.itemId}):`, stockErr.message);
+        try {
+          await localDb.run(
+            `UPDATE sync_queue
+             SET retry_count = COALESCE(retry_count, 0) + 1,
+                 error_message = ?,
+                 status = CASE WHEN COALESCE(retry_count, 0) + 1 >= 5 THEN 'FAILED' ELSE status END
+             WHERE id = ?`,
+            [stockErr.message || 'Stock adjustment push failed', operation.itemId]
+          );
+        } catch (_) {}
+      }
+    }
 
     if (statements.length > 0) {
       try {
@@ -649,48 +1004,7 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
       } catch (_) {}
 
       if (cloudWipeTimestamp > localWipeTimestamp) {
-        console.warn(`🚨 [SyncEngine] Cloud SYSTEM_WIPE_TIMESTAMP (${cloudWipeTimestamp}) > local (${localWipeTimestamp}). Executing Terminal Factory Reset...`);
-
-        const tablesToWipe = [
-          'sales', 'sale_items', 'sales_returns', 'sales_return_items',
-          'transactions', 'credit_payments', 'cheque_registry',
-          'purchase_orders', 'purchase_order_items', 'quotations', 'quotation_items',
-          'customers', 'suppliers', 'products', 'categories'
-        ];
-
-        for (const t of tablesToWipe) {
-          try {
-            await localDb.run(`DELETE FROM "${t}";`);
-          } catch (_) {}
-        }
-
-        // Clear local sync_queue completely
-        try {
-          await localDb.run('DELETE FROM sync_queue;');
-        } catch (_) {}
-
-        // Delete all non-root users from local SQLite
-        try {
-          await localDb.run("DELETE FROM users WHERE LOWER(email) != 'sanojhardware@gmail.com';");
-          await localDb.run("DELETE FROM profiles WHERE LOWER(email) != 'sanojhardware@gmail.com';");
-          await localDb.run("DELETE FROM custom_permissions WHERE user_id NOT IN (SELECT id FROM users WHERE LOWER(email) = 'sanojhardware@gmail.com');");
-        } catch (_) {}
-
-        // Record wipe timestamp in local SQLite system_settings and system_meta
-        try {
-          await localDb.run(
-            "INSERT OR REPLACE INTO system_settings (id, key, value, system_wipe_timestamp) VALUES ('SYSTEM_WIPE_TIMESTAMP', 'SYSTEM_WIPE_TIMESTAMP', ?, ?)",
-            [String(cloudWipeTimestamp), String(cloudWipeTimestamp)]
-          );
-          await localDb.run(
-            "INSERT OR REPLACE INTO system_meta (key, value) VALUES ('SYSTEM_WIPE_TIMESTAMP', ?)",
-            [String(cloudWipeTimestamp)]
-          );
-        } catch (_) {}
-
-        globalThis.__systemWipeDetected = true;
-        globalThis.__systemWipeTimestamp = cloudWipeTimestamp;
-        console.log('✅ [SyncEngine] Terminal factory reset wipe completed successfully.');
+        console.warn(`⚠️ [SyncEngine] Notice: Cloud SYSTEM_WIPE_TIMESTAMP (${cloudWipeTimestamp}) > local (${localWipeTimestamp}) detected. Automatic background wipe is disarmed for data safety. Local database, sync_queue, and user accounts preserved.`);
       }
     }
   } catch (wipeErr) {
@@ -719,6 +1033,18 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
             activeCloudIds.push(String(row[idCol]));
           }
 
+          // Anti-resurrection guard: Do not resurrect records deleted on this terminal
+          try {
+            const rowIdStr = String(row[idCol]);
+            const [tombstone, pendingDelete] = await Promise.all([
+              localDb.get('SELECT 1 FROM deleted_records WHERE table_name = ? AND record_id = ?', [tableName, rowIdStr]),
+              localDb.get("SELECT 1 FROM sync_queue WHERE table_name = ? AND record_id = ? AND action = 'DELETE'", [tableName, rowIdStr])
+            ]);
+            if (tombstone || pendingDelete) {
+              continue;
+            }
+          } catch (_) {}
+
           // LWW & Conflict Resolution for Master Data
           if (isMasterTable) {
             let localRow = null;
@@ -730,28 +1056,68 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
             } catch (_) {}
 
             if (localRow) {
-              let pendingOutbox = null;
+              let unacknowledgedOutbox = null;
               try {
-                pendingOutbox = await localDb.get(
-                  `SELECT id FROM sync_queue WHERE table_name = ? AND (record_id = ? OR record_id = ?) AND status = 'PENDING'`,
+                unacknowledgedOutbox = await localDb.get(
+                  `SELECT id FROM sync_queue WHERE table_name = ? AND (record_id = ? OR record_id = ?) AND status IN ('PENDING', 'FAILED', 'ERROR')`,
                   [tableName, String(row[idCol]), String(localRow[idCol])]
                 );
               } catch (_) {}
 
+              // SAFETY CONTRACT: If local record has unacknowledged outbox changes (PENDING, FAILED, ERROR),
+              // NEVER allow downstream pull to overwrite local stock/master mutations with cloud snapshots!
+              if (unacknowledgedOutbox) {
+                continue;
+              }
+
               const cloudUpdated = row.updated_at || row.created_at;
               const localUpdated = localRow.updated_at || localRow.created_at;
-              const cloudTime = cloudUpdated ? new Date(cloudUpdated).getTime() : 0;
-              const localTime = localUpdated ? new Date(localUpdated).getTime() : 0;
-              const isCloudNewerOrEqual = cloudTime >= localTime;
+              const cloudTime = parseUtcTimestamp(cloudUpdated);
+              const localTime = parseUtcTimestamp(localUpdated);
+              const isCloudNewer = cloudTime > localTime;
 
-              // If local record has pending outbox changes AND local is newer, keep local; otherwise Cloud Wins!
-              if (pendingOutbox && !isCloudNewerOrEqual) {
+              // If cloud is not strictly newer than local, preserve local record
+              if (!isCloudNewer) {
                 continue;
               }
             }
           }
 
-          if (tableName === 'products') {
+          if (tableName === 'stock_adjustments') {
+            const existingAdj = await localDb.get('SELECT id FROM stock_adjustments WHERE id = ?', [row.id]);
+            if (!existingAdj) {
+              let delta = 0;
+              if (row.delta !== undefined && row.delta !== null) {
+                delta = Number(row.delta);
+              } else if (row.delta_qty !== undefined && row.delta_qty !== null) {
+                delta = Number(row.delta_qty);
+              } else if (row.new_qty !== undefined && row.old_qty !== undefined) {
+                delta = Number(row.new_qty) - Number(row.old_qty);
+              }
+
+              const rawCols = Object.keys(row);
+              const cols = localColSet.size > 0 ? rawCols.filter(c => localColSet.has(c)) : rawCols;
+              const colNames = cols.map(c => `"${c}"`).join(', ');
+              const placeholders = cols.map(() => '?').join(', ');
+              const args = cols.map(c => row[c] !== undefined ? row[c] : null);
+
+              await localDb.run(
+                `INSERT INTO "stock_adjustments" (${colNames}) VALUES (${placeholders})`,
+                args
+              );
+
+              if (delta !== 0 && !isNaN(delta) && row.product_id) {
+                await localDb.run(
+                  `UPDATE "products" SET
+                     "stock" = MAX(0, COALESCE("stock", 0) + ?),
+                     "stock_quantity" = MAX(0, COALESCE("stock_quantity", 0) + ?),
+                     "updated_at" = ?
+                   WHERE "id" = ? OR "sku" = ?`,
+                  [delta, delta, row.created_at || new Date().toISOString(), row.product_id, row.product_id]
+                );
+              }
+            }
+          } else if (tableName === 'products') {
             const cleanRow = { ...row };
             if (cleanRow.price !== undefined && cleanRow.selling_price === undefined) {
               cleanRow.selling_price = cleanRow.price;
@@ -777,8 +1143,6 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
                  "price" = excluded."price",
                  "selling_price" = excluded."selling_price",
                  "cost_price" = excluded."cost_price",
-                 "stock" = excluded."stock",
-                 "stock_quantity" = excluded."stock_quantity",
                  "category" = excluded."category",
                  "min_stock" = excluded."min_stock",
                  "supplier" = excluded."supplier",
@@ -832,29 +1196,12 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
       }
 
       // Deletion pruning:
-      // Exclude local records that are currently awaiting upstream sync in sync_queue (offline creations)
-      const tableFilter = tableName === 'transactions' ? "('transactions', 'cash_book')" : `('${tableName}')`;
-      const pendingExclude = `AND "${idCol}" NOT IN (SELECT record_id FROM sync_queue WHERE table_name IN ${tableFilter} AND status = 'PENDING')`;
-      const fullExclude = `${pendingExclude} ${excludeClause}`.trim();
-
-      if (activeCloudIds.length > 0) {
-        const placeholders = activeCloudIds.map(() => '?').join(', ');
-        const deletedResult = await localDb.run(
-          `DELETE FROM "${tableName}" WHERE "${idCol}" NOT IN (${placeholders}) ${fullExclude}`,
-          activeCloudIds
-        );
-        if (deletedResult?.changes && deletedResult.changes > 0) {
-          console.log(`[BackgroundSync] Pruned ${deletedResult.changes} deleted ${tableName} record(s) locally.`);
-        }
-      } else {
-        // Cloud table has 0 records -> Prune all local records for this entity
-        const deletedResult = await localDb.run(
-          `DELETE FROM "${tableName}" WHERE 1=1 ${fullExclude}`
-        );
-        if (deletedResult?.changes && deletedResult.changes > 0) {
-          console.log(`[BackgroundSync] Pruned all ${deletedResult.changes} local ${tableName} record(s) (cloud table is empty).`);
-        }
-      }
+      // PERMANENTLY DISABLED: Downstream synchronization must NEVER physically delete Local ERP
+      // records merely because those records are absent from a cloud query result set.
+      // Inferring deletion from query absence causes catastrophic data loss (deleting legitimate
+      // local customers, suppliers, and historical records when cloud responses are incomplete,
+      // paginated, or restored). Explicit deletions are handled exclusively via explicit 'DELETE'
+      // queue actions in pushUpstreamChanges.
     } catch (err) {
       if (!err?.message?.includes('no such table')) {
         console.warn(`[BackgroundSync] Notice syncing/pruning ${tableName} downstream:`, err.message);
@@ -903,7 +1250,9 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
     // 11. Cheque Registry
     syncAndPruneEntity('cheque_registry', 'SELECT * FROM cheque_registry ORDER BY created_at DESC LIMIT 1000'),
     // 12. Transactions (General Ledger / Cash Book)
-    syncAndPruneEntity('transactions', 'SELECT * FROM transactions ORDER BY created_at DESC LIMIT 1000')
+    syncAndPruneEntity('transactions', 'SELECT * FROM transactions ORDER BY created_at DESC LIMIT 1000'),
+    // 13. Stock Adjustments (Delta synchronization for multi-computer stock integrity)
+    syncAndPruneEntity('stock_adjustments', 'SELECT * FROM stock_adjustments ORDER BY created_at ASC LIMIT 2000', '', 'id', false)
   ]);
 
   lastDownstreamSync = new Date().toISOString();

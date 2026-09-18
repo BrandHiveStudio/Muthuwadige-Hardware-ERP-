@@ -123,42 +123,44 @@ if (!process.env.VERCEL) {
   envPath = path.join(process.cwd(), '.env');
 }
 
-dotenv.config({ path: envPath });
+if (process.env.NODE_ENV !== 'test') {
+  dotenv.config({ path: envPath });
 
-if (!process.env.TURSO_DATABASE_URL && DEFAULT_TURSO_DATABASE_URL) {
-  process.env.TURSO_DATABASE_URL = DEFAULT_TURSO_DATABASE_URL;
-}
-if (!process.env.TURSO_AUTH_TOKEN && DEFAULT_TURSO_AUTH_TOKEN) {
-  process.env.TURSO_AUTH_TOKEN = DEFAULT_TURSO_AUTH_TOKEN;
-}
+  if (!process.env.TURSO_DATABASE_URL && DEFAULT_TURSO_DATABASE_URL) {
+    process.env.TURSO_DATABASE_URL = DEFAULT_TURSO_DATABASE_URL;
+  }
+  if (!process.env.TURSO_AUTH_TOKEN && DEFAULT_TURSO_AUTH_TOKEN) {
+    process.env.TURSO_AUTH_TOKEN = DEFAULT_TURSO_AUTH_TOKEN;
+  }
 
-// Ensure global caching for serverless environments (Turso Client Singleton)
-if (!global.__tursoClient && process.env.TURSO_DATABASE_URL && process.env.TURSO_AUTH_TOKEN) {
-  let tursoUrl = process.env.TURSO_DATABASE_URL;
-  let tursoToken = process.env.TURSO_AUTH_TOKEN;
-  if (typeof tursoUrl === 'string') {
-    tursoUrl = tursoUrl.trim().replace(/^["']|["']$/g, '');
-    if (tursoUrl.includes('mhardware-db-sanoj-hardware') && !tursoUrl.includes('mwhardware-db-sanoj-hardware')) {
-      tursoUrl = tursoUrl.replace('mhardware-db-sanoj-hardware', 'mwhardware-db-sanoj-hardware');
+  // Ensure global caching for serverless environments (Turso Client Singleton)
+  if (!global.__tursoClient && process.env.TURSO_DATABASE_URL && process.env.TURSO_AUTH_TOKEN) {
+    let tursoUrl = process.env.TURSO_DATABASE_URL;
+    let tursoToken = process.env.TURSO_AUTH_TOKEN;
+    if (typeof tursoUrl === 'string') {
+      tursoUrl = tursoUrl.trim().replace(/^["']|["']$/g, '');
+      if (tursoUrl.includes('mhardware-db-sanoj-hardware') && !tursoUrl.includes('mwhardware-db-sanoj-hardware')) {
+        tursoUrl = tursoUrl.replace('mhardware-db-sanoj-hardware', 'mwhardware-db-sanoj-hardware');
+      }
+      if (tursoUrl.includes('mydb-user.turso.io')) {
+        tursoUrl = 'https://mwhardware-db-sanoj-hardware.aws-ap-south-1.turso.io';
+      }
+      if (tursoUrl.startsWith('libsql://')) {
+        tursoUrl = tursoUrl.replace('libsql://', 'https://');
+      }
     }
-    if (tursoUrl.includes('mydb-user.turso.io')) {
-      tursoUrl = 'https://mwhardware-db-sanoj-hardware.aws-ap-south-1.turso.io';
+    if (typeof tursoToken === 'string') {
+      tursoToken = tursoToken.trim().replace(/^["']|["']$/g, '');
     }
-    if (tursoUrl.startsWith('libsql://')) {
-      tursoUrl = tursoUrl.replace('libsql://', 'https://');
+    if (tursoUrl && tursoToken && tursoToken !== '<valid_token>') {
+      const client = createClient({
+        url: tursoUrl,
+        authToken: tursoToken
+      });
+      global.__tursoClient = client;
+      globalThis.__tursoClient = client;
+      globalThis.__tursoClientSingleton = client;
     }
-  }
-  if (typeof tursoToken === 'string') {
-    tursoToken = tursoToken.trim().replace(/^["']|["']$/g, '');
-  }
-  if (tursoUrl && tursoToken && tursoToken !== '<valid_token>') {
-    const client = createClient({
-      url: tursoUrl,
-      authToken: tursoToken
-    });
-    global.__tursoClient = client;
-    globalThis.__tursoClient = client;
-    globalThis.__tursoClientSingleton = client;
   }
 }
 
@@ -5280,7 +5282,12 @@ async function executeCreateSale(s, options = {}) {
         }
       }
 
-      // Decrement Product Stock levels & validate available stock
+      const cashierName = s.cashier || s.cashier_name || s.user_name || (s.user_email ? s.user_email.split('@')[0] : 'Krish');
+      const userEmail = s.user_email || (s.user_id ? `${s.user_id}@hardware.erp` : 'admin@hardware.erp');
+      const stationId = s.station_id || (finalInvoiceNo.includes('-INV-') ? finalInvoiceNo.split('-INV-')[0] : 'POS1');
+      const branchId = s.branch_id || 'MAIN';
+
+      // Decrement Product Stock levels, record stock_adjustments deltas & validate available stock
       for (const item of enrichedItems) {
         const convRate = Number(item.conversionRate) || 1;
         const baseQtyDeduction = convRate > 0 ? (Number(item.qty || 0) / convRate) : Number(item.qty || 0);
@@ -5297,15 +5304,66 @@ async function executeCreateSale(s, options = {}) {
           }
         }
 
+        const pId = item.productId || item.product_id;
+        const oldStock = prod ? Number(prod.stock || 0) : 0;
+        const newStock = Math.max(0, oldStock - baseQtyDeduction);
+        if (prod) {
+          prod.stock = newStock;
+        }
+
         await db.run(
           'UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?',
-          [baseQtyDeduction, item.productId || item.product_id]
+          [baseQtyDeduction, pId]
         );
+
+        // Record stock adjustment delta for multi-terminal synchronization (A-SYNC-01)
+        const saId = 'sa_sale_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+        try {
+          await db.run(
+            `INSERT INTO stock_adjustments (
+              id, product_id, product_name, old_qty, new_qty, reason, type, user_email, branch_id, station_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              saId,
+              pId,
+              item.name || item.productName || prod?.name || 'Product',
+              oldStock,
+              newStock,
+              `Sale Invoice: ${finalInvoiceNo}`,
+              'Sale',
+              userEmail,
+              branchId,
+              stationId,
+              created_at
+            ]
+          );
+        } catch (saErr) {
+          try {
+            await db.run(
+              `INSERT INTO stock_adjustments (
+                id, product_id, product_name, old_qty, new_qty, reason, type, user_email, created_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                saId,
+                pId,
+                item.name || item.productName || prod?.name || 'Product',
+                oldStock,
+                newStock,
+                `Sale Invoice: ${finalInvoiceNo}`,
+                'Sale',
+                userEmail,
+                created_at
+              ]
+            );
+          } catch (fallbackErr) {
+            const adjustmentError = new Error(`Sale stock adjustment could not be recorded: ${fallbackErr?.message || fallbackErr}`);
+            adjustmentError.cause = fallbackErr;
+            throw adjustmentError;
+          }
+        }
       }
 
       // Insert Sale Order
-      const cashierName = s.cashier || s.cashier_name || s.user_name || (s.user_email ? s.user_email.split('@')[0] : 'Krish');
-      const userEmail = s.user_email || (s.user_id ? `${s.user_id}@hardware.erp` : 'admin@hardware.erp');
       await db.run(
         'INSERT INTO sales (id, invoice_no, customer_id, customer_name, customer_phone, customer_address, items, subtotal, discount, tax, tax_rate, total_amount, status, user_id, user_email, cashier, payment_method, created_at, due_date, credit_period_days, payment_received, transportation_fee, credit_note_applied, credit_note_code, client_tx_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [id, finalInvoiceNo, s.customer_id, customerNameVal, customerPhoneVal, customerAddressVal, JSON.stringify(enrichedItems), finalSubtotal, totalRecordedDiscount, 0, 0, finalTotalAmount, s.status, s.user_id, userEmail, cashierName, s.payment_method || 'Cash', created_at, s.due_date || null, s.credit_period_days || 0, s.payment_received || 0, transportationFeeVal, creditNoteApplied, creditNoteCode, clientTxId]
@@ -12729,8 +12787,8 @@ if (!process.env.VERCEL) {
 }
 
 // Express server launch hook listening on all network interfaces (HTTP & HTTPS)
-// Only start standalone HTTP/HTTPS listeners if not running as a Vercel Serverless Function
-if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.APP_ROLE !== 'web') {
+// Only start standalone HTTP/HTTPS listeners if not running as a Vercel Serverless Function or in test environment
+if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.APP_ROLE !== 'web' && process.env.APP_ROLE !== 'test' && process.env.NODE_ENV !== 'test') {
   (async () => {
     try {
       console.log('[Startup] Initializing Database & Schema...');
