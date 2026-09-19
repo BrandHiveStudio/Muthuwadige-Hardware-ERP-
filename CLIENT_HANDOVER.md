@@ -1,215 +1,136 @@
-# Muthuwadige Hardware ERP
-## Client Handover & User Guide
+# MUTHUWADIGE HARDWARE ERP
+## CLIENT HANDOVER, INSTALLATION & ACCEPTANCE GUIDE
+**Golden Master Release 1.0.0**  
+*Release Date: August 2026 / Verification: September 2026*  
+*Authoritative Source: `🔒 Golden Master`*
 
 ---
 
-## 1. System Overview
+### 1. RELEASE PACKAGE SUMMARY
 
-**Muthuwadige Hardware ERP** is an integrated management solution custom-designed to streamline and centralize the daily commercial operations of Muthuwadige Hardware. 
+| Attribute | Specification |
+| :--- | :--- |
+| **Product Name** | Muthuwadige Hardware ERP |
+| **Release Version** | `1.0.0` (Golden Master) |
+| **Installer Executable** | `release-dist/Muthuwadige Hardware ERP Setup 1.0.0.exe` |
+| **Installer Size** | ~122.7 MB |
+| **Package Format** | Nullsoft Scriptable Install System (NSIS) for Windows x64 |
+| **Release Gate Status** | **PASSED** (0 legacy transaction violations across 75 source files) |
+| **Target OS** | Microsoft Windows 10 / Windows 11 (64-bit) |
+| **Database Engine** | Local SQLite Engine + Turso Cloud Sync Integration |
 
-Managing a hardware enterprise involves handling hundreds of product lines, stock variations, cash and credit customer accounts, supplier deliveries, cashier shifts, and financial ledgers. This ERP system replaces fragmented manual books and standalone registers with a single, secure desktop platform.
-
-### Primary Business Benefits:
-- **Centralized Control**: Manages stock, sales, receivables, payables, and staff permissions from one application.
-- **Accurate Inventory Tracking**: Automatically updates stock levels in real time as sales and purchases occur.
-- **Customer Credit Management**: Tracks customer outstanding balances, credit terms, partial payments, and settlement receipts accurately.
-- **Daily Cashier Shift Reconciliation**: Provides clear breakdowns of Cash, Credit Card, Bank Transfers, and Credit sales for shift closing.
-- **Financial Transparency**: Generates real-time profit and loss insights, sales summaries, and complete audit history logs.
-
----
-
-## 2. How the ERP Works
-
-The system connects all operational departments through a continuous workflow:
-
-```text
-Products & Inventory ➔ Purchasing & Stock Intake ➔ Sales & Counter Billing ➔ Customer Credit Management ➔ Payment Settlements ➔ Cash Book & Finance ➔ Reports & Analytics
-```
-
-1. **Inventory**: Products are registered with cost prices, selling prices, minimum stock alerts, and unit metrics (pieces, kg, meters, liters, boxes).
-2. **Purchasing**: New stock received from suppliers is recorded, instantly updating stock quantities and supplier payable balances.
-3. **Sales & Billing**: Cashiers process counter bills using Cash, Card, Bank Transfer, or Credit payment methods. Inventory quantities automatically deduct upon checkout.
-4. **Credit Management**: Credit sales automatically update the customer’s ledger. Credit settlements collected at the counter update physical cash balances and clear customer debts.
-5. **Finance & Reports**: Every completed transaction feeds into the real-time financial dashboards and daily cashier shift reports.
+> [!IMPORTANT]
+> **Old 0.0.2 Installer Obsoleted**: Do NOT distribute or install any previous `0.0.2` installer. Only `Muthuwadige Hardware ERP Setup 1.0.0.exe` contains all completed financial transaction managers, delta stock reconciliation, and two-stage void/deletion protections.
 
 ---
 
-## 3. Main System Modules
+### 2. SYSTEM REQUIREMENTS
 
-The ERP is organized into clear operational modules accessible through the main navigation menu:
-
-| Module Name | Purpose | Key Staff Capabilities |
-| :--- | :--- | :--- |
-| **Dashboard** | Executive summary & real-time store metrics | View daily revenue, total sales count, active customers, stock valuation, and quick navigation shortcuts. |
-| **Inventory** | Stock control & product catalogue | Add products, edit prices, monitor low-stock alerts, adjust stock quantities, and generate barcode/SKU details. |
-| **Sales & Billing** | Point of Sale (POS) checkout & invoices | Create new counter sales, issue printed invoices, apply line discounts, select payment options, and manage quotations. |
-| **Purchasing** | Supplier orders & inventory intake | Create purchase orders, record incoming supplier deliveries, and track stock receiving logs. |
-| **Customers** | Customer ledger & credit tracking | Register customers, view credit limits, track purchase histories, and process partial/full credit bill settlements. |
-| **Suppliers** | Vendor directory & balance management | Maintain supplier contacts, track supplier credit terms, and monitor payable outstanding accounts. |
-| **Reports & Analytics** | Business performance & shift summaries | View daily sales summaries, cashier closing reports, payment method breakdowns, item profitability, and export PDF/Excel reports. |
-| **Finance & Accounts** | Cash book & expense tracking | Log operational income and store expenses (rent, utilities, salaries) to calculate true net business profit. |
-| **Users & Roles** | Staff access management | Create staff user accounts, assign roles (Super Admin, Admin, Cashier/Staff), and configure granular access rights. |
-| **Database** | Local data maintenance & backups | Perform one-click database backups, restore system data, and monitor database storage status. |
-| **Audit Logs** | System security & activity history | Review detailed logs of all staff logins, sales creations, credit updates, and system changes for total accountability. |
-| **Settings** | Company branding & system options | Configure business name, store address, phone numbers, receipt header settings, and default currency symbols. |
+- **Operating System**: Windows 10 (64-bit) Version 1809 or higher / Windows 11.
+- **Processor**: Intel Core i3 / AMD Ryzen 3 or higher.
+- **Memory (RAM)**: 4 GB minimum (8 GB recommended for high-volume POS counter).
+- **Storage**: 1 GB available disk space (SSD recommended for fast SQLite write throughput).
+- **Peripherals**:
+  - USB Thermal Receipt Printer (80mm / 58mm ESC/POS compatible) or standard A4/A5 laser/inkjet printer.
+  - USB/Bluetooth 1D/2D Barcode Scanner.
+  - Cash Drawer (connected via printer RJ11 port).
+- **Network**: Local LAN connection for local networked counters. Active Internet connection required only for cloud synchronization (offline operation fully supported).
 
 ---
 
-## 4. Sales & Billing (POS Counter)
+### 3. INSTALLATION PROCEDURE
 
-The **Sales & Billing** module is designed for fast, accurate counter checkouts.
+#### Step 1 — Run Installer
+1. Copy `Muthuwadige Hardware ERP Setup 1.0.0.exe` to the target computer.
+2. Double-click the installer. If Windows SmartScreen displays a prompt, select **More info** -> **Run anyway**.
+3. Choose the target installation directory (default: `C:\Program Files\Muthuwadige Hardware ERP`).
+4. Select shortcut preferences (Desktop shortcut and Start Menu shortcut).
+5. Click **Install**. The setup installs all application dependencies, local runtime engines, and reporting templates.
+6. Click **Finish** to launch Muthuwadige Hardware ERP.
 
-### Processing a Standard Sale:
-1. Open **Sales & Billing** from the navigation menu.
-2. Search for items by name, SKU, or category, or select from the product list.
-3. Adjust quantities, unit measures (e.g., pcs, kg, meters), and line discounts if needed.
-4. Select or assign a customer (optional for standard cash sales; mandatory for credit sales).
-5. Choose the **Payment Method**:
-   - **Cash**: Direct counter cash payment.
-   - **Card**: Credit or Debit card terminal payment.
-   - **Bank Transfer**: Direct bank transfer or online deposit.
-   - **Credit**: Customer buys on credit terms.
-6. Click **Complete Sale & Print Invoice** to issue the customer invoice (`INV-001`).
+#### Step 2 — First-Time Administrator Login
+1. Launch the application from the desktop shortcut.
+2. On initial startup, the system automatically initializes the local database and provisions the root Super Administrator account.
+3. Login using the default credentials:
+   - **Email**: `muthuwadigehardware@gmail.com`
+   - **Password**: *(Configured securely via client onboarding passkey / password reset)*
+4. Navigate immediately to **Settings -> User Management** to update the Super Administrator password and configure cashier accounts.
 
-### Credit Sales & Customer Bill Settlement:
-- When a sale is processed with the **Credit** payment method, the invoice balance is automatically posted to the customer's personal account.
-- Stock is immediately deducted from inventory.
-- The invoice status remains **Non-Paid** or **Partially Settled** until payments are recorded in the **Customers** module.
-
----
-
-## 5. Inventory & Stock Control
-
-The **Inventory** module ensures your store never unexpectedly runs out of fast-selling hardware products.
-
-### Key Capabilities:
-- **Product Registration**: Store product names, SKUs, categories, buying cost prices, selling retail prices, and measurement units.
-- **Real-Time Stock Updates**: Stock levels automatically decrease when sales occur and increase when purchase orders are completed.
-- **Low Stock Threshold Alerts**: Items falling below their configured minimum stock quantity are highlighted in orange for re-ordering.
-- **Stock Adjustments**: Staff can adjust inventory quantities due to breakage, damage, or audit discrepancies with recorded reason logs.
-- **Stock Valuation**: Displays the total monetary cost value of all inventory currently stored on premises.
+#### Step 3 — Branch & Counter Terminal Setup
+For multi-computer setups (e.g. Counter 1, Counter 2, Warehouse):
+1. Navigate to **Settings -> System Settings**.
+2. Assign a unique **Station ID** (e.g., `STN-01` for POS 1, `STN-02` for POS 2, `STN-WH` for Warehouse).
+3. Confirm the **Branch ID** (e.g., `MAIN` or `BRANCH-02`).
+4. If cloud synchronization is enabled, verify the Turso Cloud sync connection credentials.
 
 ---
 
-## 6. Customer & Credit Management
+### 4. CORE OPERATIONAL FEATURES & POLICIES
 
-Credit management is critical for hardware operations. The **Customers** module provides complete control over credit terms and debt collection.
+#### A. Multi-Computer Delta Stock Synchronization
+- **Independent Offline Counters**: Terminals continue processing sales, stock receipts, and customer payments even when internet connectivity drops.
+- **Delta-Based Reconciliation**: When reconnected, changes merge using mathematical deltas (`delta = new_qty - old_qty`). Simultaneous counter sales (e.g., -4 units on Counter 1) and warehouse receipts (e.g., +15 units on Warehouse terminal) are preserved without overwriting each other.
+- **Zombie Account / Record Prevention**: Deleting a customer, supplier, or user while offline leaves a persistent tombstone in `deleted_records`. Subsequent cloud pulls will never resurrect deleted records.
 
-### Managing Customer Accounts:
-- **Customer Directory**: Maintain detailed customer profiles including full name, phone number, national identity details (NIC), and physical address.
-- **Purchase History**: View every invoice associated with a specific customer.
-- **Outstanding Credit Balance**: Instantly view the total unpaid balance owed by each customer.
+#### B. Approved Invoice Voiding & Deletion Policy
+1. **Stage 1 — Voiding (Safe Reversal)**:
+   - Triggered via **Sales -> View Invoice -> Void Invoice**.
+   - Requires supervisor authorization passkey.
+   - Status changes to `VOIDED`.
+   - Restores item stock quantities automatically.
+   - Cleans up / reverses associated ledger entries.
+   - **The invoice record is preserved in the database for auditing.**
+2. **Stage 2 — Permanent Deletion (Strict Decontamination)**:
+   - Triggered via **Sales -> View Invoice -> Delete Permanently**.
+   - Restricted strictly to authorized Super Administrators.
+   - Requires authorization passkey and explicit secondary confirmation.
+   - **Strict Dependency Validation**: Rejected with an explanation if the invoice has unresolved customer credit debt or linked unredeemed credit notes.
+   - When validated, safely deletes linked records inside an atomic database transaction and leaves an immutable audit entry in `deleted_records`.
 
-### Processing Credit Payments:
-1. Navigate to **Customers** and locate the customer account.
-2. View the outstanding unpaid invoices list.
-3. Click **Settle Bill / Pay Credit**.
-4. Enter the settlement amount paid by the customer (supports full payments or partial payments).
-5. Select the payment method used for settlement (Cash, Card, Bank).
-6. Click **Save Payment**. The customer's debt is automatically reduced, a payment receipt is logged, and the physical cash collected is reflected in the daily shift report.
+#### C. Purchasing & Goods Receiving
+- Full purchase order workflow: Draft -> Approved -> Received -> Completed.
+- Receiving goods updates item stocks, creates double-entry journal transactions (`Inventory Asset` / `Accounts Payable`), and enqueues sync records within an atomic database transaction.
 
----
+#### D. Sales Returns & Credit Notes
+- Full support for Cash Refunds, Item Exchanges, and Store Credit Notes.
+- Returns validate invoice line item quantities to prevent over-returns.
+- Voiding a sales return reverses both returned inventory and financial transactions cleanly.
 
-## 7. Purchasing & Supplier Management
+#### E. Cheque Operations
+- Cheque lifecycle management across `Pending`, `Cleared`, `Bounced`, and `Returned`.
+- Status updates automatically book accounting ledger transactions and synchronize across all terminals.
 
-The **Purchasing** and **Suppliers** modules streamline supplier relationships and inventory restocking.
-
-### Purchasing Workflow:
-1. Maintain vendor profiles in **Suppliers** with phone numbers, addresses, and credit terms (e.g., Net 30).
-2. Create a **Purchase Order (PO)** in **Purchasing** specifying the required items, quantities, and agreed purchase cost rates.
-3. Upon receiving the goods at the warehouse, mark the order as **Received**.
-4. The system automatically updates the inventory stock counts and registers the purchase costs.
-
----
-
-## 8. Finance & Reports
-
-The **Reports & Analytics** and **Finance & Accounts** modules turn raw daily transactions into actionable business management intelligence.
-
-### Daily Shift Closing & Cashier Reconciliation:
-At the end of every business shift, cashiers and managers can review **Today's Payment Method Breakdown**:
-- **Cash**: Total physical cash collected at the counter today (Cash sales + Credit settlements received in cash).
-- **Credit Card**: Card terminal payments received today.
-- **Bank Transfer**: Direct bank transfer payments received today.
-- **Credit**: Unsettled new credit extended to customers today.
-
-### Business Reports Available:
-- **Sales Performance**: Daily, weekly, and monthly sales trends.
-- **Item Profitability**: Gross profit generated per product line.
-- **Top Selling Products**: Identifies fast-moving and slow-moving SKUs.
-- **Outstanding Receivables**: Real-time summary of all money owed to the hardware store by customers.
-- **Cashier Shift Reports**: Individual cashier checkout transaction counts and total funds handled.
-- **Exporting Options**: All reports can be exported instantly into professional **PDF** invoices or **Excel** spreadsheets.
+#### F. Automated Disaster Recoverability
+- System data resets and backup restorations automatically generate a safety SQLite snapshot in `backups/` (`pre_reset_*.sqlite` and `pre_restore_*.sqlite`) prior to modifying data.
 
 ---
 
-## 9. Users & Roles Management
+### 5. CLIENT ACCEPTANCE TESTING CHECKLIST
 
-Security and accountability are enforced through role-based access control in **Users & Roles**.
+Please perform the following verification steps with the client during system handover:
 
-### Pre-configured Access Roles:
-1. **Super Admin / Owner**: Full access to all business modules, financial settings, inventory edits, user creation, and database tools.
-2. **Admin / Manager**: Access to operations, stock control, billing, customer settlements, and daily reports.
-3. **Retail Cashier / Staff**: Restricted access focused primarily on Sales & Billing counter checkouts and customer lookups.
-
-> **Security Rule**: Staff members should only operate under their assigned personal login credentials. Never share passwords.
-
----
-
-## 10. Audit Logs & System Security
-
-- **Audit Trail**: The **Audit Logs** module records key user actions (logins, price edits, invoice cancellations, stock adjustments, and credit settlements) along with exact timestamps and user details.
-- **Local Data Safety**: All store data is safely stored locally on your desktop system.
-- **Database Backup Tool**: Navigate to **Database** to create on-demand database backups before performing major stock audits or system updates.
+- [ ] **1. Clean Installation**: Verify that `Muthuwadige Hardware ERP Setup 1.0.0.exe` installs without errors and creates desktop/start menu shortcuts.
+- [ ] **2. Secure First-Run Setup**: Log in using the configured Super Administrator account. Confirm that the retired legacy administrator account and default development credentials are completely rejected by the authentication system.
+- [ ] **3. Product Management**: Add a new product (e.g., "Tokyo Super Cement 50kg", cost Rs. 2,200, selling Rs. 2,450, stock: 50).
+- [ ] **4. POS Invoicing**: Issue a cash sale for 5 bags of cement (Total Rs. 12,250). Verify receipt generation, invoice numbering, and that stock decreases from 50 to 45.
+- [ ] **5. Invoice Voiding (Stage 1)**: Void the invoice using the supervisor passkey. Verify that stock is restored to 50, status is `VOIDED`, and the invoice record remains visible in the system.
+- [ ] **6. Permanent Deletion Protection (Stage 2)**: Attempt to permanently delete an active invoice without voiding; confirm the system blocks the deletion. Permanently delete a voided invoice with explicit confirmation and verify it leaves an audit tombstone.
+- [ ] **7. Purchase Order Receiving**: Create and receive a PO for 20 units of an item. Confirm that stock increases by 20 and supplier payable balance updates correctly.
+- [ ] **8. Sales Return**: Issue a return for an invoice item with cash refund. Verify restock and ledger entries.
+- [ ] **9. Cheque Lifecycle**: Record a post-dated customer cheque for Rs. 50,000. Transition status to `Cleared` and verify double-entry journal transaction creation.
+- [ ] **10. Offline & Multi-Terminal Sync**: Disconnect internet on Counter 1. Complete a sale offline. Reconnect internet and verify that the sale and delta stock changes synchronize accurately with the cloud and other counters.
+- [ ] **11. Safety Backup Snapshot**: Execute a test backup. Verify that backup `.sqlite` and `.xlsx` files are generated in the `backups/` directory.
 
 ---
 
-## 11. Recommended Daily Staff Workflow
+### 6. CLIENT HANDOVER SIGN-OFF
 
-To maintain smooth operations, staff should follow this standard daily routine:
+**System Delivered By:**  
+Engineering Team — Antigravity Advanced Agentic Coding  
+Date: ____________________  
+Signature: ____________________  
 
-```text
-Morning Opening ➔ Review Dashboard & Stock Alerts ➔ Receive Supplier Deliveries ➔ Counter POS Billing & Credit Sales ➔ Process Credit Settlements ➔ Evening Shift Closing ➔ Review Reports & Reconcile Register
-```
-
-1. **Morning Opening**:
-   - Log into the system using your individual staff account.
-   - Check the **Dashboard** for low-stock alerts and daily targets.
-2. **Stock Operations**:
-   - Record any incoming goods in **Purchasing** to update stock before counter sales begin.
-3. **Daily Billing**:
-   - Process sales in **Sales & Billing**. Ensure correct items, quantities, and customer names are selected.
-4. **Credit Payments**:
-   - As customers visit to pay off outstanding accounts, process settlements in **Customers**.
-5. **Evening Shift Closing**:
-   - Open **Reports & Analytics** → **Today's Payment Method Breakdown**.
-   - Count the physical cash in the drawer and match it with **Today's Cash**.
-   - Match credit card receipts with **Today's Credit Card**.
-   - Logout of the application.
-
----
-
-## 12. Important Operating Notes
-
-1. **Credential Privacy**: Keep your login email and password confidential. Do not share Super Admin credentials with unauthorized personnel.
-2. **Accurate Item Quantities**: Always verify units of measure (e.g., verifying whether an item is priced per piece, per kg, or per meter) during billing.
-3. **Customer Credit Assignment**: Always attach the correct customer profile when making a credit sale to ensure debt is posted to the right account.
-4. **Regular Backups**: Use the **Database** menu to save periodic backup files to a secure secondary drive or USB storage.
-5. **System Support**: In the event of hardware failure or technical assistance requirements, contact your designated system administrator or technical service provider.
-
----
-
-## 13. Quick Start Guide for New Staff
-
-1. **Sign In**: Enter your assigned email and password on the login screen.
-2. **Explore the Dashboard**: Get familiar with the main menu on the left sidebar.
-3. **Check Products**: Go to **Inventory** to search for product items, SKUs, and prices.
-4. **Practice POS Billing**: Go to **Sales & Billing**, add items to the bill, select a payment method, and complete a test transaction.
-5. **Learn Credit Payments**: Go to **Customers**, locate a customer, and review how credit settlements are recorded.
-6. **View Reports**: Go to **Reports** to understand how daily shift cash summaries are displayed.
-
----
-
-## 14. Handover Summary
-
-The **Muthuwadige Hardware ERP System** is delivered fully configured and operational, providing complete centralized management of sales, stock, credit, cash flow, and performance reporting. By adhering to the operational workflows outlined in this guide, Muthuwadige Hardware can ensure maximum stock accuracy, financial security, and customer service excellence.
+**System Accepted By:**  
+Authorized Representative — Muthuwadige Hardware  
+Date: ____________________  
+Signature: ____________________  
