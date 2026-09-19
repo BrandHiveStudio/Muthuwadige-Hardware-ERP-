@@ -467,11 +467,11 @@ async function logAudit(userOrReq, action, details, userName = null, userRole = 
   if ((!effectiveName || !effectiveRole) && effectiveEmail && effectiveEmail !== 'Automated Background Sync') {
     try {
       const prof = await db.get(
-        'SELECT name, full_name, role FROM profiles WHERE email = ? OR username = ? LIMIT 1',
-        [effectiveEmail, effectiveEmail]
+        'SELECT name, role FROM profiles WHERE email = ? OR id = ? OR name = ? LIMIT 1',
+        [effectiveEmail, effectiveEmail, effectiveEmail]
       );
       if (prof) {
-        effectiveName = effectiveName || prof.name || prof.full_name;
+        effectiveName = effectiveName || prof.name;
         effectiveRole = effectiveRole || prof.role;
       }
     } catch (_) {}
@@ -2669,6 +2669,72 @@ async function seedInitialData() {
   } catch (err) {
     console.error('[Startup] Failed to seed custom permissions:', err.message);
   }
+
+  // Deduplicate PO Transportation expenses & clean up old test ledger data
+  try {
+    // 1. Remove duplicate transport fee rows for PO-867908 (keep earliest)
+    const dupTrans = await db.all(
+      "SELECT id FROM transactions WHERE (reference = 'PO-867908' OR description LIKE '%PO-867908%') AND UPPER(category) = 'TRANSPORTATION' ORDER BY created_at ASC"
+    );
+    if (dupTrans && dupTrans.length > 1) {
+      const idsToDelete = dupTrans.slice(1).map(r => r.id);
+      for (const delId of idsToDelete) {
+        await db.run("DELETE FROM transactions WHERE id = ?", [delId]);
+        await enqueueSync(db, 'transactions', delId, 'DELETE').catch(() => {});
+      }
+      console.log(`[Startup] Deduplicated ${idsToDelete.length} transport fee record(s) for PO-867908.`);
+    }
+
+    // 2. Purge orphaned test records with created_at <= '2026-09-15'
+    const staleTxs = await db.all(
+      "SELECT id FROM transactions WHERE created_at LIKE '2026-09-15%' OR created_at <= '2026-09-15T23:59:59.999Z' OR date <= '2026-09-15'"
+    );
+    if (staleTxs && staleTxs.length > 0) {
+      for (const st of staleTxs) {
+        await db.run("DELETE FROM transactions WHERE id = ?", [st.id]);
+        await enqueueSync(db, 'transactions', st.id, 'DELETE').catch(() => {});
+      }
+      console.log(`[Startup] Purged ${staleTxs.length} stale ledger transaction records from <= 2026-09-15.`);
+    }
+  } catch (cleanErr) {
+    console.warn('[Startup] Notice cleaning duplicate transport / stale ledger records:', cleanErr.message);
+  }
+
+  // Ensure local purchase orders replicate upstream to Turso Cloud
+  try {
+    const localPOs = await db.all('SELECT * FROM purchase_orders');
+    if (localPOs && localPOs.length > 0) {
+      for (const po of localPOs) {
+        await enqueueSync(db, 'purchase_orders', po.id, 'UPSERT');
+        let poItems = [];
+        try {
+          poItems = typeof po.items === 'string' ? JSON.parse(po.items) : (po.items || []);
+        } catch (_) {}
+        if (Array.isArray(poItems)) {
+          for (let i = 0; i < poItems.length; i++) {
+            const it = poItems[i];
+            const itId = it.id || `${po.id}_item_${i + 1}`;
+            await enqueueSync(db, 'purchase_order_items', itId, 'UPSERT', {
+              id: itId,
+              purchase_order_id: po.id,
+              po_number: po.po_number || po.id,
+              product_id: it.receivedProductId || it.productId || it.product_id || it.id,
+              product_name: it.productName || it.name || '',
+              quantity: Number(it.qty || it.quantity || 0),
+              cost_price: Number(it.netUnitCost || it.costPrice || it.cost_price || 0),
+              discount: Number(it.discount || it.line_discount || 0),
+              discount_type: it.discountType || it.discount_type || 'fixed',
+              total: Number(it.total || it.lineTotal || 0),
+              batch_number: it.batchNumber || 1,
+              created_at: po.created_at || new Date().toISOString()
+            }).catch(() => {});
+          }
+        }
+      }
+    }
+  } catch (poSyncErr) {
+    console.warn('[Startup] Notice enqueuing local purchase orders for sync:', poSyncErr.message);
+  }
 }
 
 // ----------------------------------------------------
@@ -4520,6 +4586,7 @@ app.delete('/api/products/:id', requireVoidPasskey, async (req, res) => {
   const { id } = req.params;
   const user_email = req.headers['x-user-email'] || 'system';
   try {
+    await ensureSyncSchema(db);
     const existing = await db.get('SELECT * FROM products WHERE id = ?', [id]);
     const prodName = existing ? existing.name : id;
     const prodSku = existing ? existing.sku : '';
@@ -7857,7 +7924,7 @@ async function resolveOrCreateBatchProduct(db, product, itemCost, qty, poSupplie
 
   const newStock = currentStock + qty;
   await db.run(
-    'UPDATE products SET stock = ?, cost_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+    'UPDATE products SET stock = ?, cost_price = ? WHERE id = ?',
     [newStock, weightedCost, product.id]
   );
 
@@ -7933,6 +8000,7 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
   const netTotal = Math.max(0, Math.round((totalWithTransport - debitNoteApplied) * 100) / 100);
 
   try {
+    await ensureSyncSchema(db);
     await db.transaction(async () => {
       // If debit note applied, deduct from purchase_returns & debit_notes
       if (debitNoteApplied > 0 && debitNoteCode) {
@@ -7984,26 +8052,34 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
         ]
       );
 
-      // If transportation fee > 0, log an expense entry so it deducts from total profit in Reports
+      // If transportation fee > 0, log an expense entry so it deducts from total profit in Reports (Idempotent check)
       if (transportationFee > 0) {
-        const todayStr = new Date().toISOString().split('T')[0];
-        const txId = 'tx_trans_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-        await db.run(
-          `INSERT INTO transactions (
-            id, type, category, description, amount, date, reference, user_id, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            txId,
-            'expense',
-            'Transportation',
-            `Transportation Fee for PO #${po.po_number || id} (${po.supplier_name || 'Vendor'})`,
-            transportationFee,
-            todayStr,
-            po.po_number || id,
-            po.user_id || 'u1',
-            created_at
-          ]
+        const poRef = po.po_number || id;
+        const existingTx = await db.get(
+          "SELECT id FROM transactions WHERE (reference = ? OR reference = ?) AND UPPER(category) = 'TRANSPORTATION' LIMIT 1",
+          [poRef, id]
         );
+        if (!existingTx) {
+          const todayStr = new Date().toISOString().split('T')[0];
+          const txId = 'tx_trans_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+          await db.run(
+            `INSERT INTO transactions (
+              id, type, category, description, amount, date, reference, user_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              txId,
+              'expense',
+              'Transportation',
+              `Transportation Fee for PO #${po.po_number || id} (${po.supplier_name || 'Vendor'})`,
+              transportationFee,
+              todayStr,
+              poRef,
+              po.user_id || 'u1',
+              created_at
+            ]
+          );
+          await enqueueSync(db, 'transactions', txId, 'INSERT');
+        }
       }
 
       // If created directly in received status:
@@ -8040,6 +8116,7 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
               }
               await db.run('UPDATE products SET cost_price = ? WHERE id = ?', [weightedCost, product.id]);
               await resolveOrCreateBatchProduct(db, product, netUnitCost, qty, po.supplier_name);
+              await enqueueSync(db, 'products', product.id, 'UPSERT');
             }
           }
         }
@@ -8060,10 +8137,32 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [txId, 'expense', 'Supplier Payment', payDesc, netTotal, todayStr, `PO-SETTLE-${po.po_number || id}`, po.user_id || 'Admin', created_at]
           );
+          await enqueueSync(db, 'transactions', txId, 'INSERT');
         }
       }
 
-      await enqueueSync(db, 'purchase_orders', id, 'INSERT');
+      await enqueueSync(db, 'purchase_orders', id, 'UPSERT');
+      if (Array.isArray(items)) {
+        for (let i = 0; i < items.length; i++) {
+          const it = items[i];
+          const itId = it.id || `${id}_item_${i + 1}`;
+          try {
+            await enqueueSync(db, 'purchase_order_items', itId, 'UPSERT', {
+              id: itId,
+              purchase_order_id: id,
+              po_number: po.po_number || id,
+              product_id: it.productId || it.product_id || it.id,
+              product_name: it.productName || it.name || '',
+              quantity: Number(it.qty || it.quantity || 0),
+              cost_price: Number(it.costPrice || it.cost_price || it.unitCostPrice || 0),
+              discount: Number(it.discount || it.line_discount || 0),
+              discount_type: it.discountType || it.discount_type || 'fixed',
+              total: Number(it.total || it.lineTotal || 0),
+              created_at
+            });
+          } catch (_) {}
+        }
+      }
     });
 
     triggerPush(db).catch(() => { });
@@ -8083,6 +8182,7 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
     settlement_mode
   } = req.body || {};
   try {
+    await ensureSyncSchema(db);
     const txnResult = await db.transaction(async () => {
       // Fetch PO first to know items
       const po = await db.get('SELECT * FROM purchase_orders WHERE id = ?', [id]);
@@ -8249,12 +8349,33 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
       for (const it of updatedItems) {
         const pId = it.receivedProductId || it.productId || it.product_id;
         if (pId) {
-          enqueueSync(db, 'products', pId, 'UPSERT').catch(() => { });
+          await enqueueSync(db, 'products', pId, 'UPSERT');
         }
       }
     }
 
-      await enqueueSync(db, 'purchase_orders', id, 'UPDATE');
+      await enqueueSync(db, 'purchase_orders', id, 'UPSERT');
+      if (Array.isArray(updatedItems) && updatedItems.length > 0) {
+        for (let i = 0; i < updatedItems.length; i++) {
+          const it = updatedItems[i];
+          const itId = it.id || `${id}_item_${i + 1}`;
+          try {
+            await enqueueSync(db, 'purchase_order_items', itId, 'UPSERT', {
+              id: itId,
+              purchase_order_id: id,
+              po_number: po.po_number || id,
+              product_id: it.receivedProductId || it.productId || it.product_id || it.id,
+              product_name: it.productName || it.name || '',
+              quantity: Number(it.qty || it.quantity || 0),
+              cost_price: Number(it.netUnitCost || it.costPrice || it.cost_price || 0),
+              discount: Number(it.discount || it.line_discount || 0),
+              discount_type: it.discountType || it.discount_type || 'fixed',
+              total: Number(it.total || it.lineTotal || 0),
+              batch_number: it.batchNumber || 1
+            });
+          } catch (_) {}
+        }
+      }
       return { status: 200, body: { success: true } };
     });
 
@@ -9324,6 +9445,7 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
   const todayStr = payment_date || new Date().toLocaleDateString('sv-SE');
   const nowIso = received_at || new Date().toISOString();
   try {
+    await ensureSyncSchema(db);
     const txnResult = await db.transaction(async () => {
       // 1. Retrieve PO
       const po = await db.get(
@@ -9371,8 +9493,8 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
       const transportFee = Math.max(0, Number(po.transportation_fee || po.transportationFee || 0));
       if (transportFee > 0) {
         const existingTx = await db.get(
-          'SELECT id FROM transactions WHERE reference = ? AND category = ?',
-          [po.po_number || po.po_no || po.id, 'Transportation']
+          "SELECT id FROM transactions WHERE (reference = ? OR reference = ? OR reference = ?) AND UPPER(category) = 'TRANSPORTATION' LIMIT 1",
+          [po.po_number || '', po.po_no || '', po.id || '']
         );
         if (!existingTx) {
           const transTxId = 'tx_trans_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
@@ -9555,7 +9677,29 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
       );
 
       // 6. Enqueue Sync inside managed transaction
-      await enqueueSync(db, 'purchase_orders', po.id, 'UPDATE');
+      await enqueueSync(db, 'purchase_orders', po.id, 'UPSERT');
+      if (Array.isArray(updatedPoItems) && updatedPoItems.length > 0) {
+        for (let i = 0; i < updatedPoItems.length; i++) {
+          const it = updatedPoItems[i];
+          const itId = it.id || `${po.id}_item_${i + 1}`;
+          try {
+            await enqueueSync(db, 'purchase_order_items', itId, 'UPSERT', {
+              id: itId,
+              purchase_order_id: po.id,
+              po_number: po.po_number || po.po_no || po.id,
+              product_id: it.receivedProductId || it.productId || it.product_id || it.id,
+              product_name: it.productName || it.name || '',
+              quantity: Number(it.qty || it.quantity || 0),
+              cost_price: Number(it.netUnitCost || it.costPrice || it.cost_price || 0),
+              discount: Number(it.discount || it.line_discount || 0),
+              discount_type: it.discountType || it.discount_type || 'fixed',
+              total: Number(it.total || it.lineTotal || 0),
+              batch_number: it.batchNumber || 1,
+              created_at: nowIso
+            });
+          } catch (_) {}
+        }
+      }
       if (suppSyncId) {
         await enqueueSync(db, 'suppliers', suppSyncId, 'UPSERT');
       }
@@ -9583,7 +9727,7 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
           supplierName,
           settlementMode: validMode,
           total: poGrandTotal,
-          status: 'received'
+          status: 'Received'
         }
       };
     });

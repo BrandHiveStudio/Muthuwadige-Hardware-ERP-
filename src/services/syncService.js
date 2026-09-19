@@ -34,7 +34,9 @@ export const TABLES_TO_SYNC = [
   'discounts',
   'promotions',
   'purchase_orders',
+  'purchases',
   'purchase_order_items',
+  'purchase_items',
   'supplier_transactions',
   'sales',
   'credit_payments',
@@ -182,6 +184,49 @@ export async function ensureTursoSchema(tursoClient) {
         branch_id TEXT,
         station_id TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );`,
+      `CREATE TABLE IF NOT EXISTS purchase_orders (
+        id TEXT PRIMARY KEY,
+        po_number TEXT UNIQUE,
+        po_no TEXT,
+        supplier_id TEXT,
+        supplier_name TEXT,
+        items TEXT NOT NULL DEFAULT '[]',
+        total REAL,
+        subtotal REAL DEFAULT 0,
+        discount_type TEXT DEFAULT 'fixed',
+        discount_value REAL DEFAULT 0,
+        discount_amount REAL DEFAULT 0,
+        transportation_fee REAL DEFAULT 0,
+        net_total REAL DEFAULT 0,
+        original_total REAL,
+        debit_note_code TEXT,
+        debit_note_applied REAL DEFAULT 0,
+        status TEXT DEFAULT 'pending',
+        due_date TEXT,
+        user_id TEXT,
+        received_at TEXT,
+        received_by TEXT,
+        settlement_mode TEXT DEFAULT 'CREDIT',
+        payment_method TEXT DEFAULT 'CREDIT',
+        branch_id TEXT,
+        station_id TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT
+      );`,
+      `CREATE TABLE IF NOT EXISTS purchase_order_items (
+        id TEXT PRIMARY KEY,
+        purchase_order_id TEXT,
+        po_number TEXT,
+        product_id TEXT,
+        product_name TEXT,
+        quantity REAL DEFAULT 0,
+        cost_price REAL DEFAULT 0,
+        discount REAL DEFAULT 0,
+        discount_type TEXT DEFAULT 'fixed',
+        total REAL DEFAULT 0,
+        batch_number INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
       );`
     ], 'write');
     const cols = [
@@ -202,6 +247,16 @@ export async function ensureTursoSchema(tursoClient) {
       "ALTER TABLE sales ADD COLUMN branch_id TEXT;",
       "ALTER TABLE sales ADD COLUMN station_id TEXT;",
       "ALTER TABLE purchase_orders ADD COLUMN branch_id TEXT;",
+      "ALTER TABLE purchase_orders ADD COLUMN supplier_id TEXT;",
+      "ALTER TABLE purchase_orders ADD COLUMN payment_method TEXT;",
+      "ALTER TABLE purchase_orders ADD COLUMN shipping_cost REAL DEFAULT 0;",
+      "ALTER TABLE purchase_orders ADD COLUMN delivery_fee REAL DEFAULT 0;",
+      "ALTER TABLE purchase_orders ADD COLUMN station_id TEXT;",
+      "ALTER TABLE suppliers ADD COLUMN contact_person TEXT;",
+      "ALTER TABLE suppliers ADD COLUMN phone TEXT;",
+      "ALTER TABLE suppliers ADD COLUMN email TEXT;",
+      "ALTER TABLE suppliers ADD COLUMN address TEXT;",
+      "ALTER TABLE suppliers ADD COLUMN payable_balance REAL DEFAULT 0;",
       "ALTER TABLE transactions ADD COLUMN branch_id TEXT;"
     ];
     for (const c of cols) {
@@ -448,6 +503,28 @@ export async function ensureSyncSchema(db) {
         if (!msg.includes('already exists')) throw drErr;
       }
 
+      try {
+        await targetExec(`
+          CREATE TABLE IF NOT EXISTS purchase_order_items (
+            id TEXT PRIMARY KEY,
+            purchase_order_id TEXT,
+            po_number TEXT,
+            product_id TEXT,
+            product_name TEXT,
+            quantity REAL DEFAULT 0,
+            cost_price REAL DEFAULT 0,
+            discount REAL DEFAULT 0,
+            discount_type TEXT DEFAULT 'fixed',
+            total REAL DEFAULT 0,
+            batch_number INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+          );
+        `);
+      } catch (poiErr) {
+        const msg = (poiErr?.message || String(poiErr)).toLowerCase();
+        if (!msg.includes('already exists')) throw poiErr;
+      }
+
       // 4. Safe column additions (harmless duplicate column ignored, operational errors thrown)
       await safeAddColumn("ALTER TABLE sync_queue ADD COLUMN retry_count INTEGER DEFAULT 0;", 'sync_queue');
       await safeAddColumn("ALTER TABLE sync_queue ADD COLUMN error_message TEXT;", 'sync_queue');
@@ -648,6 +725,8 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
       let targetTable = item.table_name;
       if (targetTable === 'cash_book') targetTable = 'transactions';
       if (targetTable === 'cheques') targetTable = 'cheque_registry';
+      if (targetTable === 'purchases') targetTable = 'purchase_orders';
+      if (targetTable === 'purchase_items') targetTable = 'purchase_order_items';
 
       if (item.action === 'DELETE') {
         const stmt = {
