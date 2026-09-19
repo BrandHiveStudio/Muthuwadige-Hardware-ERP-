@@ -300,8 +300,14 @@ export const api = {
       if (!res.ok) await handleError(res, 'Failed to bulk import products');
       return res.json();
     },
-    delete: async (id: string) => {
-      const res = await fetchWithTimeout(`${API_URL}/products/${id}`, { method: 'DELETE' });
+    delete: async (id: string, passkey?: string) => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (passkey) headers['x-void-passkey'] = passkey;
+      const res = await fetchWithTimeout(`${API_URL}/products/${id}`, {
+        method: 'DELETE',
+        headers,
+        body: passkey ? JSON.stringify({ void_passkey: passkey, passkey }) : undefined
+      });
       if (!res.ok) await handleError(res, 'Failed to delete product from database');
       return res.json();
     }
@@ -420,8 +426,21 @@ export const api = {
       if (!res.ok) throw new Error('Failed to void invoice');
       return res.json();
     },
-    delete: async (id: string) => {
-      const res = await fetchWithTimeout(`${API_URL}/sales/${id}`, { method: 'DELETE' });
+    delete: async (id: string, options: any = {}) => {
+      const passkey = typeof options === 'string' ? options : (options?.passkey || options?.void_passkey || '');
+      const res = await fetchWithTimeout(`${API_URL}/sales/${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-confirm-delete': 'true'
+        },
+        body: JSON.stringify({
+          void_passkey: passkey,
+          passkey: passkey,
+          confirm_permanent_delete: true,
+          confirmed: true
+        })
+      });
       if (!res.ok) throw new Error('Failed to delete sale from database');
       return res.json();
     },

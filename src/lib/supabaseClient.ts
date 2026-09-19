@@ -179,11 +179,11 @@ const updateTable = async (table: string, payload: any, val: any) => {
   }
 };
 
-const deleteTable = async (table: string, val: any) => {
+const deleteTable = async (table: string, val: any, extra?: any) => {
   try {
     let result: any = null;
     if (table === 'products') {
-      result = await api.products.delete(val);
+      result = await api.products.delete(val, typeof extra === 'string' ? extra : (extra?.passkey || extra?.void_passkey));
     } else if (table === 'customers') {
       result = await api.customers.delete(val);
     } else if (table === 'suppliers') {
@@ -339,11 +339,11 @@ export const supabase: any = {
         };
       },
 
-      delete: () => {
+      delete: (options?: any) => {
         return {
           eq: (col: string, val: any) => {
             return {
-              then: (onfulfilled: any) => deleteTable(table, val).then(onfulfilled)
+              then: (onfulfilled: any) => deleteTable(table, val, options).then(onfulfilled)
             };
           }
         };

@@ -493,8 +493,8 @@ export function Inventory() {
           setCachedData('products', mappedData);
           setCatalogError(null);
         } else if (mappedData) {
-          // If the server explicitly returned an empty array, update only if not already populated with cached data
-          setProducts(prev => (prev.length > 0 ? prev : []));
+          // If the server explicitly returned an empty array, update properly
+          setProducts(mappedData || []);
           setCachedData('products', mappedData);
           setCatalogError(null);
         }
@@ -764,11 +764,16 @@ export function Inventory() {
   };
 
   const handleDelete = async (id: string) => {
+    const passkey = window.prompt(t('Enter admin/void passkey to confirm deletion:', 'මකා දැමීම තහවුරු කිරීමට මුරපදය ඇතුළත් කරන්න:'));
+    if (!passkey) return;
+
     if (window.confirm(t('Are you sure you want to delete this item?', 'මෙම භාණ්ඩය මකා දැමීමට ඔබට විශ්වාසද?'))) {
-      const { error } = await supabase.from('products').delete().eq('id', id);
+      setProducts(prev => prev.filter(p => p.id !== id));
+      const { error } = await supabase.from('products').delete({ passkey: passkey.trim() }).eq('id', id);
       if (error) {
         setToast({ type: 'error', message: error.message });
         setTimeout(() => setToast(null), 5000);
+        fetchProducts();
       } else {
         setToast({ type: 'success', message: t("Product deleted successfully!", "නිෂ්පාදනය සාර්ථකව මකා දමන ලදී!") });
         setTimeout(() => setToast(null), 5000);

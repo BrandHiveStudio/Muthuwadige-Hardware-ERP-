@@ -4516,16 +4516,20 @@ app.put('/api/products/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/products/:id', async (req, res) => {
+app.delete('/api/products/:id', requireVoidPasskey, async (req, res) => {
   const { id } = req.params;
   const user_email = req.headers['x-user-email'] || 'system';
   try {
     const existing = await db.get('SELECT * FROM products WHERE id = ?', [id]);
     const prodName = existing ? existing.name : id;
     const prodSku = existing ? existing.sku : '';
-    await db.run('DELETE FROM products WHERE id = ?', [id]);
-    await logAudit(user_email, 'PRODUCT_DELETED', `Product ${prodName} (SKU: ${prodSku}) was deleted.`);
-    enqueueSync(db, 'products', id, 'DELETE').then(() => triggerPush(db)).catch(() => { });
+    await db.transaction(async () => {
+      await db.run('INSERT OR REPLACE INTO deleted_records (table_name, record_id, deleted_at) VALUES (?, ?, CURRENT_TIMESTAMP)', ['products', id]);
+      await db.run('DELETE FROM products WHERE id = ?', [id]);
+      await logAudit(user_email, 'PRODUCT_DELETED', `Product ${prodName} (SKU: ${prodSku}) was deleted.`);
+      await enqueueSync(db, 'products', id, 'DELETE');
+    });
+    triggerPush(db).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -7839,133 +7843,42 @@ app.get(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
  */
 async function resolveOrCreateBatchProduct(db, product, itemCost, qty, poSupplierName) {
   if (!product) return null;
+  const currentStock = Number(product.stock || 0);
   const currentCost = Number(product.cost_price !== undefined && product.cost_price !== null ? product.cost_price : (product.costPrice || 0));
   const newCost = Number(itemCost || 0);
 
-  // If cost matches existing catalog cost or invalid cost, use the product directly
-  if (newCost <= 0 || Math.abs(newCost - currentCost) < 0.01) {
-    const oldStock = Number(product.stock || 0);
-    const newStock = oldStock + qty;
-    await db.run('UPDATE products SET stock = ? WHERE id = ?', [newStock, product.id]);
-    return {
-      productId: product.id,
-      sku: product.sku,
-      isNewBatch: false,
-      batchNumber: product.batch_number || 1,
-      name: product.name,
-      costPrice: currentCost,
-      stock: newStock,
-      isExistingIncremented: true
-    };
+  // Calculate Weighted Average Cost
+  let weightedCost = newCost;
+  if (currentStock > 0 && currentCost > 0 && newCost > 0) {
+    weightedCost = Math.round(((currentStock * currentCost) + (qty * newCost)) / (currentStock + qty) * 100) / 100;
+  } else if (currentCost > 0 && newCost <= 0) {
+    weightedCost = currentCost;
   }
 
-  // Cost differs: preserve original product stock and cost!
-  // Determine base SKU and base Name
-  const baseSku = (product.sku || 'SKU').replace(/-B\d+$/i, '').trim();
-  const baseName = (product.name || 'Product').replace(/\s*\(Batch\s*\d+\)$/i, '').trim();
-  const rootParentId = product.parent_product_id || product.id;
-
-  // Check if a batch SKU already exists for this exact cost in the same product family
-  const existingFamily = await db.all(
-    'SELECT * FROM products WHERE sku = ? OR sku LIKE ? OR parent_product_id = ? OR id = ?',
-    [baseSku, `${baseSku}-B%`, rootParentId, rootParentId]
-  );
-
-  const matchedBatch = existingFamily.find(p => {
-    const pCost = Number(p.cost_price !== undefined && p.cost_price !== null ? p.cost_price : (p.costPrice || 0));
-    return Math.abs(pCost - newCost) < 0.01;
-  });
-
-  if (matchedBatch) {
-    const oldStock = Number(matchedBatch.stock || 0);
-    const newStock = oldStock + qty;
-    await db.run('UPDATE products SET stock = ? WHERE id = ?', [newStock, matchedBatch.id]);
-    return {
-      productId: matchedBatch.id,
-      sku: matchedBatch.sku,
-      isNewBatch: false,
-      batchNumber: matchedBatch.batch_number || 1,
-      name: matchedBatch.name,
-      costPrice: newCost,
-      stock: newStock,
-      isExistingIncremented: true
-    };
-  }
-
-  // Generate new batch item
-  // Calculate next batch number from existing family
-  let maxBatchNum = 1;
-  for (const p of existingFamily) {
-    if (p.batch_number && Number(p.batch_number) > maxBatchNum) {
-      maxBatchNum = Number(p.batch_number);
-    }
-    const match = (p.sku || '').match(/-B(\d+)$/i);
-    if (match) {
-      const num = parseInt(match[1], 10);
-      if (num > maxBatchNum) maxBatchNum = num;
-    }
-  }
-  const nextBatchNum = maxBatchNum + 1;
-
-  const newSku = `${baseSku}-B${nextBatchNum}`;
-  const newName = `${baseName} (Batch ${nextBatchNum})`;
-
-  // Calculate selling price inheriting existing markup ratio
-  const catalogPrice = Number(product.price || 0);
-  const markupRatio = currentCost > 0 ? (catalogPrice / currentCost) : 1.25;
-  const newSellingPrice = Math.round(newCost * Math.max(1.0, markupRatio) * 100) / 100;
-
-  // Generate unique barcode
-  const baseBarcode = (product.barcode || 'HW' + Date.now().toString().slice(-6)).trim();
-  let newBarcode = `${baseBarcode}-B${nextBatchNum}`;
-  const existingBarcode = await db.get('SELECT id FROM products WHERE barcode = ?', [newBarcode]);
-  if (existingBarcode) {
-    newBarcode = `${baseBarcode}B${nextBatchNum}${Date.now().toString().slice(-3)}`;
-  }
-
-  const newId = 'p_batch_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-  const supplierToUse = poSupplierName || product.supplier || '';
-
+  const newStock = currentStock + qty;
   await db.run(
-    `INSERT INTO products (
-      id, name, sku, category, price, cost_price, stock, min_stock,
-      supplier, unit, barcode, brand, serial_no, batch_code, expiry_date,
-      supplier_phone, measure_details, parent_product_id, is_batch, batch_number
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      newId,
-      newName,
-      newSku,
-      product.category || 'General',
-      newSellingPrice,
-      newCost,
-      qty,
-      product.min_stock !== undefined ? product.min_stock : 5,
-      supplierToUse,
-      product.unit || 'PCS',
-      newBarcode,
-      product.brand || '',
-      product.serial_no || '',
-      `BATCH-${nextBatchNum}`,
-      product.expiry_date || '',
-      product.supplier_phone || '',
-      product.measure_details || '',
-      rootParentId,
-      1,
-      nextBatchNum
-    ]
+    'UPDATE products SET stock = ?, cost_price = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+    [newStock, weightedCost, product.id]
   );
+
+  // Enqueue sync so updated parent stock replicates upstream
+  try {
+    if (typeof enqueueSync === 'function') {
+      await enqueueSync(db, 'products', product.id, 'UPSERT');
+    }
+  } catch (e) {
+    console.warn('[PO Receive] Enqueue sync non-critical warning:', e.message);
+  }
 
   return {
-    productId: newId,
-    sku: newSku,
-    isNewBatch: true,
-    batchNumber: nextBatchNum,
-    name: newName,
-    costPrice: newCost,
-    stock: qty,
-    price: newSellingPrice,
-    isExistingIncremented: false
+    productId: product.id,
+    sku: product.sku,
+    isNewBatch: false,
+    batchNumber: product.batch_number || 1,
+    name: product.name,
+    costPrice: weightedCost,
+    stock: newStock,
+    isExistingIncremented: true
   };
 }
 

@@ -121,7 +121,12 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
   const custPhone = order.customerPhone || order.customer_phone || matchedCust?.phone || '';
   const custAddress = order.customerAddress || order.customer_address || matchedCust?.address || '';
 
-  const activeOrderReturns = (salesReturns || []).filter(sr => sr.status !== 'voided' && (sr.invoiceNo === order.invoiceNo || sr.invoice_no === order.invoiceNo));
+  const activeOrderReturns = (salesReturns || []).filter(sr => 
+    sr.status !== 'voided' && 
+    sr.status !== 'cancelled' &&
+    (sr.invoiceNo === order.invoiceNo || sr.invoice_no === order.invoiceNo) &&
+    (!order.created_at || !sr.created_at || new Date(sr.created_at).getTime() >= new Date(order.created_at).getTime() - 60000)
+  );
 
   return (
     <div id="receipt-preview" className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-inner text-left max-w-2xl mx-auto my-4 font-sans leading-relaxed">
@@ -2191,7 +2196,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     const res = await fetchWithTimeout(`${API_URL}/sales/${orderId}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ void_passkey: passkey })
+      body: JSON.stringify({ 
+        void_passkey: passkey,
+        passkey: passkey,
+        confirm_permanent_delete: true,
+        confirmed: true 
+      })
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -5438,7 +5448,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                               const invTotal = Number(order.total_amount !== undefined ? order.total_amount : order.total);
                               const origPaidAmt = Number(order.payment_received || 0);
 
-                              const orderReturns = salesReturnsList.filter(sr => sr.status !== 'voided' && sr.status !== 'Voided' && sr.status !== 'cancelled' && (sr.invoiceNo === order.invoiceNo || sr.invoice_no === order.invoiceNo));
+                              const orderReturns = salesReturnsList.filter(sr => 
+                                sr.status !== 'voided' && 
+                                sr.status !== 'Voided' && 
+                                sr.status !== 'cancelled' && 
+                                (sr.invoiceNo === order.invoiceNo || sr.invoice_no === order.invoiceNo) &&
+                                (!order.created_at || !sr.created_at || new Date(sr.created_at).getTime() >= new Date(order.created_at).getTime() - 60000)
+                              );
 
                               const activeReturnTotal = orderReturns.reduce((sum, sr) => sum + Number(sr.returnAmount || (sr as any).return_amount || 0), 0);
                               const activeExchangeTotal = orderReturns.reduce((sum, sr) => sum + Number(sr.exchangeAmount || (sr as any).exchange_amount || 0), 0);
@@ -5468,7 +5484,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                 const invTotal = Number(order.total_amount !== undefined ? order.total_amount : order.total);
                                 const origPaidAmt = Number(order.payment_received || 0);
 
-                                const orderReturns = salesReturnsList.filter(sr => sr.status !== 'voided' && sr.status !== 'Voided' && sr.status !== 'cancelled' && (sr.invoiceNo === order.invoiceNo || sr.invoice_no === order.invoiceNo));
+                                const orderReturns = salesReturnsList.filter(sr => 
+                                  sr.status !== 'voided' && 
+                                  sr.status !== 'Voided' && 
+                                  sr.status !== 'cancelled' && 
+                                  (sr.invoiceNo === order.invoiceNo || sr.invoice_no === order.invoiceNo) &&
+                                  (!order.created_at || !sr.created_at || new Date(sr.created_at).getTime() >= new Date(order.created_at).getTime() - 60000)
+                                );
 
                                 const activeReturnTotal = orderReturns.reduce((sum, sr) => sum + Number(sr.returnAmount || (sr as any).return_amount || 0), 0);
                                 const activeExchangeTotal = orderReturns.reduce((sum, sr) => sum + Number(sr.exchangeAmount || (sr as any).exchange_amount || 0), 0);
@@ -8308,7 +8330,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             {/* Credit Accounts Overview Card */}
             {((lastOrder.payment_method || '').toLowerCase() === 'credit' || lastOrder.status === 'Non Paid' || lastOrder.status === 'Partially Settled' || lastOrder.status === 'Fully Settled' || (lastOrder as any).is_credit) && (() => {
               const acct = calculateSaleAccounting(lastOrder, salesReturnsList);
-              const orderReturns = salesReturnsList.filter(sr => sr.status !== 'voided' && sr.status !== 'Voided' && sr.status !== 'cancelled' && (sr.invoiceNo === lastOrder.invoiceNo || sr.invoice_no === lastOrder.invoiceNo));
+              const orderReturns = salesReturnsList.filter(sr => 
+                sr.status !== 'voided' && 
+                sr.status !== 'Voided' && 
+                sr.status !== 'cancelled' && 
+                (sr.invoiceNo === lastOrder.invoiceNo || sr.invoice_no === lastOrder.invoiceNo) &&
+                (!lastOrder.created_at || !sr.created_at || new Date(sr.created_at).getTime() >= new Date(lastOrder.created_at).getTime() - 60000)
+              );
               const origTotalAmt = acct.originalTotal;
               const totalPaidAmt = acct.totalPaid;
               const effectiveTotal = acct.effectiveTotal;

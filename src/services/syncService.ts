@@ -942,6 +942,8 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
             await localDb.run('DELETE FROM sales WHERE id = ?', [recordId]);
           } else if (tableName === 'sales_returns') {
             await localDb.run('DELETE FROM sales_returns WHERE id = ?', [recordId]);
+          } else if (tableName === 'products') {
+            await localDb.run('DELETE FROM products WHERE id = ?', [recordId]);
           }
         } catch (_) {}
       }
