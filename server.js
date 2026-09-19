@@ -275,6 +275,15 @@ app.use((req, res, next) => {
   next();
 });
 
+const DELETED_RECORDS_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS deleted_records (
+    table_name TEXT NOT NULL,
+    record_id TEXT NOT NULL,
+    deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (table_name, record_id)
+  )
+`;
+
 let dbInitPromise = null;
 async function ensureDbInitialized() {
   if (db) return db;
@@ -288,6 +297,8 @@ async function ensureDbInitialized() {
           // Connect the database adapter immediately without executing 60+ blocking DDL/migration roundtrips.
           db = await initDb();
           console.log('⚡ [Serverless Cold Start] Turso database initialized in <50ms (reusing Turso client singleton).');
+          // Ensure deleted_records tombstone table exists on Turso Cloud
+          await db.exec(DELETED_RECORDS_SCHEMA_SQL);
           return db;
         }
 
@@ -1485,6 +1496,9 @@ async function initializeDatabase() {
     )
   `);
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status, created_at);"); } catch (_) { }
+
+  // 6.6 Create Deleted Records Tombstone Table for Sync & Anti-Resurrection
+  await db.exec(DELETED_RECORDS_SCHEMA_SQL);
 
   // 7. Create Persistent Employees Table
   await db.exec(`
@@ -13117,7 +13131,8 @@ export {
   executeSalesReturn,
   executeVoidSalesReturn,
   executeVoidCreditNote,
-  executeVoidSale
+  executeVoidSale,
+  DELETED_RECORDS_SCHEMA_SQL
 };
 export default app;
 
