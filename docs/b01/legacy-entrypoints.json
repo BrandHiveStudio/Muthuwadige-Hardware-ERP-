@@ -1,0 +1,176 @@
+[
+  {
+    "file": "scratch/benchmark_sync.mjs",
+    "ignored": true,
+    "before": "b8fa7422015ab1b269b03a75643ace8bdb5ac331e58c0dc70627805865c990b8",
+    "after": "55e6f4c9c43f5d708269539bdb6614a309e677ee581a5015509ad37256412b8f"
+  },
+  {
+    "file": "scratch/check_dbs.cjs",
+    "ignored": true,
+    "before": "b095e09a17531f3574495dfa95f84ce4d11b6028fe7002edd7b8c738a070277b",
+    "after": "1ee6c0eef5c66d41dc62103231497858c8ad3b49efa026e31d7d18d44e8feefa"
+  },
+  {
+    "file": "scratch/check_turso.mjs",
+    "ignored": true,
+    "before": "7d66ca25a91120ed7c75efa6d6ffce809dea7672c8dae57963b5f42ea578532b",
+    "after": "8a9debb41fda1b1033d86e80432d991ee6cb2b0457be0e1044d146ab90faed84"
+  },
+  {
+    "file": "scratch/inspect_reconciliation.cjs",
+    "ignored": true,
+    "before": "7567bf6d62dea993542b64dbb5bef70e613b61b1306cad28de3f7aef78c79e5f",
+    "after": "253f68fe2fd46e326c1cfcd88dee7e2c31999c050309a4a0504e8c09d63cbcc8"
+  },
+  {
+    "file": "scratch/reconcile_turso.cjs",
+    "ignored": true,
+    "before": "9afce6ab9500d4ad78ce585e54c1c00643d5ccd658609dee96d20e2fab0e6bf6",
+    "after": "37c2d3e44335b689b8d263c2a8363e776a77fa4140a773c9668a6e35ba6a0653"
+  },
+  {
+    "file": "scratch/run_full_math_reconciliation_audit.js",
+    "ignored": true,
+    "before": "3f9c4ede9efd1ec46111e655714dbe4fa525097c7810ee656360c4e8f9f4b46c",
+    "after": "c75b2ca2e24af48aeab6b75aa1c4c0f47e693d79f34577c8303f1639b7286984"
+  },
+  {
+    "file": "scratch/test_4_purposes_inward_cheque.ts",
+    "ignored": true,
+    "before": "791055bbd12c82b99f51963b060092fe4d4007db5bdb746c61126c872995c769",
+    "after": "19bae2ce8e82ef37b4c122fe82ef5c4e5eae3cbc3819770f7b5f56f0c1b09352"
+  },
+  {
+    "file": "scratch/test_atomic_receive_po.js",
+    "ignored": true,
+    "before": "489f4d9e888e7d2a6d6ccf46e35b646d723c4a878985659d2a8bf24fadb9a734",
+    "after": "9a7be02fe2436d3cd528bf9a841cbccf5d2f9ec5fddd7d115c22d9b75474090a"
+  },
+  {
+    "file": "scratch/test_batch_sku_splitting.js",
+    "ignored": true,
+    "before": "5b7c479eed6a283579c21b75004a1c0ecf5af5f08da10e3d0e135ed7ff2f7a43",
+    "after": "137d307e83c80d911fd47469de27595fad7092374aadf5e3e80cc381a3462537"
+  },
+  {
+    "file": "scratch/test_bulk_50.mjs",
+    "ignored": true,
+    "before": "39d3023bf0f755c11e8a3695f2088eb1bcdc70354e4afd316e9f3e3d48eaf372",
+    "after": "b00f332fe7eac02df53992d63a763c6772ea2a82bb86d7321e3ad76c8d8420be"
+  },
+  {
+    "file": "scratch/test_customer_import_lifecycle.mjs",
+    "ignored": true,
+    "before": "3179459569b9cf06db98ae852aa0f44b1ff7d7d40a4d83713f644b57c63003b4",
+    "after": "6f8adbcde3303ab549935f0656d4c1dc735ac807da04ba6397cb950c0830576d"
+  },
+  {
+    "file": "scratch/test_final_forensic_repair.mjs",
+    "ignored": true,
+    "before": "ee3b917857cda06792e134fb227c88f4f8a1a03b3e8d79f9eaad92730d7a9e6f",
+    "after": "db7775f6e86c76e794731874d739f2bd60bc2aee3d533be572d1ce0fd17bd451"
+  },
+  {
+    "file": "scratch/test_http_batch_splitting.js",
+    "ignored": true,
+    "before": "550527e386c51a3a02969f009c0a6dd88436b232e40178ec232c80e338eb5e13",
+    "after": "14cbd8196110c91acac5d9e1948107f50c9d225b11e6064caf8272fe1ebcb689"
+  },
+  {
+    "file": "scratch/test_http_endpoints.js",
+    "ignored": true,
+    "before": "fff034adc853954ab22391956211922b921a091e9d4a750161ce43f248a76e1a",
+    "after": "59f122d7e7bc6f130d77f6309b5bab5fcc792a72ec2208a44d84462cbb22b61c"
+  },
+  {
+    "file": "scratch/test_inward_cheque_workflow.js",
+    "ignored": true,
+    "before": "8773fb7810defacc83ca79a5ac7a2c29754dd0e17da2a328bb8d5d45372b3d98",
+    "after": "22c6a7d8b37b86c34468045a1a715b85122a76bbfe0cc5793267fe628007c793"
+  },
+  {
+    "file": "scratch/test_inward_cheque_workflow.ts",
+    "ignored": true,
+    "before": "383cd65b45113f63454f9259ba4195637de140c7b53346e3dc09db748ea53593",
+    "after": "911ff954c51ad827b8eec64284e89ad1550fb7316c714e0b096bee029f621154"
+  },
+  {
+    "file": "scratch/test_put_sales_sync.mjs",
+    "ignored": true,
+    "before": "65a1850f9dda1743e19abea846f591860f30cb854f126f5bf1e6494c839da56b",
+    "after": "6435f92e0415d9b84d3f921d78c101632b7d27278054230fb0d99f6aa6ce4b97"
+  },
+  {
+    "file": "scratch/test_returns_and_payments.js",
+    "ignored": true,
+    "before": "c3cff1ea2a951aac47b742b1d384dc93893c8053a60c45272d54957e7c1f1171",
+    "after": "1a330523043d81c28fffe9187ec7e780064a1be965bc1b5c6727ed2b876b2247"
+  },
+  {
+    "file": "scratch/test_reversal_engine.js",
+    "ignored": true,
+    "before": "ef9058ac5f0ecb892b22d76f499bf9bc6bdc34b0824c633c48583115682024d6",
+    "after": "92f26a0d911a50beff2a0bbdd635964b61a409fc6f3d5f4cf2032fe126fa58f6"
+  },
+  {
+    "file": "scratch/test_step2_endpoints.js",
+    "ignored": true,
+    "before": "651a0dc139e2d4e41ea7e0db21d2e1b6fe27cc3c53e91b5fe8eac73df6d90e2f",
+    "after": "976e185409df28049b516bccc46af0e5ae25668f5bf8bb96a3ea9c2ffb81c365"
+  },
+  {
+    "file": "scratch/test_sync_and_parity.js",
+    "ignored": true,
+    "before": "23b9437ef40dd956e1f3e51a48b5040a6d73e9c48570364048543d18e358b827",
+    "after": "05c560c45fec0c14d9dd5132004064db8a04570363f0efe9f738b194bdf46516"
+  },
+  {
+    "file": "scratch/test_sync_engine.js",
+    "ignored": true,
+    "before": "af4a0c00ca77808a35e9c40c4525dec8c03dd8ce14550f9638e6a24427624b8a",
+    "after": "9d6b124d81f15f13dc83a146da1aafb94cdccfcafbe466904a68db05fcd64994"
+  },
+  {
+    "file": "scratch/verify_single_source_of_truth.js",
+    "ignored": true,
+    "before": "41baef1ada13f43bb57d8c6eac6e955c7be2ed4e6a09fded7f7633e778d4f8a4",
+    "after": "b18930c8a5695b7ef41ed7d7b90636bba5b5f8f1585de29163340b1622f3a4fb"
+  },
+  {
+    "file": "scratch/verify_step1.js",
+    "ignored": true,
+    "before": "b2b174661bf298d44c81e9547876a6260e15e4baeeb02199b504bb13b0dab22f",
+    "after": "60af52c36b7b7fbbe40e7263a252857cb376cb9b4b79d126c591c9b1f7e2da6f"
+  },
+  {
+    "file": "scratch/verify_supplier_workflow.js",
+    "ignored": true,
+    "before": "20078f9b3027c094a22d337d2fcb90b4afc394fae33c88a3d2eae13f36c53c81",
+    "after": "be4fa1988ca2ddd6a4f7082c6b94ac26bb92786f17dc7dd5e5a2aea8680428f1"
+  },
+  {
+    "file": "scripts/verify_cashier_attribution.js",
+    "ignored": false,
+    "before": "2b5613b6aad68917c08b0f9b57656a617592ddb48e09a8fc425ad77eed750a10",
+    "after": "dab10036e32e6ca48d052de533813f0dce11eef42f0c7e3f89a35d520a173277"
+  },
+  {
+    "file": "scripts/verify_offline_parity_and_sync.js",
+    "ignored": false,
+    "before": "13e81b25756abe49f7dbede48f0c49e82a415c4e3b0e789d5803cef4446239f0",
+    "after": "9d482b2b58460750f8d4ec4b9a271ff159efb32a24ced42ad0067c02f3b2a5b2"
+  },
+  {
+    "file": "scripts/verify_smoke_test.js",
+    "ignored": false,
+    "before": "3e81bc9de1fa705a3c8be86302a623680f2192a626df016d1d1c339a3a5a8752",
+    "after": "3f7d08f1d57aeaa3d5ea1b934b1f65453f52bb3fe9b478bdb8196c9f6860b368"
+  },
+  {
+    "file": "scripts/verify_zombie_elimination.js",
+    "ignored": false,
+    "before": "734d05fb8ba89986c766887aef02d2677209aabc9252ce7c7c212e08cbe2436e",
+    "after": "5b933cf2c334847d0d9bbd9fd21c066ff74f3ab930a641af2093d3ee0bb984fc"
+  }
+]

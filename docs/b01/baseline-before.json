@@ -1,0 +1,82 @@
+{
+  "revision": "1e4960d10b8e1e24d287559462acadb373ca7756",
+  "hashes": {
+    "package.json": "6684e3ea41b11ad01eb686344f198a17fbd8f3dff45cba4ed28d4cc63025d046",
+    "package-lock.json": "e061d1551ab1218f813751984c1a7eba79b075a070ef8aabac9daecbef92f4b0",
+    "server.js": "2c92b4cff8d7a4e2a544a62773801ab0d942012a13fd25785e9565091d3b6f8d",
+    "electron-main.js": "0e703d1ac10f2dba43d6f2290a17e5bacacceadcbea06ec472deb757a2fcf53e",
+    "preload.js": "e8663ccde67df5ccdd04591dcc2a34f10c7f4e0c8015509e55c95b12a69a7fdf",
+    "src/db/connection.js": "65c7f51bbfe1a7e0149b5c25af41e58b8295dcc963fe182dd90e6d3048429e53",
+    "src/services/syncService.js": "6b7ac4e23f9ce78b660cbc263df5c1327cf6ac1358ce35279c21725a77cf214a",
+    "api/index.js": "de56d9a48e079c7fdb6b4724d264725d101e3b54db385d4e26d1ec938871c2a7",
+    "api/health.js": "51c06b8cbc242ca53e080ba180ed84c53ad44531c0e8d693dc704a05375a0497",
+    "lib/turso.js": "c44261ff071c5f159d309705b027339534bf40a7de5e6849539fe7781b1a2eb0",
+    "backup-worker.js": "50a2c33da7b9e331668804ba2c796a61af0dbe2dce4dd424f6db256eb003152b",
+    "build-dist.js": "33141251942a73e693b59f6220959b287299304c18441da9842a96878f5ff3e3",
+    "src/db/connection.ts": "517326bfd617f658301a366b2c6e948a4e1fe5b336b72eeed24533c5f1531f94",
+    "src/services/syncService.ts": "9607c2890d94c4655f680710d69c689f02c843569c047d1d7909d831b30a9c5e",
+    "index.html": "905fd0e3d5b72e076713b4fcb1f2d0ff0f35816d641b8f936ed36831d24ed8e9",
+    "src/index.tsx": "78734bf05a7deaea980996adbf0ffdb5f19c416a3c4fb4d33afb05a6b2c06e48",
+    "src/App.tsx": "16fa54b9aae0f69856fecb3e114ea33078602c99c1d58e91281f06bfa83310f3",
+    "src/types/index.ts": "c367215995bf6032b0a7d4976e741e2be8d9f3a6273bf7bcbe17055b3d685336",
+    "vite.config.ts": "850626c46de15f497d25e11e9676a7ace61e71b0acd9defca06a1b04a104bbad",
+    "vercel.json": "2ab19570a5ef182563ae26d621432cfe78727f49a7dfb798bd2597d517628c77"
+  },
+  "dependencies": {
+    "typescript": {
+      "installed": "5.9.3",
+      "locked": "5.9.3",
+      "match": true
+    },
+    "vite": {
+      "installed": "5.4.21",
+      "locked": "5.4.21",
+      "match": true
+    },
+    "react": {
+      "installed": "18.3.1",
+      "locked": "18.3.1",
+      "match": true
+    },
+    "express": {
+      "installed": "5.2.1",
+      "locked": "5.2.1",
+      "match": true
+    },
+    "sqlite": {
+      "installed": "5.1.1",
+      "locked": "5.1.1",
+      "match": true
+    },
+    "sqlite3": {
+      "installed": "6.0.1",
+      "locked": "6.0.1",
+      "match": true
+    },
+    "@libsql/client": {
+      "installed": "0.18.0",
+      "locked": "0.18.0",
+      "match": true
+    },
+    "electron": {
+      "installed": "42.2.0",
+      "locked": "42.2.0",
+      "match": true
+    },
+    "electron-builder": {
+      "installed": "25.1.8",
+      "locked": "25.1.8",
+      "match": true
+    },
+    "eslint": {
+      "installed": "8.57.1",
+      "locked": "8.57.1",
+      "match": true
+    }
+  },
+  "packaged": {
+    "available": true,
+    "serverSha256": "13e41d76a70e0955c710e025033784b817a8a75f1b8f74c9cff3e3348678d609",
+    "matchesSource": false
+  }
+}

@@ -1,0 +1,14 @@
+<Configuration>
+  <VGpu>Disable</VGpu>
+  <Networking>Disable</Networking>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>E:\HARDWARE-ERP-GOLDEN-MASTER-2026-08-27\GOLDEN~1\release-dist</HostFolder>
+      <SandboxFolder>C:\Users\WDAGUtilityAccount\Desktop\ReleaseDist</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <LogonCommand>
+    <Command>explorer.exe C:\Users\WDAGUtilityAccount\Desktop\ReleaseDist</Command>
+  </LogonCommand>
+</Configuration>

@@ -1,0 +1,53 @@
+{
+  "files": {
+    "package.json": "6684e3ea41b11ad01eb686344f198a17fbd8f3dff45cba4ed28d4cc63025d046",
+    "package-lock.json": "e061d1551ab1218f813751984c1a7eba79b075a070ef8aabac9daecbef92f4b0",
+    "server.js": "2c92b4cff8d7a4e2a544a62773801ab0d942012a13fd25785e9565091d3b6f8d",
+    "electron-main.js": "0e703d1ac10f2dba43d6f2290a17e5bacacceadcbea06ec472deb757a2fcf53e",
+    "src/lib/api.ts": "615adfc7505b5e4d449f1a17160656037badde04f506f7206f931e7cebdf697b",
+    "src/db/connection.js": "65c7f51bbfe1a7e0149b5c25af41e58b8295dcc963fe182dd90e6d3048429e53",
+    "src/services/syncService.js": "6b7ac4e23f9ce78b660cbc263df5c1327cf6ac1358ce35279c21725a77cf214a",
+    "api/index.js": "de56d9a48e079c7fdb6b4724d264725d101e3b54db385d4e26d1ec938871c2a7",
+    "api/health.js": "51c06b8cbc242ca53e080ba180ed84c53ad44531c0e8d693dc704a05375a0497",
+    "scripts/b01/check.mjs": "d26773f48602882b44aba5db1888b82d69e9c6fadef0f3132690f9218ee6d505",
+    "scripts/b01/legacy-block.cjs": "a263da2168bbe79ccd66b7a0b20fc4f889555f2a904fef5f4d66a7c0d5f569bf",
+    "scripts/b01/schema.mjs": "f1640ffcf495a2aaa8e15daf22fbb37a660bf569f9d4dc4a786343b68a50724b",
+    "scripts/b01/targets.mjs": "b000aeea91d2b916ddd1fe22b98f62e2f63047a2732dc7a30d25b9f752a6674d",
+    "scripts/b01/targets.test.mjs": "9e27e5872ec9a167732ccc59a0ad157b7fb17ec23ffbd6e54e62e818616e374b",
+    "docs/b01/baseline-after.json": "65cf736d3a6c5957f6374364e4973f9dca871d193c3cf5b078707fed78b2847c",
+    "docs/b01/baseline-before.json": "9186136a9837b1ef8a2af5918ea50ce65e8a7ee044fe5196e8c8e62861fd7212",
+    "docs/b01/change-manifest.json": "6b35527a425c54faa7941bcf13691364a53304c7518616fc9e3dc5bfc89ab069",
+    "docs/b01/legacy-entrypoints.json": "9e4c9707480e3097cca15e237893c2707299dc4952cd4351f29b9c1154204ff1",
+    "docs/b01/README.md": "cb61e693423aed6e89836cb4ac8e1edb60a718d14efc3f22718159cfe3846212",
+    "docs/b01/schema-after.json": "bf6bad8871ee97498c349c50fee2bf4d02d1c4392d2b37807825118e73ef5e57",
+    "docs/b01/schema-before.json": "bf6bad8871ee97498c349c50fee2bf4d02d1c4392d2b37807825118e73ef5e57"
+  },
+  "bytes": {
+    "hardware.db": "b9c380ddcb759a3f86f97a44e4b5d52a085351e7e2aaf7af62ad4b44f618d663",
+    "hardware.db-wal": "91497363e91af75fb32361c9e73153c243a1a450f604c1aded20c0521350bf81"
+  },
+  "schema": {
+    "fingerprint": "6f134f743d8ee9d563ba55d28cac03409aace4f1234ff5aebe00ff0349a48b38",
+    "counts": {
+      "index": 82,
+      "table": 36,
+      "trigger": 10,
+      "view": 3
+    },
+    "metadata": {
+      "schema_version": {
+        "schema_version": 330
+      },
+      "user_version": {
+        "user_version": 0
+      },
+      "application_id": {
+        "application_id": 0
+      },
+      "encoding": {
+        "encoding": "UTF-8"
+      }
+    },
+    "filesUnchanged": true
+  }
+}

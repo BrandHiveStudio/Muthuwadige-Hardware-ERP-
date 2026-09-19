@@ -1,0 +1,187 @@
+{
+  "scope": "B02 safe harness preparation only; A35 unchanged; B03 not started",
+  "files": [
+    {
+      "file": "scripts/b02/b01-safe.test.mjs",
+      "change": "NEW",
+      "reason": "Run unchanged B01 tests with extra network denial and environment-file isolation",
+      "productionRuntimeCanChange": false,
+      "productionSchemaCanChange": false,
+      "businessLogicCanChange": false,
+      "sha256": "6e3a2cb9fb4248d41facae77f27e00610752ad2555ad12a68185005beb0ae317"
+    },
+    {
+      "file": "scripts/b02/electron-probe.cjs",
+      "change": "NEW",
+      "reason": "Independent disposable Electron shell with exact session URL guard; currently blocked at native page load",
+      "productionRuntimeCanChange": false,
+      "productionSchemaCanChange": false,
+      "businessLogicCanChange": false,
+      "sha256": "28950a3199b5a5dc2bd7b3f1b5faa10888e4afac010851a8d7e23cb56c61d03a"
+    },
+    {
+      "file": "scripts/b02/electron.mjs",
+      "change": "NEW",
+      "reason": "Preflight and launch only the independent hidden Electron probe",
+      "productionRuntimeCanChange": false,
+      "productionSchemaCanChange": false,
+      "businessLogicCanChange": false,
+      "sha256": "2a14b4afa8d8dc7e8191c098580dd5d4b7d606e384074cec29ab16ef295db5a6"
+    },
+    {
+      "file": "scripts/b02/harness.mjs",
+      "change": "NEW",
+      "reason": "Empty SQLite fixture and read-only owned loopback probe",
+      "productionRuntimeCanChange": false,
+      "productionSchemaCanChange": false,
+      "businessLogicCanChange": false,
+      "sha256": "e50ccc0e32d281a762df3abff8d8d20edbdac2ac60992d5d0e1f286ccd378b3e"
+    },
+    {
+      "file": "scripts/b02/harness.test.mjs",
+      "change": "NEW",
+      "reason": "T-H01–T-H11 and conditional T-E01–T-E04 acceptance assertions",
+      "productionRuntimeCanChange": false,
+      "productionSchemaCanChange": false,
+      "businessLogicCanChange": false,
+      "sha256": "2e91c70338c160a1a0858c9cf333f3509f02d8381688e5f0af3847d361bf5f76"
+    },
+    {
+      "file": "scripts/b02/network.mjs",
+      "change": "NEW",
+      "reason": "Default-deny trusted-harness sockets/DNS and leased loopback requests",
+      "productionRuntimeCanChange": false,
+      "productionSchemaCanChange": false,
+      "businessLogicCanChange": false,
+      "sha256": "b71b0624008c48b2dd2ec4cb713d31425e3e2739e7e643d564f7bc61d9b6c7f4"
+    },
+    {
+      "file": "scripts/b02/safety.mjs",
+      "change": "NEW",
+      "reason": "Owned disposable paths, explicit validation, minimal environment, confined cleanup",
+      "productionRuntimeCanChange": false,
+      "productionSchemaCanChange": false,
+      "businessLogicCanChange": false,
+      "sha256": "d9dddc08044cfcc1af0002eec55e90c30d0514e333ae2c35d55eae03cd158e52"
+    },
+    {
+      "file": "docs/b02/baseline-after.json",
+      "change": "NEW",
+      "reason": "Post-work unchanged source/B01/schema/DB/WAL evidence",
+      "productionRuntimeCanChange": false,
+      "productionSchemaCanChange": false,
+      "businessLogicCanChange": false,
+      "sha256": "4a5349c148cbe855d6fdd7a8b3a854c793b17921fbda0441b5a246c68a8b79eb"
+    },
+    {
+      "file": "docs/b02/baseline-before.json",
+      "change": "NEW",
+      "reason": "Pre-work source/B01 hashes and read-only schema/DB/WAL evidence",
+      "productionRuntimeCanChange": false,
+      "productionSchemaCanChange": false,
+      "businessLogicCanChange": false,
+      "sha256": "ad25ef2f442989c75f628345a12c2e4433815ff100e0591fa93ecc505766a5ba"
+    },
+    {
+      "file": "docs/b02/README.md",
+      "change": "NEW",
+      "reason": "Inspection, design, limitations, D01 proposed matrix and usage",
+      "productionRuntimeCanChange": false,
+      "productionSchemaCanChange": false,
+      "businessLogicCanChange": false,
+      "sha256": "1720b43efdf1c305ca5745f73042d3834c2b4fd3ba3921e3b0b9c2486270d279"
+    },
+    {
+      "file": "docs/b02/source-package.json",
+      "change": "NEW",
+      "reason": "Read-only packaged/backend comparison",
+      "productionRuntimeCanChange": false,
+      "productionSchemaCanChange": false,
+      "businessLogicCanChange": false,
+      "sha256": "51582791a83a64c88ca201e9093b3c0e282baeb176ff88c0dc7c814a69d381bb"
+    },
+    {
+      "file": "docs/b02/test-results.json",
+      "change": "NEW",
+      "reason": "Pass/fail/blocker evidence",
+      "productionRuntimeCanChange": false,
+      "productionSchemaCanChange": false,
+      "businessLogicCanChange": false,
+      "sha256": "b3e2a2c0a8dafe807e9e56448a0b5dcc041d43d8f4b0be6bb3a316ddd0bf18be"
+    },
+    {
+      "file": "docs/b02/change-manifest.json",
+      "change": "NEW",
+      "reason": "Per-file purpose and impact inventory",
+      "productionRuntimeCanChange": false,
+      "productionSchemaCanChange": false,
+      "businessLogicCanChange": false,
+      "sha256": null
+    },
+    {
+      "file": "docs/b02/diagnostic-instrumentation.md",
+      "change": "NEW",
+      "reason": "Diagnostic-only amendment and blocked execution evidence",
+      "productionRuntimeCanChange": false,
+      "productionSchemaCanChange": false,
+      "businessLogicCanChange": false,
+      "sha256": "87bb5b7f066f5a27024325a5643978080cda27a900c23bef4fcbbbe49299ee2f"
+    },
+    {
+      "file": "scripts/b02/firewall.ps1",
+      "change": "NEW",
+      "reason": "Deterministic Windows Defender Firewall per-program boundary helper for static review only; not executed",
+      "productionRuntimeCanChange": false,
+      "productionSchemaCanChange": false,
+      "businessLogicCanChange": false,
+      "sha256": "0ae9d859a34f02316c8f61944fc948e93d6277914f597c60364c29bb6fe76fc4"
+    }
+  ],
+  "existingFilesModified": [],
+  "selfHashOmitted": true,
+  "diagnosticInstrumentation": {
+    "scope": "Diagnostic observations only; no Electron execution",
+    "changes": [
+      {
+        "file": "scripts/b02/electron-probe.cjs",
+        "before": "46f8d586219ddd38e257715dd0d492808070abbd66f39fb8a4e1322cdb65e5bc",
+        "after": "28950a3199b5a5dc2bd7b3f1b5faa10888e4afac010851a8d7e23cb56c61d03a"
+      },
+      {
+        "file": "scripts/b02/electron.mjs",
+        "before": "64d06e3faab00d239494bcc467f00857dcfa080571e04eb763c100799725ec91",
+        "after": "2a14b4afa8d8dc7e8191c098580dd5d4b7d606e384074cec29ab16ef295db5a6"
+      },
+      {
+        "file": "scripts/b02/harness.mjs",
+        "before": "69278e555d94a4157aa6f24a2101afc66ced0f9663bb87520dab6e2f66d804bc",
+        "after": "e50ccc0e32d281a762df3abff8d8d20edbdac2ac60992d5d0e1f286ccd378b3e"
+      }
+    ],
+    "additionalFiles": [
+      "docs/b02/diagnostic-instrumentation.md",
+      "docs/b02/change-manifest.json"
+    ],
+    "static": {
+      "syntax": "PASS",
+      "eslint": "PASS",
+      "patchReview": "Diagnostic lines only; response/security behavior retained"
+    },
+    "protectedFilesUnchanged": {
+      "package.json": true,
+      "package-lock.json": true,
+      "server.js": true,
+      "electron-main.js": true,
+      "src/lib/api.ts": true,
+      "src/db/connection.js": true,
+      "src/services/syncService.js": true,
+      "api/index.js": true,
+      "api/health.js": true
+    },
+    "databaseAndWalUnchanged": true,
+    "databaseFingerprint": "6f134f743d8ee9d563ba55d28cac03409aace4f1234ff5aebe00ff0349a48b38",
+    "databaseVerification": "Read-only byte identity against recorded baseline; SQLite not opened",
+    "execution": "STOP — unsafe verification target",
+    "rootCause": "UNVERIFIED — evidence required before proceeding."
+  }
+}

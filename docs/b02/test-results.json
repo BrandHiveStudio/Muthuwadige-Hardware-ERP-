@@ -1,0 +1,47 @@
+{
+  "status": "BLOCKED",
+  "localHarness": {
+    "T-H01": "PASS",
+    "T-H02": "PASS",
+    "T-H03": "PASS",
+    "T-H04": "PASS",
+    "T-H05": "PASS",
+    "T-H06": "PASS",
+    "T-H07": "PASS",
+    "T-H08": "PASS",
+    "T-H09": "PASS",
+    "T-H10": "PASS",
+    "T-H11": "PASS"
+  },
+  "T-H12": "PASS: before/after structure and DB/WAL hashes identical",
+  "electron": {
+    "T-E01": "BLOCKED: complete assertion not reached",
+    "T-E02": "BLOCKED: complete assertion not reached",
+    "T-E03": "BLOCKED: page load ERR_FAILED",
+    "T-E04": "BLOCKED: final result not returned",
+    "observed": {
+      "configurationStage": "completed",
+      "readyStage": "completed",
+      "allowedSessionRequests": 1,
+      "deniedSessionRequests": 0,
+      "loopbackServerRequests": 1
+    },
+    "scope": "standalone test shell only; ERP startup never imported"
+  },
+  "b01Regression": {
+    "pass": 11,
+    "fail": 0,
+    "wrapper": "scripts/b02/b01-safe.test.mjs"
+  },
+  "static": {
+    "typescript": "PASS",
+    "javascript": "PASS",
+    "eslint": "PASS",
+    "diffCheck": "PASS with CRLF-aware whitespace setting"
+  },
+  "notes": [
+    "Initial loopback test failed closed because Node calls dns.lookup even for a numeric bind; numeric loopback is now resolved locally without DNS.",
+    "Electron retries retained all allowlist and sandbox restrictions; native cause remains unknown.",
+    "Native packet capture and OS-wide filesystem auditing were not performed."
+  ]
+}

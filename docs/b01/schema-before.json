@@ -1,0 +1,24 @@
+{
+  "fingerprint": "6f134f743d8ee9d563ba55d28cac03409aace4f1234ff5aebe00ff0349a48b38",
+  "counts": {
+    "index": 82,
+    "table": 36,
+    "trigger": 10,
+    "view": 3
+  },
+  "metadata": {
+    "schema_version": {
+      "schema_version": 330
+    },
+    "user_version": {
+      "user_version": 0
+    },
+    "application_id": {
+      "application_id": 0
+    },
+    "encoding": {
+      "encoding": "UTF-8"
+    }
+  },
+  "filesUnchanged": true
+}

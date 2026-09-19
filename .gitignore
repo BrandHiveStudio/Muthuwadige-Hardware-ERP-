@@ -40,3 +40,8 @@ backups/
 *.exe
 *.zip
 dist/
+
+release-archive/
+*.asar
+*.exe
+

@@ -186,23 +186,14 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
       if (poData) {
         const mappedOrders = poData.map((po: any) => ({
-            ...po,
-            poNumber: po.po_number !== undefined ? po.po_number : po.poNumber,
-            supplierName: po.supplier_name !== undefined ? po.supplier_name : po.supplierName,
-            dueDate: po.due_date !== undefined ? po.due_date : po.dueDate,
-            transportation_fee: Math.max(0, Number(po.transportation_fee ?? po.transportationFee ?? po.shipping_cost ?? po.delivery_fee ?? 0)),
-            transportationFee: Math.max(0, Number(po.transportation_fee ?? po.transportationFee ?? po.shipping_cost ?? po.delivery_fee ?? 0)),
-            shipping_cost: Math.max(0, Number(po.transportation_fee ?? po.transportationFee ?? po.shipping_cost ?? po.delivery_fee ?? 0)),
-            settlement_mode: (po.settlement_mode || po.payment_method || po.settlementMode || 'CREDIT').toUpperCase(),
-            settlementMode: (po.settlement_mode || po.payment_method || po.settlementMode || 'CREDIT').toUpperCase(),
-            payment_method: (po.payment_method || po.settlement_mode || po.settlementMode || 'CREDIT').toUpperCase(),
-            paymentMethod: (po.payment_method || po.settlement_mode || po.settlementMode || 'CREDIT').toUpperCase(),
-            received_by: po.received_by || po.receivedBy || null,
-            receivedBy: po.received_by || po.receivedBy || null,
-            received_at: po.received_at || po.receivedAt || null,
-            receivedAt: po.received_at || po.receivedAt || null,
-            date: po.created_at ? new Date(po.created_at).toLocaleDateString() : (po.date || new Date().toLocaleDateString())
-          }));
+          ...po,
+          poNumber: po.po_number !== undefined ? po.po_number : po.poNumber,
+          supplierName: po.supplier_name !== undefined ? po.supplier_name : po.supplierName,
+          dueDate: po.due_date !== undefined ? po.due_date : po.dueDate,
+          transportation_fee: Number(po.transportation_fee ?? po.transportationFee ?? po.shipping_cost ?? po.delivery_fee ?? 0),
+          transportationFee: Number(po.transportation_fee ?? po.transportationFee ?? po.shipping_cost ?? po.delivery_fee ?? 0),
+          date: po.created_at ? new Date(po.created_at).toLocaleDateString() : (po.date || new Date().toLocaleDateString())
+        }));
         setOrders(mappedOrders);
         setCachedData('purchaseOrders', mappedOrders);
       }
@@ -434,7 +425,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
   // --- HTML PURCHASE ORDER GENERATOR ---
   const generatePOPrintHTML = (order: PurchaseOrder) => {
-    const shippingFee = Math.max(0, Number((order as any).transportation_fee ?? (order as any).transportationFee ?? order.shipping_cost ?? (order as any).delivery_fee ?? 0));
+    const shippingFee = Number(order.shipping_cost || (order as any).transportation_fee || (order as any).delivery_fee || (order as any).transportationFee || 0);
     const shippingRow = shippingFee > 0 ? `
   <tr>
     <td style="padding: 4px 8px; text-align: right; color: #475569;">Transport / Delivery:</td>
@@ -445,7 +436,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       ? new Date(order.received_at || (order as any).received_date || (order as any).updated_at).toLocaleDateString() 
       : 'N/A';
     const receivedBy = order.received_by || (order as any).received_by_name || currentUser?.name || 'Staff';
-    const paymentMethod = ((order as any).settlement_mode || (order as any).settlementMode || order.payment_method || (order as any).paymentMethod || (order as any).settlement_type || 'CREDIT').toUpperCase();
+    const paymentMethod = (order.payment_method || order.settlement_type || (order as any).settlement_mode || (order as any).settlementMode || 'CREDIT').toUpperCase();
 
     const computedGross = (order.items || []).reduce((sum: number, it: any) => {
       const q = Number(it.qty || it.quantity || 0);
@@ -719,7 +710,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     doc.text("Thank you for your partnership!", 15, finalY + 19);
 
     // Received Info (only shown for received POs)
-    if (['received', 'completed', 'paid'].includes((order.status || '').toLowerCase())) {
+    if ((order.status || '').toLowerCase() === 'received') {
       const receivedDate = order.received_at || (order as any).received_date || (order as any).updated_at 
         ? new Date(order.received_at || (order as any).received_date || (order as any).updated_at).toLocaleDateString() 
         : 'N/A';
@@ -2353,7 +2344,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                             {(order.status || '').toLowerCase() === 'pending' && (
                                 <button onClick={() => openReceiveModal(order)} className="text-[10px] font-black uppercase tracking-widest bg-emerald-50 text-emerald-600 hover:bg-emerald-600 hover:text-white border border-emerald-100 px-4 py-2.5 rounded-xl transition-all flex items-center gap-1.5 shadow-sm shadow-emerald-500/10"><CheckCircleIcon className="w-3.5 h-3.5" /> Receive & Settle</button>
                             )}
-                            {['received', 'completed', 'paid'].includes((order.status || '').toLowerCase()) && (
+                            {(order.status || '').toLowerCase() === 'received' && (
                                 <button onClick={() => handleRevertPurchaseOrderReceipt(order.poNumber || order.id)} className="text-[10px] font-black uppercase tracking-widest bg-amber-50 text-amber-800 hover:bg-amber-600 hover:text-white border border-amber-200 px-4 py-2.5 rounded-xl transition-all flex items-center gap-1.5 shadow-sm shadow-amber-500/10" title="Revert PO Receipt & Restock Deduct"><RotateCcwIcon className="w-3.5 h-3.5" /> Revert Receipt</button>
                             )}
                             <button onClick={() => handleDeleteOrder(order.id)} className="p-2.5 rounded-xl bg-red-50 text-red-600 hover:bg-red-500 hover:text-white border border-red-100 transition-all shadow-sm shadow-red-500/10" title="Delete Order"><Trash2Icon className="w-5 h-5" /></button>

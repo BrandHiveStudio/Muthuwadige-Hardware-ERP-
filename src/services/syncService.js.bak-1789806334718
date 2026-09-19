@@ -1151,7 +1151,7 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
       const localTableCols = await localDb.all(`PRAGMA table_info("${tableName}")`).catch(() => []);
       const localColSet = new Set((localTableCols || []).map(c => c.name));
 
-      const MASTER_TABLES = new Set(['products', 'categories', 'customers', 'suppliers', 'users', 'profiles', 'expenses', 'debit_notes', 'purchase_returns', 'purchase_return_items', 'customer_transactions', 'delivery_notes', 'bill_holds', 'branches', 'employees']);
+      const MASTER_TABLES = new Set(['products', 'categories', 'customers', 'suppliers', 'users', 'profiles']);
       const isMasterTable = MASTER_TABLES.has(tableName);
 
       const res = await executeWithTimeout(tursoClient, selectSql || `SELECT * FROM "${tableName}"`, 15000);

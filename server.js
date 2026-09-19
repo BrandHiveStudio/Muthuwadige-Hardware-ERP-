@@ -9676,8 +9676,20 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
         `Received PO #${po.po_number || po.po_no} for "${supplierName}" (Total: Rs. ${poGrandTotal.toLocaleString()}, Settlement Mode: ${validMode})`
       );
 
-      // 6. Enqueue Sync inside managed transaction
-      await enqueueSync(db, 'purchase_orders', po.id, 'UPSERT');
+              // 6. Enqueue Sync inside managed transaction
+        await enqueueSync(db, 'purchase_orders', po.id, 'UPSERT');
+        if (suppSyncId) {
+          await enqueueSync(db, 'suppliers', suppSyncId, 'UPSERT');
+        }
+        if (transSyncTxId) {
+          await enqueueSync(db, 'transactions', transSyncTxId, 'UPSERT');
+        }
+        if (settleTxId) {
+          await enqueueSync(db, 'transactions', settleTxId, 'UPSERT');
+        }
+        if (settleChqId) {
+          await enqueueSync(db, 'cheque_registry', settleChqId, 'UPSERT');
+        }
       if (Array.isArray(updatedPoItems) && updatedPoItems.length > 0) {
         for (let i = 0; i < updatedPoItems.length; i++) {
           const it = updatedPoItems[i];
