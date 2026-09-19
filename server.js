@@ -775,6 +775,29 @@ async function authenticate(req, res, next) {
         role: decoded.role || 'admin',
         name: decoded.name || decoded.email
       };
+
+      // Active User Verification: Evict sessions for deleted users
+      if (decoded.id) {
+        let userExists = null;
+        try {
+          userExists = await db.get(
+            'SELECT id FROM profiles WHERE id = ? UNION SELECT id FROM users WHERE id = ?',
+            [decoded.id, decoded.id]
+          );
+        } catch (_) {}
+
+        if (!userExists) {
+          try {
+            res.clearCookie('token', { path: '/' });
+            await db.run('DELETE FROM sessions WHERE user_id = ? OR token = ?', [decoded.id, token]);
+          } catch (_) {}
+          return res.status(401).json({
+            error: 'Session expired or user account has been removed. Please log in again.',
+            code: 'USER_DELETED'
+          });
+        }
+      }
+
       req.authUser = authUser;
       req.user = authUser;
       return next();
@@ -841,6 +864,28 @@ async function authenticate(req, res, next) {
       }
       return res.status(401).json({ error: 'Session expired or invalid. Please log in again.' });
     }
+
+    if (session.user_id) {
+      let userExists = null;
+      try {
+        userExists = await db.get(
+          'SELECT id FROM profiles WHERE id = ? UNION SELECT id FROM users WHERE id = ?',
+          [session.user_id, session.user_id]
+        );
+      } catch (_) {}
+
+      if (!userExists) {
+        try {
+          res.clearCookie('token', { path: '/' });
+          await db.run('DELETE FROM sessions WHERE user_id = ? OR token = ?', [session.user_id, token]);
+        } catch (_) {}
+        return res.status(401).json({
+          error: 'Session expired or user account has been removed. Please log in again.',
+          code: 'USER_DELETED'
+        });
+      }
+    }
+
     const authUser = { id: session.user_id, email: session.email, role: session.role, username: (session.email === 'muthuwadigehardware@gmail.com' || session.role === 'super_admin') ? 'super_admin' : (session.username || '') };
     req.authUser = authUser;
     req.user = authUser;

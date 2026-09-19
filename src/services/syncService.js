@@ -1011,6 +1011,54 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
     console.warn('[SyncEngine] Notice checking SYSTEM_WIPE_TIMESTAMP:', wipeErr.message);
   }
 
+  // 2. Pull Downstream Tombstones from Turso Cloud to Local SQLite
+  try {
+    const tombstoneRes = await executeWithTimeout(
+      tursoClient,
+      'SELECT table_name, record_id, deleted_at FROM deleted_records',
+      15000
+    );
+    if (tombstoneRes?.rows && tombstoneRes.rows.length > 0) {
+      for (const row of tombstoneRes.rows) {
+        const tableName = row.table_name;
+        const recordId = String(row.record_id);
+        if (!tableName || !recordId) continue;
+
+        // Record tombstone into local SQLite deleted_records table (for anti-resurrection)
+        try {
+          await localDb.run(
+            'INSERT OR REPLACE INTO deleted_records (table_name, record_id, deleted_at) VALUES (?, ?, COALESCE(?, CURRENT_TIMESTAMP))',
+            [tableName, recordId, row.deleted_at]
+          );
+        } catch (_) {}
+
+        // Safely purge deleted row from local tables
+        try {
+          if (tableName === 'users') {
+            await localDb.run('DELETE FROM users WHERE id = ?', [recordId]);
+            await localDb.run('DELETE FROM sessions WHERE user_id = ?', [recordId]);
+          } else if (tableName === 'profiles') {
+            await localDb.run('DELETE FROM profiles WHERE id = ?', [recordId]);
+            await localDb.run('DELETE FROM users WHERE id = ?', [recordId]);
+            await localDb.run('DELETE FROM sessions WHERE user_id = ?', [recordId]);
+          } else if (tableName === 'customers') {
+            await localDb.run('DELETE FROM customers WHERE id = ?', [recordId]);
+          } else if (tableName === 'suppliers') {
+            await localDb.run('DELETE FROM suppliers WHERE id = ?', [recordId]);
+          } else if (tableName === 'sales') {
+            await localDb.run('DELETE FROM sales WHERE id = ?', [recordId]);
+          } else if (tableName === 'sales_returns') {
+            await localDb.run('DELETE FROM sales_returns WHERE id = ?', [recordId]);
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (tombErr) {
+    if (!tombErr?.message?.includes('no such table')) {
+      console.warn('[SyncEngine] Notice pulling downstream tombstones:', tombErr?.message);
+    }
+  }
+
   const syncAndPruneEntity = async (tableName, selectSql = null, excludeClause = '', idCol = 'id', useSafeUpsert = false) => {
     try {
       const tableExists = await localDb.get(
