@@ -3100,8 +3100,167 @@ app.post('/api/auth/login', async (req, res) => {
     } catch (_) { }
 
     if (!tursoClient) {
-      return res.status(401).json({
-        error: 'Account not cached on this device. Please connect to the internet for the first login setup.'
+      // Step B1: Secure HTTPS fallback to Online ERP login endpoint when no direct Turso credentials exist
+      const remoteApiUrl = (process.env.ONLINE_API_URL || process.env.VITE_API_URL || 'https://erp.mhardware.lk').replace(/\/+$/, '');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+      let onlineRes = null;
+      let onlineData = null;
+      let onlineFetchError = null;
+
+      try {
+        onlineRes = await fetch(`${remoteApiUrl}/api/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ email: cleanEmail, password }),
+          signal: controller.signal
+        });
+        onlineData = await onlineRes.json().catch(() => ({}));
+      } catch (fetchErr) {
+        onlineFetchError = fetchErr;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      if (onlineFetchError || !onlineRes) {
+        return res.status(401).json({
+          error: 'Account not cached on this device. Please connect to the internet for the first login setup.'
+        });
+      }
+
+      if (!onlineRes.ok || !onlineData || !onlineData.user) {
+        return res.status(401).json({
+          error: onlineData?.error || 'Invalid email or password.'
+        });
+      }
+
+      // Remote authentication verified successfully!
+      const remoteUser = onlineData.user;
+      const passwordHashToStore = await bcrypt.hash(password, 10);
+      const resolvedId = remoteUser.id || ('u_' + Date.now());
+      const resolvedEmail = (remoteUser.email || cleanEmail).toLowerCase().trim();
+      const resolvedName = remoteUser.name || remoteUser.full_name || 'Admin';
+      const resolvedRole = remoteUser.role || 'Super Admin';
+      const resolvedAvatar = remoteUser.avatar || null;
+      const resolvedPerms = remoteUser.custom_permissions || remoteUser.permissions || null;
+      const permsString = (resolvedPerms && typeof resolvedPerms === 'object')
+        ? JSON.stringify(resolvedPerms)
+        : (typeof resolvedPerms === 'string' ? resolvedPerms : null);
+
+      // Insert/Upsert into local SQLite `users` table
+      try {
+        await db.exec(`
+          CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            email TEXT UNIQUE,
+            password TEXT,
+            password_hash TEXT,
+            role TEXT,
+            name TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+          );
+        `);
+        try { await db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT'); } catch (_) { }
+
+        await db.run(
+          'INSERT OR REPLACE INTO users (id, email, password, password_hash, role, name, created_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+          [resolvedId, resolvedEmail, passwordHashToStore, passwordHashToStore, resolvedRole, resolvedName]
+        );
+      } catch (userErr) {
+        console.warn('[Auth] Notice caching online user into SQLite users table:', userErr.message);
+      }
+
+      // Insert/Upsert into local SQLite `profiles`
+      try {
+        try { await db.exec('ALTER TABLE profiles ADD COLUMN password_hash TEXT'); } catch (_) { }
+
+        await db.run(
+          'INSERT OR REPLACE INTO profiles (id, email, role, name, password, password_hash, avatar, permissions, custom_permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+          [
+            resolvedId,
+            resolvedEmail,
+            resolvedRole,
+            resolvedName,
+            passwordHashToStore,
+            passwordHashToStore,
+            resolvedAvatar,
+            permsString,
+            permsString
+          ]
+        );
+      } catch (profileErr) {
+        try {
+          await db.run(
+            'INSERT OR REPLACE INTO profiles (id, email, role, name, password, created_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+            [resolvedId, resolvedEmail, resolvedRole, resolvedName, passwordHashToStore]
+          );
+        } catch (_) { }
+      }
+
+      // Cache custom_permissions if structured permissions exist
+      if (resolvedPerms) {
+        try {
+          await db.exec(`
+            CREATE TABLE IF NOT EXISTS custom_permissions (
+              role TEXT PRIMARY KEY,
+              pages TEXT NOT NULL
+            )
+          `);
+          await db.run(
+            'INSERT OR REPLACE INTO custom_permissions (role, pages) VALUES (?, ?)',
+            [resolvedRole, permsString]
+          );
+        } catch (permErr) {
+          console.warn('[Auth] Notice caching custom_permissions into SQLite:', permErr.message);
+        }
+      }
+
+      // Create local session for the authenticated user
+      const cachedLocalAccount = (await db.get('SELECT * FROM profiles WHERE id = ?', [resolvedId])) || {
+        id: resolvedId,
+        email: resolvedEmail,
+        name: resolvedName,
+        role: resolvedRole,
+        avatar: resolvedAvatar,
+        custom_permissions: permsString,
+        permissions: permsString
+      };
+
+      const session = await createSession(cachedLocalAccount);
+
+      let parsedPermissions = undefined;
+      if (resolvedPerms) {
+        try {
+          parsedPermissions = typeof resolvedPerms === 'string' ? JSON.parse(resolvedPerms) : resolvedPerms;
+        } catch (_) {
+          if (typeof resolvedPerms === 'string') {
+            parsedPermissions = resolvedPerms.split(',').map(p => p.trim());
+          }
+        }
+      }
+
+      // Set HttpOnly session cookie
+      res.cookie('token', session.token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+      });
+
+      return res.json({
+        success: true,
+        token: session.token,
+        expiresAt: session.expiresAt,
+        user: {
+          id: cachedLocalAccount.id,
+          email: cachedLocalAccount.email,
+          full_name: cachedLocalAccount.name,
+          name: cachedLocalAccount.name,
+          role: cachedLocalAccount.role,
+          avatar: cachedLocalAccount.avatar,
+          custom_permissions: parsedPermissions,
+          permissions: parsedPermissions
+        }
       });
     }
 
