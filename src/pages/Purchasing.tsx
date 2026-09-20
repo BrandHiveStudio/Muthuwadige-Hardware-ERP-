@@ -1883,7 +1883,6 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                                 <th className="py-4 px-6">Item Name</th>
                                 <th className="py-4 text-center">Qty</th>
                                 <th className="py-4 text-right">Cost Price (Rs.)</th>
-                                <th className="py-4 text-center">Discount</th>
                                 <th className="py-4 text-right px-6">Total (Rs.)</th>
                                 <th className="py-4"></th>
                               </tr>
@@ -1966,30 +1965,6 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                                           className="w-24 text-right border border-slate-200 bg-white rounded-lg py-1.5 px-3 font-bold text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none" 
                                         />
                                       </td>
-                                      <td className="py-4 text-center">
-                                        {/* POS-Style Inline Discount Toggle Pill */}
-                                        <div className="inline-flex items-center border border-slate-200 bg-slate-50/50 rounded-xl px-2 py-1.5 focus-within:ring-2 focus-within:ring-[#DAA520] shadow-inner">
-                                          <input
-                                            type="number"
-                                            min={0}
-                                            max={item.discountType === 'fixed' ? undefined : 100}
-                                            step={item.discountType === 'fixed' ? '1' : '0.1'}
-                                            placeholder="0"
-                                            value={item.discount === 0 || item.discount === undefined ? '' : item.discount}
-                                            onFocus={(e) => e.target.select()}
-                                            onChange={(e) => updateItemDiscount(item.productId, parseFloat(e.target.value) || 0)}
-                                            className="w-14 bg-transparent text-center font-bold text-slate-800 outline-none text-sm [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                                          />
-                                          <button
-                                            type="button"
-                                            onClick={() => toggleItemDiscountType(item.productId)}
-                                            className="ml-1 px-2 py-0.5 rounded-lg text-xs font-black transition-colors bg-white shadow-sm border border-slate-200 text-[#DAA520] hover:bg-amber-50 cursor-pointer active:scale-95"
-                                            title="Toggle between Percentage (%) and Flat Concession (Rs.)"
-                                          >
-                                            {item.discountType === 'fixed' ? 'Rs.' : '%'}
-                                          </button>
-                                        </div>
-                                      </td>
                                       <td className="py-4 text-right font-black text-[#DAA520] px-6">
                                         Rs. {convert(item.total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                       </td>
@@ -2010,110 +1985,6 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                       </table>
                   </div>
 
-                  {/* Discount Section below itemized table */}
-                  <div className="mt-5 p-4 rounded-2xl border border-amber-200/80 bg-gradient-to-r from-amber-50/70 via-amber-50/30 to-amber-50/70 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-sm">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-[#DAA520]/10 text-[#DAA520] border border-[#DAA520]/25 shadow-sm flex items-center justify-center font-black">
-                        <TagIcon className="w-5 h-5 text-[#DAA520]" />
-                      </div>
-                      <div>
-                        <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
-                          <span>Supplier Order Discount</span>
-                          <span className="text-[10px] text-amber-700 font-bold">/ සැපයුම්කරු වට්ටම</span>
-                        </h4>
-                        <p className="text-[11px] text-slate-500 font-semibold mt-0.5">
-                          Apply an overall supplier concession or prompt settlement discount to this purchase
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-3 w-full md:w-auto">
-                      {/* Toggle */}
-                      <div className="flex bg-white rounded-xl p-1 border border-slate-200 shadow-sm shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => setDiscountType('percentage')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
-                            discountType === 'percentage'
-                              ? 'bg-[#DAA520] text-slate-900 shadow-sm'
-                              : 'text-slate-500 hover:text-slate-800'
-                          }`}
-                        >
-                          % Percentage
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDiscountType('fixed')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
-                            discountType === 'fixed'
-                              ? 'bg-[#DAA520] text-slate-900 shadow-sm'
-                              : 'text-slate-500 hover:text-slate-800'
-                          }`}
-                        >
-                          Rs. Fixed Amount
-                        </button>
-                      </div>
-
-                      {/* Discount input field */}
-                      <div className="relative flex-1 md:w-36">
-                        <input
-                          type="number"
-                          min={0}
-                          max={discountType === 'percentage' ? 100 : undefined}
-                          step="any"
-                          placeholder="0.00"
-                          value={discountValue === 0 ? '' : discountValue}
-                          onFocus={(e) => e.target.select()}
-                          onChange={(e) => {
-                            const valStr = e.target.value;
-                            const val = valStr === '' ? 0 : Math.max(0, parseFloat(valStr) || 0);
-                            setDiscountValue(val);
-                          }}
-                          className="w-full pl-8 pr-3 py-2 border border-slate-200 bg-white rounded-xl font-black text-slate-800 focus:ring-2 focus:ring-[#DAA520] outline-none text-right text-sm shadow-sm"
-                        />
-                        <span className="absolute left-2.5 top-2.5 text-xs font-black text-[#DAA520]">
-                          {discountType === 'percentage' ? '%' : 'Rs.'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Plain Transportation Fee Input */}
-                  <div className="mt-3 p-4 rounded-2xl border border-slate-200 bg-white flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-sm">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-blue-50 border border-blue-200/60 flex items-center justify-center text-blue-600 shadow-sm">
-                        <TruckIcon className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-black uppercase tracking-wider text-slate-800">
-                          Transportation Fee
-                        </div>
-                        <div className="text-[11px] font-medium text-slate-400">
-                          Added to net payable (product cost remains untouched)
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="relative w-full md:w-48">
-                      <input
-                        type="number"
-                        min={0}
-                        step="any"
-                        placeholder="0.00"
-                        value={transportationFee === 0 ? '' : transportationFee}
-                        onFocus={(e) => e.target.select()}
-                        onChange={(e) => {
-                          const valStr = e.target.value;
-                          const val = valStr === '' ? 0 : Math.max(0, parseFloat(valStr) || 0);
-                          setTransportationFee(val);
-                        }}
-                        className="w-full pl-9 pr-3 py-2 border border-slate-200 bg-slate-50/50 rounded-xl font-black text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none text-right text-sm shadow-sm"
-                      />
-                      <span className="absolute left-2.5 top-2.5 text-xs font-black text-blue-600">
-                        Rs.
-                      </span>
-                    </div>
-                  </div>
                 </>
               ) : (
                 <div className="py-12 text-center text-gray-400">
@@ -3669,7 +3540,6 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                       <th className="py-4 px-6">Item Catalog Desc.</th>
                       <th className="py-4 text-center">Qty</th>
                       <th className="py-4 text-right">Unit Rate</th>
-                      <th className="py-4 text-center">Discount</th>
                       <th className="py-4 text-right px-6">Total Cost</th>
                   </tr>
                 </thead>
