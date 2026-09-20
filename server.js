@@ -2364,6 +2364,46 @@ async function initializeDatabase() {
     `);
   } catch (_) { }
 
+  try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_cheque_reg_insert'); } catch (_) { }
+  try {
+    await db.exec(`
+      CREATE TRIGGER trg_sync_cheque_reg_insert AFTER INSERT ON cheque_registry
+      WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
+      BEGIN
+        INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
+        VALUES (
+          'sq_cheque_reg_' || NEW.id,
+          'cheque_registry',
+          NEW.id,
+          'INSERT',
+          json_object('id', NEW.id, 'direction', NEW.direction, 'cheque_type', NEW.cheque_type, 'cheque_number', NEW.cheque_number, 'bank_name', NEW.bank_name, 'branch', NEW.branch, 'cheque_date', NEW.cheque_date, 'amount', NEW.amount, 'party_id', NEW.party_id, 'party_name', NEW.party_name, 'reference_type', NEW.reference_type, 'reference_id', NEW.reference_id, 'status', NEW.status, 'notes', NEW.notes, 'cleared_at', NEW.cleared_at, 'cleared_date', NEW.cleared_date, 'created_by', NEW.created_by, 'processed_by', NEW.processed_by, 'created_at', NEW.created_at),
+          'PENDING',
+          strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        );
+      END;
+    `);
+  } catch (_) { }
+
+  try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_cheque_reg_update'); } catch (_) { }
+  try {
+    await db.exec(`
+      CREATE TRIGGER trg_sync_cheque_reg_update AFTER UPDATE ON cheque_registry
+      WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
+      BEGIN
+        INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
+        VALUES (
+          'sq_cheque_reg_upd_' || NEW.id,
+          'cheque_registry',
+          NEW.id,
+          'UPDATE',
+          json_object('id', NEW.id, 'direction', NEW.direction, 'cheque_type', NEW.cheque_type, 'cheque_number', NEW.cheque_number, 'bank_name', NEW.bank_name, 'branch', NEW.branch, 'cheque_date', NEW.cheque_date, 'amount', NEW.amount, 'party_id', NEW.party_id, 'party_name', NEW.party_name, 'reference_type', NEW.reference_type, 'reference_id', NEW.reference_id, 'status', NEW.status, 'notes', NEW.notes, 'cleared_at', NEW.cleared_at, 'cleared_date', NEW.cleared_date, 'created_by', NEW.created_by, 'processed_by', NEW.processed_by, 'updated_at', NEW.updated_at, 'created_at', NEW.created_at),
+          'PENDING',
+          strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        );
+      END;
+    `);
+  } catch (_) { }
+
   try { await db.exec("ALTER TABLE credit_notes ADD COLUMN credit_note_no TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE credit_notes ADD COLUMN code TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE credit_notes ADD COLUMN invoice_no TEXT"); } catch (e) { }
@@ -2434,6 +2474,7 @@ async function initializeDatabase() {
   try { await db.exec("ALTER TABLE products ADD COLUMN batch_number INTEGER"); } catch (e) { }
   try { await db.exec("ALTER TABLE cheque_registry ADD COLUMN updated_at DATETIME"); } catch (e) { }
   try { await db.exec("ALTER TABLE cheque_registry ADD COLUMN processed_by TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE cheque_registry ADD COLUMN cleared_date DATE"); } catch (e) { }
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN return_method TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN total_refunded REAL DEFAULT 0"); } catch (e) { }
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN user_id TEXT"); } catch (e) { }
@@ -5750,16 +5791,119 @@ async function executeCreateSale(s, options = {}) {
         await enqueueSync(db, 'credit_note_usage', usageId, 'INSERT');
       }
 
-      if (s.payment_method !== 'Credit' && s.status !== 'Non Paid') {
-        await replaceRuntimeTransactionByDescription(`POS Sale ${finalInvoiceNo}`, {
-          type: 'income',
-          category: 'Sales',
-          amount: finalTotalAmount,
-          date: new Date(created_at).toLocaleDateString('sv-SE'),
-          reference: finalInvoiceNo,
-          user_id: s.user_id,
-          payment_method: s.payment_method
-        });
+      // Method B (Strict Registry Clearance) Cheque Settlement & Cash Book Ledger Isolation
+      const rawPayMethod = (s.payment_method || '').toString().trim();
+      const payMethodLower = rawPayMethod.toLowerCase();
+      const isCreditPayment = payMethodLower === 'credit' || s.status === 'Non Paid';
+
+      // Check if there are split payments or mixed payment methods
+      let cashPortion = 0;
+      let chequePortion = 0;
+      let otherImmediatePortion = 0;
+      let hasChequePortion = false;
+
+      if (Array.isArray(s.split_payments) && s.split_payments.length > 0) {
+        for (const sp of s.split_payments) {
+          const spMethod = (sp.method || sp.payment_method || '').toString().toLowerCase().trim();
+          const spAmt = Number(sp.amount || 0);
+          if (spMethod === 'cheque') {
+            hasChequePortion = true;
+            chequePortion += spAmt;
+          } else if (spMethod === 'cash') {
+            cashPortion += spAmt;
+          } else if (spMethod !== 'credit') {
+            otherImmediatePortion += spAmt;
+          }
+        }
+      } else if (s.cash_amount !== undefined && s.cheque_amount !== undefined && Number(s.cheque_amount) > 0) {
+        hasChequePortion = true;
+        chequePortion = Number(s.cheque_amount);
+        cashPortion = Number(s.cash_amount || 0);
+      } else if (payMethodLower === 'cheque' || payMethodLower.includes('cheque') || Boolean(s.cheque_number || s.chequeNumber)) {
+        hasChequePortion = true;
+        chequePortion = finalTotalAmount;
+        cashPortion = 0;
+      } else if (!isCreditPayment) {
+        if (payMethodLower === 'cash' || !rawPayMethod) {
+          cashPortion = finalTotalAmount;
+        } else {
+          otherImmediatePortion = finalTotalAmount;
+        }
+      }
+
+      // 1. Record Inward Cheque to cheque_registry if cheque payment exists
+      if (hasChequePortion && chequePortion > 0) {
+        const chqNo = (s.cheque_number || s.chequeNumber || s.cheque_no || `CHQ-${finalInvoiceNo}`).toString().trim();
+        const chqBank = (s.cheque_bank || s.chequeBank || s.bank_name || 'Other').toString().trim();
+        const chqBranch = (s.cheque_branch || s.chequeBranch || s.branch || '').toString().trim();
+        const chqDate = s.cheque_date || s.chequeDate || new Date(created_at).toISOString().split('T')[0];
+        const chqType = (s.cheque_type === 'CASH_BEARER' || s.chequeType === 'CASH_BEARER') ? 'CASH_BEARER' : 'CROSSED_ACCOUNT_PAYEE';
+        const chqStatus = chqType === 'CASH_BEARER' ? 'IN_HAND' : 'PENDING';
+        const chqId = s.cheque_id || ('CHQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6));
+
+        // Ensure idempotency for inward cheque insert
+        const existingChq = await db.get(
+          'SELECT id FROM cheque_registry WHERE (reference_id = ? AND cheque_number = ?) OR id = ?',
+          [finalInvoiceNo, chqNo, chqId]
+        );
+
+        if (!existingChq) {
+          await db.run(
+            `INSERT INTO cheque_registry (
+              id, direction, cheque_type, cheque_number, bank_name, branch,
+              cheque_date, amount, party_id, party_name, reference_type,
+              reference_id, status, notes, created_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              chqId,
+              'INWARD',
+              chqType,
+              chqNo,
+              chqBank,
+              chqBranch,
+              chqDate,
+              chequePortion,
+              s.customer_id || 'WALK_IN',
+              customerNameVal,
+              'SALE_INVOICE',
+              finalInvoiceNo,
+              chqStatus,
+              s.notes || `POS Cheque Payment for Invoice ${finalInvoiceNo}`,
+              cashierName,
+              created_at
+            ]
+          );
+
+          await enqueueSync(db, 'cheque_registry', chqId, 'INSERT');
+          await enqueueSync(db, 'cheques', chqId, 'INSERT');
+        }
+      }
+
+      // 2. Cash Book (transactions table):
+      // Method B Strict Clearance: DO NOT insert immediate transactions row for cheque portion.
+      // Only insert immediate transactions row for physical cash portion or other immediate cleared methods (card/bank).
+      if (!isCreditPayment) {
+        if (cashPortion > 0) {
+          await replaceRuntimeTransactionByDescription(`POS Sale ${finalInvoiceNo}`, {
+            type: 'income',
+            category: 'Sales',
+            amount: cashPortion,
+            date: new Date(created_at).toLocaleDateString('sv-SE'),
+            reference: finalInvoiceNo,
+            user_id: s.user_id,
+            payment_method: 'CASH'
+          });
+        } else if (otherImmediatePortion > 0) {
+          await replaceRuntimeTransactionByDescription(`POS Sale ${finalInvoiceNo}`, {
+            type: 'income',
+            category: 'Sales',
+            amount: otherImmediatePortion,
+            date: new Date(created_at).toLocaleDateString('sv-SE'),
+            reference: finalInvoiceNo,
+            user_id: s.user_id,
+            payment_method: rawPayMethod || 'Card'
+          });
+        }
       }
 
       // Enqueue all sync mutations strictly within managed transaction
@@ -8629,6 +8773,20 @@ app.post('/api/cheques', async (req, res) => {
   const createdByVal = created_by || user_email || req.headers['x-user-email'] || 'system';
 
   try {
+    if (reference_id) {
+      const existingChq = await db.get(
+        'SELECT * FROM cheque_registry WHERE reference_id = ? AND cheque_number = ?',
+        [reference_id, cheque_number.toString().trim()]
+      );
+      if (existingChq) {
+        return res.json({
+          success: true,
+          ...existingChq,
+          duplicate_skipped: true
+        });
+      }
+    }
+
     await db.run(
       `INSERT INTO cheque_registry (
         id, direction, cheque_type, cheque_number, bank_name, branch,
@@ -8738,47 +8896,81 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
         let txDesc = '';
         let isCreditSettlement = false;
 
-        if (notesStr.includes('[Customer Advance]') || refType === 'CUSTOMER_ADVANCE') {
-          txCategory = isCashBearer ? 'Customer Advance (Cheque Encashed)' : 'Customer Advance (Cheque Cleared Bank)';
-          txDesc = isCashBearer
-            ? `Encashed Customer Advance Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Customer'}`
-            : `Cleared Customer Advance Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Customer'} (Bank Deposit)`;
-        } else if (notesStr.includes('[Supplier Refund]') || refType === 'EXPENSE') {
-          txCategory = isCashBearer ? 'Supplier Refund (Cheque Encashed)' : 'Supplier Refund (Cheque Cleared Bank)';
-          txDesc = isCashBearer
-            ? `Encashed Supplier Refund Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Supplier'}`
-            : `Cleared Supplier Refund Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Supplier'} (Bank Deposit)`;
-        } else if (notesStr.includes('[Other Income]')) {
-          txCategory = isCashBearer ? 'Other Income (Cheque Encashed)' : 'Other Income (Cheque Cleared Bank)';
-          txDesc = isCashBearer
-            ? `Encashed General Income Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Payer'}`
-            : `Cleared General Income Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Payer'} (Bank Deposit)`;
+          if ((notesStr || '').includes('[Customer Advance]') || refType === 'CUSTOMER_ADVANCE') {
+            txCategory = isCashBearer ? 'Customer Advance (Cheque Encashed)' : 'Customer Advance (Cheque Cleared Bank)';
+            txDesc = isCashBearer
+              ? `Encashed Customer Advance Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Customer'}`
+              : `Cleared Customer Advance Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Customer'} (Bank Deposit)`;
+          } else if ((notesStr || '').includes('[Supplier Refund]') || refType === 'EXPENSE') {
+            txCategory = isCashBearer ? 'Supplier Refund (Cheque Encashed)' : 'Supplier Refund (Cheque Cleared Bank)';
+            txDesc = isCashBearer
+              ? `Encashed Supplier Refund Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Supplier'}`
+              : `Cleared Supplier Refund Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Supplier'} (Bank Deposit)`;
+          } else if ((notesStr || '').includes('[Other Income]')) {
+            txCategory = isCashBearer ? 'Other Income (Cheque Encashed)' : 'Other Income (Cheque Cleared Bank)';
+            txDesc = isCashBearer
+              ? `Encashed General Income Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Payer'}`
+              : `Cleared General Income Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Payer'} (Bank Deposit)`;
+          } else if (
+            refType === 'SALE_INVOICE' ||
+            Boolean(cheque.reference_id && (
+              cheque.reference_id.startsWith('POS') ||
+              cheque.reference_id.startsWith('INV') ||
+              cheque.reference_id.includes('-INV-') ||
+              (notesStr || '').toLowerCase().includes('pos cheque') ||
+              (notesStr || '').includes('[POS Cheque]')
+            ))
+          ) {
+            txCategory = isCashBearer ? 'POS Cheque Realization (Cash Drawer)' : 'POS Cheque Realization (Bank Deposit)';
+            txDesc = isCashBearer
+              ? `Encashed Cheque #${cheque.cheque_number} for Sale ${cheque.reference_id} into Cash Drawer`
+              : `Cleared Cheque #${cheque.cheque_number} for Sale ${cheque.reference_id} into Bank Account`;
+          } else {
+            isCreditSettlement = true;
+            txCategory = isCashBearer ? 'Customer Debt Repayment (Cheque Encashed)' : 'Customer Debt Repayment (Cheque Cleared Bank)';
+            txDesc = isCashBearer
+              ? `Encashed Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Customer'}`
+              : `Cleared Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Customer'} (Bank Deposit)`;
+          }
+
+        // 1. Insert Cash Book Transaction (Strict Idempotency Guarded)
+        const paymentMethod = isCashBearer ? 'CASH' : 'BANK';
+        let existingTx = null;
+        if (txCategory.startsWith('POS Cheque Realization')) {
+          existingTx = await db.get(
+            `SELECT id FROM transactions 
+             WHERE category LIKE 'POS Cheque Realization%' 
+               AND (reference = ? OR reference = ? OR description LIKE ?)`,
+            [cheque.reference_id, cheque.cheque_number, `%#${cheque.cheque_number}%`]
+          );
         } else {
-          isCreditSettlement = true;
-          txCategory = isCashBearer ? 'Customer Debt Repayment (Cheque Encashed)' : 'Customer Debt Repayment (Cheque Cleared Bank)';
-          txDesc = isCashBearer
-            ? `Encashed Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Customer'}`
-            : `Cleared Cheque #${cheque.cheque_number} from ${cheque.party_name || 'Customer'} (Bank Deposit)`;
+          existingTx = await db.get(
+            `SELECT id FROM transactions 
+             WHERE (reference = ? OR reference = ? OR description LIKE ?)
+               AND amount = ?`,
+            [cheque.reference_id, cheque.cheque_number, `%#${cheque.cheque_number}%`, cheque.amount]
+          );
         }
 
-        // 1. Insert Cash Book Transaction
-        const txId = 't_chq_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-        const paymentMethod = isCashBearer ? 'CASH' : 'BANK';
-        await db.run(
-          'INSERT INTO transactions (id, type, category, description, amount, date, reference, payment_method, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [
-            txId,
-            'income',
-            txCategory,
-            txDesc,
-            cheque.amount,
-            todayStr,
-            cheque.cheque_number,
-            paymentMethod,
-            staffUser,
-            new Date().toISOString()
-          ]
-        );
+        if (!existingTx) {
+          const txId = 't_chq_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+          await db.run(
+            'INSERT INTO transactions (id, type, category, description, amount, date, reference, payment_method, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+              txId,
+              'income',
+              txCategory,
+              txDesc,
+              cheque.amount,
+              todayStr,
+              cheque.reference_id || cheque.cheque_number,
+              paymentMethod,
+              staffUser,
+              new Date().toISOString()
+            ]
+          );
+          await enqueueSync(db, 'transactions', txId, 'UPSERT');
+        }
 
         if (isCreditSettlement) {
           // 2. Deduct from customer credit balance
@@ -8952,7 +9144,11 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
                 'UPDATE sales SET payment_received = ?, status = ? WHERE id = ?',
                 [newReceived, newSaleStatus, linkedSale.id]
               );
+              await enqueueSync(db, 'sales', linkedSale.id, 'UPDATE');
             }
+          }
+          if (cheque.party_id) {
+            await enqueueSync(db, 'customers', cheque.party_id, 'UPDATE');
           }
         }
 
@@ -8987,9 +9183,10 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
 
     // 3. Update cheque status in database
     const updatedNotes = notes !== undefined ? notes : cheque.notes;
+    const clearedDateVal = targetStatus === 'CLEARED' ? (cheque.cleared_date || todayStr) : null;
     await db.run(
-      'UPDATE cheque_registry SET status = ?, notes = ?, cleared_at = ? WHERE id = ?',
-      [targetStatus, updatedNotes, cleared_at, id]
+      'UPDATE cheque_registry SET status = ?, notes = ?, cleared_at = ?, cleared_date = ? WHERE id = ?',
+      [targetStatus, updatedNotes, cleared_at, clearedDateVal, id]
     );
 
     await logAudit(
@@ -8998,8 +9195,8 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
       `Cheque #${cheque.cheque_number} status changed: ${prevStatus} -> ${targetStatus}`
     );
 
-      await enqueueSync(db, 'cheque_registry', id, 'UPDATE');
-      await enqueueSync(db, 'cheques', id, 'UPDATE');
+      await enqueueSync(db, 'cheque_registry', id, 'UPSERT');
+      await enqueueSync(db, 'cheques', id, 'UPSERT');
 
       const updatedCheque = await db.get('SELECT * FROM cheque_registry WHERE id = ?', [id]);
       return {
@@ -9930,9 +10127,16 @@ async function executeUndoChequeStatus({ cheque_id, revert_to, user_email }) {
       // If it was CLEARED, rollback financial transactions and settlements
       if (prevStatus === 'CLEARED') {
         // Delete cash/bank ledger transactions created on clearance
+        const txRows = await db.all(
+          'SELECT id FROM transactions WHERE reference = ? OR reference = ? OR description LIKE ?',
+          [chqNo, cheque.reference_id, `%${chqNo}%`]
+        );
+        for (const tx of txRows) {
+          await enqueueSync(db, 'transactions', tx.id, 'DELETE');
+        }
         await db.run(
-          'DELETE FROM transactions WHERE (reference = ? OR description LIKE ?)',
-          [chqNo, `%${chqNo}%`]
+          'DELETE FROM transactions WHERE reference = ? OR reference = ? OR description LIKE ?',
+          [chqNo, cheque.reference_id, `%${chqNo}%`]
         );
 
         if (direction === 'INWARD') {

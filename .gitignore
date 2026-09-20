@@ -39,6 +39,7 @@ backups/
 
 *.exe
 *.zip
+*.bak
 dist/
 
 release-archive/

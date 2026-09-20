@@ -3016,8 +3016,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
         throw new Error(saleError.message || 'Failed to save the sale. Please try again.');
       }
 
-      // Automatically register inward cheque into cheque registry
-      if (paymentMethod === 'Cheque') {
+      // Automatically register inward cheque into cheque registry (fallback guard if not processed by backend)
+      if (paymentMethod === 'Cheque' && !saleRecord?.id) {
         try {
           await api.cheques.create({
             direction: 'INWARD',

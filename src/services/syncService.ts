@@ -230,6 +230,42 @@ export async function ensureTursoSchema(tursoClient: Client | null): Promise<voi
         total REAL DEFAULT 0,
         batch_number INTEGER DEFAULT 1,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );`,
+      `CREATE TABLE IF NOT EXISTS cheque_registry (
+        id TEXT PRIMARY KEY,
+        direction TEXT NOT NULL,
+        cheque_type TEXT DEFAULT 'CROSSED_ACCOUNT_PAYEE',
+        cheque_number TEXT NOT NULL,
+        bank_name TEXT NOT NULL,
+        branch TEXT,
+        cheque_date DATE NOT NULL,
+        amount REAL NOT NULL,
+        party_id TEXT,
+        party_name TEXT,
+        reference_type TEXT,
+        reference_id TEXT,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        notes TEXT,
+        cleared_at DATETIME,
+        cleared_date DATE,
+        created_by TEXT,
+        processed_by TEXT,
+        updated_at DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );`,
+      `CREATE TABLE IF NOT EXISTS transactions (
+        id TEXT PRIMARY KEY,
+        type TEXT,
+        category TEXT,
+        description TEXT,
+        amount REAL,
+        date TEXT,
+        reference TEXT,
+        payment_method TEXT DEFAULT 'CASH',
+        user_id TEXT,
+        branch_id TEXT,
+        station_id TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );`
     ], 'write');
     const cols = [
@@ -260,7 +296,11 @@ export async function ensureTursoSchema(tursoClient: Client | null): Promise<voi
       "ALTER TABLE suppliers ADD COLUMN email TEXT;",
       "ALTER TABLE suppliers ADD COLUMN address TEXT;",
       "ALTER TABLE suppliers ADD COLUMN payable_balance REAL DEFAULT 0;",
-      "ALTER TABLE transactions ADD COLUMN branch_id TEXT;"
+      "ALTER TABLE transactions ADD COLUMN branch_id TEXT;",
+      "ALTER TABLE transactions ADD COLUMN payment_method TEXT DEFAULT 'CASH';",
+      "ALTER TABLE cheque_registry ADD COLUMN cleared_date DATE;",
+      "ALTER TABLE cheque_registry ADD COLUMN updated_at DATETIME;",
+      "ALTER TABLE cheque_registry ADD COLUMN processed_by TEXT;"
     ];
     for (const c of cols) {
       try { await tursoClient.execute(c); } catch (_) {}
@@ -672,6 +712,16 @@ export async function pushUpstreamChanges(localDb: any, tursoClient: Client | nu
   try {
     await ensureTursoSchema(tursoClient);
     const nowIso = new Date().toISOString();
+
+    // Auto-heal / unblock any stuck or failed queue items for cheques and transactions
+    try {
+      await localDb.run(
+        `UPDATE sync_queue 
+         SET status = 'PENDING', retry_count = 0, error_message = NULL 
+         WHERE table_name IN ('cheques', 'cheque_registry', 'transactions', 'cash_book') 
+           AND (status = 'FAILED' OR COALESCE(retry_count, 0) >= 5)`
+      );
+    } catch (_) {}
 
     const pendingItems: SyncQueueItem[] = await localDb.all(
       "SELECT * FROM sync_queue WHERE status = 'PENDING' AND COALESCE(retry_count, 0) < 5 ORDER BY created_at ASC LIMIT 100"

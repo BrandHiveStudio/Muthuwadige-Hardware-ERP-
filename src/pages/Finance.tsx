@@ -196,7 +196,13 @@ export function Finance({ currentUser }: FinanceProps = {}) {
       cat.includes('CREDIT')
     ) {
       // Inward cheque encashment into cash drawer counts as physical cash
-      if (desc.includes('ENCASHED CHEQUE') || desc.includes('ENCASHED') || cat.includes('ENCASHED')) {
+      if (
+        desc.includes('ENCASHED CHEQUE') ||
+        desc.includes('ENCASHED') ||
+        cat.includes('ENCASHED') ||
+        cat.includes('POS CHEQUE REALIZATION (CASH DRAWER)') ||
+        (method === 'CASH' && cat.includes('POS CHEQUE REALIZATION'))
+      ) {
         return true;
       }
       return false;

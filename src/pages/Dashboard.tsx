@@ -253,6 +253,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       const { data: allReturns } = await supabase.from('sales_returns').select('*');
       const { data: allCreditPayments } = await supabase.from('credit_payments').select('*');
       const { data: allTransactions } = await supabase.from('transactions').select('*');
+      const { data: allCheques } = await supabase.from('cheques').select('*');
 
       // Today's Sales (calculated with Sri Lanka timezone)
       const salesToday = allSales ? allSales.filter((s: any) => {
@@ -424,6 +425,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         sales: allSales || [],
         creditPayments: allCreditPayments || [],
         salesReturns: allReturns || [],
+        cheques: allCheques || [],
         fromDate: today,
         toDate: today
       });

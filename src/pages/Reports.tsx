@@ -112,6 +112,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   const [suppliers, setSuppliers] = useState<any[]>(() => getCachedData<any[]>('suppliers') || cachedReportsData?.suppliers || []);
   const [salesReturns, setSalesReturns] = useState<any[]>(() => getCachedData<any[]>('returns') || cachedReportsData?.salesReturns || []);
   const [creditPayments, setCreditPayments] = useState<any[]>(() => cachedReportsData?.creditPayments || []);
+  const [cheques, setCheques] = useState<any[]>(() => cachedReportsData?.cheques || []);
   const [profiles, setProfiles] = useState<any[]>(() => cachedReportsData?.profiles || []);
   const [shiftLogs, setShiftLogs] = useState<any[]>(() => cachedReportsData?.shiftLogs || []);
   const [shopName, setShopName] = useState(() => cachedReportsData?.shopName || 'Muthuwadige Hardware');
@@ -127,6 +128,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       const { data: srData } = await supabase.from('sales_returns').select('*');
       const { data: cpData } = await supabase.from('credit_payments').select('*');
       const { data: prData } = await supabase.from('profiles').select('*');
+      const { data: chqData } = await supabase.from('cheques').select('*');
 
       if (!cachedReportsData) cachedReportsData = {};
       if (sData) { setSales(sData); cachedReportsData.sales = sData; setCachedData('sales', sData); }
@@ -137,6 +139,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       if (srData) { setSalesReturns(srData); cachedReportsData.salesReturns = srData; setCachedData('returns', srData); }
       if (cpData) { setCreditPayments(cpData); cachedReportsData.creditPayments = cpData; }
       if (prData) { setProfiles(prData); cachedReportsData.profiles = prData; }
+      if (chqData) { setCheques(chqData); cachedReportsData.cheques = chqData; }
 
       try {
         const res = await fetchWithTimeout(`${API_URL}/shifts`);
@@ -711,10 +714,23 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       const acct = calculateSaleAccounting(s, salesReturns);
       calcCredit += acct.netOutstanding;
     } else {
-      if (method === 'card' || method === 'credit card') {
+      if (Array.isArray(s.split_payments) && s.split_payments.length > 0) {
+        for (const sp of s.split_payments) {
+          const spMethod = (sp.method || sp.payment_method || '').toString().toLowerCase().trim();
+          const spAmt = Number(sp.amount || 0);
+          if (spMethod === 'card' || spMethod === 'credit card') calcCard += spAmt;
+          else if (spMethod === 'bank' || spMethod === 'bank transfer' || spMethod === 'online') calcBank += spAmt;
+          else if (spMethod === 'cheque' || spMethod.includes('cheque')) { /* uncashed cheque in hand */ }
+          else calcCash += spAmt;
+        }
+      } else if (s.cash_amount !== undefined && s.cheque_amount !== undefined && Number(s.cheque_amount) > 0) {
+        calcCash += Number(s.cash_amount || 0);
+      } else if (method === 'card' || method === 'credit card') {
         calcCard += totalAmt;
       } else if (method === 'bank' || method === 'bank transfer' || method === 'online') {
         calcBank += totalAmt;
+      } else if (method === 'cheque' || method.includes('cheque')) {
+        // Method B: Uncashed / pending cheques do NOT add to physical cash drawer
       } else {
         calcCash += totalAmt;
       }
@@ -729,6 +745,8 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       calcCard += payAmt;
     } else if (payMethod === 'bank' || payMethod === 'bank transfer' || payMethod === 'online') {
       calcBank += payAmt;
+    } else if (payMethod === 'cheque' || payMethod.includes('cheque')) {
+      // Method B: Cheque settlements remain in Cheque Registry until encashed/cleared
     } else {
       calcCash += payAmt;
     }
@@ -748,6 +766,16 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   const todayCard = calcCard;
   const todayCredit = calcCredit;
   const todayBank = calcBank;
+
+  // Pending Inward Cheques in Hand for Today's Period
+  const periodPendingCheques = cheques.filter(c => {
+    const cDate = safeGetDateString(c.cheque_date || c.created_at);
+    if (effectiveFromDate && cDate < effectiveFromDate) return false;
+    if (effectiveToDate && cDate > effectiveToDate) return false;
+    const isToday = !fromDate && !toDate && rangeType === 'custom' ? cDate === getLocalDateString() : true;
+    return isToday && c.direction === 'INWARD' && (c.status === 'PENDING' || c.status === 'IN_HAND' || c.status === 'DEPOSITED');
+  });
+  const todayPendingChequesAmount = periodPendingCheques.reduce((sum, c) => sum + Number(c.amount || 0), 0);
 
   const resolveCashierDisplayName = (rawName?: string, email?: string, userId?: string): string => {
     const rawVal = (rawName || '').trim();
@@ -1500,7 +1528,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
                   <CreditCardIcon className="w-4 h-4 text-[#DAA520]" />
                   <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest">{t("Today's Payment Method Breakdown", "අද දින ගෙවීම් ක්‍රම විග්‍රහය")}</h2>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                   <div className="bg-slate-50/50 p-4 rounded-xl border border-slate-150 flex items-center justify-between">
                     <div>
                       <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">{t("Cash", "මුදල්")}</p>
@@ -1528,6 +1556,13 @@ export function Reports({ currentUser }: ReportsProps = {}) {
                       <p className="text-sm font-black text-slate-800 mt-0.5">{formatCurrency(todayBank)}</p>
                     </div>
                     <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                  </div>
+                  <div className="bg-slate-50/50 p-4 rounded-xl border border-slate-150 flex items-center justify-between">
+                    <div>
+                      <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">{t("Pending Cheques", "ලැබුණු චෙක්පත් (Pending)")}</p>
+                      <p className="text-sm font-black text-amber-700 mt-0.5">{formatCurrency(todayPendingChequesAmount)}</p>
+                    </div>
+                    <span className="w-2 h-2 rounded-full bg-amber-500"></span>
                   </div>
                 </div>
               </div>
