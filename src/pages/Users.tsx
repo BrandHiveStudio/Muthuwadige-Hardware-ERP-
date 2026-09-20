@@ -46,7 +46,7 @@ export function Users({ currentUser: propCurrentUser }: UsersProps = {}) {
     }
   }, [propCurrentUser]);
 
-  const isCallerRootAdmin = currentUser?.username === 'super_admin' || currentUser?.role === 'super_admin' || (currentUser?.email || '').toLowerCase().trim() === 'muthuwadigehardware@gmail.com';
+  const isCallerRootAdmin = currentUser?.role === 'super_admin' || (currentUser?.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com' || (currentUser?.email || '').toLowerCase().trim() === 'muthuwadigehardware@gmail.com';
 
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -80,7 +80,8 @@ export function Users({ currentUser: propCurrentUser }: UsersProps = {}) {
   const isSuperAdmin = (u: any) => {
     if (!u) return false;
     const r = (u.role || '').toLowerCase().trim();
-    return r === 'super_admin' || r === 'super admin' || (r === 'admin' && (u.email === 'admin@hardware.com' || u.id === 'u2'));
+    const email = (u.email || '').toLowerCase().trim();
+    return r === 'super_admin' || r === 'super admin' || email === 'sanojhardware@gmail.com' || email === 'muthuwadigehardware@gmail.com';
   };
 
   // Staff account quota calculations: Filter out Root Super Admin

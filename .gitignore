@@ -45,3 +45,9 @@ release-archive/
 *.asar
 *.exe
 
+
+release-archive/
+*.asar
+*.exe
+release-dist/
+
