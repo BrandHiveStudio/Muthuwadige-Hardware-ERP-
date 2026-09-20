@@ -1,0 +1,14 @@
+﻿node_modules
+release-dist
+release-archive
+dist
+build
+*.exe
+*.asar
+*.db
+*.sqlite
+hardware.db
+*.bak
+docs
+scripts
+.git

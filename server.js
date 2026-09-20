@@ -7913,39 +7913,61 @@ async function resolveOrCreateBatchProduct(db, product, itemCost, qty, poSupplie
   const currentStock = Number(product.stock || 0);
   const currentCost = Number(product.cost_price !== undefined && product.cost_price !== null ? product.cost_price : (product.costPrice || 0));
   const newCost = Number(itemCost || 0);
-
-  // Calculate Weighted Average Cost
-  let weightedCost = newCost;
-  if (currentStock > 0 && currentCost > 0 && newCost > 0) {
-    weightedCost = Math.round(((currentStock * currentCost) + (qty * newCost)) / (currentStock + qty) * 100) / 100;
-  } else if (currentCost > 0 && newCost <= 0) {
-    weightedCost = currentCost;
+  const costDiff = Math.abs(currentCost - newCost);
+  if (costDiff < 0.01 || newCost <= 0) {
+    const newStock = currentStock + qty;
+    await db.run('UPDATE products SET stock = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [newStock, product.id]);
+    try {
+      if (typeof enqueueSync === 'function') await enqueueSync(db, 'products', product.id, 'UPSERT');
+    } catch (_) {}
+    return {
+      productId: product.id,
+      sku: product.sku,
+      isNewBatch: false,
+      batchNumber: product.batch_number || 1,
+      name: product.name,
+      costPrice: currentCost,
+      stock: newStock,
+      isExistingIncremented: true
+    };
   }
-
-  const newStock = currentStock + qty;
-  await db.run(
-    'UPDATE products SET stock = ?, cost_price = ? WHERE id = ?',
-    [newStock, weightedCost, product.id]
-  );
-
-  // Enqueue sync so updated parent stock replicates upstream
+  const baseSku = String(product.sku || '').replace(/-B\d+$/, '');
+  const existingBatch = await db.get('SELECT * FROM products WHERE (sku LIKE ? OR id = ?) AND ABS(cost_price - ?) < 0.01 LIMIT 1', [baseSku + '-B%', product.id, newCost]);
+  if (existingBatch) {
+    const updatedStock = Number(existingBatch.stock || 0) + qty;
+    await db.run('UPDATE products SET stock = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [updatedStock, existingBatch.id]);
+    try {
+      if (typeof enqueueSync === 'function') await enqueueSync(db, 'products', existingBatch.id, 'UPSERT');
+    } catch (_) {}
+    return {
+      productId: existingBatch.id,
+      sku: existingBatch.sku,
+      isNewBatch: false,
+      batchNumber: existingBatch.batch_number || 2,
+      name: existingBatch.name,
+      costPrice: existingBatch.cost_price,
+      stock: updatedStock,
+      isExistingIncremented: true
+    };
+  }
+  const batchRows = await db.all('SELECT sku FROM products WHERE sku LIKE ?', [baseSku + '-B%']);
+  const nextBatchNum = batchRows.length + 1;
+  const newSku = baseSku + '-B' + nextBatchNum;
+  const newBatchId = 'prod_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+  const batchName = product.name + ' (Batch ' + nextBatchNum + ' @ Rs.' + newCost + ')';
+  await db.run('INSERT INTO products (id, name, sku, category, price, cost_price, stock, min_stock, supplier, unit, barcode, brand, batch_code, is_batch, parent_product_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)', [newBatchId, batchName, newSku, product.category || 'General', product.price, newCost, qty, product.min_stock || 0, poSupplierName || product.supplier || '', product.unit || 'pcs', product.barcode || '', product.brand || '', 'BATCH-' + nextBatchNum, product.id]);
   try {
-    if (typeof enqueueSync === 'function') {
-      await enqueueSync(db, 'products', product.id, 'UPSERT');
-    }
-  } catch (e) {
-    console.warn('[PO Receive] Enqueue sync non-critical warning:', e.message);
-  }
-
+    if (typeof enqueueSync === 'function') await enqueueSync(db, 'products', newBatchId, 'INSERT');
+  } catch (_) {}
   return {
-    productId: product.id,
-    sku: product.sku,
-    isNewBatch: false,
-    batchNumber: product.batch_number || 1,
-    name: product.name,
-    costPrice: weightedCost,
-    stock: newStock,
-    isExistingIncremented: true
+    productId: newBatchId,
+    sku: newSku,
+    isNewBatch: true,
+    batchNumber: nextBatchNum,
+    name: batchName,
+    costPrice: newCost,
+    stock: qty,
+    isExistingIncremented: false
   };
 }
 

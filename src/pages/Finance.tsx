@@ -175,13 +175,33 @@ export function Finance({ currentUser }: FinanceProps = {}) {
   };
 
   const isCashTrans = (t: any) => {
-    if (!t) return true;
-    const method = (t.payment_method || t.method || '').toUpperCase();
-    const desc = (t.description || '').toUpperCase();
-    const ref = (t.reference || '').toUpperCase();
-    if (method) return method === 'CASH';
-    return !desc.includes('CHEQUE') && !desc.includes('BANK') && !desc.includes('TRANSFER') &&
-           !ref.includes('CHQ') && !ref.includes('CHEQUE');
+    if (!t) return false;
+    const method = String(t.payment_method || t.method || '').trim().toUpperCase();
+    const desc = String(t.description || '').toUpperCase();
+    const ref = String(t.reference || '').toUpperCase();
+    const cat = String(t.category || '').toUpperCase();
+
+    // If explicit payment method is defined
+    if (method === 'CASH') return true;
+    if (['BANK', 'BANK TRANSFER', 'TRANSFER', 'CREDIT', 'CARD'].includes(method)) return false;
+
+    // Detect non-cash by keywords in description/reference/category
+    if (
+      desc.includes('BANK TRANSFER') ||
+      desc.includes('[BANK TRANSFER]') ||
+      desc.includes('CREDIT') ||
+      desc.includes('CHEQUE') ||
+      ref.includes('CHQ') ||
+      ref.includes('CHEQUE') ||
+      cat.includes('CREDIT')
+    ) {
+      // Inward cheque encashment into cash drawer counts as physical cash
+      if (desc.includes('ENCASHED CHEQUE') || desc.includes('ENCASHED') || cat.includes('ENCASHED')) {
+        return true;
+      }
+      return false;
+    }
+    return true;
   };
 
   const totalIncome = filtered.filter(t => t.type === 'income').reduce((sum, t) => sum + (t.amount || 0), 0);
