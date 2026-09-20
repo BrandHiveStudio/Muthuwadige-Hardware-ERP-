@@ -203,6 +203,14 @@ async function main() {
     }
   }
 
+  // Final purge of audit_logs (so triggers firing during user sync/settings update leave 0 rows)
+  try {
+    await runLocal('DELETE FROM audit_logs');
+    if (turso) await turso.execute('DELETE FROM audit_logs');
+  } catch (e) {
+    console.warn('Final audit_logs purge note:', e.message);
+  }
+
   // Verification Report
   console.log('\n================================================================================================');
   console.log('✅ PHASE 1: ZERO-RESET VERIFICATION SUMMARY (LOCAL SQLITE & TURSO CLOUD)');
