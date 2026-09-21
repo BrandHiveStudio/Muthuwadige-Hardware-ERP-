@@ -8865,6 +8865,8 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
   }
 
   const staffUser = user_email || user_id || req.headers['x-user-email'] || 'system';
+  const todayStr = new Date().toISOString().split('T')[0];
+  const nowIso = new Date().toISOString();
 
   try {
     const txnResult = await db.transaction(async () => {
@@ -8879,11 +8881,12 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
       }
 
     let cleared_at = cheque.cleared_at;
+    let cleared_date = cheque.cleared_date;
 
     // 1. Handling CLEARED status transition
     if (targetStatus === 'CLEARED') {
-      cleared_at = new Date().toISOString();
-      const todayStr = new Date().toLocaleDateString('sv-SE');
+      cleared_at = nowIso;
+      cleared_date = cheque.cleared_date || todayStr;
       const chqType = (cheque.cheque_type || '').toUpperCase();
       const direction = (cheque.direction || '').toUpperCase();
 
@@ -9183,7 +9186,11 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
 
     // 3. Update cheque status in database
     const updatedNotes = notes !== undefined ? notes : cheque.notes;
-    const clearedDateVal = targetStatus === 'CLEARED' ? (cheque.cleared_date || todayStr) : null;
+    if (targetStatus === 'BOUNCED' || targetStatus === 'CANCELLED') {
+      cleared_at = null;
+      cleared_date = null;
+    }
+    const clearedDateVal = targetStatus === 'CLEARED' ? (cleared_date || todayStr) : (targetStatus === 'BOUNCED' || targetStatus === 'CANCELLED' ? null : cheque.cleared_date);
     await db.run(
       'UPDATE cheque_registry SET status = ?, notes = ?, cleared_at = ?, cleared_date = ? WHERE id = ?',
       [targetStatus, updatedNotes, cleared_at, clearedDateVal, id]
@@ -10231,7 +10238,7 @@ async function executeUndoChequeStatus({ cheque_id, revert_to, user_email }) {
       // Update status back to target state
       const nowIso = new Date().toISOString();
       await db.run(
-        'UPDATE cheque_registry SET status = ?, cleared_at = NULL, updated_at = ? WHERE id = ?',
+        'UPDATE cheque_registry SET status = ?, cleared_at = NULL, cleared_date = NULL, updated_at = ? WHERE id = ?',
         [targetStatus, nowIso, cheque.id]
       );
 
