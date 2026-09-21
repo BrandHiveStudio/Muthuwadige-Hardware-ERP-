@@ -784,8 +784,11 @@ export async function pushUpstreamChanges(localDb: any, tursoClient: Client | nu
         } else if (cleanRow.selling_price !== undefined && cleanRow.price === undefined) {
           cleanRow.price = cleanRow.selling_price;
         }
-        delete cleanRow.stock;
-        delete cleanRow.stock_quantity;
+        if (cleanRow.stock !== undefined && cleanRow.stock_quantity === undefined) {
+          cleanRow.stock_quantity = cleanRow.stock;
+        } else if (cleanRow.stock_quantity !== undefined && cleanRow.stock === undefined) {
+          cleanRow.stock = cleanRow.stock_quantity;
+        }
         cleanRow.updated_at = cleanRow.updated_at || new Date().toISOString();
 
         const columns = Object.keys(cleanRow);
@@ -801,6 +804,8 @@ export async function pushUpstreamChanges(localDb: any, tursoClient: Client | nu
                   "price" = excluded."price",
                   "selling_price" = excluded."selling_price",
                   "cost_price" = excluded."cost_price",
+                  "stock" = excluded."stock",
+                  "stock_quantity" = excluded."stock_quantity",
                   "min_stock" = excluded."min_stock",
                   "supplier" = excluded."supplier",
                   "unit" = excluded."unit",
@@ -1118,8 +1123,8 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
           } catch (_) {}
 
           // LWW & Conflict Resolution for Master Data
+          let localRow: any = null;
           if (isMasterTable) {
-            let localRow: any = null;
             try {
               localRow = await localDb.get(`SELECT * FROM "${tableName}" WHERE "${idCol}" = ?`, [(row as any)[idCol]]);
               if (!localRow && tableName === 'products' && (row as any).sku) {
@@ -1196,8 +1201,17 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
             } else if (cleanRow.selling_price !== undefined && cleanRow.price === undefined) {
               cleanRow.price = cleanRow.selling_price;
             }
-            delete cleanRow.stock;
-            delete cleanRow.stock_quantity;
+            if (cleanRow.stock !== undefined && cleanRow.stock_quantity === undefined) {
+              cleanRow.stock_quantity = cleanRow.stock;
+            } else if (cleanRow.stock_quantity !== undefined && cleanRow.stock === undefined) {
+              cleanRow.stock = cleanRow.stock_quantity;
+            }
+
+            // SAFETY: Never allow downstream pull to overwrite higher local stock with stale cloud values
+            if (localRow && Number(localRow.stock || 0) > Number(cleanRow.stock || 0)) {
+              cleanRow.stock = localRow.stock;
+              cleanRow.stock_quantity = localRow.stock_quantity !== undefined ? localRow.stock_quantity : localRow.stock;
+            }
 
             const rawCols = Object.keys(cleanRow);
             const pCols = localColSet.size > 0 ? rawCols.filter(c => localColSet.has(c)) : rawCols;
@@ -1213,6 +1227,8 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
                  "selling_price" = excluded."selling_price",
                  "cost_price" = excluded."cost_price",
                  "category" = excluded."category",
+                 "stock" = CASE WHEN products."stock" > excluded."stock" THEN products."stock" ELSE excluded."stock" END,
+                 "stock_quantity" = CASE WHEN products."stock_quantity" > excluded."stock_quantity" THEN products."stock_quantity" ELSE excluded."stock_quantity" END,
                  "min_stock" = excluded."min_stock",
                  "supplier" = excluded."supplier",
                  "unit" = excluded."unit",

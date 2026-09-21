@@ -6154,9 +6154,48 @@ const handleCreditPaymentInsert = async (req, res) => {
       ]
     );
 
-    // Phase 2B Unified Accounting: Log transaction for credit repayments to reflect cash inflow in Finance page
-    // Ensure debt settlement transactions are recorded exactly once in the accounting ledger table
-    if (amountPaid > 0) {
+    const payMethodNorm = (p.payment_method || '').toString().trim().toUpperCase();
+    const isCheque = payMethodNorm === 'CHEQUE';
+
+    // Method B Accounting: When payment method is CHEQUE, do NOT log immediate cash/bank inflow.
+    // Financial cash inflow will ONLY be created when the inward cheque is marked CLEARED in /api/cheques/:id/status.
+    if (isCheque) {
+      if (p.cheque_number || p.chequeNumber || p.cheque_no) {
+        const chqNo = (p.cheque_number || p.chequeNumber || p.cheque_no).toString().trim();
+        const existingChq = await db.get('SELECT id FROM cheque_registry WHERE cheque_number = ?', [chqNo]);
+        if (!existingChq) {
+          const chqId = 'chq_in_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+          await db.run(
+            `INSERT INTO cheque_registry (
+              id, direction, cheque_type, cheque_number, bank_name, branch,
+              cheque_date, amount, party_id, party_name, reference_type,
+              reference_id, status, notes, created_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              chqId,
+              'INWARD',
+              p.cheque_type || 'CROSSED_ACCOUNT_PAYEE',
+              chqNo,
+              p.bank_name || p.bank || 'Bank',
+              p.branch || '',
+              p.cheque_date || p.chequeDate || paymentDate.substring(0, 10),
+              amountPaid,
+              p.customer_id || null,
+              p.customer_name || 'Customer',
+              'CREDIT_SETTLEMENT',
+              invoiceNo,
+              'PENDING',
+              p.notes || `Customer Credit Settlement for ${p.customer_name || 'Customer'}`,
+              authorName,
+              createdAt
+            ]
+          );
+          enqueueSync(db, 'cheque_registry', chqId, 'UPSERT').catch(() => {});
+          enqueueSync(db, 'cheques', chqId, 'UPSERT').catch(() => {});
+        }
+      }
+    } else if (amountPaid > 0) {
+      // Direct transactions cash inflow for CASH or other non-cheque settlements
       const txId = 'tx_cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
       const txDate = (paymentDate || createdAt).substring(0, 10);
       const isPartial = remainingBalance > 0.01;
@@ -6171,12 +6210,6 @@ const handleCreditPaymentInsert = async (req, res) => {
       );
 
       if (!existingTx) {
-        // Carry the customer's actual repayment method (already captured a few lines above into
-        // credit_payments.payment_method) into this ledger row too - previously this INSERT omitted
-        // the column entirely, so every credit settlement silently landed in the Cash Book as
-        // 'CASH' (the schema's column default) regardless of whether the customer actually paid by
-        // card/bank transfer, defeating the drawer cash-isolation feature for this entire category
-        // of transaction.
         await db.run(
           'INSERT INTO transactions (id, date, description, amount, type, category, reference, user_id, created_at, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [txId, txDate, description, amountPaid, 'income', category, invoiceNo, authorName, createdAt, p.payment_method || 'Cash']
@@ -8281,8 +8314,11 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
                 weightedCost = Math.round(((currentStock * currentCost) + (qty * netUnitCost)) / (currentStock + qty) * 100) / 100;
               }
               await db.run('UPDATE products SET cost_price = ? WHERE id = ?', [weightedCost, product.id]);
-              await resolveOrCreateBatchProduct(db, product, netUnitCost, qty, po.supplier_name);
+              const bRes = await resolveOrCreateBatchProduct(db, product, netUnitCost, qty, po.supplier_name);
               await enqueueSync(db, 'products', product.id, 'UPSERT');
+              if (bRes?.productId && bRes.productId !== product.id) {
+                await enqueueSync(db, 'products', bRes.productId, 'UPSERT');
+              }
             }
           }
         }
@@ -8516,6 +8552,9 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
         const pId = it.receivedProductId || it.productId || it.product_id;
         if (pId) {
           await enqueueSync(db, 'products', pId, 'UPSERT');
+        }
+        if (it.productId && it.receivedProductId && it.productId !== it.receivedProductId) {
+          await enqueueSync(db, 'products', it.productId, 'UPSERT');
         }
       }
     }
@@ -8975,7 +9014,7 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
           await enqueueSync(db, 'transactions', txId, 'UPSERT');
         }
 
-        if (isCreditSettlement) {
+        if (isCreditSettlement && cheque.reference_type !== 'CREDIT_SETTLEMENT') {
           // 2. Deduct from customer credit balance
           if (cheque.party_id) {
             await db.run(
@@ -9954,6 +9993,9 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
         const pId = it.receivedProductId || it.productId || it.product_id;
         if (pId) {
           await enqueueSync(db, 'products', pId, 'UPSERT');
+        }
+        if (it.productId && it.receivedProductId && it.productId !== it.receivedProductId) {
+          await enqueueSync(db, 'products', it.productId, 'UPSERT');
         }
       }
 

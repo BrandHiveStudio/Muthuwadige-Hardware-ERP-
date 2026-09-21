@@ -841,6 +841,8 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
                   "price" = excluded."price",
                   "selling_price" = excluded."selling_price",
                   "cost_price" = excluded."cost_price",
+                  "stock" = excluded."stock",
+                  "stock_quantity" = excluded."stock_quantity",
                   "min_stock" = excluded."min_stock",
                   "supplier" = excluded."supplier",
                   "unit" = excluded."unit",
@@ -1225,8 +1227,8 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
           } catch (_) {}
 
           // LWW & Conflict Resolution for Master Data
+          let localRow = null;
           if (isMasterTable) {
-            let localRow = null;
             try {
               localRow = await localDb.get(`SELECT * FROM "${tableName}" WHERE "${idCol}" = ?`, [row[idCol]]);
               if (!localRow && tableName === 'products' && row.sku) {
@@ -1309,6 +1311,12 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
               cleanRow.stock = cleanRow.stock_quantity;
             }
 
+            // SAFETY: Never allow downstream pull to overwrite higher local stock with stale cloud values
+            if (localRow && Number(localRow.stock || 0) > Number(cleanRow.stock || 0)) {
+              cleanRow.stock = localRow.stock;
+              cleanRow.stock_quantity = localRow.stock_quantity !== undefined ? localRow.stock_quantity : localRow.stock;
+            }
+
             const rawCols = Object.keys(cleanRow);
             const pCols = localColSet.size > 0 ? rawCols.filter(c => localColSet.has(c)) : rawCols;
             const pColNames = pCols.map(c => `"${c}"`).join(', ');
@@ -1323,6 +1331,8 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
                  "selling_price" = excluded."selling_price",
                  "cost_price" = excluded."cost_price",
                  "category" = excluded."category",
+                 "stock" = CASE WHEN products."stock" > excluded."stock" THEN products."stock" ELSE excluded."stock" END,
+                 "stock_quantity" = CASE WHEN products."stock_quantity" > excluded."stock_quantity" THEN products."stock_quantity" ELSE excluded."stock_quantity" END,
                  "min_stock" = excluded."min_stock",
                  "supplier" = excluded."supplier",
                  "unit" = excluded."unit",

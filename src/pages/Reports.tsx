@@ -66,7 +66,7 @@ const getLocalDateString = (d: Date = new Date()) => toSriLankaDateStr(d) || get
 
 const safeGetDateString = (dateVal: any): string => toSriLankaDateStr(dateVal);
 
-type Tab = 'sales' | 'inventory' | 'financial';
+type Tab = 'sales' | 'inventory' | 'financial' | 'shifts';
 
 interface ReportsProps {
   currentUser?: any;
@@ -81,6 +81,7 @@ let cachedReportsData: {
   suppliers?: any[];
   salesReturns?: any[];
   creditPayments?: any[];
+  cheques?: any[];
   profiles?: any[];
   shopName?: string;
   shiftLogs?: any[];
