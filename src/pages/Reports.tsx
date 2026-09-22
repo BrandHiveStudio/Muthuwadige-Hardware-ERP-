@@ -620,6 +620,70 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     return type === 'contra_revenue' || type === 'sales_return' || cat.startsWith('sales return') || cat === 'exchange refund';
   };
 
+  const isPurchaseReturnTrans = (t: any) => {
+    if (!t) return false;
+    const cat = String(t.category || '').toUpperCase();
+    const desc = String(t.description || '').toUpperCase();
+    const ref = String(t.reference || '').toUpperCase();
+    return (
+      cat.includes('PURCHASE RETURN') ||
+      cat.includes('SUPPLIER REFUND') ||
+      cat.includes('PURCHASE REFUND') ||
+      desc.includes('PURCHASE RETURN') ||
+      desc.includes('SUPPLIER REFUND') ||
+      desc.includes('DEBIT NOTE') ||
+      ref.startsWith('PR-') ||
+      ref.startsWith('DN-')
+    );
+  };
+
+  const isBankTrans = (t: any) => {
+    if (!t) return false;
+    const method = String(t.payment_method || t.paymentMethod || t.method || '').trim().toUpperCase();
+    const desc = String(t.description || '').toUpperCase();
+    const cat = String(t.category || '').toUpperCase();
+    if (['BANK', 'BANK TRANSFER', 'BANK_TRANSFER', 'TRANSFER'].includes(method)) return true;
+    return desc.includes('BANK TRANSFER') || desc.includes('[BANK TRANSFER]') || desc.includes('BANK REFUND') || cat.includes('BANK') || cat.includes('SUPPLIER BANK REFUND');
+  };
+
+  const isCashTrans = (t: any) => {
+    if (!t) return false;
+    const method = String(t.payment_method || t.paymentMethod || t.method || '').trim().toUpperCase();
+    if (['BANK', 'BANK TRANSFER', 'BANK_TRANSFER', 'TRANSFER', 'CREDIT', 'CARD'].includes(method)) return false;
+    const desc = String(t.description || '').toUpperCase();
+    const ref = String(t.reference || '').toUpperCase();
+    const cat = String(t.category || '').toUpperCase();
+    if (
+      desc.includes('BANK TRANSFER') ||
+      desc.includes('[BANK TRANSFER]') ||
+      desc.includes('CREDIT') ||
+      desc.includes('CHEQUE') ||
+      ref.includes('CHQ') ||
+      ref.includes('CHEQUE') ||
+      cat.includes('CREDIT')
+    ) {
+      if (
+        desc.includes('ENCASHED CHEQUE') ||
+        desc.includes('ENCASHED') ||
+        cat.includes('ENCASHED') ||
+        cat.includes('POS CHEQUE REALIZATION (CASH DRAWER)') ||
+        (method === 'CASH' && cat.includes('POS CHEQUE REALIZATION'))
+      ) {
+        return true;
+      }
+      return false;
+    }
+    return true;
+  };
+
+  const isCashPurchaseReturnTrans = (t: any) => {
+    return isPurchaseReturnTrans(t) && isCashTrans(t);
+  };
+
+  const isBankPurchaseReturnTrans = (t: any) => {
+    return isPurchaseReturnTrans(t) && isBankTrans(t);
+  };
+
   const financialChartData = getLast6MonthsReports();
   filteredTransactions.forEach((trans) => {
     const tDate = new Date(trans.date || trans.created_at);
@@ -629,7 +693,12 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     if (match) {
       const amount = Number(trans.amount || 0);
       if (trans.type === 'income' || trans.flow_type === 'INCOME') {
-        match.revenue += amount;
+        if (isPurchaseReturnTrans(trans)) {
+          // Task 2: Purchase return refund reduces operational outflow/expenses
+          match.expenses = Math.max(0, match.expenses - amount);
+        } else {
+          match.revenue += amount;
+        }
       } else if (isSalesReturnTrans(trans)) {
         match.revenue -= amount;
       } else if (trans.type === 'expense' || trans.flow_type === 'EXPENSE') {
@@ -638,10 +707,23 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     }
   });
 
-  const totalIncome = filteredTransactions.filter(t => (t.type?.toLowerCase() === 'income' || t.flow_type?.toLowerCase() === 'income')).reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  const totalPurchaseReturns = filteredTransactions
+    .filter(t => (t.type?.toLowerCase() === 'income' || t.flow_type?.toLowerCase() === 'income') && isPurchaseReturnTrans(t))
+    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
+  const totalIncome = filteredTransactions
+    .filter(t => (t.type?.toLowerCase() === 'income' || t.flow_type?.toLowerCase() === 'income') && !isPurchaseReturnTrans(t))
+    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
   const totalSalesReturns = filteredTransactions.filter(t => isSalesReturnTrans(t)).reduce((sum, t) => sum + Number(t.amount || 0), 0);
   const netRevenue = Math.max(0, totalIncome - totalSalesReturns);
-  const totalExpenses = filteredTransactions.filter(t => (t.type?.toLowerCase() === 'expense' || t.flow_type?.toLowerCase() === 'expense') && !isSalesReturnTrans(t)).reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
+  const grossExpenses = filteredTransactions
+    .filter(t => (t.type?.toLowerCase() === 'expense' || t.flow_type?.toLowerCase() === 'expense') && !isSalesReturnTrans(t))
+    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
+  // Accounting Rule (Task 2): TOTAL CASH OUT (EXPENSES) = Total Outflow - Cash Purchase Returns
+  const totalExpenses = Math.max(0, grossExpenses - totalPurchaseReturns);
 
   const financialSummaryMetrics = (() => {
     const summary = computeFinancialSummary({
@@ -753,20 +835,41 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     }
   });
 
+  const periodTransactions = filteredTransactions.filter(t => {
+    if (!fromDate && !toDate && rangeType === 'custom') {
+      const todayStr = getLocalDateString();
+      const tDate = safeGetDateString(t.date || t.created_at);
+      return tDate === todayStr;
+    }
+    return true;
+  });
+
+  const periodCashPurchaseReturns = periodTransactions
+    .filter(t => (t.flow_type?.toLowerCase() === 'income' || t.type?.toLowerCase() === 'income') && isCashPurchaseReturnTrans(t))
+    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
   // Calculate Cash Expenses paid out of the drawer for the period (Purchases, Supplier settlements, etc.)
-  const periodCashExpenses = filteredTransactions
+  const rawPeriodCashExpenses = periodTransactions
     .filter(t => {
       const type = (t.flow_type || t.type || '').toString().toUpperCase().trim();
-      const method = (t.payment_method || t.paymentMethod || 'CASH').toString().toUpperCase().trim();
-      return type === 'EXPENSE' && (method === 'CASH' || method === 'CASH_BEARER');
+      return type === 'EXPENSE' && isCashTrans(t) && !isSalesReturnTrans(t);
     })
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
+  // Cash purchase returns reduce total operational cash outflow/expenses (Task 2)
+  const periodCashExpenses = Math.max(0, rawPeriodCashExpenses - periodCashPurchaseReturns);
+
+  // Task 3: Query BANK_TRANSFER purchase returns for the period and display under Bank Breakdown
+  const periodBankPurchaseReturns = periodTransactions
+    .filter(t => (t.flow_type?.toLowerCase() === 'income' || t.type?.toLowerCase() === 'income') && isBankPurchaseReturnTrans(t))
+    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
   // Net Cash in Drawer for Today's Payment Breakdown (Inflows - Expenses)
+  // POS Net Cash sales income remains completely untouched
   const todayCash = Math.max(0, calcCash - periodCashExpenses);
   const todayCard = calcCard;
   const todayCredit = calcCredit;
-  const todayBank = calcBank;
+  const todayBank = calcBank + periodBankPurchaseReturns;
 
   // Pending Inward Cheques in Hand for Today's Period
   const periodPendingCheques = cheques.filter(c => {
@@ -1555,6 +1658,9 @@ export function Reports({ currentUser }: ReportsProps = {}) {
                     <div>
                       <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">{t("Bank", "බැංකු")}</p>
                       <p className="text-sm font-black text-slate-800 mt-0.5">{formatCurrency(todayBank)}</p>
+                      {periodBankPurchaseReturns > 0 && (
+                        <p className="text-[8px] font-bold text-blue-600 mt-0.5">+{formatCurrency(periodBankPurchaseReturns)} PR {t("Returns", "ආපසු")}</p>
+                      )}
                     </div>
                     <span className="w-2 h-2 rounded-full bg-blue-500"></span>
                   </div>

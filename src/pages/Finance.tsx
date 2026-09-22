@@ -174,6 +174,20 @@ export function Finance({ currentUser }: FinanceProps = {}) {
     return cat.includes('credit adjustment') || desc.includes('credit return') || desc.includes('credit adjustment');
   };
 
+  const isPurchaseReturnTrans = (t: any) => {
+    if (!t) return false;
+    const cat = String(t.category || '').toUpperCase();
+    const desc = String(t.description || '').toUpperCase();
+    const ref = String(t.reference || '').toUpperCase();
+    return cat.includes('SUPPLIER CASH REFUND') || 
+           cat.includes('SUPPLIER BANK REFUND') || 
+           cat.includes('PURCHASE RETURN') || 
+           desc.includes('SUPPLIER CASH REFUND') ||
+           desc.includes('SUPPLIER BANK REFUND') ||
+           ref.startsWith('PR-') ||
+           ref.startsWith('DN-');
+  };
+
   const isCashTrans = (t: any) => {
     if (!t) return false;
     const method = String(t.payment_method || t.method || '').trim().toUpperCase();
@@ -183,7 +197,7 @@ export function Finance({ currentUser }: FinanceProps = {}) {
 
     // If explicit payment method is defined
     if (method === 'CASH') return true;
-    if (['BANK', 'BANK TRANSFER', 'TRANSFER', 'CREDIT', 'CARD'].includes(method)) return false;
+    if (['BANK', 'BANK TRANSFER', 'BANK_TRANSFER', 'TRANSFER', 'CREDIT', 'CARD'].includes(method)) return false;
 
     // Detect non-cash by keywords in description/reference/category
     if (
@@ -210,14 +224,52 @@ export function Finance({ currentUser }: FinanceProps = {}) {
     return true;
   };
 
-  const totalIncome = filtered.filter(t => t.type === 'income').reduce((sum, t) => sum + (t.amount || 0), 0);
+  const isCashPurchaseReturnTrans = (t: any) => {
+    return isPurchaseReturnTrans(t) && isCashTrans(t);
+  };
+
+  const isBankTrans = (t: any) => {
+    if (!t) return false;
+    const method = String(t.payment_method || t.method || '').trim().toUpperCase();
+    const desc = String(t.description || '').toUpperCase();
+    const cat = String(t.category || '').toUpperCase();
+    if (['BANK', 'BANK TRANSFER', 'BANK_TRANSFER', 'TRANSFER'].includes(method)) return true;
+    return desc.includes('BANK TRANSFER') || desc.includes('[BANK TRANSFER]') || desc.includes('BANK REFUND') || cat.includes('BANK') || cat.includes('SUPPLIER BANK REFUND');
+  };
+
+  const isBankPurchaseReturnTrans = (t: any) => {
+    return isPurchaseReturnTrans(t) && isBankTrans(t);
+  };
+
+  // Purchase return refunds
+  const cashPurchaseReturns = filtered.filter(t => (t.type === 'income' || t.flow_type === 'income') && isCashPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  const totalPurchaseReturns = filtered.filter(t => (t.type === 'income' || t.flow_type === 'income') && isPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  const bankPurchaseReturns = filtered.filter(t => (t.type === 'income' || t.flow_type === 'income') && isBankPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+
+  // Sales & Operating Inflow (Excluding purchase return refunds from gross sales revenue)
+  const totalIncome = filtered.filter(t => t.type === 'income' && !isPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
   const totalSalesReturns = filtered.filter(t => isSalesReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
   const netSalesIncome = calculateNetSalesRevenue(totalIncome, 0, totalSalesReturns, 0);
-  const totalExpense = filtered.filter(t => t.type === 'expense' && !isSalesReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
-  const cashIncome = filtered.filter(t => t.type === 'income' && isCashTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
-  const cashExpense = filtered.filter(t => t.type === 'expense' && !isSalesReturnTrans(t) && isCashTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+
+  // Outflow (Expenses) before purchase return offset
+  const grossTotalExpense = filtered.filter(t => t.type === 'expense' && !isSalesReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  const grossCashExpense = filtered.filter(t => t.type === 'expense' && !isSalesReturnTrans(t) && isCashTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+
+  // Accounting Rule (Task 2): TOTAL CASH OUT (EXPENSES) = Total Outflow - Cash Purchase Returns
+  const totalExpense = Math.max(0, grossTotalExpense - totalPurchaseReturns);
+  const cashExpense = Math.max(0, grossCashExpense - cashPurchaseReturns);
+
+  // Cash Inflows: Cash Sales + Encashed Cash Drawer Cheques + Cash Capital In
+  const cashIncome = filtered.filter(t => t.type === 'income' && !isPurchaseReturnTrans(t) && isCashTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
   const cashSalesReturns = filtered.filter(t => isSalesReturnTrans(t) && !isCreditAdjustmentTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+
+  // Cash Book Balance = (Cash Sales + Encashed Cash Drawer Cheques + Cash Capital In) - (Cash Purchases + Cash Drawer Expenses + Cash Refunds Given)
+  // When cash purchase refund enters drawer, cashExpense is reduced by cashPurchaseReturns, so cashBalance correctly increases.
   const cashBalance = cashIncome - cashSalesReturns - cashExpense;
+
+  // Bank Inflow / Realization Breakdown (Task 3)
+  const bankIncome = filtered.filter(t => (t.type === 'income' || t.flow_type === 'income') && isBankTrans(t) && !isPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  const totalBankBreakdown = bankIncome + bankPurchaseReturns;
 
   const openAdd = () => {
     setFormData(emptyTransaction);
@@ -587,7 +639,7 @@ export function Finance({ currentUser }: FinanceProps = {}) {
       {activeTab === 'cash_book' && (
         <div className="space-y-6">
           {/* Financial Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
             {/* Net Cash Balance */}
             <div className="bg-[#464646] rounded-2xl shadow-xl p-5 border border-slate-700/10 hover:translate-y-[-2px] transition-all duration-300 relative overflow-hidden group">
               <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16 blur-xl group-hover:scale-110 transition-transform duration-500"></div>
@@ -636,7 +688,24 @@ export function Finance({ currentUser }: FinanceProps = {}) {
                 </div>
               </div>
               <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-white/95">
-                <span>Drawer Cash Out: {symbol} {convert(cashExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })} | Total Outflow: {symbol} {convert(totalExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                <span>Drawer: {symbol} {convert(cashExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })} | Outflow: {symbol} {convert(totalExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })}{cashPurchaseReturns > 0 ? ` | PR Offset: -${symbol} ${convert(cashPurchaseReturns).toLocaleString(undefined, { minimumFractionDigits: 2 })}` : ''}</span>
+              </div>
+            </div>
+
+            {/* Bank Breakdown */}
+            <div className="bg-blue-600 rounded-2xl shadow-xl p-5 hover:translate-y-[-2px] transition-all duration-300 relative overflow-hidden group">
+              <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full -mr-16 -mt-16 blur-xl group-hover:scale-110 transition-transform duration-500"></div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] font-black text-white/80 uppercase tracking-widest">Bank Breakdown</p>
+                  <p className="text-3xl font-black text-white mt-1.5">{symbol} {convert(totalBankBreakdown).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                </div>
+                <div className="w-12 h-12 bg-white/20 text-white rounded-xl flex items-center justify-center shadow-lg">
+                  <CreditCardIcon className="w-6 h-6" />
+                </div>
+              </div>
+              <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-white/95">
+                <span>Inflow: {symbol} {convert(bankIncome).toLocaleString(undefined, { minimumFractionDigits: 2 })}{bankPurchaseReturns > 0 ? ` | PR Returns: +${symbol} ${convert(bankPurchaseReturns).toLocaleString(undefined, { minimumFractionDigits: 2 })}` : ''}</span>
               </div>
             </div>
           </div>

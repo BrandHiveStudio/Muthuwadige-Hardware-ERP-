@@ -50,6 +50,11 @@ export const TABLES_TO_SYNC = [
   'quotation_items',
   'sales_returns',
   'sales_return_items',
+  'purchase_returns',
+  'purchase_return_items',
+  'debit_notes',
+  'customer_transactions',
+  'delivery_notes',
   'shift_logs',
   'audit_logs',
   'expenses',
@@ -263,6 +268,47 @@ export async function ensureTursoSchema(tursoClient) {
         branch_id TEXT,
         station_id TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );`,
+      `CREATE TABLE IF NOT EXISTS purchase_returns (
+        id TEXT PRIMARY KEY,
+        return_number TEXT UNIQUE,
+        purchase_order_id TEXT,
+        supplier_id TEXT,
+        supplier_name TEXT,
+        reason TEXT,
+        total_returned_cost REAL DEFAULT 0,
+        settlement_type TEXT DEFAULT 'DEBIT_NOTE',
+        debit_note_id TEXT,
+        items TEXT NOT NULL DEFAULT '[]',
+        user_id TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        status TEXT DEFAULT 'ACTIVE',
+        void_reason TEXT,
+        updated_at DATETIME,
+        balance_remaining REAL,
+        redeemed_amount REAL DEFAULT 0,
+        redeemed_in_po_number TEXT
+      );`,
+      `CREATE TABLE IF NOT EXISTS purchase_return_items (
+        id TEXT PRIMARY KEY,
+        return_id TEXT NOT NULL,
+        product_id TEXT,
+        product_name TEXT,
+        return_qty REAL DEFAULT 0,
+        unit_cost REAL DEFAULT 0,
+        total_cost REAL DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );`,
+      `CREATE TABLE IF NOT EXISTS debit_notes (
+        id TEXT PRIMARY KEY,
+        code TEXT UNIQUE,
+        supplier_id TEXT,
+        amount REAL DEFAULT 0,
+        balance REAL DEFAULT 0,
+        reason TEXT,
+        status TEXT DEFAULT 'AVAILABLE',
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME
       );`
     ], 'write');
     const cols = [
@@ -1441,7 +1487,16 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
     // 12. Transactions (General Ledger / Cash Book)
     syncAndPruneEntity('transactions', 'SELECT * FROM transactions ORDER BY created_at DESC LIMIT 1000'),
     // 13. Stock Adjustments (Delta synchronization for multi-computer stock integrity)
-    syncAndPruneEntity('stock_adjustments', 'SELECT * FROM stock_adjustments ORDER BY created_at ASC LIMIT 2000', '', 'id', false)
+    syncAndPruneEntity('stock_adjustments', 'SELECT * FROM stock_adjustments ORDER BY created_at ASC LIMIT 2000', '', 'id', false),
+    // 14. Expenses
+    syncAndPruneEntity('expenses', 'SELECT * FROM expenses ORDER BY created_at DESC LIMIT 1000'),
+    // 15. Credit Payments & Credit Notes
+    syncAndPruneEntity('credit_payments', 'SELECT * FROM credit_payments ORDER BY created_at DESC LIMIT 1000'),
+    syncAndPruneEntity('credit_notes', 'SELECT * FROM credit_notes ORDER BY created_at DESC LIMIT 1000'),
+    // 16. Purchase Returns, Purchase Return Items & Debit Notes
+    syncAndPruneEntity('purchase_returns', 'SELECT * FROM purchase_returns ORDER BY created_at DESC LIMIT 1000'),
+    syncAndPruneEntity('purchase_return_items', 'SELECT * FROM purchase_return_items'),
+    syncAndPruneEntity('debit_notes', 'SELECT * FROM debit_notes ORDER BY created_at DESC LIMIT 1000')
   ]);
 
   lastDownstreamSync = new Date().toISOString();

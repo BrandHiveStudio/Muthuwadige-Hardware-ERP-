@@ -117,6 +117,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
   // Purchase Returns State
   const [returnSearch, setReturnSearch] = useState<string>('');
   const [returnFilterMode, setReturnFilterMode] = useState<string>('ALL');
+  const [returnFromDate, setReturnFromDate] = useState<string>('');
+  const [returnToDate, setReturnToDate] = useState<string>('');
   const [isCreateReturnOpen, setIsCreateReturnOpen] = useState<boolean>(false);
   const [viewDebitNote, setViewDebitNote] = useState<PurchaseReturn | null>(null);
 
@@ -124,8 +126,6 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
   const [targetReturnPO, setTargetReturnPO] = useState<PurchaseOrder | null>(null);
   const [poSearchQuery, setPoSearchQuery] = useState<string>('');
   const [showPoSearchResults, setShowPoSearchResults] = useState<boolean>(false);
-  const [includeReturnDiscount, setIncludeReturnDiscount] = useState<boolean>(true);
-  const [includeReturnTransport, setIncludeReturnTransport] = useState<boolean>(false);
   const [returnQtys, setReturnQtys] = useState<Record<string, number>>({});
   const poSearchInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -417,9 +417,14 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       const currentMode = (pr.settlement_mode || pr.settlementMode || '').toUpperCase();
       const matchMode = returnFilterMode === 'ALL' || currentMode === returnFilterMode;
 
-      return matchSearch && matchMode;
+      const rawDate = (pr as any).return_date || pr.created_at || (pr as any).date || '';
+      const prDate = String(rawDate).substring(0, 10);
+      const matchFrom = !returnFromDate || (prDate >= returnFromDate);
+      const matchTo = !returnToDate || (prDate <= returnToDate);
+
+      return matchSearch && matchMode && matchFrom && matchTo;
     });
-  }, [purchaseReturns, returnSearch, returnFilterMode]);
+  }, [purchaseReturns, returnSearch, returnFilterMode, returnFromDate, returnToDate]);
 
   // Purchase Returns Summary Math
   const totalReturnsValue = useMemo(() => {
@@ -1467,8 +1472,6 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       return;
     }
     setTargetReturnPO(po);
-    setIncludeReturnDiscount(true);
-    setIncludeReturnTransport(false);
     const initialQtys: Record<string, number> = {};
     const items = Array.isArray(po.items) ? po.items : [];
     items.forEach((item: any, idx: number) => {
@@ -1476,7 +1479,45 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       initialQtys[pId] = 0;
     });
     setReturnQtys(initialQtys);
+    setPoSearchQuery('');
     setShowPoSearchResults(false);
+  };
+
+  const handleReturnQtyChange = (productId: string, qty: number, maxQty: number) => {
+    const validQty = Math.max(0, Math.min(qty, maxQty));
+    setReturnQtys(prev => ({
+      ...prev,
+      [productId]: validQty
+    }));
+  };
+
+  const handleReturnAllItems = () => {
+    if (!targetReturnPO) return;
+    const newQtys: Record<string, number> = {};
+    const items = Array.isArray(targetReturnPO.items) ? targetReturnPO.items : [];
+    items.forEach((item: any, idx: number) => {
+      const pId = item.productId || item.id || `item_${idx}`;
+      const orderedQty = Number(item.quantity || item.qty || 0);
+      const prevReturned = purchaseReturns
+        .filter(pr => (pr.purchase_order_id === targetReturnPO.poNumber || pr.purchaseOrderId === targetReturnPO.poNumber) && (pr.status || '').toUpperCase() !== 'VOIDED')
+        .reduce((sum, pr) => {
+          const matchItem = Array.isArray(pr.items) ? pr.items.find((it: any) => (it.productId === pId || it.product_id === pId || it.productName === item.productName)) : null;
+          return sum + (matchItem ? Number(matchItem.quantity || matchItem.qty || 0) : 0);
+        }, 0);
+      newQtys[pId] = Math.max(0, orderedQty - prevReturned);
+    });
+    setReturnQtys(newQtys);
+  };
+
+  const handleClearAllReturnQtys = () => {
+    if (!targetReturnPO) return;
+    const clearedQtys: Record<string, number> = {};
+    const items = Array.isArray(targetReturnPO.items) ? targetReturnPO.items : [];
+    items.forEach((item: any, idx: number) => {
+      const pId = item.productId || item.id || `item_${idx}`;
+      clearedQtys[pId] = 0;
+    });
+    setReturnQtys(clearedQtys);
   };
 
   const handleTriggerPoSearch = () => {
@@ -1513,24 +1554,20 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     if (!targetReturnPO) return;
     const targetPoItems = Array.isArray(targetReturnPO.items) ? targetReturnPO.items : [];
     
-    // Map items with net unit cost and quantity
+    // Map items strictly with unit cost and quantity (Applicable Debit = SUM(qty * unitCost))
     const returnedItemsToSubmit = targetPoItems.map((item: any, idx: number) => {
       const pId = item.productId || item.id || `item_${idx}`;
       const qtyToReturn = returnQtys[pId] || 0;
-      const grossCost = Number(item.costPrice || item.cost_price || 0);
-      const disc = Number(item.discount || 0);
-      const isPercent = item.discountType === 'percent' || item.discountType === 'percentage';
-      const unitDisc = includeReturnDiscount ? (isPercent ? (grossCost * disc) / 100 : disc) : 0;
-      const netUnitCost = Math.max(0, Math.round((grossCost - unitDisc) * 100) / 100);
-      const lineSubtotal = Math.round(qtyToReturn * netUnitCost * 100) / 100;
+      const unitCost = Number(item.costPrice || item.cost_price || item.unitCostPrice || 0);
+      const lineSubtotal = Math.round(qtyToReturn * unitCost * 100) / 100;
       return {
         productId: pId,
         productName: item.productName || item.name || 'Hardware Item',
         quantity: qtyToReturn,
         qty: qtyToReturn,
-        unitCostPrice: netUnitCost,
-        unit_cost_price: netUnitCost,
-        netUnitCost,
+        unitCostPrice: unitCost,
+        unit_cost_price: unitCost,
+        netUnitCost: unitCost,
         subtotal: lineSubtotal
       };
     }).filter(it => it.quantity > 0);
@@ -1540,10 +1577,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       return;
     }
 
-    const merchandiseTotal = returnedItemsToSubmit.reduce((sum, it) => sum + it.subtotal, 0);
-    const origTransportFee = Number((targetReturnPO as any).transportation_fee !== undefined ? (targetReturnPO as any).transportation_fee : ((targetReturnPO as any).transportationFee || 0));
-    const transportTotal = includeReturnTransport && merchandiseTotal > 0 ? origTransportFee : 0;
-    const finalTotalDebit = Math.round((merchandiseTotal + transportTotal) * 100) / 100;
+    const finalTotalDebit = Math.round(returnedItemsToSubmit.reduce((sum, it) => sum + it.subtotal, 0) * 100) / 100;
 
     setIsSubmittingReturn(true);
     try {
@@ -1566,31 +1600,24 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       };
 
       const result = await api.purchasing.createReturn(payload);
-
-      if (result && (result.success || result.id)) {
-        alert(`✅ Purchase Return & Debit Note ${result.returnNumber || result.debitNoteNo || result.id} processed successfully!`);
+      if (result && (result.success || result.return_number)) {
+        const returnNumberVal = result.return_number || result.returnNumber || `DN-${Date.now().toString().slice(-6)}`;
         
-        const createdDebitNoteRecord: PurchaseReturn = {
-          id: result.id,
-          returnNumber: result.returnNumber || result.debitNoteNo || result.id,
-          return_number: result.returnNumber || result.debitNoteNo || result.id,
-          supplierId: targetPOSupplier?.id || '',
-          supplier_id: targetPOSupplier?.id || '',
-          supplierName: targetReturnPO.supplierName,
-          supplier_name: targetReturnPO.supplierName,
-          purchaseOrderId: targetReturnPO.poNumber,
+        // Prepare preview object for the generated Debit Note Voucher modal
+        const createdDebitNoteRecord: any = {
+          id: result.id || `pr_${Date.now()}`,
+          return_number: returnNumberVal,
+          returnNumber: returnNumberVal,
           purchase_order_id: targetReturnPO.poNumber,
-          totalReturnedCost: finalTotalDebit,
+          supplier_name: targetReturnPO.supplierName,
+          supplierName: targetReturnPO.supplierName,
+          supplier_id: targetPOSupplier?.id || '',
           total_returned_cost: finalTotalDebit,
-          balanceRemaining: finalTotalDebit,
-          balance_remaining: finalTotalDebit,
-          redeemedAmount: 0,
-          redeemed_amount: 0,
-          settlementMode: returnSettlementMode,
+          totalReturnedCost: finalTotalDebit,
           settlement_mode: returnSettlementMode,
+          settlementMode: returnSettlementMode,
           reason: effectiveReason,
           notes: returnNotes.trim(),
-          handledBy: staffName,
           handled_by: staffName,
           createdAt: new Date().toISOString(),
           created_at: new Date().toISOString(),
@@ -1600,6 +1627,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
         // Open Debit Note Voucher preview modal immediately
         setViewDebitNote(createdDebitNoteRecord);
+        alert(`✅ Purchase Return & Debit Note ${returnNumberVal} processed successfully!`);
 
         // Reset dedicated return form
         setTargetReturnPO(null);
@@ -1607,16 +1635,15 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
         setPoSearchQuery('');
         setShowPoSearchResults(false);
         setReturnNotes('');
-        setIncludeReturnTransport(false);
-        setIncludeReturnDiscount(true);
 
         // Refresh data
         await fetchData();
         window.dispatchEvent(new CustomEvent('refresh-all-data'));
-        window.dispatchEvent(new CustomEvent('refresh-purchasing'));
         window.dispatchEvent(new CustomEvent('refresh-inventory'));
         window.dispatchEvent(new CustomEvent('refresh-finance'));
-        window.dispatchEvent(new CustomEvent('suppliers-updated'));
+        window.dispatchEvent(new CustomEvent('refresh-reports'));
+      } else {
+        alert(result?.error || 'Failed to submit purchase return voucher.');
       }
     } catch (err: any) {
       alert("Error processing purchase return: " + err.message);
@@ -1634,17 +1661,33 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     if (!reason || !reason.trim()) return;
 
     try {
-      const { data, error } = await supabase.rpc('void_purchase_return', {
-        p_return_no: returnNo,
-        p_void_reason: reason.trim()
-      });
+      let success = false;
+      try {
+        const res = await api.purchaseReturns.void(returnNo, reason.trim());
+        if (res && (res.success || !res.error)) {
+          success = true;
+        }
+      } catch (apiErr: any) {
+        // Fallback to direct fetch
+        const res = await fetch(`/api/purchase-returns/${encodeURIComponent(returnNo)}/void`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ void_reason: reason.trim() })
+        });
+        const json = await res.json();
+        if (res.ok && (json.success || !json.error)) {
+          success = true;
+        } else {
+          throw new Error(json.error || json.message || apiErr.message);
+        }
+      }
 
-      if (error || !data?.success) {
-        alert(error?.message || data?.message || 'Failed to void purchase return.');
-      } else {
+      if (success) {
         alert('Return voucher voided and stock/cash corrected.');
         await fetchData();
         window.dispatchEvent(new CustomEvent('refresh-inventory'));
+        window.dispatchEvent(new CustomEvent('refresh-finance'));
+        window.dispatchEvent(new CustomEvent('refresh-reports'));
         window.dispatchEvent(new CustomEvent('refresh-all-data'));
       }
     } catch (err: any) {
@@ -2405,31 +2448,23 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                   </button>
                 </div>
 
-                {/* Original PO Overview Bar (6 Stat Cards) */}
+                {/* Original PO Overview Bar (4 Stat Cards) */}
                 {(() => {
                   const grossSubtotal = Number((targetReturnPO as any).subtotal || (targetReturnPO as any).items?.reduce((s: number, it: any) => s + (Number(it.costPrice || it.cost_price || 0) * Number(it.quantity || it.qty || 0)), 0) || 0);
-                  const origDiscount = Number((targetReturnPO as any).discount || 0);
-                  const origTransport = Number((targetReturnPO as any).transportation_fee !== undefined ? (targetReturnPO as any).transportation_fee : ((targetReturnPO as any).transportationFee || 0));
                   const origTotal = Number(targetReturnPO.total || 0);
                   const currentPayableBal = Number(targetPOSupplier ? (targetPOSupplier.payableBalance !== undefined ? targetPOSupplier.payableBalance : (targetPOSupplier.payable_balance || targetPOSupplier.balance || 0)) : 0);
 
-                  // Calculate dynamic debit note value from current return selections
+                  // Calculate applicable debit value strictly from current return selections: SUM(item.return_qty * item.unit_cost)
                   const targetPoItems = Array.isArray(targetReturnPO.items) ? targetReturnPO.items : [];
-                  const merchDebitTotal = targetPoItems.reduce((sum: number, it: any, idx: number) => {
+                  const totalApplicableDebit = Math.round(targetPoItems.reduce((sum: number, it: any, idx: number) => {
                     const pId = it.productId || it.id || `item_${idx}`;
                     const q = returnQtys[pId] || 0;
-                    const grossCost = Number(it.costPrice || it.cost_price || 0);
-                    const disc = Number(it.discount || 0);
-                    const isPercent = it.discountType === 'percent' || it.discountType === 'percentage';
-                    const unitDisc = includeReturnDiscount ? (isPercent ? (grossCost * disc) / 100 : disc) : 0;
-                    const netUnitCost = Math.max(0, Math.round((grossCost - unitDisc) * 100) / 100);
-                    return sum + (q * netUnitCost);
-                  }, 0);
-                  const dynamicTransportDebit = includeReturnTransport && merchDebitTotal > 0 ? origTransport : 0;
-                  const totalApplicableDebit = Math.round((merchDebitTotal + dynamicTransportDebit) * 100) / 100;
+                    const unitCost = Number(it.costPrice || it.cost_price || it.unitCostPrice || 0);
+                    return sum + (q * unitCost);
+                  }, 0) * 100) / 100;
 
                   return (
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                       {/* Subtotal */}
                       <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-sm">
                         <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Subtotal</p>
@@ -2437,48 +2472,6 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                           {symbol} {grossSubtotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                         </p>
                         <p className="text-[9px] text-slate-400 font-bold mt-0.5">Original items gross</p>
-                      </div>
-
-                      {/* Discount with Included Toggle Pill */}
-                      <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-sm flex flex-col justify-between">
-                        <div>
-                          <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Discount</p>
-                          <p className="text-sm font-black text-rose-600 mt-1">
-                            - {symbol} {origDiscount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                          </p>
-                        </div>
-                        <label className="mt-2 flex items-center gap-1.5 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            checked={includeReturnDiscount}
-                            onChange={(e) => setIncludeReturnDiscount(e.target.checked)}
-                            className="rounded text-[#DAA520] focus:ring-[#DAA520] w-3.5 h-3.5"
-                          />
-                          <span className={`text-[10px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded ${includeReturnDiscount ? 'bg-amber-100 text-amber-900 font-extrabold' : 'bg-slate-100 text-slate-400 line-through'}`}>
-                            {includeReturnDiscount ? '✓ Included' : 'Excluded'}
-                          </span>
-                        </label>
-                      </div>
-
-                      {/* Transport Fee with Excluded Toggle Pill */}
-                      <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-sm flex flex-col justify-between">
-                        <div>
-                          <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Transport Fee</p>
-                          <p className={`text-sm font-black mt-1 ${!includeReturnTransport ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
-                            + {symbol} {origTransport.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                          </p>
-                        </div>
-                        <label className="mt-2 flex items-center gap-1.5 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            checked={includeReturnTransport}
-                            onChange={(e) => setIncludeReturnTransport(e.target.checked)}
-                            className="rounded text-[#DAA520] focus:ring-[#DAA520] w-3.5 h-3.5"
-                          />
-                          <span className={`text-[10px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded ${includeReturnTransport ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500 font-bold'}`}>
-                            {includeReturnTransport ? '✓ Included' : 'Excluded'}
-                          </span>
-                        </label>
                       </div>
 
                       {/* Final PO Total */}
@@ -2535,7 +2528,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                           <th className="py-3 text-center">Ordered Qty</th>
                           <th className="py-3 text-center">Prev Returned</th>
                           <th className="py-3 text-center">Remaining Returnable</th>
-                          <th className="py-3 text-right">Unit Cost (Net)</th>
+                          <th className="py-3 text-right">Unit Cost</th>
                           <th className="py-3 text-center w-36">Return Qty</th>
                           <th className="py-3 text-right px-4">Total Debit Value</th>
                         </tr>
@@ -2554,13 +2547,9 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                             }, 0);
 
                           const remainingReturnable = Math.max(0, orderedQty - prevReturned);
-                          const grossCost = Number(item.costPrice || item.cost_price || 0);
-                          const disc = Number(item.discount || 0);
-                          const isPercent = item.discountType === 'percent' || item.discountType === 'percentage';
-                          const unitDisc = includeReturnDiscount ? (isPercent ? (grossCost * disc) / 100 : disc) : 0;
-                          const netUnitCost = Math.max(0, Math.round((grossCost - unitDisc) * 100) / 100);
+                          const unitCost = Number(item.costPrice || item.cost_price || item.unitCostPrice || 0);
                           const returnQty = returnQtys[pId] || 0;
-                          const totalDebitValue = Math.round(returnQty * netUnitCost * 100) / 100;
+                          const totalDebitValue = Math.round(returnQty * unitCost * 100) / 100;
 
                           return (
                             <tr key={pId} className="hover:bg-slate-50/60 transition-colors">
@@ -2583,13 +2572,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                               </td>
                               <td className="py-3 text-right">
                                 <span className="font-black text-slate-900">
-                                  {symbol} {netUnitCost.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                  {symbol} {unitCost.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                                 </span>
-                                {unitDisc > 0 && (
-                                  <span className="block text-[9px] text-rose-500 font-bold">
-                                    (-{symbol} {unitDisc.toFixed(2)})
-                                  </span>
-                                )}
                               </td>
                               <td className="py-3 text-center">
                                 <div className="inline-flex items-center border border-slate-200 rounded-xl overflow-hidden shadow-sm bg-white">
@@ -2746,19 +2730,12 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                 {/* Final Execution Button */}
                 {(() => {
                   const targetPoItems = Array.isArray(targetReturnPO.items) ? targetReturnPO.items : [];
-                  const merchDebitTotal = targetPoItems.reduce((sum: number, it: any, idx: number) => {
+                  const totalApplicableDebit = Math.round(targetPoItems.reduce((sum: number, it: any, idx: number) => {
                     const pId = it.productId || it.id || `item_${idx}`;
                     const q = returnQtys[pId] || 0;
-                    const grossCost = Number(it.costPrice || it.cost_price || 0);
-                    const disc = Number(it.discount || 0);
-                    const isPercent = it.discountType === 'percent' || it.discountType === 'percentage';
-                    const unitDisc = includeReturnDiscount ? (isPercent ? (grossCost * disc) / 100 : disc) : 0;
-                    const netUnitCost = Math.max(0, Math.round((grossCost - unitDisc) * 100) / 100);
-                    return sum + (q * netUnitCost);
-                  }, 0);
-                  const origTransport = Number((targetReturnPO as any).transportation_fee !== undefined ? (targetReturnPO as any).transportation_fee : ((targetReturnPO as any).transportationFee || 0));
-                  const dynamicTransportDebit = includeReturnTransport && merchDebitTotal > 0 ? origTransport : 0;
-                  const totalApplicableDebit = Math.round((merchDebitTotal + dynamicTransportDebit) * 100) / 100;
+                    const unitCost = Number(it.costPrice || it.cost_price || it.unitCostPrice || 0);
+                    return sum + (q * unitCost);
+                  }, 0) * 100) / 100;
                   const hasSelectedItems = Object.values(returnQtys).some(q => q > 0);
 
                   return (
@@ -2846,8 +2823,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
           </div>
 
           {/* Search & Filter Toolbar */}
-          <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm flex flex-col sm:flex-row justify-between items-center gap-3">
-            <div className="flex flex-1 items-center gap-3 bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 w-full sm:max-w-md focus-within:ring-2 focus-within:ring-[#DAA520]/20">
+          <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-3">
+            <div className="flex flex-1 items-center gap-3 bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 w-full lg:max-w-md focus-within:ring-2 focus-within:ring-[#DAA520]/20">
               <SearchIcon className="w-4 h-4 text-gray-400" />
               <input
                 type="text"
@@ -2863,8 +2840,27 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
               )}
             </div>
 
-            <div className="flex items-center gap-2 w-full sm:w-auto">
-              <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest shrink-0">Filter:</span>
+            <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+              <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5">
+                <span className="text-[10px] font-black text-gray-400 uppercase tracking-wider">From:</span>
+                <input
+                  type="date"
+                  value={returnFromDate}
+                  onChange={(e) => setReturnFromDate(e.target.value)}
+                  className="bg-transparent text-xs font-bold text-slate-700 outline-none cursor-pointer"
+                />
+              </div>
+
+              <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5">
+                <span className="text-[10px] font-black text-gray-400 uppercase tracking-wider">To:</span>
+                <input
+                  type="date"
+                  value={returnToDate}
+                  onChange={(e) => setReturnToDate(e.target.value)}
+                  className="bg-transparent text-xs font-bold text-slate-700 outline-none cursor-pointer"
+                />
+              </div>
+
               <select
                 value={returnFilterMode}
                 onChange={(e) => setReturnFilterMode(e.target.value)}
@@ -2875,6 +2871,21 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                 <option value="CASH_REFUND">Cash Refund</option>
                 <option value="BANK_REFUND">Bank Refund</option>
               </select>
+
+              {(returnFromDate || returnToDate || returnSearch || returnFilterMode !== 'ALL') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReturnFromDate('');
+                    setReturnToDate('');
+                    setReturnSearch('');
+                    setReturnFilterMode('ALL');
+                  }}
+                  className="px-3 py-2 rounded-xl text-xs font-black uppercase tracking-wider text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-colors flex items-center gap-1"
+                >
+                  <XIcon className="w-3.5 h-3.5" /> Clear Filter
+                </button>
+              )}
             </div>
           </div>
 
@@ -3362,8 +3373,26 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       >
         {viewDebitNote && (
           <div className="space-y-6 p-1 text-left">
+            {/* Print Stylesheet for Clean A4 / 80mm Alignment without ERP UI overlap */}
+            <style>{`
+              @media print {
+                body * { visibility: hidden !important; }
+                #debit-note-voucher-print, #debit-note-voucher-print * { visibility: visible !important; }
+                #debit-note-voucher-print {
+                  position: fixed !important;
+                  left: 0 !important;
+                  top: 0 !important;
+                  width: 100% !important;
+                  margin: 0 auto !important;
+                  padding: 16px !important;
+                  background: #ffffff !important;
+                  box-sizing: border-box !important;
+                }
+              }
+            `}</style>
+
             {/* Printable Voucher Card Container */}
-            <div id="debit-note-voucher" className="bg-white border-2 border-slate-200 p-6 sm:p-8 rounded-2xl shadow-sm text-slate-900 relative">
+            <div id="debit-note-voucher-print" className="bg-white border-2 border-slate-200 p-6 sm:p-8 rounded-2xl shadow-sm text-slate-900 relative">
               {/* Top Business Header */}
               <div className="flex justify-between items-start border-b-2 border-slate-900 pb-4">
                 <div>

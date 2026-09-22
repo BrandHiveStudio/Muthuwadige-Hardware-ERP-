@@ -86,6 +86,21 @@ async function main() {
   // Tables to wipe
   const tablesToWipe = allTables.filter(t => !PROTECTED_TABLES.has(t));
 
+  // Enforce retention of ONLY the two approved accounts:
+  // 1. usr_super_admin_01 (sanojhardware@gmail.com) - Root Super Admin
+  // 2. u_1789829748029 (krishleo439@gmail.com) - Admin
+  console.log('\n--- Pruning Unauthorized Accounts from Local SQLite ---');
+  try {
+    if (localTables.includes('user_capabilities')) {
+      await runLocal("DELETE FROM user_capabilities WHERE user_id NOT IN ('usr_super_admin_01', 'u_1789829748029')");
+    }
+    await runLocal("DELETE FROM profiles WHERE id NOT IN ('usr_super_admin_01', 'u_1789829748029') AND email NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com')");
+    await runLocal("DELETE FROM users WHERE id NOT IN ('usr_super_admin_01', 'u_1789829748029') AND email NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com')");
+    console.log('[LOCAL] Pruned unauthorized accounts. Retained ONLY usr_super_admin_01 and u_1789829748029.');
+  } catch (e) {
+    console.warn('[LOCAL] Unauthorized account prune note:', e.message);
+  }
+
   // Verify users before purge
   console.log('--- Protected User Accounts (Local SQLite) ---');
   const localUsers = await allLocal('SELECT id, email, role, name FROM users');
@@ -139,6 +154,18 @@ async function main() {
           console.error(`[TURSO] Error purging ${table}:`, e.message);
         }
       }
+    }
+
+    // Prune unauthorized accounts from Turso Cloud
+    try {
+      if (tursoTables.includes('user_capabilities')) {
+        await turso.execute("DELETE FROM user_capabilities WHERE user_id NOT IN ('usr_super_admin_01', 'u_1789829748029')");
+      }
+      await turso.execute("DELETE FROM profiles WHERE id NOT IN ('usr_super_admin_01', 'u_1789829748029') AND email NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com')");
+      await turso.execute("DELETE FROM users WHERE id NOT IN ('usr_super_admin_01', 'u_1789829748029') AND email NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com')");
+      console.log('[TURSO] Pruned unauthorized accounts. Retained ONLY usr_super_admin_01 and u_1789829748029.');
+    } catch (e) {
+      console.warn('[TURSO] Unauthorized account prune note:', e.message);
     }
 
     // Reset sqlite_sequence on Turso

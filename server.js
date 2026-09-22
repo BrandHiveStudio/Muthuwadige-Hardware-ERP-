@@ -759,7 +759,7 @@ async function authenticate(req, res, next) {
 
   // 1. Direct failsafe verification for root admin and development session tokens
   if (token && (token.startsWith('root_admin_token_') || token.startsWith('root_token_') || token.startsWith('dev_token_') || token.startsWith('admin_token_'))) {
-    const authUser = { id: 'u1', email: 'muthuwadigehardware@gmail.com', role: 'super_admin', name: 'Muthuwadige Hardware' };
+    const authUser = { id: 'usr_super_admin_01', email: 'sanojhardware@gmail.com', role: 'super_admin', name: 'Super Admin' };
     req.authUser = authUser;
     req.user = authUser;
     return next();
@@ -852,7 +852,7 @@ async function authenticate(req, res, next) {
     if (!session || new Date(session.expires_at).getTime() < Date.now()) {
       const isDesktopLocal = !process.env.VERCEL && process.env.APP_ROLE !== 'web' && (!isTurso || !isTurso());
       if (isDesktopLocal && session) {
-        const authUser = { id: session.user_id, email: session.email, role: session.role, username: (session.email === 'muthuwadigehardware@gmail.com' || session.role === 'super_admin') ? 'super_admin' : (session.username || '') };
+        const authUser = { id: session.user_id, email: session.email, role: session.role, username: (session.email === 'sanojhardware@gmail.com' || session.role === 'super_admin') ? 'super_admin' : (session.username || '') };
         req.authUser = authUser;
         req.user = authUser;
         return next();
@@ -886,7 +886,7 @@ async function authenticate(req, res, next) {
       }
     }
 
-    const authUser = { id: session.user_id, email: session.email, role: session.role, username: (session.email === 'muthuwadigehardware@gmail.com' || session.role === 'super_admin') ? 'super_admin' : (session.username || '') };
+    const authUser = { id: session.user_id, email: session.email, role: session.role, username: (session.email === 'sanojhardware@gmail.com' || session.role === 'super_admin') ? 'super_admin' : (session.username || '') };
     req.authUser = authUser;
     req.user = authUser;
     next();
@@ -913,9 +913,9 @@ function requireAdmin(req, res, next) {
     callerUsername === 'super_admin' ||
     callerRole === 'super_admin' ||
     callerRole === 'super admin' ||
-    callerEmail === 'muthuwadigehardware@gmail.com' ||
+    callerEmail === 'sanojhardware@gmail.com' ||
     callerEmail === 'super_admin' ||
-    caller.id === 'u1';
+    caller.id === 'usr_super_admin_01';
 
   if (!isCallerRoot && !isAdminRole(callerRole)) {
     return res.status(403).json({ error: 'This action requires an administrator role.' });
@@ -3788,6 +3788,10 @@ app.post(['/api/auth/register', '/api/users'], requireAdmin, async (req, res) =>
   if (!email || !String(email).trim()) {
     return res.status(400).json({ error: 'Email is required to create a user account.' });
   }
+  const rawRole = String(role || '').toLowerCase().trim();
+  if (rawRole === 'super_admin' || rawRole === 'super admin' || rawRole === 'root_admin' || rawRole === 'root admin' || rawRole === 'superadmin') {
+    return res.status(403).json({ error: 'Creation of additional Root / Super Admin accounts is strictly prohibited.' });
+  }
   const cleanEmail = String(email).trim().toLowerCase();
   try {
     // Filter out super_admin / Admin when evaluating staff quota limit (3 max additional staff)
@@ -3998,8 +4002,8 @@ app.post('/api/admin/request-factory-reset-otp', async (req, res) => {
     }
 
     const cleanEmail = (caller.email || '').toLowerCase().trim();
-    if (cleanEmail !== 'muthuwadigehardware@gmail.com' || !isAdminRole(caller.role)) {
-      return res.status(403).json({ error: 'Access denied. Only the Root Admin (muthuwadigehardware@gmail.com) can request factory reset verification.' });
+    if (cleanEmail !== 'sanojhardware@gmail.com' || !isAdminRole(caller.role)) {
+      return res.status(403).json({ error: 'Access denied. Only the Root Admin (sanojhardware@gmail.com) can request factory reset verification.' });
     }
 
     // Generate secure 6-digit OTP (strictly 60-second TTL)
@@ -4008,7 +4012,7 @@ app.post('/api/admin/request-factory-reset-otp', async (req, res) => {
 
     activeFactoryResetOtp = {
       code: otpCode,
-      email: 'muthuwadigehardware@gmail.com',
+      email: 'sanojhardware@gmail.com',
       expiresAt
     };
 
@@ -4020,14 +4024,14 @@ app.post('/api/admin/request-factory-reset-otp', async (req, res) => {
       );
     } catch (_) { }
 
-    console.log(`[Factory Reset] Generated OTP for Root Admin (muthuwadigehardware@gmail.com): ${otpCode} (expires in 60s)`);
+    console.log(`[Factory Reset] Generated OTP for Root Admin (sanojhardware@gmail.com): ${otpCode} (expires in 60s)`);
 
-    const emailResult = await sendFactoryResetOtp('muthuwadigehardware@gmail.com', otpCode);
-    await logAudit('muthuwadigehardware@gmail.com', 'FACTORY_RESET_OTP_REQUESTED', 'Factory reset OTP verification code requested by Root Admin.');
+    const emailResult = await sendFactoryResetOtp('sanojhardware@gmail.com', otpCode);
+    await logAudit('sanojhardware@gmail.com', 'FACTORY_RESET_OTP_REQUESTED', 'Factory reset OTP verification code requested by Root Admin.');
 
     return res.json({
       success: true,
-      message: 'Factory reset verification code has been dispatched to muthuwadigehardware@gmail.com.',
+      message: 'Factory reset verification code has been dispatched to sanojhardware@gmail.com.',
       emailDelivered: Boolean(emailResult.transmitted),
       simulated: Boolean(emailResult.simulated),
       expiresInSeconds: 60
@@ -4050,8 +4054,8 @@ app.post('/api/admin/execute-factory-reset', async (req, res) => {
     }
 
     const cleanEmail = (caller.email || '').toLowerCase().trim();
-    if (cleanEmail !== 'muthuwadigehardware@gmail.com' || !isAdminRole(caller.role)) {
-      return res.status(403).json({ error: 'Access denied. Only the Root Admin (muthuwadigehardware@gmail.com) can execute a factory reset.' });
+    if (cleanEmail !== 'sanojhardware@gmail.com' || !isAdminRole(caller.role)) {
+      return res.status(403).json({ error: 'Access denied. Only the Root Admin (sanojhardware@gmail.com) can execute a factory reset.' });
     }
 
     const { otp_code, password } = req.body || {};
@@ -4092,11 +4096,11 @@ app.post('/api/admin/execute-factory-reset', async (req, res) => {
     // 2. Validate Root Admin Password
     let rootProfile = null;
     try {
-      rootProfile = await db.get('SELECT * FROM profiles WHERE LOWER(email) = ?', ['muthuwadigehardware@gmail.com']);
+      rootProfile = await db.get('SELECT * FROM profiles WHERE LOWER(email) = ?', ['sanojhardware@gmail.com']);
     } catch (_) { }
     if (!rootProfile) {
       try {
-        rootProfile = await db.get('SELECT * FROM users WHERE LOWER(email) = ?', ['muthuwadigehardware@gmail.com']);
+        rootProfile = await db.get('SELECT * FROM users WHERE LOWER(email) = ?', ['sanojhardware@gmail.com']);
       } catch (_) { }
     }
 
@@ -4110,7 +4114,7 @@ app.post('/api/admin/execute-factory-reset', async (req, res) => {
         try {
           const cloudRes = await tursoClient.execute({
             sql: 'SELECT password FROM profiles WHERE LOWER(email) = ?',
-            args: ['muthuwadigehardware@gmail.com']
+            args: ['sanojhardware@gmail.com']
           });
           const cloudPw = cloudRes?.rows?.[0]?.password;
           if (cloudPw) {
@@ -4154,9 +4158,9 @@ app.post('/api/admin/execute-factory-reset', async (req, res) => {
           'DELETE FROM suppliers;',
           'DELETE FROM products;',
           'DELETE FROM categories;',
-          "DELETE FROM users WHERE LOWER(email) != 'muthuwadigehardware@gmail.com';",
-          "DELETE FROM profiles WHERE LOWER(email) != 'muthuwadigehardware@gmail.com';",
-          "DELETE FROM custom_permissions WHERE user_id NOT IN (SELECT id FROM users WHERE LOWER(email) = 'muthuwadigehardware@gmail.com');",
+          "DELETE FROM users WHERE LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com');",
+          "DELETE FROM profiles WHERE LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com');",
+          "DELETE FROM custom_permissions WHERE user_id NOT IN (SELECT id FROM users WHERE LOWER(email) IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com'));",
           `INSERT OR REPLACE INTO system_settings (id, key, value, system_wipe_timestamp) VALUES ('SYSTEM_WIPE_TIMESTAMP', 'SYSTEM_WIPE_TIMESTAMP', '${wipeTimestamp}', '${wipeTimestamp}');`
         ], 'write');
         cloudWiped = true;
@@ -4183,9 +4187,9 @@ app.post('/api/admin/execute-factory-reset', async (req, res) => {
       'DELETE FROM suppliers;',
       'DELETE FROM products;',
       'DELETE FROM categories;',
-      "DELETE FROM users WHERE LOWER(email) != 'muthuwadigehardware@gmail.com';",
-      "DELETE FROM profiles WHERE LOWER(email) != 'muthuwadigehardware@gmail.com';",
-      "DELETE FROM custom_permissions WHERE user_id NOT IN (SELECT id FROM users WHERE LOWER(email) = 'muthuwadigehardware@gmail.com');",
+      "DELETE FROM users WHERE LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com');",
+      "DELETE FROM profiles WHERE LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com');",
+      "DELETE FROM custom_permissions WHERE user_id NOT IN (SELECT id FROM users WHERE LOWER(email) IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com'));",
       'DELETE FROM sync_queue;',
       `INSERT OR REPLACE INTO system_settings (id, key, value, system_wipe_timestamp) VALUES ('SYSTEM_WIPE_TIMESTAMP', 'SYSTEM_WIPE_TIMESTAMP', '${wipeTimestamp}', '${wipeTimestamp}');`
     ];
@@ -4204,7 +4208,7 @@ app.post('/api/admin/execute-factory-reset', async (req, res) => {
       await db.run("DELETE FROM system_settings WHERE id = 'FACTORY_RESET_OTP'");
     } catch (_) { }
 
-    await logAudit('muthuwadigehardware@gmail.com', 'FACTORY_RESET_EXECUTED', `System was factory-reset by Root Admin. Wipe timestamp: ${wipeTimestamp}.`);
+    await logAudit('sanojhardware@gmail.com', 'FACTORY_RESET_EXECUTED', `System was factory-reset by Root Admin. Wipe timestamp: ${wipeTimestamp}.`);
     console.log('✅ [FACTORY RESET] System factory reset completed successfully.');
 
     return res.json({
@@ -8323,7 +8327,8 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
           }
         }
 
-        const validMode = (po.payment_method || po.settlement_mode || 'CREDIT').toString().toUpperCase();
+        const rawMode = (po.payment_method || po.settlement_mode || 'CREDIT').toString().toUpperCase();
+        const validMode = (rawMode === 'BANK_TRANSFER' || rawMode === 'TRANSFER' || rawMode === 'ONLINE') ? 'BANK' : rawMode;
         if (validMode === 'CREDIT') {
           if (po.supplier_name) {
             await db.run(
@@ -8331,13 +8336,22 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
               [netTotal, po.supplier_id || '', po.supplier_name]
             );
           }
-        } else if (validMode === 'CASH' || validMode === 'BANK') {
+        } else if (validMode === 'CASH') {
           const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-          const payDesc = `Supplier Payment - ${po.supplier_name || 'Vendor'} (PO #${po.po_number || id}) [${validMode === 'CASH' ? 'Cash Drawer' : 'Bank Transfer'}]`;
+          const payDesc = `Supplier Payment - ${po.supplier_name || 'Vendor'} (PO #${po.po_number || id}) [Cash Drawer]`;
           await db.run(
-            `INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [txId, 'expense', 'Supplier Payment', payDesc, netTotal, todayStr, `PO-SETTLE-${po.po_number || id}`, po.user_id || 'Admin', created_at]
+            `INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at, payment_method)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [txId, 'expense', 'PURCHASE', payDesc, netTotal, todayStr, `PO-SETTLE-${po.po_number || id}`, po.user_id || 'Admin', created_at, 'CASH']
+          );
+          await enqueueSync(db, 'transactions', txId, 'INSERT');
+        } else if (validMode === 'BANK') {
+          const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+          const payDesc = `Supplier Payment - ${po.supplier_name || 'Vendor'} (PO #${po.po_number || id}) [Bank Transfer]`;
+          await db.run(
+            `INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at, payment_method)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [txId, 'expense', 'PURCHASE', payDesc, netTotal, todayStr, `PO-SETTLE-${po.po_number || id}`, po.user_id || 'Admin', created_at, 'BANK']
           );
           await enqueueSync(db, 'transactions', txId, 'INSERT');
         }
@@ -8491,25 +8505,49 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
             enqueueSync(db, 'suppliers', supp.id, 'UPSERT').catch(() => { });
           }
         }
-      } else if (payMethod === 'CASH' || payMethod === 'BANK') {
+      } else if (payMethod === 'CASH') {
         const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-        const payDesc = `Supplier Payment - ${po.supplier_name || 'Vendor'} (PO #${po.po_number || id}) [${payMethod === 'CASH' ? 'Cash Drawer' : 'Bank Transfer'}]`;
+        const payDesc = `Supplier Payment - ${po.supplier_name || 'Vendor'} (PO #${po.po_number || id}) [Cash Drawer]`;
         const txRef = req.body.reference || `PO-SETTLE-${po.po_number || id}`;
         const todayStr = req.body.payment_date || new Date().toLocaleDateString('sv-SE');
         await db.run(
           `INSERT INTO transactions (
-            id, type, category, description, amount, date, reference, user_id, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            id, type, category, description, amount, date, reference, user_id, created_at, payment_method
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             txId,
             'expense',
-            'Supplier Payment',
+            'PURCHASE',
             payDesc,
             poNetTotal,
             todayStr,
             txRef,
             recBy,
-            recAt
+            recAt,
+            'CASH'
+          ]
+        );
+        enqueueSync(db, 'transactions', txId, 'INSERT').catch(() => { });
+      } else if (payMethod === 'BANK' || payMethod === 'BANK_TRANSFER' || payMethod === 'TRANSFER' || payMethod === 'ONLINE') {
+        const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        const payDesc = `Supplier Payment - ${po.supplier_name || 'Vendor'} (PO #${po.po_number || id}) [Bank Transfer]`;
+        const txRef = req.body.reference || `PO-SETTLE-${po.po_number || id}`;
+        const todayStr = req.body.payment_date || new Date().toLocaleDateString('sv-SE');
+        await db.run(
+          `INSERT INTO transactions (
+            id, type, category, description, amount, date, reference, user_id, created_at, payment_method
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            txId,
+            'expense',
+            'PURCHASE',
+            payDesc,
+            poNetTotal,
+            todayStr,
+            txRef,
+            recBy,
+            recAt,
+            'BANK'
           ]
         );
         enqueueSync(db, 'transactions', txId, 'INSERT').catch(() => { });
@@ -9584,7 +9622,7 @@ app.post(['/api/purchasing/return', '/api/purchase-returns'], async (req, res) =
         // Record cash income transaction
         const txId = 't_pr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
         await db.run(
-          'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [
             txId,
             'income',
@@ -9594,15 +9632,17 @@ app.post(['/api/purchasing/return', '/api/purchase-returns'], async (req, res) =
             todayStr,
             returnNumber,
             finalStaff,
-            createdAt
+            createdAt,
+            'CASH'
           ]
         );
         refundTxId = txId;
-      } else if (finalSettlementMode === 'BANK_REFUND') {
+        enqueueSync(db, 'transactions', txId, 'INSERT').catch(() => { });
+      } else if (finalSettlementMode === 'BANK_REFUND' || finalSettlementMode === 'BANK_TRANSFER' || finalSettlementMode === 'BANK') {
         // Record bank income transaction
         const txId = 't_pr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
         await db.run(
-          'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [
             txId,
             'income',
@@ -9612,10 +9652,12 @@ app.post(['/api/purchasing/return', '/api/purchase-returns'], async (req, res) =
             todayStr,
             returnNumber,
             finalStaff,
-            createdAt
+            createdAt,
+            'BANK'
           ]
         );
         refundTxId = txId;
+        enqueueSync(db, 'transactions', txId, 'INSERT').catch(() => { });
       }
 
       // 5. Insert audit log
@@ -9702,9 +9744,10 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
     return res.status(400).json({ error: 'Purchase Order ID or PO Number is required.' });
   }
 
-  const validMode = ['CREDIT', 'CASH', 'BANK', 'CHEQUE'].includes(((payment_method || settlement_mode) || '').toUpperCase())
-    ? (payment_method || settlement_mode).toUpperCase()
-    : 'CREDIT';
+  const rawMode = ((payment_method || settlement_mode) || '').toUpperCase();
+  const validMode = (rawMode === 'BANK_TRANSFER' || rawMode === 'TRANSFER' || rawMode === 'ONLINE')
+    ? 'BANK'
+    : (['CREDIT', 'CASH', 'BANK', 'CHEQUE'].includes(rawMode) ? rawMode : 'CREDIT');
 
   const staffUser = received_by || req.body.receivedBy || user_email || req.headers['x-user-email'] || 'Admin';
   const todayStr = payment_date || new Date().toLocaleDateString('sv-SE');
@@ -9874,26 +9917,50 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
             [poGrandTotal, supplierName]
           );
         }
-      } else if (validMode === 'CASH' || validMode === 'BANK') {
+      } else if (validMode === 'CASH') {
         // Insert Cash Book Outflow
         const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-        const payDesc = `Supplier Payment - ${supplierName} (PO #${po.po_number || po.po_no}) [${validMode === 'CASH' ? 'Cash Drawer' : 'Bank Transfer'}]`;
+        const payDesc = `Supplier Payment - ${supplierName} (PO #${po.po_number || po.po_no}) [Cash Drawer]`;
         const txRef = reference || `PO-SETTLE-${po.po_number || po.po_no}`;
 
         await db.run(
           `INSERT INTO transactions (
-            id, type, category, description, amount, date, reference, user_id, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            id, type, category, description, amount, date, reference, user_id, created_at, payment_method
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             txId,
             'expense',
-            'Supplier Payment',
+            'PURCHASE',
             payDesc,
             poGrandTotal,
             todayStr,
             txRef,
             staffUser,
-            nowIso
+            nowIso,
+            'CASH'
+          ]
+        );
+        settleTxId = txId;
+      } else if (validMode === 'BANK') {
+        const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        const payDesc = `Supplier Payment - ${supplierName} (PO #${po.po_number || po.po_no}) [Bank Transfer]`;
+        const txRef = reference || `PO-SETTLE-${po.po_number || po.po_no}`;
+
+        await db.run(
+          `INSERT INTO transactions (
+            id, type, category, description, amount, date, reference, user_id, created_at, payment_method
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            txId,
+            'expense',
+            'PURCHASE',
+            payDesc,
+            poGrandTotal,
+            todayStr,
+            txRef,
+            staffUser,
+            nowIso,
+            'BANK'
           ]
         );
         settleTxId = txId;
@@ -10052,14 +10119,30 @@ async function executeVoidPurchaseReturn({ return_no, void_reason, user_email })
       }
 
       // 2. Restore stock for all items in the return batch
-      const items = await db.all(
-        'SELECT * FROM purchase_return_items WHERE return_id = ?',
-        [pr.id]
+      let items = await db.all(
+        'SELECT * FROM purchase_return_items WHERE return_id = ? OR return_id = ?',
+        [pr.id, pr.return_number]
       );
 
-      for (const item of items) {
-        const prodId = item.product_id;
-        const qty = Number(item.quantity || 0);
+      if (!items || items.length === 0) {
+        try {
+          const dn = await db.get('SELECT items FROM debit_notes WHERE return_id = ? OR debit_note_no = ?', [pr.id, pr.return_number]);
+          if (dn?.items) {
+            const parsed = typeof dn.items === 'string' ? JSON.parse(dn.items) : dn.items;
+            if (Array.isArray(parsed)) {
+              items = parsed.map(it => ({
+                product_id: it.productId || it.product_id || it.id,
+                product_name: it.productName || it.name,
+                quantity: it.quantity || it.qty || 0
+              }));
+            }
+          }
+        } catch (_) {}
+      }
+
+      for (const item of (items || [])) {
+        const prodId = item.product_id || item.productId;
+        const qty = Number(item.quantity || item.qty || 0);
         if (prodId && qty > 0) {
           await db.run(
             'UPDATE products SET stock = stock + ? WHERE id = ?',
@@ -10075,7 +10158,7 @@ async function executeVoidPurchaseReturn({ return_no, void_reason, user_email })
             [
               saId,
               prodId,
-              item.product_name || 'Restored Item',
+              item.product_name || item.productName || 'Restored Item',
               0,
               qty,
               `Void Purchase Return (${pr.return_number || pr.id}): ${finalReason}`,
@@ -10091,13 +10174,20 @@ async function executeVoidPurchaseReturn({ return_no, void_reason, user_email })
       const sm = (pr.settlement_mode || '').toUpperCase();
       const retCost = Number(pr.total_returned_cost || 0);
 
-      if (sm === 'CASH_REFUND' || sm === 'BANK_REFUND') {
+      if (sm === 'CASH_REFUND' || sm === 'BANK_REFUND' || sm === 'BANK_TRANSFER' || sm === 'BANK') {
         // Remove the cash/bank income transaction
+        const txRows = await db.all(
+          'SELECT id FROM transactions WHERE reference = ? OR reference = ? OR description LIKE ?',
+          [pr.return_number, pr.id, `%${pr.return_number}%`]
+        );
+        for (const tx of txRows) {
+          await enqueueSync(db, 'transactions', tx.id, 'DELETE');
+        }
         await db.run(
           'DELETE FROM transactions WHERE (reference = ? OR reference = ? OR description LIKE ?)',
           [pr.return_number, pr.id, `%${pr.return_number}%`]
         );
-      } else if (sm === 'SUPPLIER_DEBIT_NOTE' || sm === 'SUPPLIER_CREDIT') {
+      } else if (sm === 'SUPPLIER_DEBIT_NOTE' || sm === 'SUPPLIER_CREDIT' || sm === 'CREDIT') {
         // Add the payable liability back to supplier balance
         if (pr.supplier_id) {
           await db.run(
@@ -10111,6 +10201,14 @@ async function executeVoidPurchaseReturn({ return_no, void_reason, user_email })
           );
         }
       }
+
+      // Revert debit_notes table status
+      try {
+        await db.run(
+          'UPDATE debit_notes SET status = ?, updated_at = ? WHERE return_id = ? OR debit_note_no = ?',
+          ['VOIDED', nowIso, pr.id, pr.return_number]
+        );
+      } catch (_) {}
 
       // 4. Mark status as VOIDED
       const nowIso = new Date().toISOString();
@@ -10130,9 +10228,10 @@ async function executeVoidPurchaseReturn({ return_no, void_reason, user_email })
       if (pr.supplier_id) {
         await enqueueSync(db, 'suppliers', pr.supplier_id, 'UPSERT');
       }
-      for (const item of items) {
-        if (item.product_id) {
-          await enqueueSync(db, 'products', item.product_id, 'UPSERT');
+      for (const item of (items || [])) {
+        const prodId = item.product_id || item.productId;
+        if (prodId) {
+          await enqueueSync(db, 'products', prodId, 'UPSERT');
         }
       }
     });
@@ -11704,6 +11803,11 @@ app.put(['/api/profiles/:id', '/api/users/:id'], requireAdmin, async (req, res) 
 
     if (isTargetSuperAdmin && !isCallerRoot) {
       return res.status(403).json({ error: '403 Forbidden: Modifying the Root Administrator account is restricted to the Root Administrator.' });
+    }
+
+    const targetNewRole = String(p.role || '').toLowerCase().trim();
+    if ((targetNewRole === 'super_admin' || targetNewRole === 'super admin' || targetNewRole === 'root_admin' || targetNewRole === 'root admin' || targetNewRole === 'superadmin') && !isTargetSuperAdmin) {
+      return res.status(403).json({ error: 'Promotion to Root / Super Admin is strictly prohibited.' });
     }
 
     const effectivePerms = p.custom_permissions !== undefined ? p.custom_permissions : p.permissions;
