@@ -34,6 +34,8 @@ interface Transaction {
   createdAt?: string;
   created_at?: string;
   flow_type?: string;
+  payment_method?: string;
+  status?: string;
 }
 
 const emptyTransaction: Omit<Transaction, 'id'> = {
@@ -146,6 +148,7 @@ export function Finance({ currentUser }: FinanceProps = {}) {
   };
 
   const filtered = transactions.filter((t) => {
+    if (t.status && t.status.toUpperCase() === 'VOIDED') return false;
     const matchesSearch = t.description.toLowerCase().includes(search.toLowerCase()) || 
                           t.reference.toLowerCase().includes(search.toLowerCase()) ||
                           t.category.toLowerCase().includes(search.toLowerCase());
@@ -179,11 +182,14 @@ export function Finance({ currentUser }: FinanceProps = {}) {
     const cat = String(t.category || '').toUpperCase();
     const desc = String(t.description || '').toUpperCase();
     const ref = String(t.reference || '').toUpperCase();
-    return cat.includes('SUPPLIER CASH REFUND') || 
+    return cat === 'PURCHASE_RETURN' ||
+           cat.includes('PURCHASE_RETURN') ||
+           cat.includes('PURCHASE RETURN') ||
+           cat.includes('SUPPLIER CASH REFUND') || 
            cat.includes('SUPPLIER BANK REFUND') || 
-           cat.includes('PURCHASE RETURN') || 
            desc.includes('SUPPLIER CASH REFUND') ||
            desc.includes('SUPPLIER BANK REFUND') ||
+           desc.includes('PURCHASE RETURN') ||
            ref.startsWith('PR-') ||
            ref.startsWith('DN-');
   };
@@ -194,6 +200,11 @@ export function Finance({ currentUser }: FinanceProps = {}) {
     const desc = String(t.description || '').toUpperCase();
     const ref = String(t.reference || '').toUpperCase();
     const cat = String(t.category || '').toUpperCase();
+
+    // Specific check for Purchase Return cash refund: returns true for category PURCHASE_RETURN with CASH
+    if ((cat === 'PURCHASE_RETURN' || cat.includes('PURCHASE_RETURN') || cat.includes('SUPPLIER CASH REFUND')) && (method === 'CASH' || !method)) {
+      return true;
+    }
 
     // If explicit payment method is defined
     if (method === 'CASH') return true;
@@ -242,33 +253,34 @@ export function Finance({ currentUser }: FinanceProps = {}) {
   };
 
   // Purchase return refunds
-  const cashPurchaseReturns = filtered.filter(t => (t.type === 'income' || t.flow_type === 'income') && isCashPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
-  const totalPurchaseReturns = filtered.filter(t => (t.type === 'income' || t.flow_type === 'income') && isPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
-  const bankPurchaseReturns = filtered.filter(t => (t.type === 'income' || t.flow_type === 'income') && isBankPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  const cashPurchaseReturns = filtered.filter(t => (t.type?.toLowerCase() === 'income' || t.flow_type?.toLowerCase() === 'income') && isCashPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  const totalPurchaseReturns = filtered.filter(t => (t.type?.toLowerCase() === 'income' || t.flow_type?.toLowerCase() === 'income') && isPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  const bankPurchaseReturns = filtered.filter(t => (t.type?.toLowerCase() === 'income' || t.flow_type?.toLowerCase() === 'income') && isBankPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
 
   // Sales & Operating Inflow (Excluding purchase return refunds from gross sales revenue)
-  const totalIncome = filtered.filter(t => t.type === 'income' && !isPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  const totalIncome = filtered.filter(t => (t.type?.toLowerCase() === 'income' || t.flow_type?.toLowerCase() === 'income') && !isPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
   const totalSalesReturns = filtered.filter(t => isSalesReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
   const netSalesIncome = calculateNetSalesRevenue(totalIncome, 0, totalSalesReturns, 0);
 
-  // Outflow (Expenses) before purchase return offset
-  const grossTotalExpense = filtered.filter(t => t.type === 'expense' && !isSalesReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
-  const grossCashExpense = filtered.filter(t => t.type === 'expense' && !isSalesReturnTrans(t) && isCashTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  // Net Cash In includes supplier cash refunds so the physical cash drawer reflects returned cash
+  const netCashIn = netSalesIncome + cashPurchaseReturns;
 
-  // Accounting Rule (Task 2): TOTAL CASH OUT (EXPENSES) = Total Outflow - Cash Purchase Returns
-  const totalExpense = Math.max(0, grossTotalExpense - totalPurchaseReturns);
-  const cashExpense = Math.max(0, grossCashExpense - cashPurchaseReturns);
+  // Outflow (Expenses)
+  const grossTotalExpense = filtered.filter(t => (t.type?.toLowerCase() === 'expense' || t.flow_type?.toLowerCase() === 'expense') && !isSalesReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  const grossCashExpense = filtered.filter(t => (t.type?.toLowerCase() === 'expense' || t.flow_type?.toLowerCase() === 'expense') && !isSalesReturnTrans(t) && isCashTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+
+  const totalExpense = grossTotalExpense;
+  const cashExpense = grossCashExpense;
 
   // Cash Inflows: Cash Sales + Encashed Cash Drawer Cheques + Cash Capital In
-  const cashIncome = filtered.filter(t => t.type === 'income' && !isPurchaseReturnTrans(t) && isCashTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  const cashIncome = filtered.filter(t => (t.type?.toLowerCase() === 'income' || t.flow_type?.toLowerCase() === 'income') && !isPurchaseReturnTrans(t) && isCashTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
   const cashSalesReturns = filtered.filter(t => isSalesReturnTrans(t) && !isCreditAdjustmentTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
 
-  // Cash Book Balance = (Cash Sales + Encashed Cash Drawer Cheques + Cash Capital In) - (Cash Purchases + Cash Drawer Expenses + Cash Refunds Given)
-  // When cash purchase refund enters drawer, cashExpense is reduced by cashPurchaseReturns, so cashBalance correctly increases.
-  const cashBalance = cashIncome - cashSalesReturns - cashExpense;
+  // Cash Book Balance = (Cash Sales + Encashed Cash Drawer Cheques + Cash Capital In + Cash Purchase Returns) - (Cash Purchases + Cash Drawer Expenses + Cash Refunds Given)
+  const cashBalance = (cashIncome + cashPurchaseReturns) - cashSalesReturns - grossCashExpense;
 
-  // Bank Inflow / Realization Breakdown (Task 3)
-  const bankIncome = filtered.filter(t => (t.type === 'income' || t.flow_type === 'income') && isBankTrans(t) && !isPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  // Bank Inflow / Realization Breakdown
+  const bankIncome = filtered.filter(t => (t.type?.toLowerCase() === 'income' || t.flow_type?.toLowerCase() === 'income') && isBankTrans(t) && !isPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
   const totalBankBreakdown = bankIncome + bankPurchaseReturns;
 
   const openAdd = () => {
@@ -664,14 +676,14 @@ export function Finance({ currentUser }: FinanceProps = {}) {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-[10px] font-black text-white/80 uppercase tracking-widest">Net Cash In (Income)</p>
-                  <p className="text-3xl font-black text-white mt-1.5">{symbol} {convert(netSalesIncome).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  <p className="text-3xl font-black text-white mt-1.5">{symbol} {convert(netCashIn).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                 </div>
                 <div className="w-12 h-12 bg-white/20 text-white rounded-xl flex items-center justify-center shadow-lg">
                   <ArrowUpRightIcon className="w-6 h-6" />
                 </div>
               </div>
               <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-white/95">
-                <span>Gross Inflow: {symbol} {convert(totalIncome).toLocaleString(undefined, { minimumFractionDigits: 2 })} | Refunds: -{symbol} {convert(totalSalesReturns).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                <span>Gross Inflow: {symbol} {convert(totalIncome + totalPurchaseReturns).toLocaleString(undefined, { minimumFractionDigits: 2 })} | Refunds: -{symbol} {convert(totalSalesReturns).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
               </div>
             </div>
 
@@ -688,7 +700,7 @@ export function Finance({ currentUser }: FinanceProps = {}) {
                 </div>
               </div>
               <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-white/95">
-                <span>Drawer: {symbol} {convert(cashExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })} | Outflow: {symbol} {convert(totalExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })}{cashPurchaseReturns > 0 ? ` | PR Offset: -${symbol} ${convert(cashPurchaseReturns).toLocaleString(undefined, { minimumFractionDigits: 2 })}` : ''}</span>
+                <span>Drawer: {symbol} {convert(cashExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })} | Outflow: {symbol} {convert(totalExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })}{cashPurchaseReturns > 0 ? ` | PR Cash Refund: +${symbol} ${convert(cashPurchaseReturns).toLocaleString(undefined, { minimumFractionDigits: 2 })}` : ''}</span>
               </div>
             </div>
 

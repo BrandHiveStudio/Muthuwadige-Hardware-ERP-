@@ -1568,12 +1568,15 @@ async function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS transactions (
       id TEXT PRIMARY KEY,
       type TEXT, -- 'income' | 'expense' | 'contra_revenue'
+      flow_type TEXT,
       category TEXT,
       description TEXT,
       amount REAL,
       date TEXT,
       reference TEXT,
       user_id TEXT,
+      payment_method TEXT DEFAULT 'CASH',
+      status TEXT DEFAULT 'ACTIVE',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -1888,6 +1891,12 @@ async function initializeDatabase() {
   } catch (e) { }
   try {
     await db.exec("ALTER TABLE transactions ADD COLUMN payment_method TEXT DEFAULT 'CASH'");
+  } catch (e) { }
+  try {
+    await db.exec("ALTER TABLE transactions ADD COLUMN flow_type TEXT DEFAULT 'INCOME'");
+  } catch (e) { }
+  try {
+    await db.exec("ALTER TABLE transactions ADD COLUMN status TEXT DEFAULT 'ACTIVE'");
   } catch (e) { }
   try {
     await db.exec("ALTER TABLE suppliers ADD COLUMN nic TEXT");
@@ -9622,38 +9631,43 @@ app.post(['/api/purchasing/return', '/api/purchase-returns'], async (req, res) =
         // Record cash income transaction
         const txId = 't_pr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
         await db.run(
-          'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO transactions (id, type, flow_type, category, description, amount, date, reference, user_id, created_at, payment_method, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [
             txId,
             'income',
-            'Supplier Cash Refund',
-            `Supplier Cash Refund - ${returnNumber} (${finalSupplierName})`,
+            'INCOME',
+            'PURCHASE_RETURN',
+            `Supplier Cash Refund - Return #${returnNumber}`,
             totalReturnedCost,
             todayStr,
             returnNumber,
             finalStaff,
             createdAt,
-            'CASH'
+            'CASH',
+            'ACTIVE'
           ]
         );
         refundTxId = txId;
         enqueueSync(db, 'transactions', txId, 'INSERT').catch(() => { });
+        enqueueSync(db, 'cash_book', txId, 'INSERT').catch(() => { });
       } else if (finalSettlementMode === 'BANK_REFUND' || finalSettlementMode === 'BANK_TRANSFER' || finalSettlementMode === 'BANK') {
         // Record bank income transaction
         const txId = 't_pr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
         await db.run(
-          'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at, payment_method) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO transactions (id, type, flow_type, category, description, amount, date, reference, user_id, created_at, payment_method, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [
             txId,
             'income',
-            'Supplier Bank Refund',
-            `Supplier Bank Refund - ${returnNumber} (${finalSupplierName})`,
+            'INCOME',
+            'PURCHASE_RETURN',
+            `Supplier Bank Refund - Return #${returnNumber}`,
             totalReturnedCost,
             todayStr,
             returnNumber,
             finalStaff,
             createdAt,
-            'BANK'
+            'BANK',
+            'ACTIVE'
           ]
         );
         refundTxId = txId;
@@ -9674,6 +9688,9 @@ app.post(['/api/purchasing/return', '/api/purchase-returns'], async (req, res) =
       }
       if (refundTxId) {
         await enqueueSync(db, 'transactions', refundTxId, 'INSERT');
+        if (finalSettlementMode === 'CASH_REFUND') {
+          await enqueueSync(db, 'cash_book', refundTxId, 'INSERT').catch(() => { });
+        }
       }
       for (const it of processedItems) {
         if (it.productId) {
@@ -10104,10 +10121,15 @@ async function executeVoidPurchaseReturn({ return_no, void_reason, user_email })
 
   try {
     await db.transaction(async () => {
-      // 1. Fetch return details
+      // 1. Fetch return details (accepts both numeric id and alphanumeric return_no)
+      const refStr = String(return_no || '').trim();
+      const numId = !isNaN(Number(refStr)) && refStr !== '' ? Number(refStr) : null;
+
       const pr = await db.get(
-        'SELECT * FROM purchase_returns WHERE id = ? OR return_number = ?',
-        [return_no, return_no]
+        'SELECT * FROM purchase_returns WHERE id = ? OR return_number = ? OR CAST(id AS TEXT) = ? OR CAST(return_number AS TEXT) = ?' + (numId !== null ? ' OR id = ? OR return_number = ?' : ''),
+        numId !== null
+          ? [refStr, refStr, refStr, refStr, numId, numId]
+          : [refStr, refStr, refStr, refStr]
       );
 
       if (!pr) {
@@ -10174,20 +10196,22 @@ async function executeVoidPurchaseReturn({ return_no, void_reason, user_email })
       const sm = (pr.settlement_mode || '').toUpperCase();
       const retCost = Number(pr.total_returned_cost || 0);
 
-      if (sm === 'CASH_REFUND' || sm === 'BANK_REFUND' || sm === 'BANK_TRANSFER' || sm === 'BANK') {
-        // Remove the cash/bank income transaction
-        const txRows = await db.all(
-          'SELECT id FROM transactions WHERE reference = ? OR reference = ? OR description LIKE ?',
-          [pr.return_number, pr.id, `%${pr.return_number}%`]
-        );
-        for (const tx of txRows) {
-          await enqueueSync(db, 'transactions', tx.id, 'DELETE');
-        }
-        await db.run(
-          'DELETE FROM transactions WHERE (reference = ? OR reference = ? OR description LIKE ?)',
-          [pr.return_number, pr.id, `%${pr.return_number}%`]
-        );
-      } else if (sm === 'SUPPLIER_DEBIT_NOTE' || sm === 'SUPPLIER_CREDIT' || sm === 'CREDIT') {
+      // Voids the refund transaction: UPDATE transactions SET status = 'VOIDED' WHERE reference = return_no OR reference = id
+      await db.run(
+        "UPDATE transactions SET status = 'VOIDED' WHERE reference = ? OR reference = ? OR reference = ? OR reference = ? OR description LIKE ?",
+        [pr.return_number, pr.id, String(pr.return_number), String(pr.id), `%${pr.return_number}%`]
+      );
+
+      const txRows = await db.all(
+        'SELECT id FROM transactions WHERE reference = ? OR reference = ? OR reference = ? OR reference = ? OR description LIKE ?',
+        [pr.return_number, pr.id, String(pr.return_number), String(pr.id), `%${pr.return_number}%`]
+      );
+      for (const tx of txRows) {
+        await enqueueSync(db, 'transactions', tx.id, 'UPDATE');
+        await enqueueSync(db, 'cash_book', tx.id, 'UPDATE').catch(() => {});
+      }
+
+      if (sm === 'SUPPLIER_DEBIT_NOTE' || sm === 'SUPPLIER_CREDIT' || sm === 'CREDIT') {
         // Add the payable liability back to supplier balance
         if (pr.supplier_id) {
           await db.run(
@@ -10202,6 +10226,8 @@ async function executeVoidPurchaseReturn({ return_no, void_reason, user_email })
         }
       }
 
+      const nowIso = new Date().toISOString();
+
       // Revert debit_notes table status
       try {
         await db.run(
@@ -10210,8 +10236,7 @@ async function executeVoidPurchaseReturn({ return_no, void_reason, user_email })
         );
       } catch (_) {}
 
-      // 4. Mark status as VOIDED
-      const nowIso = new Date().toISOString();
+      // 4. Sets status: UPDATE purchase_returns SET status = 'VOIDED' WHERE id = ?
       await db.run(
         'UPDATE purchase_returns SET status = ?, void_reason = ?, updated_at = ? WHERE id = ?',
         ['VOIDED', finalReason, nowIso, pr.id]
@@ -10243,7 +10268,7 @@ async function executeVoidPurchaseReturn({ return_no, void_reason, user_email })
       console.warn('[Sync] Non-blocking notice triggering push:', _syncErr?.message);
     }
 
-    return { success: true, message: 'Purchase return successfully voided and balances restored.' };
+    return { success: true, message: 'Purchase return voided successfully' };
   } catch (err) {
     return { success: false, message: err.message };
   }

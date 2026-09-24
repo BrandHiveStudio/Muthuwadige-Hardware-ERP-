@@ -1668,6 +1668,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
           success = true;
         }
       } catch (apiErr: any) {
+        console.error('[PurchaseReturn] api.purchaseReturns.void failed, attempting direct fetch:', apiErr);
         // Fallback to direct fetch
         const res = await fetch(`/api/purchase-returns/${encodeURIComponent(returnNo)}/void`, {
           method: 'POST',
@@ -1678,7 +1679,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
         if (res.ok && (json.success || !json.error)) {
           success = true;
         } else {
-          throw new Error(json.error || json.message || apiErr.message);
+          console.error('[PurchaseReturn] Direct void endpoint error response:', json);
+          throw new Error(json.error || json.message || apiErr.message || 'Direct network void failed');
         }
       }
 
@@ -1691,7 +1693,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
         window.dispatchEvent(new CustomEvent('refresh-all-data'));
       }
     } catch (err: any) {
-      alert('Error voiding purchase return: ' + err.message);
+      console.error('[PurchaseReturn] Error voiding purchase return:', err);
+      alert('Error voiding purchase return: ' + (err.message || 'Network request failed'));
     }
   };
 
@@ -3376,17 +3379,33 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
             {/* Print Stylesheet for Clean A4 / 80mm Alignment without ERP UI overlap */}
             <style>{`
               @media print {
-                body * { visibility: hidden !important; }
-                #debit-note-voucher-print, #debit-note-voucher-print * { visibility: visible !important; }
+                html, body {
+                  margin: 0 !important;
+                  padding: 0 !important;
+                  height: auto !important;
+                  overflow: visible !important;
+                  background: #ffffff !important;
+                }
+                body * {
+                  visibility: hidden !important;
+                }
+                #debit-note-voucher-print,
+                #debit-note-voucher-print * {
+                  visibility: visible !important;
+                }
                 #debit-note-voucher-print {
-                  position: fixed !important;
+                  position: absolute !important;
                   left: 0 !important;
                   top: 0 !important;
                   width: 100% !important;
-                  margin: 0 auto !important;
-                  padding: 16px !important;
-                  background: #ffffff !important;
+                  max-width: 100% !important;
+                  margin: 0 !important;
+                  padding: 20px !important;
                   box-sizing: border-box !important;
+                  background: #ffffff !important;
+                }
+                .no-print {
+                  display: none !important;
                 }
               }
             `}</style>
@@ -3512,7 +3531,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
             </div>
 
             {/* Modal Action Controls */}
-            <div className="flex flex-wrap gap-3 pt-2">
+            <div className="flex flex-wrap gap-3 pt-2 no-print">
               <button
                 onClick={triggerPrintDebitNote}
                 className="flex-1 py-3.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-black uppercase tracking-wider text-xs flex items-center justify-center gap-2 shadow-lg transition-all"

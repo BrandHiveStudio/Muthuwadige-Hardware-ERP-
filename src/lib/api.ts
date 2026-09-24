@@ -891,8 +891,8 @@ export const api = {
       }
       return res.json();
     },
-    void: async (returnNo: string, voidReason?: string) => {
-      const res = await fetchWithTimeout(`${API_URL}/purchase-returns/${returnNo}/void`, {
+    void: async (returnNo: string | number, voidReason?: string) => {
+      const res = await fetchWithTimeout(`${API_URL}/purchase-returns/${encodeURIComponent(String(returnNo))}/void`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ void_reason: voidReason || 'Accidental / User Mistake' })
