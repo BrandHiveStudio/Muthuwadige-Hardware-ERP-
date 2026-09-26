@@ -848,7 +848,13 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     doc.line(15, dnDividerY, pageWidth - 15, dnDividerY);
 
     // Table of returned items
-    const items = ret.items || [];
+    let items = (ret as any).items || (ret as any).returned_items || [];
+    if (!Array.isArray(items) || items.length === 0) {
+      // Check if attached to viewDebitNote state
+      if ((viewDebitNote as any)?.id === ret.id && (viewDebitNote as any)?.items?.length > 0) {
+        items = (viewDebitNote as any).items;
+      }
+    }
     autoTable(doc, {
       startY: dnDividerY + 4,
       head: [['Item Description', 'Qty Returned', 'Net Unit Price (Rs.)', 'Line Total (Rs.)']],
@@ -945,7 +951,30 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
   // Browser Direct Print for Debit Note
   const triggerPrintDebitNote = () => {
-    window.print();
+    const printEl = document.getElementById('debit-note-voucher-printable');
+    if (!printEl) {
+      window.print();
+      return;
+    }
+    const printWindow = window.open('', '_blank', 'width=850,height=900');
+    if (!printWindow) {
+      window.print();
+      return;
+    }
+    const tailwindStyles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+      .map(el => el.outerHTML)
+      .join('');
+    const htmlContent = [
+      '<!DOCTYPE html><html><head><title>Debit Note Voucher</title>',
+      tailwindStyles,
+      '<style>@page { size: auto; margin: 15mm; } body { background: white !important; color: black !important; padding: 20px; font-family: ui-sans-serif, system-ui, sans-serif; } .no-print { display: none !important; }</style>',
+      '</head><body>',
+      printEl.outerHTML,
+      '<script>window.onload = function() { window.focus(); window.print(); setTimeout(function() { window.close(); }, 500); };<\/script>',
+      '</body></html>'
+    ].join('');
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
   };
 
   // PO Line Items Handling
@@ -3412,7 +3441,35 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
             `}</style>
 
             {/* Printable Voucher Card Container */}
-            <div id="debit-note-voucher-print" className="bg-white border-2 border-slate-200 p-6 sm:p-8 rounded-2xl shadow-sm text-slate-900 relative">
+            
+              {/* ISOLATED PRINT STYLES TO ENSURE DEBIT NOTE PRINTS TOP-ALIGNED AND FULL PAGE */}
+              <style>{'\
+                @media print {\
+                  body * {\
+                    visibility: hidden !important;\
+                  }\
+                  #debit-note-voucher-print, #debit-note-voucher-print * {\
+                    visibility: visible !important;\
+                  }\
+                  #debit-note-voucher-print {\
+                    position: fixed !important;\
+                    left: 0 !important;\
+                    top: 0 !important;\
+                    width: 100% !important;\
+                    margin: 0 !important;\
+                    padding: 20px !important;\
+                    border: none !important;\
+                    box-shadow: none !important;\
+                    background: white !important;\
+                    z-index: 9999999 !important;\
+                  }\
+                  @page {\
+                    size: A4 portrait;\
+                    margin: 10mm;\
+                  }\
+                }\
+              '}</style>
+              <div id="debit-note-voucher-print" className="bg-white border-2 border-slate-200 p-6 sm:p-8 rounded-2xl shadow-sm text-slate-900 relative">
               {/* Top Business Header */}
               <div className="flex justify-between items-start border-b-2 border-slate-900 pb-4">
                 <div>
@@ -3516,7 +3573,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
               </div>
 
               {/* Dual Signatures */}
-              <div className="grid grid-cols-2 gap-8 pt-12 text-center text-xs">
+              <div id="debit-note-voucher-printable" className="grid grid-cols-2 gap-8 pt-12 text-center text-xs">
                 <div>
                   <div className="border-b border-dashed border-slate-400 pb-1 mb-1"></div>
                   <p className="font-black text-slate-800">{viewDebitNote.handled_by || viewDebitNote.handledBy || viewDebitNote.created_by_name || currentUser?.name || currentUser?.full_name || 'Muthuwadige Hardware'}</p>
