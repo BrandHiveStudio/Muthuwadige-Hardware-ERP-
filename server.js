@@ -10303,6 +10303,394 @@ async function executeVoidPurchaseReturn({ return_no, void_reason, user_email })
 }
 
 // Void Purchase Return
+async function executeUndoChequeStatus({ cheque_id, revert_to, user_email }) {
+  const targetStatus = (revert_to || 'IN_HAND').toUpperCase();
+  const staffUser = user_email || 'system';
+
+  try {
+    await db.transaction(async () => {
+      const cheque = await db.get(
+        'SELECT * FROM cheque_registry WHERE id = ? OR cheque_number = ?',
+        [cheque_id, cheque_id]
+      );
+
+      if (!cheque) {
+        throw new Error('Cheque not found.');
+      }
+
+      const prevStatus = (cheque.status || '').toUpperCase();
+      const direction = (cheque.direction || '').toUpperCase();
+      const chqNo = cheque.cheque_number;
+      const chqAmt = Number(cheque.amount || 0);
+
+      // If it was CLEARED, rollback financial transactions and settlements
+      if (prevStatus === 'CLEARED') {
+        // Delete cash/bank ledger transactions created on clearance
+        await db.run(
+          'DELETE FROM transactions WHERE (reference = ? OR description LIKE ?)',
+          [chqNo, `%${chqNo}%`]
+        );
+
+        if (direction === 'INWARD') {
+          // Re-add customer debt / credit balance
+          if (cheque.party_id) {
+            await db.run(
+              'UPDATE customers SET credit_balance = COALESCE(credit_balance, 0) + ?, current_credit = COALESCE(current_credit, 0) + ? WHERE id = ?',
+              [chqAmt, chqAmt, cheque.party_id]
+            );
+          } else if (cheque.party_name) {
+            await db.run(
+              'UPDATE customers SET credit_balance = COALESCE(credit_balance, 0) + ?, current_credit = COALESCE(current_credit, 0) + ? WHERE name = ?',
+              [chqAmt, chqAmt, cheque.party_name]
+            );
+          }
+
+          // If linked to sale invoice, deduct payment_received and reset status to pending
+          if (cheque.reference_id) {
+            const linkedSale = await db.get(
+              'SELECT * FROM sales WHERE invoice_no = ? OR id = ?',
+              [cheque.reference_id, cheque.reference_id]
+            );
+            if (linkedSale) {
+              const currentReceived = Number(linkedSale.payment_received || 0);
+              const newReceived = Math.max(0, currentReceived - chqAmt);
+              const newStatus = newReceived <= 0 ? 'Non Paid' : (newReceived < linkedSale.total_amount ? 'Non Paid' : 'Paid');
+              await db.run(
+                'UPDATE sales SET payment_received = ?, status = ? WHERE id = ?',
+                [newReceived, newStatus, linkedSale.id]
+              );
+            }
+          }
+
+          // Delete any credit_payments record logged for this clearance
+          await db.run(
+            'DELETE FROM credit_payments WHERE notes LIKE ?',
+            [`%${chqNo}%`]
+          );
+        } else if (direction === 'OUTWARD') {
+          // If outward cheque cleared settled supplier balance, re-add payable balance
+          if (cheque.party_id) {
+            await db.run(
+              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE id = ?',
+              [chqAmt, cheque.party_id]
+            );
+          } else if (cheque.party_name) {
+            await db.run(
+              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE name = ?',
+              [chqAmt, cheque.party_name]
+            );
+          }
+        }
+      }
+
+      // If it was BOUNCED, reverse any penalty or customer balance restorations that were applied on bounce
+      if (prevStatus === 'BOUNCED') {
+        // Delete penalty transactions if any
+        await db.run(
+          'DELETE FROM transactions WHERE (reference = ? OR description LIKE ?) AND category LIKE ?',
+          [chqNo, `%${chqNo}%`, '%Penalty%']
+        );
+
+        if (direction === 'INWARD') {
+          // Revert the credit balance increment made during bounce
+          if (cheque.party_id) {
+            await db.run(
+              'UPDATE customers SET current_credit = MAX(0, COALESCE(current_credit, 0) - ?) WHERE id = ?',
+              [chqAmt, cheque.party_id]
+            );
+          } else if (cheque.party_name) {
+            await db.run(
+              'UPDATE customers SET current_credit = MAX(0, COALESCE(current_credit, 0) - ?) WHERE name = ?',
+              [chqAmt, cheque.party_name]
+            );
+          }
+        } else if (direction === 'OUTWARD') {
+          // Revert supplier balance increment made during bounce
+          if (cheque.party_id) {
+            await db.run(
+              'UPDATE suppliers SET payable_balance = MAX(0, COALESCE(payable_balance, 0) - ?) WHERE id = ?',
+              [chqAmt, cheque.party_id]
+            );
+          } else if (cheque.party_name) {
+            await db.run(
+              'UPDATE suppliers SET payable_balance = MAX(0, COALESCE(payable_balance, 0) - ?) WHERE name = ?',
+              [chqAmt, cheque.party_name]
+            );
+          }
+        }
+      }
+
+      // Update status back to target state
+      const nowIso = new Date().toISOString();
+      await db.run(
+        'UPDATE cheque_registry SET status = ?, cleared_at = NULL, updated_at = ? WHERE id = ?',
+        [targetStatus, nowIso, cheque.id]
+      );
+
+      await logAudit(
+        staffUser,
+        'CHEQUE_STATUS_REVERTED',
+        `Cheque #${chqNo} (${cheque.party_name || 'Party'}, Rs. ${chqAmt.toLocaleString()}) reverted from ${prevStatus} to ${targetStatus}. Ledger entries & balances rolled back.`
+      );
+
+      // Local sync queue writes INSIDE the transaction and awaited
+      await enqueueSync(db, 'cheque_registry', cheque.id, 'UPDATE');
+      await enqueueSync(db, 'cheques', cheque.id, 'UPDATE');
+    });
+
+    // Cloud push strictly after successful commit
+    const tursoClient = getTursoClient();
+    if (tursoClient) {
+      pushUpstreamChanges(db, tursoClient).catch(err => console.warn('[Undo Cheque Sync Push Notice]:', err.message));
+    }
+
+    return { success: true, message: 'Cheque status reverted successfully.' };
+  } catch (err) {
+    return { success: false, message: err.message };
+  }
+}
+
+/**
+ * 3. VOID / REVERT RECEIVED PURCHASE ORDER
+ */
+async function executeRevertPurchaseOrderReceipt({ po_ref, user_email }) {
+  const staffUser = user_email || 'system';
+
+  try {
+    await db.transaction(async () => {
+      const po = await db.get(
+        'SELECT * FROM purchase_orders WHERE id = ? OR po_number = ? OR po_no = ?',
+        [po_ref, po_ref, po_ref]
+      );
+
+      if (!po) {
+        throw new Error('Purchase order not found.');
+      }
+
+      const currentStatus = (po.status || '').toLowerCase().trim();
+      if (currentStatus !== 'received') {
+        throw new Error('Only received purchase orders can be reverted.');
+      }
+
+      const poNum = po.po_number || po.po_no || po.id;
+      const settleMode = (po.settlement_mode || po.payment_method || 'CREDIT').toString().trim().toUpperCase();
+
+      // 0. Safety Check for Cheque settlement:
+      // If settled via CHEQUE, verify that no associated outward cheque has already cleared
+      if (settleMode === 'CHEQUE') {
+        const linkedCheques = await db.all(
+          'SELECT * FROM cheque_registry WHERE reference_type = ? AND (reference_id = ? OR reference_id = ?)',
+          ['PURCHASE_ORDER', po.id, poNum]
+        );
+        const clearedCheque = (linkedCheques || []).find(c => (c.status || '').toUpperCase() === 'CLEARED');
+        if (clearedCheque) {
+          throw new Error(`Cannot revert Purchase Order #${poNum}: Outward Cheque #${clearedCheque.cheque_number} has already CLEARED the bank. A cleared cheque cannot be reverted automatically.`);
+        }
+      }
+
+      // 0b. Safety Check for Active Purchase Returns:
+      // If active (non-voided) purchase returns exist for this PO, block automatic revert
+      // to prevent double-deducting stock and double-reversing supplier liabilities.
+      const activeReturns = await db.all(
+        `SELECT return_number, id FROM purchase_returns
+         WHERE (purchase_order_id = ? OR purchase_order_id = ?)
+           AND UPPER(status) != 'VOIDED'`,
+        [po.id, poNum]
+      );
+      if (activeReturns && activeReturns.length > 0) {
+        const retNumbers = activeReturns.map(r => r.return_number || r.id).join(', ');
+        throw new Error(`Cannot revert Purchase Order #${poNum}: Active Purchase Return(s) [${retNumbers}] exist for this order. Please void the purchase return voucher(s) first before reverting the purchase order receipt.`);
+      }
+
+      // 1. Deduct stock that was received
+      let poItems = [];
+      if (po.items) {
+        try {
+          poItems = typeof po.items === 'string' ? JSON.parse(po.items) : po.items;
+        } catch (_e) {
+          poItems = [];
+        }
+      }
+
+      const affectedProductIds = [];
+      if (Array.isArray(poItems)) {
+        for (const item of poItems) {
+          const prodId = item.receivedProductId || item.productId || item.product_id || item.id;
+          const qty = Math.max(0, Number(item.qty || item.quantity || 0));
+
+          if (prodId && qty > 0) {
+            const prod = await db.get('SELECT * FROM products WHERE id = ?', [prodId]);
+            if (prod) {
+              const prevStock = Number(prod.stock || 0);
+              const prevCost = Number(prod.cost_price || 0);
+              const newStock = Math.max(0, prevStock - qty);
+
+              // Reverse weighted average cost: remove the received batch's contribution
+              let restoredCost = prevCost;
+              const itemNetCost = Number(item.netUnitCost || item.costPrice || item.cost_price || prevCost);
+              if (newStock > 0 && prevStock > 0 && prevCost > 0) {
+                restoredCost = Math.round(Math.max(0, ((prevStock * prevCost) - (qty * itemNetCost)) / newStock) * 100) / 100;
+              } else if (newStock <= 0) {
+                restoredCost = 0;
+              }
+
+              await db.run(
+                'UPDATE products SET stock = ?, cost_price = ? WHERE id = ?',
+                [newStock, restoredCost, prodId]
+              );
+              affectedProductIds.push(prodId);
+
+              // If batch item reaches 0 stock with no sales history, safely clean/archive it
+              const isBatchItem = Boolean(item.isNewBatch || prod.is_batch || (prod.sku && /-B\d+$/i.test(prod.sku)));
+              if (isBatchItem && newStock <= 0.0001) {
+                const salesHistory = await db.get(
+                  'SELECT COUNT(*) as cnt FROM sales WHERE items LIKE ?',
+                  [`%"productId":"${prodId}"%`]
+                );
+                const salesCount = Number(salesHistory?.cnt || 0);
+                if (salesCount === 0) {
+                  await db.run('DELETE FROM products WHERE id = ?', [prodId]);
+                }
+              }
+
+              // Log stock deduction adjustment
+              const saId = 'sa_revert_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+              await db.run(
+                `INSERT INTO stock_adjustments (
+                  id, product_id, product_name, old_qty, new_qty, reason, type, user_email, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  saId,
+                  prodId,
+                  prod.name || item.name || item.productName || 'PO Item',
+                  prevStock,
+                  newStock,
+                  `Revert PO Receipt (#${po.po_number || po.po_no})`,
+                  'PO Reversal Deduction',
+                  staffUser,
+                  new Date().toISOString()
+                ]
+              );
+            }
+          }
+        }
+      }
+
+      // 2. Settlement-Specific Accounting Reversal:
+      let affectedSupplierId = null;
+      const deletedTxIds = [];
+      const deletedChequeIds = [];
+      const poNetTotal = Number(po.net_total !== null && po.net_total !== undefined ? po.net_total : (po.total || 0));
+
+      if (settleMode === 'CREDIT') {
+        if (po.supplier_name || po.supplier_id) {
+          const supp = await db.get(
+            'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+            [po.supplier_id || '', po.supplier_name || '']
+          );
+          if (supp) affectedSupplierId = supp.id;
+
+          await db.run(
+            'UPDATE suppliers SET payable_balance = MAX(0, COALESCE(payable_balance, 0) - ?) WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+            [poNetTotal, po.supplier_id || '', po.supplier_name || '']
+          );
+        }
+      } else if (settleMode === 'CASH' || settleMode === 'BANK') {
+        const rawPoNum = (po.po_number || po.po_no || '').toString();
+        const strippedPoNum = rawPoNum.startsWith('PO-') ? rawPoNum.slice(3) : rawPoNum;
+        const candidateRefs = Array.from(new Set([
+          poNum,
+          'PO-SETTLE-' + poNum,
+          'PO-REC-' + poNum,
+          po.id,
+          rawPoNum ? ('PO-SETTLE-' + rawPoNum) : null,
+          rawPoNum ? ('PO-REC-' + rawPoNum) : null,
+          strippedPoNum ? ('PO-SETTLE-' + strippedPoNum) : null,
+          strippedPoNum ? ('PO-REC-' + strippedPoNum) : null
+        ])).filter(Boolean);
+
+        const placeholders = candidateRefs.map(() => '?').join(', ');
+        const txsToDelete = await db.all(
+          `SELECT id FROM transactions
+           WHERE reference IN (${placeholders})
+             AND (category IN ('Supplier Payment', 'Purchases') OR reference LIKE 'PO-SETTLE-%' OR reference LIKE 'PO-REC-%')`,
+          candidateRefs
+        );
+
+        if (txsToDelete && txsToDelete.length > 0) {
+          const txIds = txsToDelete.map(t => t.id);
+          const delPlaceholders = txIds.map(() => '?').join(', ');
+          await db.run(
+            `DELETE FROM transactions WHERE id IN (${delPlaceholders})`,
+            txIds
+          );
+          deletedTxIds.push(...txIds);
+        }
+      } else if (settleMode === 'CHEQUE') {
+        const pendingCheques = await db.all(
+          `SELECT id FROM cheque_registry
+           WHERE reference_type = ?
+             AND (reference_id = ? OR reference_id = ?)
+             AND UPPER(status) = 'PENDING'`,
+          ['PURCHASE_ORDER', po.id, poNum]
+        );
+        if (pendingCheques && pendingCheques.length > 0) {
+          const chqIds = pendingCheques.map(c => c.id);
+          const delPlaceholders = chqIds.map(() => '?').join(', ');
+          await db.run(
+            `DELETE FROM cheque_registry WHERE id IN (${delPlaceholders})`,
+            chqIds
+          );
+          deletedChequeIds.push(...chqIds);
+        }
+      }
+
+      // 3. Reset PO status to pending and clear receipt metadata
+      const nowIso = new Date().toISOString();
+      await db.run(
+        'UPDATE purchase_orders SET status = ?, received_at = NULL, received_by = NULL, settlement_mode = NULL, payment_method = NULL, updated_at = ? WHERE id = ?',
+        ['pending', nowIso, po.id]
+      );
+
+      await logAudit(
+        staffUser,
+        'PO_RECEIPT_REVERTED',
+        `Purchase Order #${poNum} receipt reverted to PENDING (Settlement: ${settleMode}, Net Total: Rs. ${poNetTotal.toLocaleString()}).`
+      );
+
+      // Local sync queue writes INSIDE the transaction and awaited
+      await enqueueSync(db, 'purchase_orders', po.id, 'UPDATE');
+      if (affectedSupplierId) {
+        await enqueueSync(db, 'suppliers', affectedSupplierId, 'UPSERT');
+      }
+      for (const pId of affectedProductIds) {
+        await enqueueSync(db, 'products', pId, 'UPSERT');
+      }
+      for (const txId of deletedTxIds) {
+        await enqueueSync(db, 'transactions', txId, 'DELETE');
+      }
+      for (const chqId of deletedChequeIds) {
+        await enqueueSync(db, 'cheque_registry', chqId, 'DELETE');
+      }
+    });
+
+    // 4. Background Sync: trigger push strictly AFTER successful commit
+    try {
+      triggerPush(db).catch(() => {});
+    } catch (_syncErr) {
+      console.warn('[Sync] Non-blocking notice enqueuing revert sync:', _syncErr?.message);
+    }
+
+    return { success: true, message: 'PO receipt reverted to PENDING and stock/accounting restored.' };
+  } catch (err) {
+    return { success: false, message: err.message };
+  }
+}
+
+// ============================================================
+// REVERSAL REST ENDPOINTS
+// ============================================================
+
 app.post('/api/purchase-returns/:id/void', async (req, res) => {
   const { id } = req.params;
   const { void_reason, reason, user_email } = req.body || {};

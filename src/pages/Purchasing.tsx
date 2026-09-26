@@ -122,6 +122,12 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
   const [isCreateReturnOpen, setIsCreateReturnOpen] = useState<boolean>(false);
   const [viewDebitNote, setViewDebitNote] = useState<PurchaseReturn | null>(null);
 
+  // Void Purchase Return Modal State (Electron-Safe)
+  const [voidReturnModalOpen, setVoidReturnModalOpen] = useState(false);
+  const [targetVoidReturn, setTargetVoidReturn] = useState<any>(null);
+  const [voidReturnReason, setVoidReturnReason] = useState('Accidental duplicate entry');
+  const [isVoidingReturn, setIsVoidingReturn] = useState(false);
+
   // Dedicated Sales-Return-Style Purchase Return State
   const [targetReturnPO, setTargetReturnPO] = useState<PurchaseOrder | null>(null);
   const [poSearchQuery, setPoSearchQuery] = useState<string>('');
@@ -945,13 +951,12 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     // Bottom dark bar
     doc.setFillColor(darkSilver[0], darkSilver[1], darkSilver[2]);
     doc.rect(0, pageHeight - 15, pageWidth, 15, 'F');
-
     doc.save(`DebitNote_${returnNumberStr}.pdf`);
   };
 
   // Browser Direct Print for Debit Note
   const triggerPrintDebitNote = () => {
-    const printEl = document.getElementById('debit-note-voucher-printable');
+    const printEl = document.getElementById('debit-note-voucher-print');
     if (!printEl) {
       window.print();
       return;
@@ -962,12 +967,19 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       return;
     }
     const tailwindStyles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+      .filter(el => !el.textContent?.includes('#debit-note-voucher-print') && !el.textContent?.includes('body *'))
       .map(el => el.outerHTML)
       .join('');
     const htmlContent = [
       '<!DOCTYPE html><html><head><title>Debit Note Voucher</title>',
       tailwindStyles,
-      '<style>@page { size: auto; margin: 15mm; } body { background: white !important; color: black !important; padding: 20px; font-family: ui-sans-serif, system-ui, sans-serif; } .no-print { display: none !important; }</style>',
+      '<style>',
+      '  @page { size: A4; margin: 15mm; }',
+      '  body { margin: 0; padding: 20px; font-family: system-ui, sans-serif; background: #fff !important; color: #000 !important; }',
+      '  * { visibility: visible !important; box-sizing: border-box; }',
+      '  #debit-note-voucher-print { display: block !important; width: 100% !important; position: static !important; }',
+      '  .no-print { display: none !important; }',
+      '</style>',
       '</head><body>',
       printEl.outerHTML,
       '<script>window.onload = function() { window.focus(); window.print(); setTimeout(function() { window.close(); }, 500); };<\/script>',
@@ -976,6 +988,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     printWindow.document.write(htmlContent);
     printWindow.document.close();
   };
+
+
 
   // PO Line Items Handling
 
@@ -1681,30 +1695,28 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     }
   };
 
-  // Void Purchase Return Action
-  const handleVoidPurchaseReturn = async (returnIdentifier: any) => {
-    const returnNo = typeof returnIdentifier === 'object' 
-      ? (returnIdentifier.return_number || returnIdentifier.id || returnIdentifier.debit_note_no || returnIdentifier.debitNoteNo) 
-      : returnIdentifier;
-    const reason = window.prompt(
-      'Enter reason for voiding this return voucher (ආපසු යැවීම අවලංගු කිරීමට හේතුව):',
-      'Accidental duplicate entry'
-    );
-    if (!reason || !reason.trim()) return;
+  // Void Purchase Return Action (Electron-Safe Modal Execution)
+  const confirmVoidPurchaseReturn = async () => {
+    if (!targetVoidReturn) return;
+    const returnNo = typeof targetVoidReturn === 'object' 
+      ? (targetVoidReturn.return_number || targetVoidReturn.id || targetVoidReturn.debit_note_no || targetVoidReturn.debitNoteNo) 
+      : targetVoidReturn;
+    const reason = voidReturnReason.trim() || 'Accidental duplicate entry';
 
+    setIsVoidingReturn(true);
     try {
       let success = false;
       try {
-        const res = await api.purchaseReturns.void(returnNo, reason.trim());
+        const res = await api.purchaseReturns.void(returnNo, reason);
         if (res && (res.success || !res.error)) {
           success = true;
         }
       } catch (apiErr: any) {
         console.warn('[PurchaseReturn] Primary void attempt failed, trying alternate id:', apiErr);
-        if (typeof returnIdentifier === 'object') {
-          const alternateId = returnIdentifier.id || returnIdentifier.debit_note_no;
+        if (typeof targetVoidReturn === 'object') {
+          const alternateId = targetVoidReturn.id || targetVoidReturn.debit_note_no;
           if (alternateId && alternateId !== returnNo) {
-            const retryRes = await api.purchaseReturns.void(alternateId, reason.trim());
+            const retryRes = await api.purchaseReturns.void(alternateId, reason);
             if (retryRes && (retryRes.success || !retryRes.error)) success = true;
           } else {
             throw apiErr;
@@ -1715,6 +1727,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       }
 
       if (success) {
+        setVoidReturnModalOpen(false);
+        setTargetVoidReturn(null);
         alert('Return voucher voided and stock/cash corrected.');
         await fetchData();
         window.dispatchEvent(new CustomEvent('refresh-inventory'));
@@ -1725,7 +1739,15 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     } catch (err: any) {
       console.error('[PurchaseReturn] Error voiding purchase return:', err);
       alert('Error voiding purchase return: ' + (err.message || 'Network request failed'));
+    } finally {
+      setIsVoidingReturn(false);
     }
+  };
+
+  const handleVoidPurchaseReturn = (returnIdentifier: any) => {
+    setTargetVoidReturn(returnIdentifier);
+    setVoidReturnReason('Accidental duplicate entry');
+    setVoidReturnModalOpen(true);
   };
 
   // Revert Received PO Action
@@ -3010,7 +3032,11 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                               </button>
                               {!isVoided && (
                                 <button
-                                  onClick={() => handleVoidPurchaseReturn(ret)}
+                                  onClick={() => {
+                                    setTargetVoidReturn(ret);
+                                    setVoidReturnReason('Accidental duplicate entry');
+                                    setVoidReturnModalOpen(true);
+                                  }}
                                   className="text-[10px] font-black uppercase tracking-widest bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white border border-rose-200 px-3.5 py-2 rounded-xl transition-all flex items-center gap-1.5 shadow-sm shadow-rose-500/10"
                                   title="Void Return Voucher & Restore Stock"
                                 >
@@ -3573,7 +3599,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
               </div>
 
               {/* Dual Signatures */}
-              <div id="debit-note-voucher-printable" className="grid grid-cols-2 gap-8 pt-12 text-center text-xs">
+              <div id="debit-note-voucher-signatures" className="grid grid-cols-2 gap-8 pt-12 text-center text-xs">
                 <div>
                   <div className="border-b border-dashed border-slate-400 pb-1 mb-1"></div>
                   <p className="font-black text-slate-800">{viewDebitNote.handled_by || viewDebitNote.handledBy || viewDebitNote.created_by_name || currentUser?.name || currentUser?.full_name || 'Muthuwadige Hardware'}</p>
@@ -3613,6 +3639,78 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Void Purchase Return Confirmation Modal (Electron-Safe) */}
+      <Modal
+        isOpen={voidReturnModalOpen}
+        onClose={() => {
+          if (!isVoidingReturn) {
+            setVoidReturnModalOpen(false);
+            setTargetVoidReturn(null);
+          }
+        }}
+        title="Void Return Voucher & Restore Stock"
+        size="md"
+      >
+        <div className="space-y-5 p-2">
+          <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 text-xs text-rose-800 space-y-1">
+            <p className="font-black text-rose-900 flex items-center gap-1.5">
+              <BanIcon className="w-4 h-4 text-rose-600" /> Confirm Voucher Voiding
+            </p>
+            <p>
+              Voiding Return Voucher <span className="font-mono font-bold">{targetVoidReturn?.return_number || targetVoidReturn?.returnNumber || targetVoidReturn?.id}</span> will:
+            </p>
+            <ul className="list-disc pl-5 space-y-0.5 font-medium text-rose-700">
+              <li>Restore returned quantities back to inventory stock</li>
+              <li>Reverse supplier debit balance or cash settlement</li>
+              <li>Permanently mark the debit note as VOIDED</li>
+            </ul>
+          </div>
+
+          <div>
+            <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block mb-1.5">
+              Void Reason (ආපසු යැවීම අවලංගු කිරීමට හේතුව) <span className="text-rose-500">*</span>
+            </label>
+            <textarea
+              value={voidReturnReason}
+              onChange={(e) => setVoidReturnReason(e.target.value)}
+              placeholder="e.g. Accidental duplicate entry, Supplier rejected return"
+              rows={3}
+              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all resize-none"
+            />
+          </div>
+
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              disabled={isVoidingReturn}
+              onClick={() => {
+                setVoidReturnModalOpen(false);
+                setTargetVoidReturn(null);
+              }}
+              className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-black uppercase tracking-wider text-xs transition-colors disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={isVoidingReturn || !voidReturnReason.trim()}
+              onClick={confirmVoidPurchaseReturn}
+              className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-black uppercase tracking-wider text-xs flex items-center justify-center gap-2 shadow-lg shadow-rose-600/20 transition-all disabled:opacity-50"
+            >
+              {isVoidingReturn ? (
+                <>
+                  <Loader2Icon className="w-4 h-4 animate-spin" /> Voiding...
+                </>
+              ) : (
+                <>
+                  <BanIcon className="w-4 h-4" /> Confirm Void
+                </>
+              )}
+            </button>
+          </div>
+        </div>
       </Modal>
 
       {/* Details Modal (PO Explorer) */}

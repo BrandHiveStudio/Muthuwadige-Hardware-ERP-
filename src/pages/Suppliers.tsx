@@ -97,17 +97,7 @@ export function Suppliers() {
     handleSyncNow: handleWarningSyncNow
   } = useOfflineSyncWarning();
 
-  // Settle / Payment Modal State
-  const [settlingSupplier, setSettlingSupplier] = useState<Supplier | null>(null);
-  const [settleAmount, setSettleAmount] = useState<number>(0);
-  const [settlePaymentMode, setSettlePaymentMode] = useState<'CASH' | 'BANK' | 'CHEQUE'>('CASH');
-  const [settleDate, setSettleDate] = useState<string>(getTodaySriLankaDate());
-  const [settleRef, setSettleRef] = useState<string>('');
-  const [settleChequeNo, setSettleChequeNo] = useState<string>('');
-  const [settleBankName, setSettleBankName] = useState<string>(SRI_LANKA_BANKS[0]);
-  const [settleChequeDate, setSettleChequeDate] = useState<string>(getTodaySriLankaDate());
-  const [settleNotes, setSettleNotes] = useState<string>('');
-  const [isSubmittingSettle, setIsSubmittingSettle] = useState(false);
+  // Settle feature removed to ensure single source of truth in Purchasing
 
   useEffect(() => {
     if (toast) {
@@ -231,17 +221,7 @@ export function Suppliers() {
     setShowAddModal(true);
   };
 
-  const openSettleModal = (supplier: Supplier) => {
-    setSettlingSupplier(supplier);
-    setSettleAmount(supplier.payableBalance > 0 ? supplier.payableBalance : 0);
-    setSettlePaymentMode('CASH');
-    setSettleDate(getTodaySriLankaDate());
-    setSettleRef(`PV-${Date.now().toString().slice(-6)}`);
-    setSettleChequeNo('');
-    setSettleBankName(SRI_LANKA_BANKS[0]);
-    setSettleChequeDate(getTodaySriLankaDate());
-    setSettleNotes('');
-  };
+  
 
   const handleSave = async () => {
     if (!formData.name || formData.name.trim().length < 2) {
@@ -280,89 +260,7 @@ export function Suppliers() {
     }
   };
 
-  const handleExecuteSettlement = async () => {
-    if (!settlingSupplier) return;
-    if (settleAmount <= 0) {
-      setToast({ message: "Settlement amount must be greater than 0.", type: 'error' });
-      return;
-    }
-
-    if (settlePaymentMode === 'CHEQUE') {
-      if (!settleChequeNo.trim()) {
-        setToast({ message: "Please enter a valid Cheque Number.", type: 'error' });
-        return;
-      }
-      if (!settleBankName.trim()) {
-        setToast({ message: "Please specify the Bank Name.", type: 'error' });
-        return;
-      }
-      if (!settleChequeDate) {
-        setToast({ message: "Please specify the Cheque Date.", type: 'error' });
-        return;
-      }
-    }
-
-    setIsSubmittingSettle(true);
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const currentBalance = Number(settlingSupplier.payableBalance || 0);
-      const newPayableBalance = Math.max(0, Math.round((currentBalance - settleAmount) * 100) / 100);
-
-      // 1. Reduce Supplier Payable Balance
-      const { error: suppError } = await supabase
-        .from('suppliers')
-        .update({ payable_balance: newPayableBalance })
-        .eq('id', settlingSupplier.id);
-      
-      if (suppError) throw suppError;
-
-      // 2. Handle Cash / Bank / Cheque logging
-      if (settlePaymentMode === 'CASH' || settlePaymentMode === 'BANK') {
-        const desc = `Supplier Settlement: ${settlingSupplier.name} (${settlePaymentMode === 'CASH' ? 'Cash' : 'Bank Transfer'})`;
-        const transPayload = {
-          type: 'expense',
-          category: 'Supplier Payment',
-          description: desc,
-          amount: settleAmount,
-          date: settleDate || getTodaySriLankaDate(),
-          reference: settleRef || `PV-${Date.now().toString().slice(-6)}`,
-          user_id: user?.id || null
-        };
-        const { error: txError } = await supabase.from('transactions').insert([transPayload]);
-        if (txError) throw txError;
-      } else if (settlePaymentMode === 'CHEQUE') {
-        await api.cheques.create({
-          direction: 'OUTWARD',
-          cheque_type: 'CROSSED_ACCOUNT_PAYEE',
-          cheque_number: settleChequeNo.trim(),
-          bank_name: settleBankName.trim(),
-          cheque_date: settleChequeDate,
-          amount: settleAmount,
-          party_id: settlingSupplier.id,
-          party_name: settlingSupplier.name,
-          reference_type: 'EXPENSE',
-          reference_id: settlingSupplier.id,
-          status: 'PENDING',
-          notes: settleNotes.trim() || `Supplier Settlement Voucher ${settleRef} for ${settlingSupplier.name}`
-        });
-      }
-
-      setToast({
-        message: `Settled ${symbol} ${settleAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })} for ${settlingSupplier.name} successfully!`,
-        type: 'success'
-      });
-
-      setSettlingSupplier(null);
-      await fetchData();
-      window.dispatchEvent(new CustomEvent('suppliers-updated'));
-      window.dispatchEvent(new CustomEvent('refresh-finance'));
-      window.dispatchEvent(new CustomEvent('refresh-dashboard'));
-    } catch (err: any) {
-      setToast({ message: "Settlement failed: " + err.message, type: 'error' });
-    } finally {
-      setIsSubmittingSettle(false);
-    }
-  };
+  
 
   const handleDelete = async (id: string) => {
     const { error } = await supabase.from('suppliers').delete().eq('id', id);
@@ -714,15 +612,7 @@ export function Suppliers() {
                       </td>
                       <td className="px-6 py-4 text-center">
                         <div className="flex items-center justify-center gap-1.5">
-                          {/* Pay / Settle Button */}
-                          <button
-                            onClick={() => openSettleModal(supplier)}
-                            className="flex items-center gap-1 px-3 py-2 rounded-xl bg-[#DAA520] hover:bg-[#B8860B] text-slate-900 text-xs font-black shadow-sm shadow-amber-500/20 transition-all uppercase tracking-wider"
-                            title="Pay / Settle Outstanding Balance"
-                          >
-                            <WalletIcon className="w-3.5 h-3.5 text-slate-900" />
-                            <span>Pay / Settle</span>
-                          </button>
+                          {/* Settle button removed */}
 
                           <button 
                             onClick={() => setViewSupplier(supplier)} 
@@ -763,232 +653,7 @@ export function Suppliers() {
         </div>
       </div>
 
-      {/* Settle / Pay Supplier Modal */}
-      <Modal 
-        isOpen={!!settlingSupplier} 
-        onClose={() => setSettlingSupplier(null)} 
-        title={`Supplier Payment & Settlement — ${settlingSupplier?.name || ''}`} 
-        size="lg"
-      >
-        {settlingSupplier && (
-          <div className="p-2 space-y-5 text-left">
-            {/* Header info banner */}
-            <div className="bg-slate-900 rounded-2xl p-5 text-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border border-slate-800">
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-amber-400">Supplier Account</p>
-                <h3 className="text-lg font-black text-white mt-0.5">{settlingSupplier.name}</h3>
-                <p className="text-xs text-slate-400 font-medium">{settlingSupplier.phone || 'No phone'} | {settlingSupplier.address || 'No address'}</p>
-              </div>
-              <div className="text-right sm:text-right bg-white/10 p-3.5 rounded-xl border border-white/10 w-full sm:w-auto">
-                <p className="text-[10px] font-black uppercase tracking-widest text-rose-300">Current Payable Balance</p>
-                <p className="text-2xl font-black text-rose-400 mt-0.5">
-                  {symbol} {settlingSupplier.payableBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                </p>
-              </div>
-            </div>
-
-            {/* Settlement Amount & Quick Full Settlement */}
-            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/80 space-y-3">
-              <div className="flex justify-between items-center">
-                <label className="text-[11px] font-black uppercase tracking-widest text-slate-500">
-                  Settlement Amount ({symbol}) *
-                </label>
-                {settlingSupplier.payableBalance > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setSettleAmount(settlingSupplier.payableBalance)}
-                    className="text-xs font-black text-[#DAA520] hover:text-[#B8860B] underline uppercase tracking-wider"
-                  >
-                    Full Settlement ({symbol} {settlingSupplier.payableBalance.toLocaleString()})
-                  </button>
-                )}
-              </div>
-              <div className="relative">
-                <span className="absolute left-4 top-3 text-sm font-black text-slate-400">{symbol}</span>
-                <input
-                  type="number"
-                  min="0.01"
-                  step="any"
-                  value={settleAmount || ''}
-                  onChange={(e) => setSettleAmount(Math.max(0, parseFloat(e.target.value) || 0))}
-                  placeholder="0.00"
-                  className="w-full pl-12 pr-4 py-3 bg-white border border-slate-200 rounded-xl text-base font-black text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
-                />
-              </div>
-            </div>
-
-            {/* Payment Method Selector */}
-            <div>
-              <label className="block text-[11px] font-black uppercase tracking-widest text-slate-500 mb-2">
-                Settlement Payment Method *
-              </label>
-              <div className="grid grid-cols-3 gap-3">
-                {/* Cash */}
-                <button
-                  type="button"
-                  onClick={() => setSettlePaymentMode('CASH')}
-                  className={`p-3.5 rounded-xl border flex flex-col items-center gap-2 transition-all ${
-                    settlePaymentMode === 'CASH'
-                      ? 'bg-emerald-50 border-emerald-500 text-emerald-800 ring-2 ring-emerald-500/20'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <WalletIcon className="w-5 h-5 text-emerald-600" />
-                  <span className="text-xs font-black uppercase">Direct Cash</span>
-                </button>
-
-                {/* Bank Transfer */}
-                <button
-                  type="button"
-                  onClick={() => setSettlePaymentMode('BANK')}
-                  className={`p-3.5 rounded-xl border flex flex-col items-center gap-2 transition-all ${
-                    settlePaymentMode === 'BANK'
-                      ? 'bg-blue-50 border-blue-500 text-blue-800 ring-2 ring-blue-500/20'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <Building2Icon className="w-5 h-5 text-blue-600" />
-                  <span className="text-xs font-black uppercase">Bank Transfer</span>
-                </button>
-
-                {/* Outward Cheque */}
-                <button
-                  type="button"
-                  onClick={() => setSettlePaymentMode('CHEQUE')}
-                  className={`p-3.5 rounded-xl border flex flex-col items-center gap-2 transition-all ${
-                    settlePaymentMode === 'CHEQUE'
-                      ? 'bg-amber-50 border-[#DAA520] text-amber-900 ring-2 ring-[#DAA520]/20'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <FileCheckIcon className="w-5 h-5 text-[#DAA520]" />
-                  <span className="text-xs font-black uppercase">Outward Cheque</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Conditional Cheque Fields */}
-            {settlePaymentMode === 'CHEQUE' && (
-              <div className="bg-amber-50/50 p-4 rounded-xl border border-amber-200/60 space-y-3 animate-in fade-in duration-300">
-                <div className="flex items-center gap-2 text-xs font-black text-amber-800 uppercase tracking-wider">
-                  <ShieldCheckIcon className="w-4 h-4 text-[#DAA520]" />
-                  <span>Outward Account Payee Cheque Details</span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
-                      Cheque Number *
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. 000458"
-                      value={settleChequeNo}
-                      onChange={(e) => setSettleChequeNo(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
-                      Bank Name *
-                    </label>
-                    <select
-                      value={settleBankName}
-                      onChange={(e) => setSettleBankName(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
-                    >
-                      {SRI_LANKA_BANKS.map((b, i) => (
-                        <option key={i} value={b}>{b}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
-                      Cheque Date (PDC) *
-                    </label>
-                    <input
-                      type="date"
-                      value={settleChequeDate}
-                      onChange={(e) => setSettleChequeDate(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
-                      required
-                    />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Date & Reference Note */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
-                  Payment Date
-                </label>
-                <input
-                  type="date"
-                  value={settleDate}
-                  onChange={(e) => setSettleDate(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
-                  Payment Voucher / Ref #
-                </label>
-                <input
-                  type="text"
-                  placeholder="PV-001234"
-                  value={settleRef}
-                  onChange={(e) => setSettleRef(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
-                Settlement Notes (Optional)
-              </label>
-              <textarea
-                rows={2}
-                placeholder="Details of the invoices or purchase orders covered..."
-                value={settleNotes}
-                onChange={(e) => setSettleNotes(e.target.value)}
-                className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
-              />
-            </div>
-
-            {/* Modal Actions */}
-            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setSettlingSupplier(null)}
-                className="px-6 py-2.5 text-xs font-black text-slate-400 hover:text-slate-600 transition-colors uppercase tracking-widest"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={isSubmittingSettle || settleAmount <= 0}
-                onClick={handleExecuteSettlement}
-                className="flex items-center gap-2 px-8 py-2.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black shadow-lg shadow-emerald-600/20 transition-all uppercase tracking-widest disabled:opacity-50"
-              >
-                {isSubmittingSettle ? (
-                  <>
-                    <Loader2Icon className="w-4 h-4 animate-spin" />
-                    <span>Processing...</span>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircleIcon className="w-4 h-4" />
-                    <span>Confirm & Pay {symbol} {settleAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        )}
-      </Modal>
+      {/* Settle modal removed */}
 
       {/* Add/Edit Modal */}
       <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title={editingSupplier ? 'Update Supplier Profile' : 'Register New Supplier'} size="lg">

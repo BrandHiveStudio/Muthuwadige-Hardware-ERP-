@@ -279,9 +279,11 @@ export function Finance({ currentUser }: FinanceProps = {}) {
   // Cash Book Balance = (Cash Sales + Encashed Cash Drawer Cheques + Cash Capital In + Cash Purchase Returns) - (Cash Purchases + Cash Drawer Expenses + Cash Refunds Given)
   const cashBalance = (cashIncome + cashPurchaseReturns) - cashSalesReturns - grossCashExpense;
 
-  // Bank Inflow / Realization Breakdown
+  // Bank Inflow / Realization & Outflow Breakdown
   const bankIncome = filtered.filter(t => (t.type?.toLowerCase() === 'income' || t.flow_type?.toLowerCase() === 'income') && isBankTrans(t) && !isPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
-  const totalBankBreakdown = bankIncome + bankPurchaseReturns;
+  const grossBankExpense = filtered.filter(t => (t.type?.toLowerCase() === 'expense' || t.flow_type?.toLowerCase() === 'expense') && !isSalesReturnTrans(t) && isBankTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  // Net Bank Balance = Total Bank Inflows (Sales & Customer Bank Transfers + Supplier PR Bank Refunds) - Bank Outflows (Bank Purchases & Expenses)
+  const totalBankBreakdown = (bankIncome + bankPurchaseReturns) - grossBankExpense;
 
   const openAdd = () => {
     setFormData(emptyTransaction);
@@ -717,7 +719,7 @@ export function Finance({ currentUser }: FinanceProps = {}) {
                 </div>
               </div>
               <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-white/95">
-                <span>Inflow: {symbol} {convert(bankIncome).toLocaleString(undefined, { minimumFractionDigits: 2 })}{bankPurchaseReturns > 0 ? ` | PR Returns: +${symbol} ${convert(bankPurchaseReturns).toLocaleString(undefined, { minimumFractionDigits: 2 })}` : ''}</span>
+                <span>Inflow: {symbol} {convert(bankIncome + bankPurchaseReturns).toLocaleString(undefined, { minimumFractionDigits: 2 })} | Outflow: -{symbol} {convert(grossBankExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
               </div>
             </div>
           </div>
