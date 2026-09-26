@@ -1653,7 +1653,10 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
   };
 
   // Void Purchase Return Action
-  const handleVoidPurchaseReturn = async (returnNo: string) => {
+  const handleVoidPurchaseReturn = async (returnIdentifier: any) => {
+    const returnNo = typeof returnIdentifier === 'object' 
+      ? (returnIdentifier.return_number || returnIdentifier.id || returnIdentifier.debit_note_no || returnIdentifier.debitNoteNo) 
+      : returnIdentifier;
     const reason = window.prompt(
       'Enter reason for voiding this return voucher (ආපසු යැවීම අවලංගු කිරීමට හේතුව):',
       'Accidental duplicate entry'
@@ -1668,19 +1671,17 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
           success = true;
         }
       } catch (apiErr: any) {
-        console.error('[PurchaseReturn] api.purchaseReturns.void failed, attempting direct fetch:', apiErr);
-        // Fallback to direct fetch
-        const res = await fetch(`/api/purchase-returns/${encodeURIComponent(returnNo)}/void`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ void_reason: reason.trim() })
-        });
-        const json = await res.json();
-        if (res.ok && (json.success || !json.error)) {
-          success = true;
+        console.warn('[PurchaseReturn] Primary void attempt failed, trying alternate id:', apiErr);
+        if (typeof returnIdentifier === 'object') {
+          const alternateId = returnIdentifier.id || returnIdentifier.debit_note_no;
+          if (alternateId && alternateId !== returnNo) {
+            const retryRes = await api.purchaseReturns.void(alternateId, reason.trim());
+            if (retryRes && (retryRes.success || !retryRes.error)) success = true;
+          } else {
+            throw apiErr;
+          }
         } else {
-          console.error('[PurchaseReturn] Direct void endpoint error response:', json);
-          throw new Error(json.error || json.message || apiErr.message || 'Direct network void failed');
+          throw apiErr;
         }
       }
 
@@ -2980,7 +2981,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                               </button>
                               {!isVoided && (
                                 <button
-                                  onClick={() => handleVoidPurchaseReturn(returnNumberVal)}
+                                  onClick={() => handleVoidPurchaseReturn(ret)}
                                   className="text-[10px] font-black uppercase tracking-widest bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white border border-rose-200 px-3.5 py-2 rounded-xl transition-all flex items-center gap-1.5 shadow-sm shadow-rose-500/10"
                                   title="Void Return Voucher & Restore Stock"
                                 >
