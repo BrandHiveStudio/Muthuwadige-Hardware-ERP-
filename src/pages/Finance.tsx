@@ -244,7 +244,7 @@ export function Finance({ currentUser }: FinanceProps = {}) {
     const method = String(t.payment_method || t.method || '').trim().toUpperCase();
     const desc = String(t.description || '').toUpperCase();
     const cat = String(t.category || '').toUpperCase();
-    if (['BANK', 'BANK TRANSFER', 'BANK_TRANSFER', 'TRANSFER'].includes(method)) return true;
+    if (['BANK', 'BANK TRANSFER', 'BANK_TRANSFER', 'TRANSFER', 'CARD'].includes(method)) return true;
     return desc.includes('BANK TRANSFER') || desc.includes('[BANK TRANSFER]') || desc.includes('BANK REFUND') || cat.includes('BANK') || cat.includes('SUPPLIER BANK REFUND');
   };
 
