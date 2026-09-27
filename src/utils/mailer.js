@@ -10,8 +10,9 @@ import nodemailer from 'nodemailer';
 export const createMailTransporter = (settings = {}) => {
   const host = settings.smtp_host || process.env.SMTP_HOST || 'smtp.gmail.com';
   const port = Number(settings.smtp_port || process.env.SMTP_PORT || 465);
-  const user = settings.smtp_user || settings.gmail_user || process.env.SMTP_USER || settings.shop_email || settings.email || process.env.GMAIL_USER;
-  const pass = settings.smtp_pass || settings.gmail_pass || process.env.SMTP_PASS || process.env.GMAIL_PASS;
+  const user = settings.smtp_user || settings.gmail_user || process.env.SMTP_USER || process.env.EMAIL_USER || process.env.GMAIL_USER || settings.shop_email || settings.email;
+  const rawPass = settings.smtp_pass || settings.gmail_pass || process.env.SMTP_PASS || process.env.EMAIL_PASS || process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_PASS;
+  const pass = rawPass ? String(rawPass).replace(/\s+/g, '') : '';
 
   if (!user || !pass) {
     console.error('[MAILER ERROR] Missing SMTP credentials (user or app password).');
