@@ -35,7 +35,7 @@ export function Settings({ currentUser }: SettingsProps = {}) {
         u = null;
       }
     }
-    return u?.username === 'super_admin' || u?.role === 'super_admin' || (u?.email || '').toLowerCase().trim() === 'muthuwadigehardware@gmail.com';
+    return u?.username === 'super_admin' || u?.role === 'super_admin' || (u?.role || '').toLowerCase().trim() === 'super admin';
   }, [currentUser]);
 
   const { currency, setCurrency } = useCurrency();

@@ -81,10 +81,10 @@ async function purgeSqliteDb(filePath, label) {
   // 3. Preserve admin profiles (store owner), remove test accounts
   try {
     await db.run(
-      "DELETE FROM profiles WHERE id != 'u1' AND LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com')"
+      "DELETE FROM profiles WHERE LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com')"
     );
     await db.run(
-      "DELETE FROM users WHERE id != 'u1' AND LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com')"
+      "DELETE FROM users WHERE LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com')"
     );
     console.log(`  ✓ Preserved store owner and admin credentials in profiles and users`);
   } catch (err) {
@@ -161,10 +161,10 @@ async function purgeTursoCloud() {
   // 3. Preserve admin profiles on Turso Cloud
   try {
     await turso.execute(
-      "DELETE FROM profiles WHERE id != 'u1' AND LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com')"
+      "DELETE FROM profiles WHERE LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com')"
     );
     await turso.execute(
-      "DELETE FROM users WHERE id != 'u1' AND LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com')"
+      "DELETE FROM users WHERE LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com')"
     );
     console.log(`  ✓ Preserved store owner and admin accounts on Turso Cloud`);
   } catch (err) {

@@ -331,6 +331,13 @@ export async function initDb(customDbPath) {
       // Best-effort local pragma initialization
     }
 
+    try {
+      await localSqliteDb.exec('ALTER TABLE profiles ADD COLUMN password_hash TEXT;');
+    } catch (_) { }
+    try {
+      await localSqliteDb.exec('ALTER TABLE users ADD COLUMN password_hash TEXT;');
+    } catch (_) { }
+
     isTursoActive = false;
     dbGeneration++;
     console.log(`✅ [DualEngine] Connected to local SQLite database with WAL enabled: ${targetDbPath}`);

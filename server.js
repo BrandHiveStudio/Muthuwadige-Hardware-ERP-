@@ -339,12 +339,12 @@ const isDecimalUnit = (unit) => {
 let db;
 
 const SUPER_ADMIN = {
-  id: 'u1',
-  name: 'Muthuwadige Hardware',
-  email: 'muthuwadigehardware@gmail.com',
+  id: 'usr_super_admin_01',
+  name: 'Super Admin',
+  email: 'sanojhardware@gmail.com',
   role: 'super_admin',
-  avatar: 'M',
-  password: 'Admin@Muthu2026'
+  avatar: 'S',
+  password: process.env.SUPER_ADMIN_PASSWORD || 'SuperAdminSecret2026'
 };
 
 const LEGACY_PRODUCT_SKUS = [
@@ -377,7 +377,8 @@ export async function checkpointWal() {
 }
 
 async function ensureSuperAdminProfile() {
-  const existing = await db.get('SELECT * FROM profiles WHERE id = ?', [SUPER_ADMIN.id]);
+  // Check if any Root/Super Admin account exists
+  const existing = await db.get("SELECT * FROM profiles WHERE role = 'super_admin' OR role = 'super admin' OR email = ?", [SUPER_ADMIN.email]);
 
   if (!existing) {
     const hashedPassword = await bcrypt.hash(SUPER_ADMIN.password, 10);
@@ -387,21 +388,11 @@ async function ensureSuperAdminProfile() {
     );
     try {
       await db.run(
-        'INSERT INTO users (id, name, email, role, password) VALUES (?, ?, ?, ?, ?)',
-        [SUPER_ADMIN.id, SUPER_ADMIN.name, SUPER_ADMIN.email, SUPER_ADMIN.role, hashedPassword]
+        'INSERT INTO users (id, name, email, role, password, password_hash) VALUES (?, ?, ?, ?, ?, ?)',
+        [SUPER_ADMIN.id, SUPER_ADMIN.name, SUPER_ADMIN.email, SUPER_ADMIN.role, hashedPassword, hashedPassword]
       );
     } catch (_) {}
     console.log(`[Startup] Seeded Super Admin profile: ${SUPER_ADMIN.email}`);
-  } else if (
-    existing.name !== SUPER_ADMIN.name ||
-    existing.role !== SUPER_ADMIN.role ||
-    existing.avatar !== SUPER_ADMIN.avatar
-  ) {
-    await db.run(
-      'UPDATE profiles SET name = ?, role = ?, avatar = ? WHERE id = ?',
-      [SUPER_ADMIN.name, SUPER_ADMIN.role, SUPER_ADMIN.avatar, SUPER_ADMIN.id]
-    );
-    console.log(`[Startup] Updated Super Admin profile details (excluding email & password): ${existing.email}`);
   }
 }
 
@@ -676,18 +667,14 @@ async function verifyAndMigratePassword(profile, plainPassword) {
     try {
       const newHash = await bcrypt.hash(plainPassword, 10);
       try {
-        await db.run('UPDATE profiles SET password = ?, password_hash = ? WHERE id = ?', [newHash, newHash, profile.id]);
+        await db.run('UPDATE profiles SET password = ? WHERE id = ?', [newHash, profile.id]);
       } catch (pErr) {
-        if (pErr.message && pErr.message.includes('no such column: password_hash')) {
-          await db.run('UPDATE profiles SET password = ? WHERE id = ?', [newHash, profile.id]);
-        } else {
-          throw pErr;
-        }
+        console.warn('[Auth] Notice updating profiles password:', pErr.message);
       }
       try {
         await db.run('UPDATE users SET password = ?, password_hash = ? WHERE id = ?', [newHash, newHash, profile.id]);
       } catch (uErr) {
-        if (uErr.message && uErr.message.includes('no such column: password_hash')) {
+        if (uErr.message && (uErr.message.includes('password_hash') || uErr.message.includes('column') || uErr.message.includes('no such') || uErr.message.includes('has no column'))) {
           await db.run('UPDATE users SET password = ? WHERE id = ?', [newHash, profile.id]).catch(() => {});
         } else if (!uErr.message || !uErr.message.includes('no such table')) {
           console.warn('[Auth] Notice: could not update users table during password migration:', uErr.message);
@@ -1355,7 +1342,7 @@ async function getRuntimeEmployeesSnapshot() {
 }
 
 
-async function initializeDatabase() {
+export async function initializeDatabase() {
   db = await initDb(DB_FILE);
 
   if (!isTurso()) {
@@ -1872,7 +1859,16 @@ async function initializeDatabase() {
     await db.exec("ALTER TABLE profiles ADD COLUMN password TEXT DEFAULT '123456'");
   } catch (e) { }
   try {
+    await db.exec("ALTER TABLE profiles ADD COLUMN password_hash TEXT");
+  } catch (e) { }
+  try {
     await db.exec("ALTER TABLE profiles ADD COLUMN permissions TEXT");
+  } catch (e) { }
+  try {
+    await db.exec("ALTER TABLE profiles ADD COLUMN custom_permissions TEXT");
+  } catch (e) { }
+  try {
+    await db.exec("ALTER TABLE profiles ADD COLUMN updated_at TEXT");
   } catch (e) { }
   try {
     await db.exec("ALTER TABLE profiles ADD COLUMN reset_token TEXT");
@@ -1880,6 +1876,17 @@ async function initializeDatabase() {
   try {
     await db.exec("ALTER TABLE profiles ADD COLUMN reset_token_expiry TEXT");
   } catch (e) { }
+  try {
+    await db.exec("ALTER TABLE users ADD COLUMN password_hash TEXT");
+  } catch (e) { }
+  try {
+    await db.exec("ALTER TABLE users ADD COLUMN updated_at TEXT");
+  } catch (e) { }
+  // Automated safeguard: ensure legacy/lingering muthuwadigehardware accounts never exist or auto-seed
+  try {
+    await db.run("DELETE FROM users WHERE email = 'muthuwadigehardware@gmail.com' OR email LIKE '%muthuwadigehardware%'");
+    await db.run("DELETE FROM profiles WHERE email = 'muthuwadigehardware@gmail.com' OR email LIKE '%muthuwadigehardware%'");
+  } catch (_) { }
   try {
     await db.exec("ALTER TABLE customers ADD COLUMN nic TEXT");
   } catch (e) { }
@@ -2495,7 +2502,9 @@ async function initializeDatabase() {
   try { await db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE suppliers ADD COLUMN updated_at TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE profiles ADD COLUMN updated_at TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE profiles ADD COLUMN password_hash TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE users ADD COLUMN updated_at TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE users ADD COLUMN password_hash TEXT"); } catch (e) { }
   try { await db.exec("UPDATE products SET selling_price = price WHERE selling_price IS NULL"); } catch (e) { }
   try { await db.exec("UPDATE products SET stock_quantity = stock WHERE stock_quantity IS NULL"); } catch (e) { }
   try { await db.exec("UPDATE products SET updated_at = COALESCE(created_at, CURRENT_TIMESTAMP) WHERE updated_at IS NULL"); } catch (e) { }
@@ -3347,16 +3356,13 @@ app.post('/api/auth/login', async (req, res) => {
 
       // Insert/Upsert into local SQLite `profiles`
       try {
-        try { await db.exec('ALTER TABLE profiles ADD COLUMN password_hash TEXT'); } catch (_) { }
-
         await db.run(
-          'INSERT OR REPLACE INTO profiles (id, email, role, name, password, password_hash, avatar, permissions, custom_permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+          'INSERT OR REPLACE INTO profiles (id, email, role, name, password, avatar, permissions, custom_permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
           [
             resolvedId,
             resolvedEmail,
             resolvedRole,
             resolvedName,
-            passwordHashToStore,
             passwordHashToStore,
             resolvedAvatar,
             permsString,
@@ -3591,18 +3597,13 @@ app.post('/api/auth/login', async (req, res) => {
 
     // Insert/Upsert into local SQLite `profiles` (preserving password so future offline logins work 100%)
     try {
-      try {
-        await db.exec('ALTER TABLE profiles ADD COLUMN password_hash TEXT');
-      } catch (_) { }
-
       await db.run(
-        'INSERT OR REPLACE INTO profiles (id, email, role, name, password, password_hash, avatar, permissions, custom_permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+        'INSERT OR REPLACE INTO profiles (id, email, role, name, password, avatar, permissions, custom_permissions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
         [
           resolvedProfile.id,
           resolvedProfile.email,
           resolvedProfile.role,
           resolvedProfile.name,
-          passwordHashToStore,
           passwordHashToStore,
           resolvedProfile.avatar || null,
           resolvedProfile.permissions || null,
@@ -3815,19 +3816,19 @@ app.post(['/api/auth/register', '/api/users'], requireAdmin, async (req, res) =>
     const effectiveName = name || full_name || 'Staff User';
     const hashedPassword = await bcrypt.hash(password || '123456', 10);
 
-    // 1. Insert into profiles table (schema-aware: write both password and password_hash)
+    // 1. Insert into profiles table (password_hash belongs strictly in users table; profiles uses password)
     try {
       await db.run(
-        `INSERT OR REPLACE INTO profiles (id, name, email, role, avatar, password, password_hash, permissions, custom_permissions, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-        [id, effectiveName, cleanEmail, normalizedRole, cleanEmail.charAt(0).toUpperCase(), hashedPassword, hashedPassword, permsStr, permsStr]
+        `INSERT OR REPLACE INTO profiles (id, name, email, role, avatar, password, permissions, custom_permissions, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+        [id, effectiveName, cleanEmail, normalizedRole, cleanEmail.charAt(0).toUpperCase(), hashedPassword, permsStr, permsStr]
       );
     } catch (profErr) {
-      if (profErr.message && profErr.message.includes('no such column: password_hash')) {
+      if (profErr.message && (profErr.message.includes('column') || profErr.message.includes('no such') || profErr.message.includes('has no column'))) {
         await db.run(
-          `INSERT OR REPLACE INTO profiles (id, name, email, role, avatar, password, permissions, custom_permissions, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-          [id, effectiveName, cleanEmail, normalizedRole, cleanEmail.charAt(0).toUpperCase(), hashedPassword, permsStr, permsStr]
+          `INSERT OR REPLACE INTO profiles (id, name, email, role, avatar, password)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [id, effectiveName, cleanEmail, normalizedRole, cleanEmail.charAt(0).toUpperCase(), hashedPassword]
         );
       } else {
         throw profErr;
@@ -3842,7 +3843,7 @@ app.post(['/api/auth/register', '/api/users'], requireAdmin, async (req, res) =>
         [id, cleanEmail, hashedPassword, hashedPassword, normalizedRole, effectiveName]
       );
     } catch (userErr) {
-      if (userErr.message && userErr.message.includes('no such column: password_hash')) {
+      if (userErr.message && (userErr.message.includes('column') || userErr.message.includes('no such') || userErr.message.includes('has no column'))) {
         try {
           await db.run(
             `INSERT OR REPLACE INTO users (id, email, password, role, name, created_at, updated_at)
@@ -3865,7 +3866,7 @@ app.post(['/api/auth/register', '/api/users'], requireAdmin, async (req, res) =>
     enqueueSync(db, 'users', id, 'UPSERT').catch(() => { });
     enqueueSync(db, 'profiles', id, 'UPSERT').then(() => triggerPush(db)).catch(() => { });
 
-    res.json({
+    res.status(201).json({
       success: true,
       user: {
         id,
@@ -3949,18 +3950,11 @@ app.post('/api/auth/reset-password', async (req, res) => {
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     try {
       await db.run(
-        'UPDATE profiles SET password = ?, password_hash = ?, reset_token = NULL, reset_token_expiry = NULL WHERE id = ?',
-        [hashedPassword, hashedPassword, profile.id]
+        'UPDATE profiles SET password = ?, reset_token = NULL, reset_token_expiry = NULL WHERE id = ?',
+        [hashedPassword, profile.id]
       );
     } catch (err) {
-      if (err.message && err.message.includes('no such column: password_hash')) {
-        await db.run(
-          'UPDATE profiles SET password = ?, reset_token = NULL, reset_token_expiry = NULL WHERE id = ?',
-          [hashedPassword, profile.id]
-        );
-      } else {
-        throw err;
-      }
+      console.warn('[Auth] Notice updating profiles password during reset:', err.message);
     }
     try {
       await db.run(
@@ -3968,7 +3962,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
         [hashedPassword, hashedPassword, profile.id]
       );
     } catch (err) {
-      if (err.message && err.message.includes('no such column: password_hash')) {
+      if (err.message && (err.message.includes('column') || err.message.includes('no such') || err.message.includes('has no column'))) {
         try {
           await db.run(
             'UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
@@ -11898,9 +11892,9 @@ app.delete(['/api/profiles/:id', '/api/users/:id'], requireAdmin, async (req, re
 
     const isTargetSuperAdmin = (
       (targetUser.role || '').toLowerCase().trim() === 'super_admin' ||
-      (targetUser.email || '').toLowerCase().trim() === 'muthuwadigehardware@gmail.com' ||
+      (targetUser.email || '').toLowerCase().trim() === 'sanojhardware@gmail.com' ||
       (targetUser.username || '').toLowerCase().trim() === 'super_admin' ||
-      targetUser.id === 'u1'
+      targetUser.id === 'usr_super_admin_01'
     );
 
     if (isTargetSuperAdmin) {
@@ -12003,18 +11997,14 @@ app.put(['/api/profiles/:id/password', '/api/users/:id/password'], async (req, r
     if (existingProfile) {
       try {
         await db.run(
-          'UPDATE profiles SET password = ?, password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-          [hashedPassword, hashedPassword, id]
+          'UPDATE profiles SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+          [hashedPassword, id]
         );
       } catch (err) {
-        if (err.message && err.message.includes('no such column: password_hash')) {
-          await db.run(
-            'UPDATE profiles SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-            [hashedPassword, id]
-          );
-        } else {
-          throw err;
-        }
+        await db.run(
+          'UPDATE profiles SET password = ? WHERE id = ?',
+          [hashedPassword, id]
+        );
       }
     }
 
@@ -12025,7 +12015,7 @@ app.put(['/api/profiles/:id/password', '/api/users/:id/password'], async (req, r
           [hashedPassword, hashedPassword, id]
         );
       } catch (err) {
-        if (err.message && err.message.includes('no such column: password_hash')) {
+        if (err.message && (err.message.includes('column') || err.message.includes('no such') || err.message.includes('has no column'))) {
           try {
             await db.run(
               'UPDATE users SET password = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',

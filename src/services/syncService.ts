@@ -305,7 +305,14 @@ export async function ensureTursoSchema(tursoClient: Client | null): Promise<voi
       "ALTER TABLE transactions ADD COLUMN payment_method TEXT DEFAULT 'CASH';",
       "ALTER TABLE cheque_registry ADD COLUMN cleared_date DATE;",
       "ALTER TABLE cheque_registry ADD COLUMN updated_at DATETIME;",
-      "ALTER TABLE cheque_registry ADD COLUMN processed_by TEXT;"
+      "ALTER TABLE cheque_registry ADD COLUMN processed_by TEXT;",
+      "ALTER TABLE profiles ADD COLUMN password TEXT DEFAULT '123456';",
+      "ALTER TABLE profiles ADD COLUMN password_hash TEXT;",
+      "ALTER TABLE profiles ADD COLUMN permissions TEXT;",
+      "ALTER TABLE profiles ADD COLUMN custom_permissions TEXT;",
+      "ALTER TABLE profiles ADD COLUMN updated_at TEXT;",
+      "ALTER TABLE users ADD COLUMN password_hash TEXT;",
+      "ALTER TABLE users ADD COLUMN updated_at TEXT;"
     ];
     for (const c of cols) {
       try { await tursoClient.execute(c); } catch (_) {}
