@@ -13528,13 +13528,14 @@ if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.
     try {
       console.log('[Startup] Initializing Database & Schema...');
       await ensureDbInitialized();
-      await scheduleAutomaticBackups();
-      startBackgroundSyncWorker(db);
 
       // 1. HTTP Server for desktop app and fast local REST API (Binds immediately so health checks & UI connect instantly)
       app.listen(PORT, '0.0.0.0', () => {
         console.log(`🚀 REST API Server running on http://0.0.0.0:${PORT}`);
       });
+
+      scheduleAutomaticBackups().catch(err => console.warn('[Backup Scheduler] Init notice:', err.message));
+      startBackgroundSyncWorker(db);
 
       // 2. HTTPS Server for Mobile Camera Scanner (getUserMedia requires Secure Context)
       getOrCreateSslCertificate().then((ssl) => {
