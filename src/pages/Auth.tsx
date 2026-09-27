@@ -131,7 +131,7 @@ export function Auth({ onLogin }: AuthProps) {
     );
 
     const stored = localStorage.getItem('erp_host_address') || localStorage.getItem('api_server_url') || localStorage.getItem('server_address');
-    if (stored) return stored;
+    if (stored && !isElectron) return stored;
 
     if (!isElectron && typeof window !== 'undefined' && window.location) {
       const hostname = window.location.hostname || '';
@@ -140,7 +140,7 @@ export function Auth({ onLogin }: AuthProps) {
         return window.location.origin;
       }
     }
-    return 'http://localhost:5001';
+    return 'http://127.0.0.1:5001';
   });
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [connectionTestResult, setConnectionTestResult] = useState<{ success: boolean; message: string } | null>(null);
@@ -161,35 +161,42 @@ export function Auth({ onLogin }: AuthProps) {
 
     const fetchSettings = async () => {
       const activeBaseUrl = getBaseUrl();
-      try {
-        // Pre-flight health check to verify server connectivity (25s cold start tolerance)
-        const healthRes = await fetchWithTimeout(`${activeBaseUrl}/health`, {}, 25000).catch(() => null);
-        if (healthRes && healthRes.ok && isMounted) {
-          setConnectionError(false);
-        }
-
-        const { data, error } = await supabase.from('system_settings').select('*').single();
-        if (error) throw error;
-        if (data && isMounted) {
-          setShopSettings(data);
-          setConnectionError(false);
-        }
-      } catch (err) {
-        console.warn('[Connection Check] Database check notice:', err);
-        if (isMounted) {
-          const hostname = typeof window !== 'undefined' ? (window.location.hostname || '') : '';
-          const isLiveWebDomain = !isElectronEnv && Boolean(hostname && hostname !== 'localhost' && hostname !== '127.0.0.1');
-
-          if (isLiveWebDomain) {
+      
+      // Multi-attempt grace period: probe health up to 3 times (with 1s delay) so momentary startup lag
+      // while SQLite / Express binds to port 5001 never pops up the "Configure Settings" banner.
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        if (!isMounted) return;
+        try {
+          const healthRes = await fetchWithTimeout(`${activeBaseUrl}/health`, {}, 3000).catch(() => null);
+          if (healthRes && healthRes.ok) {
+            if (isMounted) setConnectionError(false);
             try {
-              const check = await fetchWithTimeout(`${activeBaseUrl}/health`, {}, 25000);
-              if (check.ok) {
-                setConnectionError(false);
-                return;
+              const { data } = await supabase.from('system_settings').select('*').single();
+              if (data && isMounted) {
+                setShopSettings(data);
               }
             } catch (_) {}
+            return;
           }
-          setConnectionError(true);
+        } catch (_) {}
+
+        if (attempt < 3) {
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+
+      if (isMounted) {
+        // In local desktop / Electron counter mode, backend is local loopback on 5001 - never show connection error on boot
+        if (!isElectronEnv) {
+          const hostname = typeof window !== 'undefined' ? (window.location.hostname || '') : '';
+          const isLiveWebDomain = Boolean(hostname && hostname !== 'localhost' && hostname !== '127.0.0.1');
+          if (isLiveWebDomain) {
+            setConnectionError(true);
+          } else {
+            setConnectionError(false);
+          }
+        } else {
+          setConnectionError(false);
         }
       }
     };

@@ -447,6 +447,25 @@ export function Inventory() {
   const [newConversionPrice, setNewConversionPrice] = useState<string>('');
   const [isCustomCategory, setIsCustomCategory] = useState<boolean>(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [deleteConfirmTarget, setDeleteConfirmTarget] = useState<{
+    type: 'single' | 'bulk' | 'all';
+    product?: Product;
+    count?: number;
+  } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const currentUser = React.useMemo(() => {
+    try {
+      const saved = sessionStorage.getItem('hardware_erp_user') || sessionStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user') || localStorage.getItem('erp_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const userRole = (currentUser?.role || '').toLowerCase().trim();
+  const userEmail = (currentUser?.email || '').toLowerCase().trim();
+  const canDeleteInventory = ['super_admin', 'admin', 'super admin', 'administrator'].includes(userRole) || userEmail === 'krishleo439@gmail.com';
 
   const {
     isOpen: isSyncWarningOpen,
@@ -763,24 +782,15 @@ export function Inventory() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    const passkey = window.prompt(t('Enter admin/void passkey to confirm deletion:', 'මකා දැමීම තහවුරු කිරීමට මුරපදය ඇතුළත් කරන්න:'));
-    if (!passkey) return;
-
-    if (window.confirm(t('Are you sure you want to delete this item?', 'මෙම භාණ්ඩය මකා දැමීමට ඔබට විශ්වාසද?'))) {
-      setProducts(prev => prev.filter(p => p.id !== id));
-      const { error } = await supabase.from('products').delete({ passkey: passkey.trim() }).eq('id', id);
-      if (error) {
-        setToast({ type: 'error', message: error.message });
-        setTimeout(() => setToast(null), 5000);
-        fetchProducts();
-      } else {
-        setToast({ type: 'success', message: t("Product deleted successfully!", "නිෂ්පාදනය සාර්ථකව මකා දමන ලදී!") });
-        setTimeout(() => setToast(null), 5000);
-        setSelectedProductIds((prev) => prev.filter((selectedId) => selectedId !== id));
-        fetchProducts();
-      }
+  const handleDelete = (id: string) => {
+    if (!canDeleteInventory) {
+      setToast({ type: 'error', message: t('Permission Denied: Only Administrators can delete inventory items.', 'අවසර නැත: තොග අයිතම මකා දැමිය හැක්කේ පරිපාලකවරුන්ට පමණි.') });
+      setTimeout(() => setToast(null), 5000);
+      return;
     }
+    const targetProduct = products.find(p => p.id === id);
+    if (!targetProduct) return;
+    setDeleteConfirmTarget({ type: 'single', product: targetProduct });
   };
 
   const allFilteredSelected = filtered.length > 0 && filtered.every((p) => selectedProductIds.includes(p.id));
@@ -801,70 +811,75 @@ export function Inventory() {
     );
   };
 
-  const handleBulkDelete = async () => {
-    if (selectedProductIds.length === 0) return;
-    if (!window.confirm(t(
-      `Are you sure you want to delete the ${selectedProductIds.length} selected products?`,
-      `තෝරාගත් නිෂ්පාදන ${selectedProductIds.length} මකා දැමීමට ඔබට විශ්වාසද?`
-    ))) {
+  const handleBulkDelete = () => {
+    if (!canDeleteInventory) {
+      setToast({ type: 'error', message: t('Permission Denied: Only Administrators can delete inventory items.', 'අවසර නැත: තොග අයිතම මකා දැමිය හැක්කේ පරිපාලකවරුන්ට පමණි.') });
+      setTimeout(() => setToast(null), 5000);
       return;
     }
-
-    setIsLoading(true);
-    try {
-      const results: any[] = [];
-      for (const productId of selectedProductIds) {
-        const res = await supabase.from('products').delete().eq('id', productId);
-        results.push(res);
-      }
-      const firstError = results.find((r: any) => r?.error);
-      if (firstError) throw firstError.error;
-      setToast({ type: 'success', message: t('Selected products deleted successfully!', 'තෝරාගත් නිෂ්පාදන සාර්ථකව මකා දමන ලදි!') });
-      setTimeout(() => setToast(null), 5000);
-      setSelectedProductIds([]);
-      fetchProducts();
-    } catch (err: any) {
-      setToast({ type: 'error', message: t('Failed to delete selected products: ', 'තෝරාගත් නිෂ්පාදන මකා ගැනීමට අපොහොසත් විය: ') + err.message });
-      setTimeout(() => setToast(null), 5000);
-    } finally {
-      setIsLoading(false);
-    }
+    if (selectedProductIds.length === 0) return;
+    setDeleteConfirmTarget({ type: 'bulk', count: selectedProductIds.length });
   };
 
-  const handleDeleteAll = async () => {
+  const handleDeleteAll = () => {
+    if (!canDeleteInventory) {
+      setToast({ type: 'error', message: t('Permission Denied: Only Administrators can delete inventory items.', 'අවසර නැත: තොග අයිතම මකා දැමිය හැක්කේ පරිපාලකවරුන්ට පමණි.') });
+      setTimeout(() => setToast(null), 5000);
+      return;
+    }
     if (products.length === 0) return;
-    if (!window.confirm(t(
-      'WARNING: Are you sure you want to delete ALL products in the inventory? This action is permanent and cannot be undone.',
-      'අනතුරු ඇඟවීමයි: තොගයේ ඇති සියලුම නිෂ්පාදන මකා දැමීමට ඔබට විශ්වාසද? මෙම ක්‍රියාව ස්ථිර වන අතර ආපසු හැරවිය නොහැක.'
-    ))) {
-      return;
-    }
-    
-    if (!window.confirm(t(
-      'Please confirm once more: Do you really want to clear the entire inventory database?',
-      'කරුණාකර තවත් වරක් තහවුරු කරන්න: ඔබට ඇත්තටම මුළු තොග දත්ත ගබඩාවම මකා දැමීමට අවශ්‍යද?'
-    ))) {
-      return;
-    }
+    setDeleteConfirmTarget({ type: 'all', count: products.length });
+  };
 
-    setIsLoading(true);
+  const handleExecuteConfirmedDelete = async () => {
+    if (!deleteConfirmTarget || isDeleting) return;
+    setIsDeleting(true);
+
     try {
-      const results: any[] = [];
-      for (const product of products) {
-        const res = await supabase.from('products').delete().eq('id', product.id);
-        results.push(res);
+      if (deleteConfirmTarget.type === 'single') {
+        const prodId = deleteConfirmTarget.product?.id;
+        if (!prodId) return;
+
+        setProducts(prev => prev.filter(p => p.id !== prodId));
+        const { error } = await supabase.from('products').delete().eq('id', prodId);
+        if (error) {
+          setToast({ type: 'error', message: error.message || t('Failed to delete product', 'නිෂ්පාදනය මකා ගැනීමට අපොහොසත් විය') });
+          fetchProducts();
+        } else {
+          setToast({ type: 'success', message: t("Product deleted successfully!", "නිෂ්පාදනය සාර්ථකව මකා දමන ලදී!") });
+          setSelectedProductIds(prev => prev.filter(id => id !== prodId));
+          fetchProducts();
+        }
+      } else if (deleteConfirmTarget.type === 'bulk') {
+        const results: any[] = [];
+        for (const productId of selectedProductIds) {
+          const res = await supabase.from('products').delete().eq('id', productId);
+          results.push(res);
+        }
+        const firstError = results.find((r: any) => r?.error);
+        if (firstError) throw firstError.error;
+        setToast({ type: 'success', message: t('Selected products deleted successfully!', 'තෝරාගත් නිෂ්පාදන සාර්ථකව මකා දමන ලදි!') });
+        setSelectedProductIds([]);
+        fetchProducts();
+      } else if (deleteConfirmTarget.type === 'all') {
+        const results: any[] = [];
+        for (const product of products) {
+          const res = await supabase.from('products').delete().eq('id', product.id);
+          results.push(res);
+        }
+        const firstError = results.find((r: any) => r?.error);
+        if (firstError) throw firstError.error;
+        setToast({ type: 'success', message: t('All inventory products deleted successfully!', 'සියලුම තොග නිෂ්පාදන සාර්ථකව මකා දමන ලදි!') });
+        setSelectedProductIds([]);
+        fetchProducts();
       }
-      const firstError = results.find((r: any) => r?.error);
-      if (firstError) throw firstError.error;
-      setToast({ type: 'success', message: t('All inventory products deleted successfully!', 'සියලුම තොග නිෂ්පාදන සාර්ථකව මකා දමන ලදි!') });
-      setTimeout(() => setToast(null), 5000);
-      setSelectedProductIds([]);
-      fetchProducts();
     } catch (err: any) {
-      setToast({ type: 'error', message: t('Failed to delete all products: ', 'සියලුම නිෂ්පාදන මකා ගැනීමට අපොහොසත් විය: ') + err.message });
-      setTimeout(() => setToast(null), 5000);
+      setToast({ type: 'error', message: (err?.message || t('Error deleting inventory', 'තොග මකා දැමීමේ දෝෂයක්')) });
+      fetchProducts();
     } finally {
-      setIsLoading(false);
+      setIsDeleting(false);
+      setDeleteConfirmTarget(null);
+      setTimeout(() => setToast(null), 5000);
     }
   };
 
@@ -1032,14 +1047,16 @@ export function Inventory() {
           <button onClick={openAdd} className="flex items-center justify-center gap-2 bg-[#DAA520] hover:bg-[#B8860B] text-white px-6 py-3 rounded-xl text-sm font-black shadow-lg shadow-[#DAA520]/20 transition-all uppercase tracking-widest">
             <PlusIcon className="w-4 h-4" /> {t('Add Product', 'නිෂ්පාදනය එක් කරන්න')}
           </button>
-          <button onClick={handleDeleteAll} disabled={products.length === 0} className="flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-100 disabled:text-gray-300 text-white px-6 py-3 rounded-xl text-sm font-black shadow-lg shadow-red-600/20 transition-all uppercase tracking-widest shrink-0">
-            <Trash2Icon className="w-4 h-4" /> {t('Delete All', 'සියල්ල මකන්න')}
-          </button>
+          {canDeleteInventory && (
+            <button onClick={handleDeleteAll} disabled={products.length === 0} className="flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-100 disabled:text-gray-300 text-white px-6 py-3 rounded-xl text-sm font-black shadow-lg shadow-red-600/20 transition-all uppercase tracking-widest shrink-0">
+              <Trash2Icon className="w-4 h-4" /> {t('Delete All', 'සියල්ල මකන්න')}
+            </button>
+          )}
         </div>
       </div>
 
       {/* Bulk Actions Banner */}
-      {selectedProductIds.length > 0 && (
+      {selectedProductIds.length > 0 && canDeleteInventory && (
         <div className="bg-red-50 border border-red-100 rounded-xl p-4 flex flex-col sm:flex-row justify-between items-center gap-4 animate-in slide-in-from-top-5 duration-300">
           <div className="flex items-center gap-2.5 text-red-800 font-bold text-sm">
             <AlertTriangleIcon className="w-5 h-5 text-red-600 animate-pulse" />
@@ -1169,7 +1186,9 @@ export function Inventory() {
                           <button onClick={() => openStock(product, 'in')} className="p-2.5 rounded-xl bg-emerald-50 text-emerald-600 hover:bg-emerald-500 hover:text-white border border-emerald-100 transition-all shadow-sm" title="Stock In"><ArrowUpIcon className="w-4 h-4" /></button>
                           <button onClick={() => openStock(product, 'out')} className="p-2.5 rounded-xl bg-amber-50 text-amber-600 hover:bg-amber-500 hover:text-white border border-amber-100 transition-all shadow-sm" title="Stock Out"><ArrowDownIcon className="w-4 h-4" /></button>
                           <button onClick={() => openEdit(product)} className="p-2.5 rounded-xl bg-blue-50 text-blue-600 hover:bg-blue-200 border border-blue-100 transition-all shadow-sm" title="Edit Product"><EditIcon className="w-4 h-4" /></button>
-                          <button onClick={() => handleDelete(product.id)} className="p-2.5 rounded-xl bg-red-50 text-red-600 hover:bg-red-500 hover:text-white border border-red-100 transition-all shadow-sm shadow-red-500/10" title="Delete Product"><Trash2Icon className="w-4 h-4" /></button>
+                          {canDeleteInventory && (
+                            <button onClick={() => handleDelete(product.id)} className="p-2.5 rounded-xl bg-red-50 text-red-600 hover:bg-red-500 hover:text-white border border-red-100 transition-all shadow-sm shadow-red-500/10" title="Delete Product"><Trash2Icon className="w-4 h-4" /></button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1573,6 +1592,105 @@ export function Inventory() {
           <button onClick={() => setToast(null)} className="text-gray-400 hover:text-gray-600 transition-colors p-1 hover:bg-gray-50 rounded-lg">
             <XIcon className="w-4 h-4" />
           </button>
+        </div>
+      )}
+
+      {/* IN-APP CONFIRM DELETE MODAL (ELECTRON SAFE) */}
+      {deleteConfirmTarget && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[9999] p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-8 space-y-6 animate-in zoom-in-95 duration-200 border border-slate-100">
+            <div className="flex justify-between items-center">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.3em] text-red-500">Danger Zone</p>
+                <h3 className="text-2xl font-black text-slate-900">
+                  {deleteConfirmTarget.type === 'single'
+                    ? t('Confirm Delete', 'මකා දැමීම තහවුරු කරන්න')
+                    : deleteConfirmTarget.type === 'bulk'
+                    ? t('Confirm Bulk Delete', 'තොග මකා දැමීම තහවුරු කරන්න')
+                    : t('Delete All Inventory', 'සියලුම තොග මකන්න')}
+                </h3>
+              </div>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setDeleteConfirmTarget(null)}
+                className="p-2 hover:bg-slate-100 rounded-full text-slate-400 transition-colors disabled:opacity-50"
+              >
+                <XIcon className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="rounded-2xl bg-red-50 border border-red-100 p-5 text-center">
+              <div className="mx-auto w-16 h-16 bg-red-500/10 rounded-2xl flex items-center justify-center mb-4 text-red-600">
+                <Trash2Icon className="w-8 h-8" />
+              </div>
+              {deleteConfirmTarget.type === 'single' && deleteConfirmTarget.product && (
+                <>
+                  <p className="text-sm text-slate-600 mb-1">
+                    {t('You are about to permanently delete this product:', 'ඔබ මෙම භාණ්ඩය ස්ථිරවම මකා දැමීමට සූදානම් වේ:')}
+                  </p>
+                  <p className="font-black text-lg text-slate-900">{deleteConfirmTarget.product.name}</p>
+                  <p className="text-xs text-slate-500 font-bold mt-1">
+                    SKU: {deleteConfirmTarget.product.sku} | {t('Stock', 'තොග')}: {deleteConfirmTarget.product.stock} {deleteConfirmTarget.product.unit || 'pcs'}
+                  </p>
+                </>
+              )}
+              {deleteConfirmTarget.type === 'bulk' && (
+                <>
+                  <p className="text-sm text-slate-600 mb-1">
+                    {t('You are about to permanently delete', 'ඔබ ස්ථිරවම මකා දැමීමට සූදානම් වේ')}
+                  </p>
+                  <p className="font-black text-2xl text-slate-900 my-1">{deleteConfirmTarget.count} {t('Selected Items', 'තෝරාගත් අයිතම')}</p>
+                  <p className="text-xs text-slate-500">
+                    {t('All selected products will be removed from your catalog.', 'තෝරාගත් සියලුම නිෂ්පාදන ඔබේ නාමාවලියෙන් ඉවත් කරනු ලැබේ.')}
+                  </p>
+                </>
+              )}
+              {deleteConfirmTarget.type === 'all' && (
+                <>
+                  <p className="text-sm text-red-700 font-bold mb-1">
+                    {t('CRITICAL WARNING: Wipe All Inventory', 'දැඩි අවවාදයයි: සියලුම තොග මකා දැමීම')}
+                  </p>
+                  <p className="font-black text-2xl text-slate-900 my-1">{deleteConfirmTarget.count} {t('Products Total', 'මුළු නිෂ්පාදන')}</p>
+                  <p className="text-xs text-slate-600 mt-1">
+                    {t('This will permanently delete all product records in the entire database.', 'මෙමඟින් සමස්ත දත්ත සමුදායේ ඇති සියලුම නිෂ්පාදන වාර්තා ස්ථිරවම මකා දමනු ඇත.')}
+                  </p>
+                </>
+              )}
+              <p className="text-xs uppercase tracking-[0.2em] text-red-500 font-black mt-4">
+                {t('This action cannot be undone', 'මෙම ක්‍රියාව ආපසු හැරවිය නොහැක')}
+              </p>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setDeleteConfirmTarget(null)}
+                className="flex-1 py-3.5 rounded-xl border border-slate-200 text-slate-700 font-black uppercase tracking-wider text-xs hover:bg-slate-50 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {t('Cancel', 'අවලංගු කරන්න')}
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleExecuteConfirmedDelete}
+                className="flex-1 py-3.5 rounded-xl bg-red-600 text-white font-black uppercase tracking-wider text-xs hover:bg-red-700 transition-all shadow-md shadow-red-600/20 cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {isDeleting ? (
+                  <>
+                    <Loader2Icon className="w-4 h-4 animate-spin" />
+                    <span>{t('Deleting...', 'මකමින් පවතී...')}</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2Icon className="w-4 h-4" />
+                    <span>{t('Confirm Delete', 'මකා දමන්න')}</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
