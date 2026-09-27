@@ -91,7 +91,7 @@ export const sendResetEmail = async (toEmail, code, settings = {}) => {
  */
 export const sendNotificationEmail = async (subject, text, settings = {}, targetEmail = null) => {
   try {
-    const destination = targetEmail || settings.backup_email || settings.email || process.env.GMAIL_USER || 'muthuwadigehardware@gmail.com';
+    const destination = targetEmail || settings.backup_email || settings.email || process.env.GMAIL_USER || 'sanojhardware@gmail.com';
     const transporter = createMailTransporter(settings);
     const user = settings.smtp_user || process.env.SMTP_USER || settings.email || process.env.GMAIL_USER;
 
@@ -160,13 +160,13 @@ export const sendBackupEmail = async ({ toEmail, subject, text, html, fileName, 
 /**
  * Sends a critical Factory Reset OTP verification email.
  *
- * @param {string} toEmail Target recipient email address (muthuwadigehardware@gmail.com)
+ * @param {string} toEmail Target recipient email address (sanojhardware@gmail.com)
  * @param {string} code 6-digit verification OTP code
  * @param {Object} settings Optional runtime settings
  */
 export const sendFactoryResetOtpEmail = async (toEmail, code, settings = {}) => {
   try {
-    const destination = toEmail || 'muthuwadigehardware@gmail.com';
+    const destination = toEmail || 'sanojhardware@gmail.com';
     const transporter = createMailTransporter(settings);
     const user = settings.smtp_user || process.env.SMTP_USER || settings.shop_email || settings.email || process.env.GMAIL_USER;
 

@@ -891,7 +891,7 @@ export function Inventory() {
     }
 
     const { data: { user } } = await supabase.auth.getUser();
-    const userEmail = user?.email || 'muthuwadigehardware@gmail.com';
+    const userEmail = user?.email || 'sanojhardware@gmail.com';
 
     const isIncrement = actionType === 'Adjustment (Increase)' || actionType === 'Sale Return';
     const deltaQty = isIncrement ? stockQty : -stockQty;

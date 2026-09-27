@@ -49,7 +49,7 @@ export function resolveAuthorName(currentUser?: CurrentUserSession | null): stri
 
   const isSuperAdmin = !active || 
     active.email === 'admin@hardware.com' || 
-    active.email === 'muthuwadigehardware@gmail.com' ||
+    active.email === 'sanojhardware@gmail.com' ||
     (active.role || '').toLowerCase() === 'super_admin' || 
     (active.role || '').toLowerCase() === 'super admin' ||
     active.id === 'u1' || 

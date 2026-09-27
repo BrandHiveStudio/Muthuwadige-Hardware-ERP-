@@ -85,7 +85,7 @@ export function Settings({ currentUser }: SettingsProps = {}) {
   const [shopAddress, setShopAddress] = useState('');
   const [shopPhone, setShopPhone] = useState('');
   const [shopEmail, setShopEmail] = useState('');
-  const [backupEmail, setBackupEmail] = useState('');
+  const [backupEmail, setBackupEmail] = useState('sanojhardware@gmail.com');
   const [backupFromDate, setBackupFromDate] = useState('');
   const [backupToDate, setBackupToDate] = useState('');
   const [backupEnabled, setBackupEnabled] = useState(false);
@@ -313,7 +313,7 @@ export function Settings({ currentUser }: SettingsProps = {}) {
       setShopAddress(settingData.address || '');
       setShopPhone(settingData.phone || '');
       setShopEmail(settingData.email || '');
-      setBackupEmail(settingData.backup_email || '');
+      setBackupEmail(settingData.backup_email || 'sanojhardware@gmail.com');
       setBackupEnabled(settingData.backup_enabled === true || settingData.backup_enabled === 1 || false);
       setBackupIntervalHours(settingData.backup_interval_hours || 6);
       setLogoPath(settingData.logo_path || '');
@@ -1153,7 +1153,7 @@ export function Settings({ currentUser }: SettingsProps = {}) {
                 </div>
 
                 <div className="text-[10px] font-black text-slate-500 bg-[#DAA520]/5 border border-[#DAA520]/10 p-3.5 rounded-2xl text-center">
-                  Destination Email: <span className="text-[#DAA520] font-black">{backupEmail || shopEmail || 'muthuwadigehardware@gmail.com'}</span>
+                  Destination Email: <span className="text-[#DAA520] font-black">{backupEmail || shopEmail || 'sanojhardware@gmail.com'}</span>
                 </div>
 
                 <button
@@ -1189,7 +1189,7 @@ export function Settings({ currentUser }: SettingsProps = {}) {
                       type="email"
                       value={smtpUser}
                       onChange={e => setSmtpUser(e.target.value)}
-                      placeholder="e.g. muthuwadigehardware@gmail.com"
+                      placeholder="e.g. sanojhardware@gmail.com"
                       className="w-full px-4 py-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#DAA520] font-bold text-xs text-[#464646]"
                     />
                   </div>
@@ -1308,7 +1308,7 @@ export function Settings({ currentUser }: SettingsProps = {}) {
                       type="email"
                       value={backupEmail}
                       onChange={e => setBackupEmail(e.target.value)}
-                      placeholder="e.g. muthuwadigehardware@gmail.com"
+                      placeholder="e.g. sanojhardware@gmail.com"
                       className="w-full px-4 py-3 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-[#DAA520] font-bold text-xs text-[#464646]"
                     />
                   </div>

@@ -579,7 +579,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
     doc.text("No: 80, Mahahunupitiya, Negombo", 15, 27);
-    doc.text("Contact: 077 076 076 7 | muthuwadigehardware@gmail.com", 15, 32);
+    doc.text("Contact: 077 076 076 7 | sanojhardware@gmail.com", 15, 32);
 
     doc.setTextColor(50, 50, 50);
     doc.setFontSize(10);
@@ -795,7 +795,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     doc.setFontSize(9);
     doc.setFont('helvetica', 'normal');
     doc.text("No: 80, Mahahunupitiya, Negombo", 15, 27);
-    doc.text("Contact: 077 076 076 7 | muthuwadigehardware@gmail.com", 15, 32);
+    doc.text("Contact: 077 076 076 7 | sanojhardware@gmail.com", 15, 32);
 
     // Supplier Info
     const sName = ret.supplier_name || ret.supplierName || 'Supplier';
@@ -3501,7 +3501,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                 <div>
                   <h2 className="text-xl font-black text-slate-900 tracking-tight">MUTHUWADIGE HARDWARE</h2>
                   <p className="text-xs text-slate-600 font-bold mt-0.5">No: 80, Mahahunupitiya, Negombo</p>
-                  <p className="text-xs text-slate-600 font-bold">Contact: 077 076 076 7 | muthuwadigehardware@gmail.com</p>
+                  <p className="text-xs text-slate-600 font-bold">Contact: 077 076 076 7 | sanojhardware@gmail.com</p>
                 </div>
                 <div className="text-right">
                   <span className="inline-block px-3 py-1 bg-amber-100 text-amber-900 text-xs font-black uppercase tracking-wider rounded border border-amber-300">

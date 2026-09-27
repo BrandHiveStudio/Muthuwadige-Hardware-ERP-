@@ -409,10 +409,10 @@ const DEFAULT_RUNTIME_SETTINGS = {
   shop_name: 'MUTHUWADIGE HARDWARE',
   address: 'No: 80, Mahahunupitiya, Negombo',
   phone: '077 076 076 7',
-  email: 'muthuwadigehardware@gmail.com',
+  email: 'sanojhardware@gmail.com',
   currency: 'Rs.',
   tax_rate: 0,
-  backup_email: 'muthuwadigehardware@gmail.com',
+  backup_email: 'sanojhardware@gmail.com',
   backup_enabled: 0,
   backup_interval_hours: 6,
   next_invoice_number: 'INV001',
@@ -3071,7 +3071,7 @@ if (!process.env.VERCEL) {
     console.log('[Cron] Running weekly automated Sunday backup at 6:00 PM...');
     try {
       const settings = await getRuntimeSettingsSnapshot();
-      const targetEmail = settings.backup_email || settings.email || 'muthuwadigehardware@gmail.com';
+      const targetEmail = settings.backup_email || settings.email || 'sanojhardware@gmail.com';
       console.log(`[Cron] Weekly Sunday automated backup triggered for target email: ${targetEmail}`);
       await performBackup(targetEmail, 'Auto');
     } catch (err) {
@@ -3109,7 +3109,7 @@ app.post('/api/settings/trigger-backup', async (req, res) => {
   try {
     const { fromDate, toDate, targetEmail } = req.body || {};
     const settings = await getRuntimeSettingsSnapshot();
-    const email = targetEmail || settings.smtp_destination || settings.backup_email || 'muthuwadigehardware@gmail.com';
+    const email = targetEmail || settings.smtp_destination || settings.backup_email || 'sanojhardware@gmail.com';
     const result = await performBackup(email, 'Manual', fromDate, toDate);
     if (result.success) {
       res.json(result);
@@ -3131,7 +3131,7 @@ app.get('/api/trigger-backup', async (req, res) => {
   try {
     const { fromDate, toDate, targetEmail } = req.query || {};
     const settings = await getRuntimeSettingsSnapshot();
-    const email = targetEmail || settings.smtp_destination || settings.backup_email || 'muthuwadigehardware@gmail.com';
+    const email = targetEmail || settings.smtp_destination || settings.backup_email || 'sanojhardware@gmail.com';
     const result = await performBackup(email, 'Manual', fromDate, toDate);
     if (result.success) {
       res.json(result);
@@ -11442,7 +11442,7 @@ app.post('/api/admin/test-smtp', testSmtpHandler);
 app.post('/api/settings/test-notification', async (req, res) => {
   try {
     const settings = await getRuntimeSettingsSnapshot();
-    const email = settings.backup_email || settings.email || 'muthuwadigehardware@gmail.com';
+    const email = settings.backup_email || settings.email || 'sanojhardware@gmail.com';
     const emailText = `Greetings,
 
 This is a test notification from the Muthuwadige Hardware ERP system.
