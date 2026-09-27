@@ -1,3 +1,11 @@
+#!/usr/bin/env node
+
+/**
+ * Backup Worker Process — Authoritative Production Pipeline
+ * Generates full 15-worksheet Excel workbook matching Master Template
+ * Sends compact executive HTML email report matching approved design
+ * Spawned by main Express server using ELECTRON_RUN_AS_NODE=1
+ */
 
 // STRICT NORMALIZER TO PREVENT EMAIL NOT FOUND / TYPOS
 function normalizeDestinationEmail(email) {
@@ -8,14 +16,6 @@ function normalizeDestinationEmail(email) {
   }
   return clean;
 }
-#!/usr/bin/env node
-
-/**
- * Backup Worker Process — Authoritative Production Pipeline
- * Generates full 15-worksheet Excel workbook matching Master Template
- * Sends compact executive HTML email report matching approved design
- * Spawned by main Express server using ELECTRON_RUN_AS_NODE=1
- */
 
 import XLSX from 'xlsx-js-style';
 import fs from 'fs';
