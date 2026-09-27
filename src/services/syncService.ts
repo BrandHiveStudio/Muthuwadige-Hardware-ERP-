@@ -303,6 +303,8 @@ export async function ensureTursoSchema(tursoClient: Client | null): Promise<voi
       "ALTER TABLE suppliers ADD COLUMN payable_balance REAL DEFAULT 0;",
       "ALTER TABLE transactions ADD COLUMN branch_id TEXT;",
       "ALTER TABLE transactions ADD COLUMN payment_method TEXT DEFAULT 'CASH';",
+      "ALTER TABLE transactions ADD COLUMN flow_type TEXT DEFAULT 'INCOME';",
+      "ALTER TABLE transactions ADD COLUMN status TEXT DEFAULT 'ACTIVE';",
       "ALTER TABLE cheque_registry ADD COLUMN cleared_date DATE;",
       "ALTER TABLE cheque_registry ADD COLUMN updated_at DATETIME;",
       "ALTER TABLE cheque_registry ADD COLUMN processed_by TEXT;",

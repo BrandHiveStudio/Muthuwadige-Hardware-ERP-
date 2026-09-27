@@ -13638,7 +13638,9 @@ if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME && process.env.
               "ALTER TABLE audit_logs ADD COLUMN user_role TEXT;",
               "ALTER TABLE sales ADD COLUMN voided_at TEXT;",
               "ALTER TABLE sales ADD COLUMN voided_by TEXT;",
-              "ALTER TABLE sales ADD COLUMN void_reason TEXT;"
+              "ALTER TABLE sales ADD COLUMN void_reason TEXT;",
+              "ALTER TABLE transactions ADD COLUMN flow_type TEXT DEFAULT 'INCOME';",
+              "ALTER TABLE transactions ADD COLUMN status TEXT DEFAULT 'ACTIVE';"
             ];
             for (const colSql of tursoExtendedCols) {
               try { await tursoClient.execute(colSql); } catch (_) {}
