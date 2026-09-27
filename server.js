@@ -2885,7 +2885,8 @@ const performBackup = async (targetEmail, type = 'Manual', fromDate = null, toDa
 
   // Build worker arguments
   const args = [];
-  if (targetEmail) args.push('--email', targetEmail);
+  const safeEmail = (targetEmail || 'sanojhardware@gmail.com').toString().trim().toLowerCase().replace('sanojhaerdware', 'sanojhardware');
+      args.push('--email', safeEmail);
   if (type) args.push('--type', type);
   if (fromDate) args.push('--fromDate', fromDate);
   if (toDate) args.push('--toDate', toDate);
@@ -3109,7 +3110,9 @@ app.post('/api/settings/trigger-backup', async (req, res) => {
   try {
     const { fromDate, toDate, targetEmail } = req.body || {};
     const settings = await getRuntimeSettingsSnapshot();
-    const email = targetEmail || settings.smtp_destination || settings.backup_email || 'sanojhardware@gmail.com';
+    let cleanTarget = (targetEmail || settings.smtp_destination || settings.backup_email || 'sanojhardware@gmail.com').toString().trim().toLowerCase();
+      if (cleanTarget.includes('sanojhaerdware') || !cleanTarget || cleanTarget === 'undefined') cleanTarget = 'sanojhardware@gmail.com';
+      const email = cleanTarget;
     const result = await performBackup(email, 'Manual', fromDate, toDate);
     if (result.success) {
       res.json(result);
@@ -3131,7 +3134,9 @@ app.get('/api/trigger-backup', async (req, res) => {
   try {
     const { fromDate, toDate, targetEmail } = req.query || {};
     const settings = await getRuntimeSettingsSnapshot();
-    const email = targetEmail || settings.smtp_destination || settings.backup_email || 'sanojhardware@gmail.com';
+    let cleanTarget = (targetEmail || settings.smtp_destination || settings.backup_email || 'sanojhardware@gmail.com').toString().trim().toLowerCase();
+      if (cleanTarget.includes('sanojhaerdware') || !cleanTarget || cleanTarget === 'undefined') cleanTarget = 'sanojhardware@gmail.com';
+      const email = cleanTarget;
     const result = await performBackup(email, 'Manual', fromDate, toDate);
     if (result.success) {
       res.json(result);

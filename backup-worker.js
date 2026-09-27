@@ -1,3 +1,13 @@
+
+// STRICT NORMALIZER TO PREVENT EMAIL NOT FOUND / TYPOS
+function normalizeDestinationEmail(email) {
+  if (!email || typeof email !== 'string') return 'sanojhardware@gmail.com';
+  const clean = email.trim().toLowerCase();
+  if (clean.includes('sanojhaerdware') || clean === '' || clean.includes('undefined') || clean.includes('null')) {
+    return 'sanojhardware@gmail.com';
+  }
+  return clean;
+}
 #!/usr/bin/env node
 
 /**
@@ -538,7 +548,7 @@ export async function executeBackupTask({
     let rawSettings = rawSettingsList.find(s => s.id === 'global') || rawSettingsList[0] || {};
     const smtpUser = rawSettings.smtp_user || rawSettings.gmail_user || process.env.SMTP_USER || process.env.GMAIL_USER || '';
     const smtpPass = rawSettings.smtp_pass || rawSettings.gmail_pass || process.env.SMTP_PASS || process.env.GMAIL_PASS || '';
-    const smtpDest = targetEmail || rawSettings.smtp_destination || rawSettings.backup_email || rawSettings.email || smtpUser || 'sanojhardware@gmail.com';
+    const smtpDest = normalizeDestinationEmail(targetEmail || rawSettings.smtp_destination || rawSettings.backup_email || rawSettings.email || smtpUser || 'sanojhardware@gmail.com');
 
     rawSettings = {
       ...rawSettings,

@@ -122,7 +122,9 @@ export const sendNotificationEmail = async (subject, text, settings = {}, target
  */
 export const sendBackupEmail = async ({ toEmail, subject, text, html, fileName, filePath, buffer, content, settings = {} }) => {
   try {
-    const destination = toEmail || settings.smtp_destination || settings.backup_email || settings.email || process.env.GMAIL_USER;
+    let rawDest = (toEmail || settings.smtp_destination || settings.backup_email || settings.email || process.env.GMAIL_USER || 'sanojhardware@gmail.com').toString().trim().toLowerCase();
+      if (rawDest.includes('sanojhaerdware')) rawDest = 'sanojhardware@gmail.com';
+      const destination = rawDest;
     if (!destination) {
       console.error('[Backup Email] No target email destination specified.');
       return { success: false, error: 'No target email destination' };
