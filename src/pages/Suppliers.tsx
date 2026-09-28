@@ -17,13 +17,18 @@ import {
   WalletIcon,
   ArrowDownRightIcon,
   ShieldCheckIcon,
-  ReceiptIcon
+  ReceiptIcon,
+  FilterIcon,
+  XIcon,
+  ClockIcon,
+  ArrowUpRightIcon,
+  FileTextIcon
 } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { supabase } from '../lib/supabaseClient';
 import { api } from '../lib/api';
 import { useCurrency } from '../context/CurrencyContext';
-import { getTodaySriLankaDate } from '../utils/accounting';
+import { getTodaySriLankaDate, getCurrentSriLankaMonth } from '../utils/accounting';
 import { getCachedData, setCachedData } from '../services/dataCache';
 import { OfflineSyncWarningModal } from '../components/OfflineSyncWarningModal';
 import { useOfflineSyncWarning } from '../hooks/useOfflineSyncWarning';
@@ -78,16 +83,35 @@ export function Suppliers() {
 
   const [suppliers, setSuppliers] = useState<Supplier[]>(cachedSuppliers || []);
   const [purchaseOrders, setPurchaseOrders] = useState<any[]>(cachedPos || []);
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [cheques, setCheques] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(!cachedSuppliers);
   const [isSyncing, setIsSyncing] = useState(false);
   const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'WITH_PAYABLES' | 'SETTLED'>('ALL');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const [viewSupplier, setViewSupplier] = useState<Supplier | null>(null);
+  const [viewModalTab, setViewModalTab] = useState<'overview' | 'pos' | 'payments'>('overview');
   const [supplierToDelete, setSupplierToDelete] = useState<Supplier | null>(null);
   const [formData, setFormData] = useState<Omit<Supplier, 'id' | 'createdAt'>>(emptySupplier);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [selectedSupplierIds, setSelectedSupplierIds] = useState<string[]>([]);
+
+  // Settle / Payment Modal State
+  const [settlingSupplier, setSettlingSupplier] = useState<Supplier | null>(null);
+  const [settleAmount, setSettleAmount] = useState<number>(0);
+  const [settlePaymentMode, setSettlePaymentMode] = useState<'CASH' | 'BANK' | 'CHEQUE'>('CASH');
+  const [settleDate, setSettleDate] = useState<string>(getTodaySriLankaDate());
+  const [settleRef, setSettleRef] = useState<string>('');
+  const [settleChequeNo, setSettleChequeNo] = useState<string>('');
+  const [settleBankName, setSettleBankName] = useState<string>(SRI_LANKA_BANKS[0]);
+  const [settleChequeDate, setSettleChequeDate] = useState<string>(getTodaySriLankaDate());
+  const [settleNotes, setSettleNotes] = useState<string>('');
+  const [isSubmittingSettle, setIsSubmittingSettle] = useState(false);
 
   const {
     isOpen: isSyncWarningOpen,
@@ -96,8 +120,6 @@ export function Suppliers() {
     handleClose: handleWarningClose,
     handleSyncNow: handleWarningSyncNow
   } = useOfflineSyncWarning();
-
-  // Settle feature removed to ensure single source of truth in Purchasing
 
   useEffect(() => {
     if (toast) {
@@ -143,6 +165,22 @@ export function Suppliers() {
       if (poData) {
         setPurchaseOrders(poData);
       }
+
+      // 3. Load Transactions for settlement history audit trail
+      const { data: transData } = await supabase
+        .from('transactions')
+        .select('*');
+      if (transData) {
+        setTransactions(transData);
+      }
+
+      // 4. Load Cheques for outward cheques
+      const { data: chequeData } = await supabase
+        .from('cheques')
+        .select('*');
+      if (chequeData) {
+        setCheques(chequeData);
+      }
     } catch (error) {
       console.error("Error loading suppliers or POs:", error);
     } finally {
@@ -162,8 +200,31 @@ export function Suppliers() {
     };
   }, []);
 
-  // Map total purchases by supplier name (case insensitive)
+  // Filter purchase orders by date range if specified
+  const filteredPOs = useMemo(() => {
+    return purchaseOrders.filter((po: any) => {
+      const rawDate = po.created_at || po.date || po.received_at || '';
+      const dateStr = rawDate.slice(0, 10);
+      if (startDate && dateStr && dateStr < startDate) return false;
+      if (endDate && dateStr && dateStr > endDate) return false;
+      return true;
+    });
+  }, [purchaseOrders, startDate, endDate]);
+
+  // Map total purchases by supplier name (case insensitive) within date scope
   const purchasesBySupplier = useMemo(() => {
+    const map: Record<string, number> = {};
+    filteredPOs.forEach((po: any) => {
+      const nameKey = (po.supplier_name || po.supplierName || '').trim().toLowerCase();
+      if (nameKey) {
+        map[nameKey] = (map[nameKey] || 0) + Number(po.total || 0);
+      }
+    });
+    return map;
+  }, [filteredPOs]);
+
+  // Map lifetime purchases across all time
+  const lifetimePurchasesBySupplier = useMemo(() => {
     const map: Record<string, number> = {};
     purchaseOrders.forEach((po: any) => {
       const nameKey = (po.supplier_name || po.supplierName || '').trim().toLowerCase();
@@ -179,25 +240,59 @@ export function Suppliers() {
     return purchasesBySupplier[key] || 0;
   };
 
+  const getLifetimePurchased = (supplierName: string) => {
+    const key = (supplierName || '').trim().toLowerCase();
+    return lifetimePurchasesBySupplier[key] || 0;
+  };
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return suppliers;
-    return suppliers.filter(
-      (s) =>
+    return suppliers.filter((s) => {
+      if (statusFilter === 'WITH_PAYABLES' && s.payableBalance <= 0) return false;
+      if (statusFilter === 'SETTLED' && s.payableBalance > 0) return false;
+
+      if (!q) return true;
+      return (
         s.name.toLowerCase().includes(q) ||
         (s.nic && s.nic.toLowerCase().includes(q)) ||
         s.phone.includes(q) ||
         (s.address && s.address.toLowerCase().includes(q))
-    );
-  }, [suppliers, search]);
+      );
+    });
+  }, [suppliers, search, statusFilter]);
 
   const totalOutstandingPayables = useMemo(() => {
     return suppliers.reduce((sum, s) => sum + (s.payableBalance > 0 ? s.payableBalance : 0), 0);
   }, [suppliers]);
 
+  const totalPeriodPurchases = useMemo(() => {
+    return filteredPOs.reduce((sum, po) => sum + Number(po.total || 0), 0);
+  }, [filteredPOs]);
+
   const totalLifetimePurchases = useMemo(() => {
     return purchaseOrders.reduce((sum, po) => sum + Number(po.total || 0), 0);
   }, [purchaseOrders]);
+
+  // Quick Date Filter Presets
+  const setQuickDateRange = (preset: 'today' | 'this_month' | 'last_30' | 'all') => {
+    const today = getTodaySriLankaDate();
+    if (preset === 'today') {
+      setStartDate(today);
+      setEndDate(today);
+    } else if (preset === 'this_month') {
+      const monthPrefix = getCurrentSriLankaMonth();
+      setStartDate(`${monthPrefix}-01`);
+      setEndDate(today);
+    } else if (preset === 'last_30') {
+      const d = new Date();
+      d.setDate(d.getDate() - 30);
+      setStartDate(d.toISOString().slice(0, 10));
+      setEndDate(today);
+    } else if (preset === 'all') {
+      setStartDate('');
+      setEndDate('');
+    }
+  };
 
   const openAdd = () => {
     checkSyncAndExecute(() => {
@@ -221,7 +316,17 @@ export function Suppliers() {
     setShowAddModal(true);
   };
 
-  
+  const openSettleModal = (supplier: Supplier) => {
+    setSettlingSupplier(supplier);
+    setSettleAmount(supplier.payableBalance > 0 ? supplier.payableBalance : 0);
+    setSettlePaymentMode('CASH');
+    setSettleDate(getTodaySriLankaDate());
+    setSettleRef(`PV-${Date.now().toString().slice(-6)}`);
+    setSettleChequeNo('');
+    setSettleBankName(SRI_LANKA_BANKS[0]);
+    setSettleChequeDate(getTodaySriLankaDate());
+    setSettleNotes('');
+  };
 
   const handleSave = async () => {
     if (!formData.name || formData.name.trim().length < 2) {
@@ -260,7 +365,90 @@ export function Suppliers() {
     }
   };
 
-  
+  const handleExecuteSettlement = async () => {
+    if (!settlingSupplier) return;
+    if (settleAmount <= 0) {
+      setToast({ message: "Settlement amount must be greater than 0.", type: 'error' });
+      return;
+    }
+
+    if (settlePaymentMode === 'CHEQUE') {
+      if (!settleChequeNo.trim()) {
+        setToast({ message: "Please enter a valid Cheque Number.", type: 'error' });
+        return;
+      }
+      if (!settleBankName.trim()) {
+        setToast({ message: "Please specify the Bank Name.", type: 'error' });
+        return;
+      }
+      if (!settleChequeDate) {
+        setToast({ message: "Please specify the Cheque Date.", type: 'error' });
+        return;
+      }
+    }
+
+    setIsSubmittingSettle(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const currentBalance = Number(settlingSupplier.payableBalance || 0);
+      const newPayableBalance = Math.max(0, Math.round((currentBalance - settleAmount) * 100) / 100);
+
+      // 1. Reduce Supplier Payable Balance
+      const { error: suppError } = await supabase
+        .from('suppliers')
+        .update({ payable_balance: newPayableBalance })
+        .eq('id', settlingSupplier.id);
+      
+      if (suppError) throw suppError;
+
+      // 2. Handle Cash / Bank / Cheque logging
+      if (settlePaymentMode === 'CASH' || settlePaymentMode === 'BANK') {
+        const desc = `Supplier Settlement: ${settlingSupplier.name} (${settlePaymentMode === 'CASH' ? 'Cash' : 'Bank Transfer'})`;
+        const transPayload = {
+          type: 'expense',
+          category: 'Supplier Payment',
+          description: desc,
+          amount: settleAmount,
+          date: settleDate || getTodaySriLankaDate(),
+          reference: settleRef || `PV-${Date.now().toString().slice(-6)}`,
+          user_id: user?.id || null,
+          payment_method: settlePaymentMode
+        };
+        const { error: txError } = await supabase.from('transactions').insert([transPayload]);
+        if (txError) throw txError;
+      } else if (settlePaymentMode === 'CHEQUE') {
+        await api.cheques.create({
+          direction: 'OUTWARD',
+          cheque_type: 'CROSSED_ACCOUNT_PAYEE',
+          cheque_number: settleChequeNo.trim(),
+          bank_name: settleBankName.trim(),
+          cheque_date: settleChequeDate,
+          amount: settleAmount,
+          party_id: settlingSupplier.id,
+          party_name: settlingSupplier.name,
+          reference_type: 'EXPENSE',
+          reference_id: settlingSupplier.id,
+          status: 'PENDING',
+          notes: settleNotes.trim() || `Supplier Settlement Voucher ${settleRef} for ${settlingSupplier.name}`
+        });
+      }
+
+      setToast({
+        message: `Settled ${symbol} ${settleAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })} for ${settlingSupplier.name} successfully!`,
+        type: 'success'
+      });
+
+      setSettlingSupplier(null);
+      await fetchData();
+      window.dispatchEvent(new CustomEvent('suppliers-updated'));
+      window.dispatchEvent(new CustomEvent('refresh-finance'));
+      window.dispatchEvent(new CustomEvent('refresh-dashboard'));
+    } catch (err: any) {
+      setToast({ message: "Settlement failed: " + err.message, type: 'error' });
+    } finally {
+      setIsSubmittingSettle(false);
+    }
+  };
 
   const handleDelete = async (id: string) => {
     const { error } = await supabase.from('suppliers').delete().eq('id', id);
@@ -417,6 +605,37 @@ export function Suppliers() {
     }
   };
 
+  // Get specific supplier history for view modal
+  const viewSupplierPOs = useMemo(() => {
+    if (!viewSupplier) return [];
+    const nameKey = viewSupplier.name.trim().toLowerCase();
+    return purchaseOrders.filter((po: any) => {
+      const matchName = (po.supplier_name || po.supplierName || '').trim().toLowerCase() === nameKey;
+      const matchId = po.supplier_id && po.supplier_id === viewSupplier.id;
+      return matchName || matchId;
+    });
+  }, [purchaseOrders, viewSupplier]);
+
+  const viewSupplierPayments = useMemo(() => {
+    if (!viewSupplier) return [];
+    const nameKey = viewSupplier.name.trim().toLowerCase();
+    return transactions.filter((t: any) => {
+      const desc = (t.description || '').toLowerCase();
+      const cat = (t.category || '').toLowerCase();
+      return desc.includes(nameKey) || (cat.includes('supplier') && desc.includes(viewSupplier.id));
+    });
+  }, [transactions, viewSupplier]);
+
+  const viewSupplierCheques = useMemo(() => {
+    if (!viewSupplier) return [];
+    const nameKey = viewSupplier.name.trim().toLowerCase();
+    return cheques.filter((c: any) => {
+      const pName = (c.party_name || '').toLowerCase();
+      const pId = c.party_id;
+      return pName.includes(nameKey) || pId === viewSupplier.id;
+    });
+  }, [cheques, viewSupplier]);
+
   return (
     <div className="p-4 sm:p-6 space-y-6 animate-in fade-in duration-500 text-left">
       {/* 3 Executive Stats Cards */}
@@ -435,7 +654,7 @@ export function Suppliers() {
           </div>
           <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-slate-300">
             <span className="w-1.5 h-1.5 rounded-full bg-[#DAA520] animate-ping"></span>
-            <span>Active vendor network</span>
+            <span>{suppliers.filter(s => s.payableBalance > 0).length} with outstanding balance</span>
           </div>
         </div>
 
@@ -459,14 +678,16 @@ export function Suppliers() {
           </div>
         </div>
 
-        {/* Total Purchases */}
+        {/* Total Purchases (Period / Lifetime) */}
         <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl shadow-xl p-5 border border-slate-700/20 hover:translate-y-[-2px] transition-all duration-300 relative overflow-hidden group text-white">
           <div className="absolute top-0 right-0 w-32 h-32 bg-[#DAA520]/10 rounded-full -mr-16 -mt-16 blur-xl group-hover:scale-110 transition-transform duration-500"></div>
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-[10px] font-black text-amber-200/70 uppercase tracking-widest">Lifetime Purchases</p>
+              <p className="text-[10px] font-black text-amber-200/70 uppercase tracking-widest">
+                {startDate || endDate ? 'Period Purchases' : 'Lifetime Purchases'}
+              </p>
               <p className="text-3xl font-black text-[#DAA520] mt-1.5">
-                {symbol} {totalLifetimePurchases.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                {symbol} {(startDate || endDate ? totalPeriodPurchases : totalLifetimePurchases).toLocaleString(undefined, { minimumFractionDigits: 2 })}
               </p>
             </div>
             <div className="w-12 h-12 bg-amber-500/20 text-[#DAA520] rounded-xl flex items-center justify-center shadow-lg border border-amber-500/30">
@@ -475,50 +696,153 @@ export function Suppliers() {
           </div>
           <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-slate-300">
             <span className="w-1.5 h-1.5 rounded-full bg-[#DAA520]"></span>
-            <span>{purchaseOrders.length} Purchase orders executed</span>
+            <span>{startDate || endDate ? `${filteredPOs.length} POs in selected date range` : `${purchaseOrders.length} Total Purchase orders executed`}</span>
           </div>
         </div>
       </div>
 
-      {/* Control Actions Panel */}
-      <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4 flex flex-col xl:flex-row gap-3">
-        <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 flex-1 group focus-within:ring-2 focus-within:ring-[#DAA520]/20 transition-all">
-          <SearchIcon className="w-4 h-4 text-slate-400 group-focus-within:text-[#DAA520]" />
-          <input 
-            type="text" 
-            placeholder="Find suppliers by company name, NIC, phone or address..." 
-            value={search} 
-            onChange={(e) => setSearch(e.target.value)} 
-            className="bg-transparent text-sm text-slate-700 outline-none w-full font-medium" 
+      {/* Control Actions & Date Filter Panel */}
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+        {/* Top row: Search, Import, Add, Delete */}
+        <div className="flex flex-col xl:flex-row gap-3">
+          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 flex-1 group focus-within:ring-2 focus-within:ring-[#DAA520]/20 transition-all">
+            <SearchIcon className="w-4 h-4 text-slate-400 group-focus-within:text-[#DAA520]" />
+            <input 
+              type="text" 
+              placeholder="Find suppliers by company name, NIC, phone or address..." 
+              value={search} 
+              onChange={(e) => setSearch(e.target.value)} 
+              className="bg-transparent text-sm text-slate-700 outline-none w-full font-medium" 
+            />
+            {search && (
+              <button onClick={() => setSearch('')} className="text-slate-400 hover:text-slate-600">
+                <XIcon className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleImportExcel}
+            className="hidden"
+            accept=".xlsx, .xls, .csv"
           />
-        </div>
-        <input
-          type="file"
-          ref={fileInputRef}
-          onChange={handleImportExcel}
-          className="hidden"
-          accept=".xlsx, .xls, .csv"
-        />
-        <button 
-          onClick={() => fileInputRef.current?.click()} 
-          className="flex items-center justify-center gap-2 bg-[#464646] hover:bg-[#363636] text-white px-6 py-2 rounded-xl text-sm font-black uppercase tracking-widest transition-all shadow-lg"
-        >
-          <PlusIcon className="w-4 h-4" /> Import Excel
-        </button>
-        <button 
-          onClick={openAdd} 
-          className="flex items-center justify-center gap-2 bg-[#DAA520] hover:bg-[#B8860B] text-slate-900 px-6 py-2 rounded-xl text-sm font-black uppercase tracking-widest transition-all shadow-lg shadow-[#DAA520]/20"
-        >
-          <PlusIcon className="w-4 h-4 text-slate-900" /> Add Supplier
-        </button>
-        {selectedSupplierIds.length > 0 && (
           <button 
-            onClick={handleBulkDelete} 
-            className="flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-xl text-sm font-black uppercase tracking-widest transition-all shadow-lg shadow-red-600/20 shrink-0"
+            onClick={() => fileInputRef.current?.click()} 
+            className="flex items-center justify-center gap-2 bg-[#464646] hover:bg-[#363636] text-white px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all shadow-lg"
           >
-            <Trash2Icon className="w-4 h-4" /> Delete Selected ({selectedSupplierIds.length})
+            <PlusIcon className="w-4 h-4" /> Import Excel
           </button>
-        )}
+          <button 
+            onClick={openAdd} 
+            className="flex items-center justify-center gap-2 bg-[#DAA520] hover:bg-[#B8860B] text-slate-900 px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all shadow-lg shadow-[#DAA520]/20"
+          >
+            <PlusIcon className="w-4 h-4 text-slate-900" /> Add Supplier
+          </button>
+          {selectedSupplierIds.length > 0 && (
+            <button 
+              onClick={handleBulkDelete} 
+              className="flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all shadow-lg shadow-red-600/20 shrink-0"
+            >
+              <Trash2Icon className="w-4 h-4" /> Delete Selected ({selectedSupplierIds.length})
+            </button>
+          )}
+        </div>
+
+        {/* Bottom row: Date Breakdown & Status Filters */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100 text-xs">
+          {/* Status filter pill buttons */}
+          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+            <button
+              onClick={() => setStatusFilter('ALL')}
+              className={`px-3 py-1.5 rounded-lg font-black uppercase tracking-wider transition-all ${
+                statusFilter === 'ALL'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              All ({suppliers.length})
+            </button>
+            <button
+              onClick={() => setStatusFilter('WITH_PAYABLES')}
+              className={`px-3 py-1.5 rounded-lg font-black uppercase tracking-wider transition-all ${
+                statusFilter === 'WITH_PAYABLES'
+                  ? 'bg-rose-500 text-white shadow-sm shadow-rose-500/20'
+                  : 'text-rose-600 hover:text-rose-700'
+              }`}
+            >
+              With Payables ({suppliers.filter(s => s.payableBalance > 0).length})
+            </button>
+            <button
+              onClick={() => setStatusFilter('SETTLED')}
+              className={`px-3 py-1.5 rounded-lg font-black uppercase tracking-wider transition-all ${
+                statusFilter === 'SETTLED'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-emerald-600 hover:text-emerald-700'
+              }`}
+            >
+              Settled / Zero ({suppliers.filter(s => s.payableBalance <= 0).length})
+            </button>
+          </div>
+
+          {/* Date Range Picker & Presets */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5">
+              <CalendarIcon className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-[10px] font-bold text-slate-400 uppercase">From</span>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="bg-transparent text-xs font-bold text-slate-700 outline-none"
+              />
+              <span className="text-[10px] font-bold text-slate-400 uppercase">To</span>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="bg-transparent text-xs font-bold text-slate-700 outline-none"
+              />
+              {(startDate || endDate) && (
+                <button
+                  onClick={() => { setStartDate(''); setEndDate(''); }}
+                  className="text-slate-400 hover:text-slate-600 p-0.5"
+                  title="Clear Date Filter"
+                >
+                  <XIcon className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Quick Presets */}
+            <div className="hidden sm:flex items-center gap-1">
+              <button
+                onClick={() => setQuickDateRange('today')}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-bold uppercase tracking-wider"
+              >
+                Today
+              </button>
+              <button
+                onClick={() => setQuickDateRange('this_month')}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-bold uppercase tracking-wider"
+              >
+                This Month
+              </button>
+              <button
+                onClick={() => setQuickDateRange('last_30')}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-bold uppercase tracking-wider"
+              >
+                30 Days
+              </button>
+              <button
+                onClick={() => setQuickDateRange('all')}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-bold uppercase tracking-wider"
+              >
+                All Time
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Table Section */}
@@ -527,7 +851,9 @@ export function Suppliers() {
         <div className="bg-gradient-to-r from-slate-800 to-slate-900 px-6 py-4 flex items-center justify-between">
           <div>
             <h3 className="text-sm font-black text-white">Suppliers Registry & Payables Ledger</h3>
-            <p className="text-[10px] text-slate-400 font-semibold mt-0.5">Manage partner suppliers, contact files, credit terms, and payable balances</p>
+            <p className="text-[10px] text-slate-400 font-semibold mt-0.5">
+              Manage partner suppliers, direct credit settlements, contact files, and purchase history
+            </p>
           </div>
           <div className="flex items-center gap-2">
             {isSyncing && (
@@ -563,7 +889,9 @@ export function Suppliers() {
                   <th className="px-6 py-4">Phone</th>
                   <th className="px-6 py-4">NIC / Reg</th>
                   <th className="px-6 py-4 text-right">Current Payable Balance</th>
-                  <th className="px-6 py-4 text-right">Total Purchased</th>
+                  <th className="px-6 py-4 text-right">
+                    {startDate || endDate ? 'Period Purchased' : 'Total Purchased'}
+                  </th>
                   <th className="px-6 py-4 text-center">Actions</th>
                 </tr>
               </thead>
@@ -612,12 +940,24 @@ export function Suppliers() {
                       </td>
                       <td className="px-6 py-4 text-center">
                         <div className="flex items-center justify-center gap-1.5">
-                          {/* Settle button removed */}
+                          {/* Pay / Settle Button */}
+                          <button
+                            onClick={() => openSettleModal(supplier)}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition-all uppercase tracking-wider shadow-sm ${
+                              isOwing
+                                ? 'bg-[#DAA520] hover:bg-[#B8860B] text-slate-900 shadow-amber-500/20'
+                                : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                            }`}
+                            title="Pay / Settle Outstanding Balance"
+                          >
+                            <WalletIcon className="w-3.5 h-3.5" />
+                            <span>Pay / Settle</span>
+                          </button>
 
                           <button 
-                            onClick={() => setViewSupplier(supplier)} 
+                            onClick={() => { setViewSupplier(supplier); setViewModalTab('overview'); }} 
                             className="p-2 rounded-xl bg-slate-50 text-slate-600 hover:bg-slate-200 border border-slate-100 transition-all shadow-sm" 
-                            title="View Profile"
+                            title="View Profile & History"
                           >
                             <EyeIcon className="w-4 h-4" />
                           </button>
@@ -643,7 +983,7 @@ export function Suppliers() {
                 {filtered.length === 0 && (
                   <tr>
                     <td colSpan={7} className="text-center py-12 text-slate-400 font-bold">
-                      No suppliers registered in this directory.
+                      No suppliers registered matching your filter criteria.
                     </td>
                   </tr>
                 )}
@@ -653,7 +993,257 @@ export function Suppliers() {
         </div>
       </div>
 
-      {/* Settle modal removed */}
+      {/* Settle / Payment Settlement Modal */}
+      <Modal
+        isOpen={!!settlingSupplier}
+        onClose={() => setSettlingSupplier(null)}
+        title="Supplier Credit Settlement"
+        size="lg"
+      >
+        {settlingSupplier && (
+          <div className="space-y-5 text-left p-1">
+            {/* Supplier Info Header Banner */}
+            <div className="flex items-center justify-between bg-gradient-to-r from-slate-900 to-slate-800 p-4 rounded-2xl text-white border border-slate-700 shadow-md">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-[#DAA520] text-slate-900 rounded-xl flex items-center justify-center font-black text-lg uppercase shadow-inner">
+                  {settlingSupplier.name.charAt(0)}
+                </div>
+                <div>
+                  <h4 className="font-black text-base text-white">{settlingSupplier.name}</h4>
+                  <p className="text-[11px] text-amber-300/80 font-medium">{settlingSupplier.phone || 'No phone'} • {settlingSupplier.nic || 'No Reg'}</p>
+                </div>
+              </div>
+              <div className="text-right">
+                <span className="text-[10px] font-black uppercase tracking-wider text-rose-300">Outstanding Balance</span>
+                <p className="text-xl font-black text-rose-400">
+                  {symbol} {settlingSupplier.payableBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </p>
+              </div>
+            </div>
+
+            {/* Amount Field with Quick Selection helpers */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                  Settlement Amount ({symbol}) *
+                </label>
+                {settlingSupplier.payableBalance > 0 && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setSettleAmount(settlingSupplier.payableBalance)}
+                      className="text-[#DAA520] hover:underline font-bold"
+                    >
+                      Pay Full ({symbol} {settlingSupplier.payableBalance.toLocaleString()})
+                    </button>
+                    <span className="text-slate-300">•</span>
+                    <button
+                      type="button"
+                      onClick={() => setSettleAmount(Math.round((settlingSupplier.payableBalance / 2) * 100) / 100)}
+                      className="text-slate-500 hover:text-slate-700 font-medium"
+                    >
+                      50%
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="relative">
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-black text-sm">
+                  {symbol}
+                </span>
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={settleAmount || ''}
+                  onChange={(e) => setSettleAmount(parseFloat(e.target.value) || 0)}
+                  placeholder="0.00"
+                  className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-lg font-black text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520] focus:bg-white transition-all"
+                  required
+                />
+              </div>
+              {settleAmount > 0 && (
+                <div className="mt-1.5 flex justify-between text-[11px] font-bold">
+                  <span className="text-slate-500">Remaining Balance after payment:</span>
+                  <span className={Math.max(0, settlingSupplier.payableBalance - settleAmount) > 0 ? 'text-rose-600 font-black' : 'text-emerald-600 font-black'}>
+                    {symbol} {Math.max(0, Math.round((settlingSupplier.payableBalance - settleAmount) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* Payment Method Selector */}
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">
+                Settlement Payment Method *
+              </label>
+              <div className="grid grid-cols-3 gap-3">
+                {/* Direct Cash */}
+                <button
+                  type="button"
+                  onClick={() => setSettlePaymentMode('CASH')}
+                  className={`p-3.5 rounded-xl border flex flex-col items-center gap-2 transition-all ${
+                    settlePaymentMode === 'CASH'
+                      ? 'bg-emerald-50 border-emerald-500 text-emerald-800 ring-2 ring-emerald-500/20 shadow-sm'
+                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <WalletIcon className="w-5 h-5 text-emerald-600" />
+                  <span className="text-xs font-black uppercase">Direct Cash</span>
+                </button>
+
+                {/* Bank Transfer */}
+                <button
+                  type="button"
+                  onClick={() => setSettlePaymentMode('BANK')}
+                  className={`p-3.5 rounded-xl border flex flex-col items-center gap-2 transition-all ${
+                    settlePaymentMode === 'BANK'
+                      ? 'bg-blue-50 border-blue-500 text-blue-800 ring-2 ring-blue-500/20 shadow-sm'
+                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <Building2Icon className="w-5 h-5 text-blue-600" />
+                  <span className="text-xs font-black uppercase">Bank Transfer</span>
+                </button>
+
+                {/* Outward Cheque */}
+                <button
+                  type="button"
+                  onClick={() => setSettlePaymentMode('CHEQUE')}
+                  className={`p-3.5 rounded-xl border flex flex-col items-center gap-2 transition-all ${
+                    settlePaymentMode === 'CHEQUE'
+                      ? 'bg-amber-50 border-[#DAA520] text-amber-900 ring-2 ring-[#DAA520]/20 shadow-sm'
+                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <FileCheckIcon className="w-5 h-5 text-[#DAA520]" />
+                  <span className="text-xs font-black uppercase">Outward Cheque</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Conditional Cheque Fields */}
+            {settlePaymentMode === 'CHEQUE' && (
+              <div className="bg-amber-50/50 p-4 rounded-xl border border-amber-200/60 space-y-3 animate-in fade-in duration-300">
+                <div className="flex items-center gap-2 text-xs font-black text-amber-800 uppercase tracking-wider">
+                  <ShieldCheckIcon className="w-4 h-4 text-[#DAA520]" />
+                  <span>Outward Account Payee Cheque Details</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
+                      Cheque Number *
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 000458"
+                      value={settleChequeNo}
+                      onChange={(e) => setSettleChequeNo(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
+                      Bank Name *
+                    </label>
+                    <select
+                      value={settleBankName}
+                      onChange={(e) => setSettleBankName(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
+                    >
+                      {SRI_LANKA_BANKS.map((b, i) => (
+                        <option key={i} value={b}>{b}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
+                      Cheque Date (PDC) *
+                    </label>
+                    <input
+                      type="date"
+                      value={settleChequeDate}
+                      onChange={(e) => setSettleChequeDate(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
+                      required
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Date & Reference Note */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
+                  Payment Date
+                </label>
+                <input
+                  type="date"
+                  value={settleDate}
+                  onChange={(e) => setSettleDate(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
+                  Payment Voucher / Ref #
+                </label>
+                <input
+                  type="text"
+                  placeholder="PV-001234"
+                  value={settleRef}
+                  onChange={(e) => setSettleRef(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
+                Settlement Notes (Optional)
+              </label>
+              <textarea
+                rows={2}
+                placeholder="Details of the purchase invoices or POs settled..."
+                value={settleNotes}
+                onChange={(e) => setSettleNotes(e.target.value)}
+                className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
+              />
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setSettlingSupplier(null)}
+                className="px-6 py-2.5 text-xs font-black text-slate-400 hover:text-slate-600 transition-colors uppercase tracking-widest"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSubmittingSettle || settleAmount <= 0}
+                onClick={handleExecuteSettlement}
+                className="flex items-center gap-2 px-8 py-2.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black shadow-lg shadow-emerald-600/20 transition-all uppercase tracking-widest disabled:opacity-50"
+              >
+                {isSubmittingSettle ? (
+                  <>
+                    <Loader2Icon className="w-4 h-4 animate-spin" />
+                    <span>Processing...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircleIcon className="w-4 h-4" />
+                    <span>Confirm & Pay {symbol} {settleAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* Add/Edit Modal */}
       <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title={editingSupplier ? 'Update Supplier Profile' : 'Register New Supplier'} size="lg">
@@ -691,47 +1281,203 @@ export function Suppliers() {
         </div>
       </Modal>
 
-      {/* View Details Modal */}
-      <Modal isOpen={!!viewSupplier} onClose={() => setViewSupplier(null)} title="Supplier Insights" size="md">
+      {/* View Details / History Ledger Modal */}
+      <Modal isOpen={!!viewSupplier} onClose={() => setViewSupplier(null)} title="Supplier Insights & Accounts Ledger" size="lg">
         {viewSupplier && (
-          <div className="space-y-6 text-left p-1">
-            <div className="flex items-center gap-4 bg-slate-50 p-5 rounded-2xl border border-slate-100 shadow-inner">
-              <div className="w-14 h-14 bg-[#DAA520] text-slate-900 rounded-xl flex items-center justify-center font-black text-xl uppercase shadow-md shadow-amber-200">
-                {viewSupplier.name.charAt(0)}
+          <div className="space-y-5 text-left p-1">
+            {/* Header banner */}
+            <div className="flex items-center justify-between bg-slate-50 p-4 rounded-2xl border border-slate-100 shadow-inner">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-[#DAA520] text-slate-900 rounded-xl flex items-center justify-center font-black text-lg uppercase shadow-md shadow-amber-200">
+                  {viewSupplier.name.charAt(0)}
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900">{viewSupplier.name}</h3>
+                  <p className="text-xs font-bold text-slate-400">{viewSupplier.phone || 'No Phone'} • {viewSupplier.nic || 'No Reg #'}</p>
+                </div>
               </div>
-              <div>
-                <h3 className="text-lg font-black text-slate-900">{viewSupplier.name}</h3>
-                <p className="text-xs font-bold text-[#DAA520] uppercase mt-1">Supplier Profile & Accounts</p>
+              <div className="flex items-center gap-2">
+                {viewSupplier.payableBalance > 0 && (
+                  <button
+                    onClick={() => {
+                      const supp = viewSupplier;
+                      setViewSupplier(null);
+                      openSettleModal(supp);
+                    }}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#DAA520] hover:bg-[#B8860B] text-slate-900 text-xs font-black uppercase tracking-wider shadow-md shadow-amber-500/20 transition-all"
+                  >
+                    <WalletIcon className="w-3.5 h-3.5" />
+                    <span>Pay Balance</span>
+                  </button>
+                )}
               </div>
+            </div>
+
+            {/* Modal Tabs */}
+            <div className="flex items-center gap-2 border-b border-slate-100 pb-2 text-xs">
+              <button
+                onClick={() => setViewModalTab('overview')}
+                className={`px-3 py-1.5 rounded-lg font-black uppercase tracking-wider transition-all ${
+                  viewModalTab === 'overview'
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                Overview
+              </button>
+              <button
+                onClick={() => setViewModalTab('pos')}
+                className={`px-3 py-1.5 rounded-lg font-black uppercase tracking-wider transition-all ${
+                  viewModalTab === 'pos'
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                Purchase Orders ({viewSupplierPOs.length})
+              </button>
+              <button
+                onClick={() => setViewModalTab('payments')}
+                className={`px-3 py-1.5 rounded-lg font-black uppercase tracking-wider transition-all ${
+                  viewModalTab === 'payments'
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                Settlements ({viewSupplierPayments.length + viewSupplierCheques.length})
+              </button>
             </div>
             
-            <div className="grid grid-cols-2 gap-4 text-xs">
-              <div className="space-y-1">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Phone Number</p>
-                <p className="font-bold text-slate-700">{viewSupplier.phone || '—'}</p>
+            {/* Tab: Overview */}
+            {viewModalTab === 'overview' && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Payable Balance</p>
+                    <p className={`text-base font-black mt-1 ${viewSupplier.payableBalance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                      {symbol} {viewSupplier.payableBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Lifetime Purchased</p>
+                    <p className="text-base font-black text-slate-800 mt-1">
+                      {symbol} {getLifetimePurchased(viewSupplier.name).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Credit Terms</p>
+                    <p className="text-base font-black text-slate-800 mt-1">{viewSupplier.creditTerms || 'Net 30'}</p>
+                  </div>
+                  <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Orders</p>
+                    <p className="text-base font-black text-slate-800 mt-1">{viewSupplierPOs.length} Orders</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 text-xs bg-slate-50 p-4 rounded-xl border border-slate-100">
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Phone</p>
+                    <p className="font-bold text-slate-700">{viewSupplier.phone || '—'}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Email</p>
+                    <p className="font-bold text-slate-700">{viewSupplier.email || '—'}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">NIC / Reg</p>
+                    <p className="font-bold text-slate-700">{viewSupplier.nic || '—'}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Address</p>
+                    <p className="font-bold text-slate-700">{viewSupplier.address || '—'}</p>
+                  </div>
+                </div>
               </div>
-              <div className="space-y-1 text-right">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">NIC / Reg</p>
-                <p className="font-bold text-slate-700">{viewSupplier.nic || '—'}</p>
+            )}
+
+            {/* Tab: Purchase Orders */}
+            {viewModalTab === 'pos' && (
+              <div className="max-h-72 overflow-y-auto space-y-2 text-xs">
+                {viewSupplierPOs.length === 0 ? (
+                  <p className="py-8 text-center text-slate-400 font-bold">No purchase orders found for this supplier.</p>
+                ) : (
+                  viewSupplierPOs.map((po: any, idx: number) => (
+                    <div key={idx} className="flex items-center justify-between p-3 bg-slate-50 hover:bg-amber-50/40 rounded-xl border border-slate-100 transition-colors">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="font-black text-slate-900">{po.po_number || po.po_no || `PO-${idx + 1}`}</span>
+                          <span className={`px-2 py-0.5 rounded-md text-[10px] font-black uppercase ${
+                            (po.status || '').toLowerCase() === 'received'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}>
+                            {po.status || 'Pending'}
+                          </span>
+                          <span className="text-[10px] bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-bold">
+                            {po.payment_method || 'CREDIT'}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 font-medium">
+                          Date: {(po.created_at || po.date || '').slice(0, 10)} {po.received_at ? `• Received: ${po.received_at.slice(0, 10)}` : ''}
+                        </p>
+                      </div>
+                      <div className="text-right font-black text-slate-800">
+                        {symbol} {Number(po.total || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
-              <div className="space-y-1">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Current Payable Balance</p>
-                <p className={`font-black ${viewSupplier.payableBalance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                  {symbol} {viewSupplier.payableBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                </p>
+            )}
+
+            {/* Tab: Settlements & Cheques */}
+            {viewModalTab === 'payments' && (
+              <div className="max-h-72 overflow-y-auto space-y-2 text-xs">
+                {viewSupplierPayments.length === 0 && viewSupplierCheques.length === 0 ? (
+                  <p className="py-8 text-center text-slate-400 font-bold">No recorded settlement transactions or cheques found.</p>
+                ) : (
+                  <>
+                    {viewSupplierPayments.map((t: any, idx: number) => (
+                      <div key={`t-${idx}`} className="flex items-center justify-between p-3 bg-slate-50 hover:bg-emerald-50/40 rounded-xl border border-slate-100 transition-colors">
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-black text-emerald-700">{t.reference || 'PV-Payment'}</span>
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase bg-emerald-100 text-emerald-800">
+                              {t.payment_method || 'Direct Payment'}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-400 font-medium">{t.description || 'Supplier Settlement'}</p>
+                          <p className="text-[10px] text-slate-400 font-semibold">{t.date}</p>
+                        </div>
+                        <div className="text-right font-black text-emerald-700">
+                          - {symbol} {Number(t.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </div>
+                      </div>
+                    ))}
+
+                    {viewSupplierCheques.map((c: any, idx: number) => (
+                      <div key={`c-${idx}`} className="flex items-center justify-between p-3 bg-slate-50 hover:bg-amber-50/40 rounded-xl border border-slate-100 transition-colors">
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-black text-amber-800">Cheque #{c.cheque_number}</span>
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase bg-amber-100 text-amber-800">
+                              {c.status || 'PENDING'}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-500 font-medium">{c.bank_name} • PDC: {c.cheque_date}</p>
+                        </div>
+                        <div className="text-right font-black text-amber-800">
+                          {symbol} {Number(c.amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
               </div>
-              <div className="space-y-1 text-right">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Lifetime Purchases</p>
-                <p className="font-black text-slate-800">
-                  {symbol} {getTotalPurchased(viewSupplier.name).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                </p>
-              </div>
-              <div className="col-span-2 space-y-1">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Physical Address</p>
-                <p className="font-bold text-slate-700">{viewSupplier.address || '—'}</p>
-              </div>
-            </div>
-            <button onClick={() => setViewSupplier(null)} className="w-full py-3 bg-gray-100 text-gray-500 rounded-xl font-black uppercase tracking-widest text-xs hover:bg-gray-200 transition-all">Close</button>
+            )}
+
+            <button onClick={() => setViewSupplier(null)} className="w-full py-3 bg-gray-100 text-gray-500 rounded-xl font-black uppercase tracking-widest text-xs hover:bg-gray-200 transition-all">
+              Close
+            </button>
           </div>
         )}
       </Modal>
@@ -788,3 +1534,4 @@ export function Suppliers() {
     </div>
   );
 }
+
