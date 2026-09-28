@@ -88,7 +88,7 @@ export function Suppliers() {
   const [isLoading, setIsLoading] = useState(!cachedSuppliers);
   const [isSyncing, setIsSyncing] = useState(false);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'WITH_PAYABLES' | 'SETTLED'>('ALL');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'WITH_PAYABLES' | 'ADVANCES' | 'SETTLED'>('ALL');
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
 
@@ -249,7 +249,8 @@ export function Suppliers() {
     const q = search.trim().toLowerCase();
     return suppliers.filter((s) => {
       if (statusFilter === 'WITH_PAYABLES' && s.payableBalance <= 0) return false;
-      if (statusFilter === 'SETTLED' && s.payableBalance > 0) return false;
+      if (statusFilter === 'ADVANCES' && s.payableBalance >= 0) return false;
+      if (statusFilter === 'SETTLED' && s.payableBalance !== 0) return false;
 
       if (!q) return true;
       return (
@@ -261,8 +262,14 @@ export function Suppliers() {
     });
   }, [suppliers, search, statusFilter]);
 
+  // Sum only positive balances for liabilities
   const totalOutstandingPayables = useMemo(() => {
     return suppliers.reduce((sum, s) => sum + (s.payableBalance > 0 ? s.payableBalance : 0), 0);
+  }, [suppliers]);
+
+  // Sum supplier advance credits
+  const totalSupplierAdvances = useMemo(() => {
+    return suppliers.reduce((sum, s) => sum + (s.payableBalance < 0 ? Math.abs(s.payableBalance) : 0), 0);
   }, [suppliers]);
 
   const totalPeriodPurchases = useMemo(() => {
@@ -318,6 +325,7 @@ export function Suppliers() {
 
   const openSettleModal = (supplier: Supplier) => {
     setSettlingSupplier(supplier);
+    // Suggest payable balance if > 0, otherwise 0 for advance
     setSettleAmount(supplier.payableBalance > 0 ? supplier.payableBalance : 0);
     setSettlePaymentMode('CASH');
     setSettleDate(getTodaySriLankaDate());
@@ -391,9 +399,10 @@ export function Suppliers() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       const currentBalance = Number(settlingSupplier.payableBalance || 0);
-      const newPayableBalance = Math.max(0, Math.round((currentBalance - settleAmount) * 100) / 100);
+      // Support exact negative balance / supplier advance without 0 clamp
+      const newPayableBalance = Math.round((currentBalance - settleAmount) * 100) / 100;
 
-      // 1. Reduce Supplier Payable Balance
+      // 1. Update Supplier Payable Balance (can be negative for advance credit)
       const { error: suppError } = await supabase
         .from('suppliers')
         .update({ payable_balance: newPayableBalance })
@@ -401,11 +410,23 @@ export function Suppliers() {
       
       if (suppError) throw suppError;
 
+      // Format rich audit description distinguishing settlement vs overpayment / advance
+      let desc = '';
+      const modeLabel = settlePaymentMode === 'CASH' ? 'Cash' : (settlePaymentMode === 'BANK' ? 'Bank Transfer' : 'Cheque');
+      if (currentBalance > 0 && settleAmount > currentBalance) {
+        const overpayment = Math.round((settleAmount - currentBalance) * 100) / 100;
+        desc = `Supplier Payment - ${settlingSupplier.name} (Rs. ${currentBalance.toFixed(2)} settled, Rs. ${overpayment.toFixed(2)} Advance / Overpayment) via ${modeLabel}`;
+      } else if (currentBalance <= 0) {
+        desc = `Supplier Advance Payment - ${settlingSupplier.name} (Rs. ${settleAmount.toFixed(2)} Advance) via ${modeLabel}`;
+      } else {
+        desc = `Supplier Settlement: ${settlingSupplier.name} (Rs. ${settleAmount.toFixed(2)}) via ${modeLabel}`;
+      }
+
       // 2. Handle Cash / Bank / Cheque logging
       if (settlePaymentMode === 'CASH' || settlePaymentMode === 'BANK') {
-        const desc = `Supplier Settlement: ${settlingSupplier.name} (${settlePaymentMode === 'CASH' ? 'Cash' : 'Bank Transfer'})`;
         const transPayload = {
           type: 'expense',
+          flow_type: 'EXPENSE',
           category: 'Supplier Payment',
           description: desc,
           amount: settleAmount,
@@ -429,12 +450,16 @@ export function Suppliers() {
           reference_type: 'EXPENSE',
           reference_id: settlingSupplier.id,
           status: 'PENDING',
-          notes: settleNotes.trim() || `Supplier Settlement Voucher ${settleRef} for ${settlingSupplier.name}`
+          notes: settleNotes.trim() || `${desc} [Voucher: ${settleRef}]`
         });
       }
 
+      const balanceMessage = newPayableBalance < 0
+        ? ` (Recorded Advance: ${symbol} ${Math.abs(newPayableBalance).toFixed(2)})`
+        : '';
+
       setToast({
-        message: `Settled ${symbol} ${settleAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })} for ${settlingSupplier.name} successfully!`,
+        message: `Settled ${symbol} ${settleAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })} for ${settlingSupplier.name}${balanceMessage}!`,
         type: 'success'
       });
 
@@ -652,9 +677,16 @@ export function Suppliers() {
               <TruckIcon className="w-6 h-6" />
             </div>
           </div>
-          <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-slate-300">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#DAA520] animate-ping"></span>
-            <span>{suppliers.filter(s => s.payableBalance > 0).length} with outstanding balance</span>
+          <div className="mt-3 flex items-center justify-between text-[11px] font-bold text-slate-300">
+            <div className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#DAA520] animate-ping"></span>
+              <span>{suppliers.filter(s => s.payableBalance > 0).length} with payables</span>
+            </div>
+            {totalSupplierAdvances > 0 && (
+              <span className="text-indigo-300 font-black">
+                {suppliers.filter(s => s.payableBalance < 0).length} with advance
+              </span>
+            )}
           </div>
         </div>
 
@@ -672,9 +704,16 @@ export function Suppliers() {
               <ArrowDownRightIcon className="w-6 h-6 text-rose-300" />
             </div>
           </div>
-          <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-rose-200">
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-400"></span>
-            <span>Vendor credit liabilities</span>
+          <div className="mt-3 flex items-center justify-between text-[11px] font-bold text-rose-200">
+            <div className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-400"></span>
+              <span>Liabilities to vendors</span>
+            </div>
+            {totalSupplierAdvances > 0 && (
+              <span className="text-amber-200 bg-black/20 px-2 py-0.5 rounded-md font-black text-[10px]">
+                Advance Credit: {symbol} {totalSupplierAdvances.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              </span>
+            )}
           </div>
         </div>
 
@@ -774,6 +813,16 @@ export function Suppliers() {
               With Payables ({suppliers.filter(s => s.payableBalance > 0).length})
             </button>
             <button
+              onClick={() => setStatusFilter('ADVANCES')}
+              className={`px-3 py-1.5 rounded-lg font-black uppercase tracking-wider transition-all ${
+                statusFilter === 'ADVANCES'
+                  ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/20'
+                  : 'text-indigo-600 hover:text-indigo-700'
+              }`}
+            >
+              With Advance ({suppliers.filter(s => s.payableBalance < 0).length})
+            </button>
+            <button
               onClick={() => setStatusFilter('SETTLED')}
               className={`px-3 py-1.5 rounded-lg font-black uppercase tracking-wider transition-all ${
                 statusFilter === 'SETTLED'
@@ -781,7 +830,7 @@ export function Suppliers() {
                   : 'text-emerald-600 hover:text-emerald-700'
               }`}
             >
-              Settled / Zero ({suppliers.filter(s => s.payableBalance <= 0).length})
+              Settled / Zero ({suppliers.filter(s => s.payableBalance === 0).length})
             </button>
           </div>
 
@@ -852,7 +901,7 @@ export function Suppliers() {
           <div>
             <h3 className="text-sm font-black text-white">Suppliers Registry & Payables Ledger</h3>
             <p className="text-[10px] text-slate-400 font-semibold mt-0.5">
-              Manage partner suppliers, direct credit settlements, contact files, and purchase history
+              Manage partner suppliers, direct credit settlements, advance payments, and purchase history
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -899,6 +948,7 @@ export function Suppliers() {
                 {filtered.map((supplier) => {
                   const purchasedVal = getTotalPurchased(supplier.name);
                   const isOwing = supplier.payableBalance > 0;
+                  const isAdvance = supplier.payableBalance < 0;
 
                   return (
                     <tr key={supplier.id} className="hover:bg-amber-50/30 transition-colors group">
@@ -928,6 +978,11 @@ export function Suppliers() {
                           <span className="inline-flex items-center gap-1 px-3 py-1 bg-rose-50 text-rose-700 font-black rounded-lg border border-rose-200 text-xs shadow-sm">
                             {symbol} {supplier.payableBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                           </span>
+                        ) : isAdvance ? (
+                          <span className="inline-flex items-center gap-1 px-3 py-1 bg-indigo-50 text-indigo-700 font-black rounded-lg border border-indigo-200 text-xs shadow-sm" title="Supplier Advance / Overpayment">
+                            <ArrowUpRightIcon className="w-3.5 h-3.5 text-indigo-600" />
+                            Advance: {symbol} {Math.abs(supplier.payableBalance).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-3 py-1 bg-emerald-50 text-emerald-700 font-bold rounded-lg border border-emerald-200 text-xs">
                             <CheckCircleIcon className="w-3 h-3 text-emerald-600" />
@@ -948,10 +1003,10 @@ export function Suppliers() {
                                 ? 'bg-[#DAA520] hover:bg-[#B8860B] text-slate-900 shadow-amber-500/20'
                                 : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
                             }`}
-                            title="Pay / Settle Outstanding Balance"
+                            title={isOwing ? "Pay / Settle Outstanding Balance" : "Make Payment / Advance Deposit"}
                           >
                             <WalletIcon className="w-3.5 h-3.5" />
-                            <span>Pay / Settle</span>
+                            <span>{isOwing ? 'Pay / Settle' : 'Pay / Advance'}</span>
                           </button>
 
                           <button 
@@ -997,7 +1052,7 @@ export function Suppliers() {
       <Modal
         isOpen={!!settlingSupplier}
         onClose={() => setSettlingSupplier(null)}
-        title="Supplier Credit Settlement"
+        title={settlingSupplier?.payableBalance && settlingSupplier.payableBalance > 0 ? "Supplier Credit Settlement" : "Supplier Payment / Advance"}
         size="lg"
       >
         {settlingSupplier && (
@@ -1014,9 +1069,13 @@ export function Suppliers() {
                 </div>
               </div>
               <div className="text-right">
-                <span className="text-[10px] font-black uppercase tracking-wider text-rose-300">Outstanding Balance</span>
-                <p className="text-xl font-black text-rose-400">
-                  {symbol} {settlingSupplier.payableBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-300">
+                  {settlingSupplier.payableBalance > 0 ? 'Outstanding Payable' : (settlingSupplier.payableBalance < 0 ? 'Current Advance Credit' : 'Account Status')}
+                </span>
+                <p className={`text-xl font-black ${
+                  settlingSupplier.payableBalance > 0 ? 'text-rose-400' : (settlingSupplier.payableBalance < 0 ? 'text-indigo-300' : 'text-emerald-400')
+                }`}>
+                  {settlingSupplier.payableBalance < 0 ? `Advance: ${symbol} ${Math.abs(settlingSupplier.payableBalance).toLocaleString(undefined, { minimumFractionDigits: 2 })}` : `${symbol} ${settlingSupplier.payableBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
                 </p>
               </div>
             </div>
@@ -1025,7 +1084,7 @@ export function Suppliers() {
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
-                  Settlement Amount ({symbol}) *
+                  Payment Amount ({symbol}) *
                 </label>
                 {settlingSupplier.payableBalance > 0 && (
                   <div className="flex items-center gap-2 text-xs">
@@ -1063,11 +1122,32 @@ export function Suppliers() {
                 />
               </div>
               {settleAmount > 0 && (
-                <div className="mt-1.5 flex justify-between text-[11px] font-bold">
-                  <span className="text-slate-500">Remaining Balance after payment:</span>
-                  <span className={Math.max(0, settlingSupplier.payableBalance - settleAmount) > 0 ? 'text-rose-600 font-black' : 'text-emerald-600 font-black'}>
-                    {symbol} {Math.max(0, Math.round((settlingSupplier.payableBalance - settleAmount) * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </span>
+                <div className="mt-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between text-xs">
+                  <span className="text-slate-500 font-bold">Projected Balance After Payment:</span>
+                  {(() => {
+                    const resulting = Math.round((settlingSupplier.payableBalance - settleAmount) * 100) / 100;
+                    if (resulting > 0) {
+                      return (
+                        <span className="text-rose-600 font-black">
+                          Remaining Payable: {symbol} {resulting.toFixed(2)}
+                        </span>
+                      );
+                    } else if (resulting === 0) {
+                      return (
+                        <span className="text-emerald-600 font-black flex items-center gap-1">
+                          <CheckCircleIcon className="w-3.5 h-3.5" />
+                          Fully Settled ({symbol} 0.00)
+                        </span>
+                      );
+                    } else {
+                      return (
+                        <span className="text-indigo-600 font-black flex items-center gap-1">
+                          <ArrowUpRightIcon className="w-3.5 h-3.5" />
+                          Supplier Advance / Store Credit: {symbol} {Math.abs(resulting).toFixed(2)}
+                        </span>
+                      );
+                    }
+                  })()}
                 </div>
               )}
             </div>
@@ -1297,19 +1377,17 @@ export function Suppliers() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {viewSupplier.payableBalance > 0 && (
-                  <button
-                    onClick={() => {
-                      const supp = viewSupplier;
-                      setViewSupplier(null);
-                      openSettleModal(supp);
-                    }}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#DAA520] hover:bg-[#B8860B] text-slate-900 text-xs font-black uppercase tracking-wider shadow-md shadow-amber-500/20 transition-all"
-                  >
-                    <WalletIcon className="w-3.5 h-3.5" />
-                    <span>Pay Balance</span>
-                  </button>
-                )}
+                <button
+                  onClick={() => {
+                    const supp = viewSupplier;
+                    setViewSupplier(null);
+                    openSettleModal(supp);
+                  }}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#DAA520] hover:bg-[#B8860B] text-slate-900 text-xs font-black uppercase tracking-wider shadow-md shadow-amber-500/20 transition-all"
+                >
+                  <WalletIcon className="w-3.5 h-3.5" />
+                  <span>{viewSupplier.payableBalance > 0 ? 'Pay Balance' : 'Pay Advance'}</span>
+                </button>
               </div>
             </div>
 
@@ -1352,9 +1430,15 @@ export function Suppliers() {
               <div className="space-y-4">
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Payable Balance</p>
-                    <p className={`text-base font-black mt-1 ${viewSupplier.payableBalance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                      {symbol} {viewSupplier.payableBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                      {viewSupplier.payableBalance > 0 ? 'Payable Balance' : (viewSupplier.payableBalance < 0 ? 'Advance Credit' : 'Balance')}
+                    </p>
+                    <p className={`text-base font-black mt-1 ${
+                      viewSupplier.payableBalance > 0 ? 'text-rose-600' : (viewSupplier.payableBalance < 0 ? 'text-indigo-600' : 'text-emerald-600')
+                    }`}>
+                      {viewSupplier.payableBalance < 0
+                        ? `Advance: ${symbol} ${Math.abs(viewSupplier.payableBalance).toLocaleString(undefined, { minimumFractionDigits: 2 })}`
+                        : `${symbol} ${viewSupplier.payableBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
                     </p>
                   </div>
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
@@ -1534,4 +1618,3 @@ export function Suppliers() {
     </div>
   );
 }
-
