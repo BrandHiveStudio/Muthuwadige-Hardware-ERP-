@@ -31,8 +31,8 @@ const __dirname = path.dirname(__filename);
 let candidateDbs = [
   process.env.DB_FILE,
   process.env.USER_DATA_PATH ? path.join(process.env.USER_DATA_PATH, 'hardware.db') : null,
-  path.join(__dirname, 'hardware.db'),
-  process.env.APPDATA ? path.join(process.env.APPDATA, 'Muthuwadige Hardware ERP', 'hardware.db') : null
+  process.env.APPDATA ? path.join(process.env.APPDATA, 'Muthuwadige Hardware ERP', 'hardware.db') : null,
+  path.join(__dirname, 'hardware.db')
 ].filter(Boolean);
 
 let DB_FILE = candidateDbs.find(p => fs.existsSync(p)) || path.join(__dirname, 'hardware.db');
@@ -529,18 +529,32 @@ export async function executeBackupTask({
     log('Fetching database records for master backup generation...');
     const customers = await db.all('SELECT * FROM customers').catch(() => []);
     let sales = await db.all('SELECT * FROM sales').catch(() => []);
-    const products = await db.all('SELECT * FROM products').catch(() => []);
+    const products = await db.all("SELECT * FROM products WHERE status != 'DELETED' OR status IS NULL").catch(async () => {
+      return await db.all('SELECT * FROM products').catch(() => []);
+    });
     const suppliers = await db.all('SELECT * FROM suppliers').catch(() => []);
-    let purchaseOrders = await db.all('SELECT * FROM purchase_orders').catch(() => []);
-    let transactions = await db.all('SELECT * FROM transactions').catch(() => []);
-    let stockAdjustments = await db.all('SELECT * FROM stock_adjustments').catch(() => []);
-    let quotations = await db.all('SELECT * FROM quotations').catch(() => []);
+    let purchaseOrders = await db.all('SELECT * FROM purchase_orders ORDER BY created_at DESC').catch(async () => {
+      return await db.all('SELECT * FROM purchase_orders').catch(() => []);
+    });
+    let transactions = await db.all('SELECT * FROM transactions ORDER BY created_at DESC').catch(async () => {
+      return await db.all('SELECT * FROM transactions').catch(() => []);
+    });
+    let stockAdjustments = await db.all('SELECT * FROM stock_adjustments ORDER BY created_at DESC').catch(async () => {
+      return await db.all('SELECT * FROM stock_adjustments').catch(() => []);
+    });
+    let quotations = await db.all('SELECT * FROM quotations ORDER BY created_at DESC').catch(async () => {
+      return await db.all('SELECT * FROM quotations').catch(() => []);
+    });
     const profiles = await db.all('SELECT * FROM profiles').catch(() => []);
     const rawSettingsList = await db.all('SELECT * FROM system_settings').catch(() => []);
     const rawEmployees = await db.all('SELECT * FROM employees ORDER BY name ASC').catch(() => []);
     const branches = await db.all('SELECT * FROM branches').catch(() => []);
-    let salesReturns = await db.all('SELECT * FROM sales_returns').catch(() => []);
-    let creditPayments = await db.all('SELECT * FROM credit_payments').catch(() => []);
+    let salesReturns = await db.all('SELECT * FROM sales_returns ORDER BY created_at DESC').catch(async () => {
+      return await db.all('SELECT * FROM sales_returns').catch(() => []);
+    });
+    let creditPayments = await db.all('SELECT * FROM credit_payments ORDER BY created_at DESC').catch(async () => {
+      return await db.all('SELECT * FROM credit_payments').catch(() => []);
+    });
     let cheques = await db.all('SELECT * FROM cheque_registry ORDER BY cheque_date DESC, created_at DESC').catch(() => []);
     let purchaseReturns = await db.all('SELECT * FROM purchase_returns ORDER BY created_at DESC').catch(async () => {
       return await db.all('SELECT * FROM purchase_returns').catch(() => []);
@@ -1043,21 +1057,34 @@ export async function executeBackupTask({
     wsOverview['B24'] = { t: 'n', v: paymentTotal, z: '#,##0.00' };
 
     // 1. Inventory Stock Sheet
-    const structuredInventory = products.map(p => ({
-      "Item Name": p.name,
-      "Category": p.category || 'Other',
-      "Base Retail Price (Rs.)": p.price || 0,
-      "Base Cost Price (Rs.)": p.cost_price || 0,
-      "Current Stock Level": p.stock || 0,
-      "Measurement Unit": p.unit || 'pcs',
-      "Brand": p.brand || '',
-      "Supplier Entity": p.supplier || '',
-      "Total Cost Value (Rs.)": (p.stock || 0) * (p.cost_price || 0),
-      "Total Market Value (Rs.)": (p.stock || 0) * (p.price || 0)
-    }));
+    const structuredInventory = products.map(p => {
+      const stock = Number(p.stock !== undefined ? p.stock : (p.stock_quantity || 0));
+      const costPrice = Number(p.cost_price !== undefined ? p.cost_price : (p.costPrice || 0));
+      const sellingPrice = Number(p.price !== undefined ? p.price : (p.selling_price || p.retail_price || 0));
+      return {
+        "Item Name": p.name || '---',
+        "Category": p.category || 'Other',
+        "Base Retail Price (Rs.)": sellingPrice,
+        "Base Cost Price (Rs.)": costPrice,
+        "Current Stock Level": stock,
+        "Measurement Unit": p.unit || 'pcs',
+        "Brand": p.brand || '',
+        "Supplier Entity": p.supplier || '',
+        "Total Cost Value (Rs.)": stock * costPrice,
+        "Total Market Value (Rs.)": stock * sellingPrice
+      };
+    });
     if (structuredInventory.length > 0) {
-      const costValSum = products.reduce((sum, p) => sum + ((p.stock || 0) * (p.cost_price || 0)), 0);
-      const marketValSum = products.reduce((sum, p) => sum + ((p.stock || 0) * (p.price || 0)), 0);
+      const costValSum = products.reduce((sum, p) => {
+        const stock = Number(p.stock !== undefined ? p.stock : (p.stock_quantity || 0));
+        const costPrice = Number(p.cost_price !== undefined ? p.cost_price : (p.costPrice || 0));
+        return sum + (stock * costPrice);
+      }, 0);
+      const marketValSum = products.reduce((sum, p) => {
+        const stock = Number(p.stock !== undefined ? p.stock : (p.stock_quantity || 0));
+        const sellingPrice = Number(p.price !== undefined ? p.price : (p.selling_price || p.retail_price || 0));
+        return sum + (stock * sellingPrice);
+      }, 0);
       structuredInventory.push({
         "Item Name": "TOTAL",
         "Category": "",
@@ -1083,10 +1110,18 @@ export async function executeBackupTask({
     // 2. Sales Orders Sheet
     const structuredSales = sales.map(s => {
       let itemsList = '---';
+      let saleCogs = 0;
+      let items = [];
       try {
-        const items = typeof s.items === 'string' ? JSON.parse(s.items) : s.items;
+        items = typeof s.items === 'string' ? JSON.parse(s.items) : s.items;
         if (Array.isArray(items)) {
-          itemsList = items.map(it => `${it.productName || it.name || 'Item'} (x${it.qty || 1})`).join(', ');
+          itemsList = items.map(it => `${it.productName || it.name || it.item_name || 'Item'} (x${it.qty || it.quantity || 1})`).join(', ');
+          items.forEach(it => {
+            const product = products.find(p => p.id === (it.productId || it.product_id || it.id));
+            const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.cost_price || it.costPrice);
+            const qty = Number(it.qty || it.quantity || 0);
+            saleCogs += (qty * cost);
+          });
         }
       } catch (e) { }
 
@@ -1099,28 +1134,28 @@ export async function executeBackupTask({
       const method = (s.payment_method || '').toLowerCase();
       const isCredit = method === 'credit' || s.is_credit === 1 || s.is_credit === true || s.status?.toLowerCase() === 'non paid' || s.status?.toLowerCase() === 'partially settled' || s.status?.toLowerCase() === 'fully settled' || s.status?.toLowerCase() === 'fully returned' || s.status?.toLowerCase() === 'partially returned';
 
-      const origTotal = Number(s.total_amount || 0);
+      const origTotal = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
       const origPaid = isCredit ? Number(s.payment_received || 0) : (s.status?.toLowerCase() === 'paid' ? origTotal : Number(s.payment_received || 0));
       const totalPaid = origPaid + exPaid;
       const effTotal = Math.max(0, origTotal - retAmt + exAmt);
       const netOutstanding = Math.max(0, effTotal - totalPaid);
 
       return {
-        "Invoice Number": s.invoice_no,
-        "Customer Name": s.customer_name || 'Guest Customer',
+        "Invoice Number": s.invoice_no || s.invoiceNo || s.id || '---',
+        "Customer Name": s.customer_name || s.customerName || 'Guest Customer',
         "Products Sold": itemsList,
-        "Subtotal (Rs.)": s.subtotal || 0,
-        "Discount (Rs.)": s.discount || 0,
-        "Tax Amount (Rs.)": 0,
+        "Subtotal (Rs.)": Number(s.subtotal !== undefined ? s.subtotal : (s.total_amount || s.total || 0)),
+        "Discount (Rs.)": Number(s.discount_amount !== undefined ? s.discount_amount : (s.discount || 0)),
+        "Tax Amount (Rs.)": Number(s.tax_amount !== undefined ? s.tax_amount : (s.tax || 0)),
         "Total Amount (Rs.)": effTotal,
         "Payment Received (Rs.)": totalPaid,
         "Outstanding Balance (Rs.)": netOutstanding,
         "Payment Status": netOutstanding <= 0.01 ? 'PAID' : (totalPaid > 0 ? 'PARTIALLY SETTLED' : (s.status ? s.status.toUpperCase() : 'NON PAID')),
         "Payment Method": s.payment_method || 'Cash',
-        "Checkout Date & Time": getExcelDecimalDate(s.created_at) || '---',
+        "Checkout Date & Time": getExcelDecimalDate(s.created_at || s.date) || '---',
         "Due Date": getExcelDecimalDate(s.due_date) || '---',
-        "Credit Period (Days)": s.credit_period_days || 0,
-        "Cost of Goods Sold (Rs.)": 0
+        "Credit Period (Days)": s.credit_period_days || s.credit_period || 0,
+        "Cost of Goods Sold (Rs.)": Math.round(saleCogs * 100) / 100
       };
     });
 
@@ -1137,13 +1172,13 @@ export async function executeBackupTask({
 
     // 3. Transactions Sheet
     const structuredTransactions = transactions.map(t => ({
-      "Record Date": getExcelDecimalDate(t.date) || '---',
-      "Flow Type": t.type ? t.type.toUpperCase() : 'INCOME',
+      "Record Date": getExcelDecimalDate(t.date || t.created_at) || '---',
+      "Flow Type": (t.flow_type || t.type || 'INCOME').toUpperCase(),
       "Finance Category": t.category || 'Other',
-      "Description Details": t.description,
+      "Description Details": t.description || '---',
       "Reference Invoice / PO": t.reference || '---',
-      "Transaction Value (Rs.)": t.amount || 0,
-      "System Log Date": getExcelDecimalDate(t.created_at) || '---'
+      "Transaction Value (Rs.)": Number(t.amount || 0),
+      "System Log Date": getExcelDecimalDate(t.created_at || t.date) || '---'
     }));
     const wsTransactionsHeaders = [
       "Record Date", "Flow Type", "Finance Category", "Description Details",
@@ -1155,14 +1190,14 @@ export async function executeBackupTask({
 
     // 4. Customers Sheet
     const structuredCustomers = customers.map(c => ({
-      "Customer Name": c.name,
-      "Email": c.email || '',
-      "Phone Number": c.phone || '—',
+      "Customer Name": c.name || '---',
+      "Email": c.email || '—',
+      "Phone Number": c.phone || c.phone_number || '—',
       "Address": c.address || '—',
       "NIC Number": c.nic || '—',
-      "Loyalty Points": c.loyalty_points || 0,
-      "Total Purchases (Rs.)": c.total_purchases || 0,
-      "Registered Date": getExcelDecimalDate(c.created_at) || '---'
+      "Loyalty Points": Number(c.loyalty_points || 0),
+      "Total Purchases (Rs.)": Number(c.total_purchases || 0),
+      "Registered Date": getExcelDecimalDate(c.created_at || c.join_date) || '---'
     }));
     const wsCustomersHeaders = [
       "Customer Name", "Email", "Phone Number", "Address",
@@ -1174,15 +1209,15 @@ export async function executeBackupTask({
 
     // 5. Employees Sheet
     const structuredEmployees = employees.map(e => ({
-      "Full Name": e.name,
-      "Designated Role": e.role,
-      "Department": e.department,
-      "Email Address": e.email,
-      "Phone Number": e.phone,
-      "Salary (Rs.)": e.salary || 0,
+      "Full Name": e.name || '---',
+      "Designated Role": e.role || '---',
+      "Department": e.department || '---',
+      "Email Address": e.email || '—',
+      "Phone Number": e.phone || '—',
+      "Salary (Rs.)": Number(e.salary || 0),
       "Active Status": e.status ? e.status.toUpperCase() : 'ACTIVE',
       "Attendance Percentage (%)": `${e.attendance || 100}%`,
-      "Date of Joining": getExcelDecimalDate(e.join_date) || '---'
+      "Date of Joining": getExcelDecimalDate(e.join_date || e.created_at) || '---'
     }));
     const wsEmployeesHeaders = [
       "Full Name", "Designated Role", "Department", "Email Address",
@@ -1195,8 +1230,8 @@ export async function executeBackupTask({
 
     // 6. User Profiles Sheet
     const structuredProfiles = profiles.map(pr => ({
-      "User Full Name": pr.name,
-      "User Email": pr.email,
+      "User Full Name": pr.name || '---',
+      "User Email": pr.email || '---',
       "Access Privilege Level": pr.role ? pr.role.toUpperCase() : 'CASHIER',
       "Created Date": getExcelDecimalDate(pr.created_at) || '---'
     }));
@@ -1209,13 +1244,13 @@ export async function executeBackupTask({
 
     // 7. System Settings Sheet
     const structuredSettings = settings.map(set => ({
-      "Shop Name": set.shop_name,
-      "Address": set.address,
-      "Phone": set.phone,
-      "Email": set.email,
-      "Currency": set.currency,
-      "Tax Rate (%)": set.tax_rate,
-      "Backup Email": set.backup_email,
+      "Shop Name": set.shop_name || 'Muthuwadige Hardware',
+      "Address": set.address || 'No: 80, Mahahunupitiya, Negombo',
+      "Phone": set.phone || '077 076 076 7',
+      "Email": set.email || 'sanojhardware@gmail.com',
+      "Currency": set.currency || 'Rs.',
+      "Tax Rate (%)": Number(set.tax_rate || 0),
+      "Backup Email": set.backup_email || 'sanojhardware@gmail.com',
       "Weekly Auto-Backup": set.backup_enabled ? "ENABLED" : "DISABLED",
       "Last Synced Time": getExcelDecimalDate(set.updated_at) || '---'
     }));
@@ -1229,12 +1264,12 @@ export async function executeBackupTask({
 
     // 8. Suppliers Sheet
     const structuredSuppliers = suppliers.map(s => ({
-      "Supplier Name": s.name,
-      "Email Address": s.email || '---',
-      "Phone Number": s.phone || '---',
-      "Address": s.address || '---',
+      "Supplier Name": s.name || '---',
+      "Email Address": s.email || '—',
+      "Phone Number": s.phone || '—',
+      "Address": s.address || '—',
       "Credit Terms": s.credit_terms || '---',
-      "Payable Balance (Rs.)": s.payable_balance || 0,
+      "Payable Balance (Rs.)": Number(s.payable_balance || 0),
       "Registered Date": getExcelDecimalDate(s.created_at) || '---'
     }));
     const wsSuppliersHeaders = [
@@ -1251,14 +1286,14 @@ export async function executeBackupTask({
       try {
         const parsed = typeof po.items === 'string' ? JSON.parse(po.items) : po.items;
         if (Array.isArray(parsed)) {
-          poItems = parsed.map(it => `${it.name || it.productName || 'Item'} (x${it.qty || 1})`).join(', ');
+          poItems = parsed.map(it => `${it.productName || it.name || it.item_name || 'Item'} (x${it.qty || it.quantity || 1})`).join(', ');
         }
       } catch (e) { }
       return {
-        "PO Number": po.po_no,
-        "Supplier Name": po.supplier_name,
+        "PO Number": po.po_number || po.po_no || po.id || '---',
+        "Supplier Name": po.supplier_name || '---',
         "PO Items": poItems,
-        "Total Amount (Rs.)": po.total || 0,
+        "Total Amount (Rs.)": Number(po.total_amount !== undefined ? po.total_amount : (po.total || 0)),
         "PO Status": po.status ? po.status.toUpperCase() : 'PENDING',
         "Due Date": getExcelDecimalDate(po.due_date) || '---',
         "Created Date": getExcelDecimalDate(po.created_at) || '---'
@@ -1274,9 +1309,9 @@ export async function executeBackupTask({
 
     // 10. Stock Adjustments Sheet
     const structuredAdjustments = stockAdjustments.map(sa => ({
-      "Product Name": sa.product_name,
-      "Old Quantity": sa.old_qty || 0,
-      "New Quantity": sa.new_qty || 0,
+      "Product Name": sa.product_name || '---',
+      "Old Quantity": Number(sa.old_qty || 0),
+      "New Quantity": Number(sa.new_qty || 0),
       "Adjustment Type": sa.type || 'Adjustment',
       "Reason Details": sa.reason || '---',
       "Staff Email": sa.user_email || '---',
@@ -1292,9 +1327,9 @@ export async function executeBackupTask({
 
     // 11. Quotations Sheet
     const structuredQuotes = quotations.map(q => ({
-      "Quotation Number": q.quote_no,
-      "Customer Name": q.customer_name,
-      "Total Amount (Rs.)": q.total || 0,
+      "Quotation Number": q.quote_no || q.id || '---',
+      "Customer Name": q.customer_name || '---',
+      "Total Amount (Rs.)": Number(q.total || q.total_amount || 0),
       "Created Date": getExcelDecimalDate(q.created_at) || '---'
     }));
     const wsQuotesHeaders = [
@@ -1306,8 +1341,8 @@ export async function executeBackupTask({
 
     // 12. Branches Sheet
     const structuredBranches = branches.map(b => ({
-      "Branch Name": b.name,
-      "Branch Code": b.code,
+      "Branch Name": b.name || '---',
+      "Branch Code": b.code || '---',
       "Address": b.address || '---',
       "Phone Number": b.phone || '---',
       "Created Date": getExcelDecimalDate(b.created_at) || '---'
@@ -1336,7 +1371,7 @@ export async function executeBackupTask({
       const isOverdue = s.due_date && new Date(s.due_date) < new Date();
       return {
         "Customer": s.customer_name || 'Walk-in Credit Customer',
-        "Invoice Number": s.invoice_no,
+        "Invoice Number": s.invoice_no || s.invoiceNo || '---',
         "Invoice Date": s.created_at ? s.created_at.slice(0, 10) : (s.date || '---'),
         "Invoice Amount": totalAmt,
         "Amount Paid": paidAmt,
@@ -1375,11 +1410,11 @@ export async function executeBackupTask({
       } catch (e) { }
 
       return {
-        "Return ID": sr.return_no || sr.id,
-        "Original Invoice Number": sr.invoice_no,
-        "Return Date": sr.created_at ? sr.created_at.slice(0, 10) : '---',
+        "Return ID": sr.return_no || sr.return_number || sr.id || '---',
+        "Original Invoice Number": sr.invoice_no || sr.invoiceNo || '---',
+        "Return Date": sr.created_at ? sr.created_at.slice(0, 10) : (sr.return_date || '---'),
         "Customer": sr.customer_name || 'Walk-in Customer',
-        "Return Type": sr.return_method || 'Cash Refund',
+        "Return Type": sr.return_method || sr.return_type || 'Cash Refund',
         "Product": returnedProd,
         "Quantity": returnedQty,
         "Return Amount": Number(sr.return_amount || 0),
@@ -1399,18 +1434,18 @@ export async function executeBackupTask({
 
     // 15. Cheque Registry Sheet
     const structuredCheques = (cheques || []).map(c => ({
-      "Date": c.cheque_date || '---',
-      "Cheque No": c.cheque_number || '---',
-      "Direction": c.direction || 'INWARD',
+      "Date": getSriLankaDateStr(c.cheque_date || c.created_at) || '---',
+      "Cheque No": c.cheque_number || c.cheque_no || '---',
+      "Direction": (c.direction || 'INWARD').toUpperCase(),
       "Type": c.cheque_type === 'CROSSED_ACCOUNT_PAYEE' ? 'Account Payee' : 'Cash / Bearer',
       "Bank Name": c.bank_name || '---',
       "Branch": c.branch || '---',
       "Amount (Rs.)": Number(c.amount || 0),
       "Party Name": c.party_name || '---',
-      "Status": c.status || 'PENDING',
+      "Status": (c.status || 'PENDING').toUpperCase(),
       "Reference Type": c.reference_type || '---',
       "Reference ID": c.reference_id || '---',
-      "Cleared At": c.cleared_at || '---',
+      "Cleared At": getSriLankaDateStr(c.cleared_at || c.cleared_date) || '---',
       "Notes": c.notes || '---'
     }));
     const wsChequesHeaders = [
