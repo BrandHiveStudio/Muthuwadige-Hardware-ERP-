@@ -921,12 +921,6 @@ export function Inventory() {
         console.warn("Local SQLite stock adjustment log notice:", e);
       }
 
-      const { error: adjustError } = await supabase
-        .from('stock_adjustments')
-        .insert([adjustmentRecord]);
-
-      if (adjustError) console.warn("Supabase stock_adjustments sync notice:", adjustError);
-
       // 3. Log expense in transactions if Damage / Breakage / Wastage
       if (actionType === 'Damage' || actionType === 'Damaged / Breakage / Wastage') {
         const uom = stockProduct.unit || 'units';
