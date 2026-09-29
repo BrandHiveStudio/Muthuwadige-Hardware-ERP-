@@ -539,10 +539,12 @@ export async function executeBackupTask({
     const rawSettingsList = await db.all('SELECT * FROM system_settings').catch(() => []);
     const rawEmployees = await db.all('SELECT * FROM employees ORDER BY name ASC').catch(() => []);
     const branches = await db.all('SELECT * FROM branches').catch(() => []);
-    const salesReturns = await db.all('SELECT * FROM sales_returns').catch(() => []);
+    let salesReturns = await db.all('SELECT * FROM sales_returns').catch(() => []);
     let creditPayments = await db.all('SELECT * FROM credit_payments').catch(() => []);
     let cheques = await db.all('SELECT * FROM cheque_registry ORDER BY cheque_date DESC, created_at DESC').catch(() => []);
-    let purchaseReturns = await db.all('SELECT * FROM purchase_returns ORDER BY return_date DESC, created_at DESC').catch(() => []);
+    let purchaseReturns = await db.all('SELECT * FROM purchase_returns ORDER BY created_at DESC').catch(async () => {
+      return await db.all('SELECT * FROM purchase_returns').catch(() => []);
+    });
     const purchaseReturnItems = await db.all('SELECT * FROM purchase_return_items').catch(() => []);
 
     let rawSettings = rawSettingsList.find(s => s.id === 'global') || rawSettingsList[0] || {};
@@ -582,29 +584,58 @@ export async function executeBackupTask({
       attendance: e.attendance !== undefined ? e.attendance : 100
     }));
 
+    const SRI_LANKA_TIMEZONE = 'Asia/Colombo';
+
+    const parseToDate = (dateInput) => {
+      if (!dateInput && dateInput !== 0) return null;
+      if (dateInput instanceof Date) return isNaN(dateInput.getTime()) ? null : dateInput;
+      if (typeof dateInput === 'number') {
+        const d = new Date(dateInput);
+        return isNaN(d.getTime()) ? null : d;
+      }
+      if (typeof dateInput === 'string') {
+        const trimmed = dateInput.trim();
+        if (!trimmed || trimmed === '---' || trimmed === 'null' || trimmed === 'undefined') return null;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+          const d = new Date(`${trimmed}T12:00:00Z`);
+          return isNaN(d.getTime()) ? null : d;
+        }
+        if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(trimmed)) {
+          const isoFormat = trimmed.replace(' ', 'T') + 'Z';
+          const d = new Date(isoFormat);
+          return isNaN(d.getTime()) ? null : d;
+        }
+        const d = new Date(trimmed);
+        return isNaN(d.getTime()) ? null : d;
+      }
+      return null;
+    };
+
     const getSriLankaDateStr = (dateInput) => {
       if (!dateInput && dateInput !== 0) return '';
       if (typeof dateInput === 'string') {
         const trimmed = dateInput.trim();
         if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
-        if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(trimmed)) {
-          const d = new Date(trimmed.replace(' ', 'T') + 'Z');
-          return isNaN(d.getTime()) ? trimmed.substring(0, 10) : d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Colombo' });
+      }
+      const d = parseToDate(dateInput);
+      if (!d) {
+        if (typeof dateInput === 'string' && dateInput.length >= 10) {
+          return dateInput.substring(0, 10);
         }
+        return '';
       }
       try {
-        const d = new Date(dateInput);
-        if (isNaN(d.getTime())) return String(dateInput).substring(0, 10);
-        return d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Colombo' });
+        return d.toLocaleDateString('sv-SE', { timeZone: SRI_LANKA_TIMEZONE });
       } catch (e) {
-        return String(dateInput).substring(0, 10);
+        return d.toISOString().substring(0, 10);
       }
     };
 
     const isWithinDateRange = (dateVal) => {
       if (!fromDate && !toDate) return true;
-      if (!dateVal || dateVal === '---') return false;
+      if (!dateVal && dateVal !== 0) return false;
       const checkStr = getSriLankaDateStr(dateVal);
+      if (!checkStr) return false;
       if (fromDate && checkStr < fromDate) return false;
       if (toDate && checkStr > toDate) return false;
       return true;
@@ -612,13 +643,14 @@ export async function executeBackupTask({
 
     if (fromDate || toDate) {
       sales = sales.filter(s => isWithinDateRange(s.created_at || s.date));
+      salesReturns = salesReturns.filter(sr => isWithinDateRange(sr.created_at || sr.return_date || sr.date));
       transactions = transactions.filter(t => isWithinDateRange(t.date || t.created_at));
       purchaseOrders = purchaseOrders.filter(po => isWithinDateRange(po.created_at));
       stockAdjustments = stockAdjustments.filter(sa => isWithinDateRange(sa.created_at));
       quotations = quotations.filter(q => isWithinDateRange(q.created_at));
       creditPayments = creditPayments.filter(cp => isWithinDateRange(cp.payment_date || cp.created_at));
       cheques = cheques.filter(c => isWithinDateRange(c.cheque_date || c.created_at));
-      purchaseReturns = purchaseReturns.filter(pr => isWithinDateRange(pr.return_date || pr.created_at));
+      purchaseReturns = purchaseReturns.filter(pr => isWithinDateRange(pr.created_at || pr.return_date));
     }
 
     let minDate = null;
@@ -634,10 +666,11 @@ export async function executeBackupTask({
     };
 
     sales.forEach(s => checkDate(s.created_at || s.date));
+    salesReturns.forEach(sr => checkDate(sr.created_at || sr.return_date || sr.date));
     transactions.forEach(t => checkDate(t.date || t.created_at));
     purchaseOrders.forEach(po => checkDate(po.created_at));
     cheques.forEach(c => checkDate(c.cheque_date || c.created_at));
-    purchaseReturns.forEach(pr => checkDate(pr.return_date || pr.created_at));
+    purchaseReturns.forEach(pr => checkDate(pr.created_at || pr.return_date));
 
     const currentMonthStart = new Date();
     currentMonthStart.setDate(1);
@@ -748,19 +781,22 @@ export async function executeBackupTask({
         items = typeof o.items === 'string' ? JSON.parse(o.items) : o.items || [];
       } catch (e) { }
 
-      if (Array.isArray(items)) {
+      if (Array.isArray(items) && items.length > 0) {
         items.forEach(it => {
-          const product = products.find(p => p.id === it.productId || p.id === it.product_id);
+          const product = products.find(p => p.id === it.productId || p.id === it.product_id || p.id === it.id);
           const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.cost_price || it.costPrice);
-          const qty = Number(it.qty || 0);
-          const price = Number(it.price || it.unitPrice || 0);
+          const qty = Number(it.qty || it.quantity || 0);
+          const price = Number(it.price || it.unitPrice || it.unit_price || 0);
           
           grossStickerSales += (qty * price);
           grossCostVal += (qty * cost);
         });
+      } else {
+        const subtotal = Number(o.subtotal !== undefined ? o.subtotal : (o.total_amount || o.total || 0));
+        grossStickerSales += subtotal;
       }
-      customerDiscounts += Number(o.discount || 0);
-      transportFees += Number(o.transportation_fee || o.transportationFee || 0);
+      customerDiscounts += Number(o.discount_amount || o.discount || 0);
+      transportFees += Number(o.transportation_fee || o.delivery_fee || o.transportationFee || 0);
     });
 
     let returnedSellingRev = 0;
@@ -778,9 +814,9 @@ export async function executeBackupTask({
 
       if (Array.isArray(items)) {
         items.forEach(it => {
-          const product = products.find(p => p.id === (it.productId || it.product_id));
+          const product = products.find(p => p.id === (it.productId || it.product_id || it.id));
           const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.cost_price || it.costPrice);
-          const qty = Number(it.qty || 0);
+          const qty = Number(it.qty || it.quantity || 0);
           returnedCostVal += qty * cost;
         });
       }
@@ -796,21 +832,22 @@ export async function executeBackupTask({
 
       if (Array.isArray(exItems)) {
         exItems.forEach(it => {
-          const product = products.find(p => p.id === (it.productId || it.product_id));
+          const product = products.find(p => p.id === (it.productId || it.product_id || it.id));
           const cost = getItemUnitCost(product, it.unit, it.conversionRate, it.cost_price || it.costPrice);
-          const qty = Number(it.qty || 0);
+          const qty = Number(it.qty || it.quantity || 0);
           exchangeCostVal += qty * cost;
         });
       }
     });
 
     const netReturns = returnedSellingRev;
-    const grossSellingRev = grossStickerSales;
-    const netSellingRev = Math.max(0, grossStickerSales - customerDiscounts - netReturns + transportFees);
-    const netCostVal = Math.max(0, grossCostVal + exchangeCostVal - returnedCostVal);
+    const grossSellingRev = Math.round(grossStickerSales * 100) / 100;
+    const netSellingRev = Math.max(0, Math.round((grossStickerSales - customerDiscounts - netReturns + transportFees) * 100) / 100);
+    const netCostVal = Math.max(0, Math.round((grossCostVal + exchangeCostVal - returnedCostVal) * 100) / 100);
+    const grossProfit = Math.round((netSellingRev - netCostVal) * 100) / 100;
 
     const valB6 = Math.max(0, netSellingRev);
-    const valB11 = netSellingRev - netCostVal;
+    const valB11 = grossProfit;
     const totalCostOfSales = netCostVal;
 
     // 2. Accurate Payment Attribution Calculation
@@ -917,9 +954,12 @@ export async function executeBackupTask({
 
     const valB8 = totalCreditOutstanding;
     const valB7 = cashAmount + cardAmount + bankTransferAmount + clearedChequeAmount;
-    const valB9 = purchaseOrders.filter(po => po.status?.toUpperCase() !== 'CANCELLED').reduce((sum, po) => sum + (po.total || 0), 0);
-    const valB10 = transactions.filter(t => t.type?.toUpperCase() === 'EXPENSE' && t.category !== 'Purchases').reduce((sum, t) => sum + (t.amount || 0), 0);
-    const valB12 = products.reduce((sum, p) => sum + ((p.stock || 0) * (p.cost_price || 0)), 0);
+    const valB9 = purchaseOrders.filter(po => {
+      const st = (po.status || '').toUpperCase().trim();
+      return st !== 'CANCELLED' && st !== 'VOIDED';
+    }).reduce((sum, po) => sum + (Number(po.total_amount !== undefined ? po.total_amount : (po.total || 0))), 0);
+    const valB10 = transactions.filter(t => (t.flow_type || t.type || '').toUpperCase() === 'EXPENSE' && t.category !== 'Purchases').reduce((sum, t) => sum + (Number(t.amount || 0)), 0);
+    const valB12 = products.reduce((sum, p) => sum + ((Number(p.stock || 0)) * (Number(p.cost_price !== undefined ? p.cost_price : (p.costPrice || 0)))), 0);
 
     const totalSalesRevenue = valB6;
     const totalSalesProfit = valB11;
@@ -1384,24 +1424,32 @@ export async function executeBackupTask({
 
     // 16. Purchase Returns Sheet
     const structuredPurchaseReturns = (purchaseReturns || []).map(pr => {
-      const prItems = (purchaseReturnItems || []).filter(item => item.purchase_return_id === pr.id);
+      const prItems = (purchaseReturnItems || []).filter(item => (item.return_id === pr.id || item.purchase_return_id === pr.id));
       const itemsCount = prItems.length > 0 ? prItems.length : (Number(pr.items_count) || 0);
+      const returnedCost = Number(
+        pr.total_returned_cost !== undefined && pr.total_returned_cost !== null
+          ? pr.total_returned_cost
+          : (pr.total_amount !== undefined && pr.total_amount !== null ? pr.total_amount : 0)
+      );
+
+      const rawMode = (pr.settlement_mode || '').toUpperCase().trim();
+      const modeLabel = (rawMode === 'DEDUCT_PAYABLE' || rawMode === 'SUPPLIER_DEBIT_NOTE' || rawMode === 'DEBIT_NOTE')
+        ? 'Deduct Payable / Debit Note'
+        : (rawMode === 'CASH_REFUND' || rawMode === 'CASH')
+        ? 'Cash Refund'
+        : (rawMode === 'BANK_REFUND' || rawMode === 'BANK')
+        ? 'Bank Refund'
+        : 'Supplier Credit Note';
 
       return {
-        "Date": pr.return_date || (pr.created_at ? pr.created_at.slice(0, 10) : '---'),
-        "Return No": pr.return_no || pr.id || '---',
+        "Date": getSriLankaDateStr(pr.created_at || pr.return_date) || '---',
+        "Return No": pr.return_number || pr.return_no || pr.debit_note_no || pr.id || '---',
         "Supplier Name": pr.supplier_name || '---',
-        "Total Returned Cost (Rs.)": Number(pr.total_amount || 0),
-        "Settlement Mode": pr.settlement_mode === 'DEDUCT_PAYABLE'
-          ? 'Deduct Payable'
-          : pr.settlement_mode === 'CASH_REFUND'
-          ? 'Cash Refund'
-          : pr.settlement_mode === 'BANK_REFUND'
-          ? 'Bank Refund'
-          : 'Supplier Credit Note',
+        "Total Returned Cost (Rs.)": returnedCost,
+        "Settlement Mode": modeLabel,
         "Reason": pr.reason || '---',
         "Items Count": itemsCount,
-        "Handled By": pr.created_by || 'Admin',
+        "Handled By": pr.handled_by || pr.created_by || 'Admin',
         "Notes": pr.notes || '---'
       };
     });
@@ -1472,11 +1520,11 @@ export async function executeBackupTask({
         );
         const maturingChequesTotal = maturingCheques.reduce((sum, c) => sum + Number(c.amount || 0), 0);
 
-        const todayPRs = (purchaseReturns || []).filter(pr => (
-          pr.return_date === todayDateStr || 
-          (pr.created_at && String(pr.created_at).startsWith(todayDateStr))
-        ));
-        const todayPRTotal = todayPRs.reduce((sum, pr) => sum + Number(pr.total_amount || 0), 0);
+        const todayPRs = (purchaseReturns || []).filter(pr => {
+          const prDate = getSriLankaDateStr(pr.created_at || pr.return_date);
+          return prDate === todayDateStr;
+        });
+        const todayPRTotal = todayPRs.reduce((sum, pr) => sum + Number(pr.total_returned_cost !== undefined ? pr.total_returned_cost : (pr.total_amount || 0)), 0);
 
         const htmlBody = `
         <!DOCTYPE html>
