@@ -19,7 +19,7 @@ try {
   }
 
   console.log('🚀 Packaging Electron application to temporary directory...');
-  execSync(`npx electron-builder --config.directories.output=${tempOutputDir} --config.npmRebuild=false`, {
+  execSync(`npx electron-builder --win nsis portable dir --x64 --config.directories.output=${tempOutputDir} --config.npmRebuild=false`, {
     stdio: 'inherit'
   });
 
