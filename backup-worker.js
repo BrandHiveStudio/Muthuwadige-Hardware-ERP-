@@ -868,11 +868,23 @@ export async function executeBackupTask({
     let directCash = 0;
     let directCard = 0;
     let directBank = 0;
+    let directCheque = 0;
+
+    const classifyPaymentMethod = (rawMethod) => {
+      if (!rawMethod) return 'cash';
+      const m = String(rawMethod).toLowerCase().trim();
+      if (m.includes('credit') && !m.includes('card')) return 'credit';
+      if (m.includes('card') || m.includes('visa') || m.includes('master')) return 'card';
+      if (m.includes('cheque') || m.includes('check')) return 'cheque';
+      if (m.includes('bank') || m.includes('transfer') || m.includes('online') || m.includes('deposit')) return 'bank';
+      if (m.includes('cash')) return 'cash';
+      return 'cash';
+    };
 
     validSales.forEach(s => {
       const rawMethod = (s.payment_method || s.paymentMethod || '').toString().trim();
-      const methodLower = rawMethod.toLowerCase();
-      const isCredit = methodLower === 'credit' || s.is_credit === 1 || s.is_credit === true || s.status?.toLowerCase() === 'non paid' || s.status?.toLowerCase() === 'partially settled' || s.status?.toLowerCase() === 'pending';
+      const methodCategory = classifyPaymentMethod(rawMethod);
+      const isCredit = methodCategory === 'credit' || s.is_credit === 1 || s.is_credit === true || s.status?.toLowerCase() === 'non paid' || s.status?.toLowerCase() === 'partially settled' || s.status?.toLowerCase() === 'pending';
 
       const totalAmt = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
 
@@ -885,13 +897,15 @@ export async function executeBackupTask({
 
         const initialDownPayment = Math.max(0, Number(s.payment_received || 0) - totalSettledOnInvoice);
         if (initialDownPayment > 0) {
-          if (methodLower.includes('card')) directCard += initialDownPayment;
-          else if (methodLower.includes('bank')) directBank += initialDownPayment;
+          if (methodCategory === 'card') directCard += initialDownPayment;
+          else if (methodCategory === 'bank') directBank += initialDownPayment;
+          else if (methodCategory === 'cheque') directCheque += initialDownPayment;
           else directCash += initialDownPayment;
         }
       } else {
-        if (methodLower.includes('card')) directCard += totalAmt;
-        else if (methodLower.includes('bank')) directBank += totalAmt;
+        if (methodCategory === 'card') directCard += totalAmt;
+        else if (methodCategory === 'bank') directBank += totalAmt;
+        else if (methodCategory === 'cheque') directCheque += totalAmt;
         else directCash += totalAmt;
       }
     });
@@ -900,14 +914,16 @@ export async function executeBackupTask({
     let settledCash = 0;
     let settledCard = 0;
     let settledBank = 0;
+    let settledCheque = 0;
 
     if (Array.isArray(creditPayments)) {
       creditPayments.forEach(cp => {
         const cpAmt = Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0));
-        const cpMethod = (cp.payment_method || cp.paymentMethod || 'Cash').toString().toLowerCase().trim();
+        const cpMethod = classifyPaymentMethod(cp.payment_method || cp.paymentMethod || 'Cash');
 
-        if (cpMethod.includes('card')) settledCard += cpAmt;
-        else if (cpMethod.includes('bank')) settledBank += cpAmt;
+        if (cpMethod === 'card') settledCard += cpAmt;
+        else if (cpMethod === 'bank') settledBank += cpAmt;
+        else if (cpMethod === 'cheque') settledCheque += cpAmt;
         else settledCash += cpAmt;
       });
     }
@@ -964,10 +980,11 @@ export async function executeBackupTask({
     const cashAmount = Math.max(0, directCash + settledCash + exchangeCashInflowsTotal - cashRefundsTotal);
     const cardAmount = directCard + settledCard;
     const bankTransferAmount = directBank + settledBank;
+    const chequeAmount = directCheque + settledCheque;
     const creditAmount = totalCreditOutstanding;
 
     const valB8 = totalCreditOutstanding;
-    const valB7 = cashAmount + cardAmount + bankTransferAmount + clearedChequeAmount;
+    const valB7 = cashAmount + cardAmount + bankTransferAmount + chequeAmount;
     const valB9 = purchaseOrders.filter(po => {
       const st = (po.status || '').toUpperCase().trim();
       return st !== 'CANCELLED' && st !== 'VOIDED';
@@ -977,7 +994,7 @@ export async function executeBackupTask({
 
     const totalSalesRevenue = valB6;
     const totalSalesProfit = valB11;
-    const paymentTotal = cashAmount + cardAmount + creditAmount + bankTransferAmount + clearedChequeAmount;
+    const paymentTotal = cashAmount + cardAmount + creditAmount + bankTransferAmount + chequeAmount;
 
     // Overview Dashboard Sheet
     const overviewRows = [
@@ -1001,7 +1018,7 @@ export async function executeBackupTask({
       ["Card Amount", "", "", "", "", "", "", "", ""],
       ["Credit Amount", "", "", "", "", "", "", "", ""],
       ["Bank Transfer Amount", "", "", "", "", "", "", "", ""],
-      ["Cleared Cheque Amount", "", "", "", "", "", "", "", ""],
+      ["Cheque Amount", "", "", "", "", "", "", "", ""],
       ["Cash Cheques (In Hand / Drawer)", "", "", "", "", "", "", "", ""],
       ["Pending Cheques (Uncleared / PDC)", "", "", "", "", "", "", "", ""],
       ["Total Payment Methods", "", "", "", "", "", "", "", ""],
@@ -1051,7 +1068,7 @@ export async function executeBackupTask({
     wsOverview['B18'] = { t: 'n', v: cardAmount, z: '#,##0.00' };
     wsOverview['B19'] = { t: 'n', v: creditAmount, z: '#,##0.00' };
     wsOverview['B20'] = { t: 'n', v: bankTransferAmount, z: '#,##0.00' };
-    wsOverview['B21'] = { t: 'n', v: clearedChequeAmount, z: '#,##0.00' };
+    wsOverview['B21'] = { t: 'n', v: chequeAmount, z: '#,##0.00' };
     wsOverview['B22'] = { t: 'n', v: cashChequesInHandAmount, z: '#,##0.00' };
     wsOverview['B23'] = { t: 'n', v: pendingChequesAmount, z: '#,##0.00' };
     wsOverview['B24'] = { t: 'n', v: paymentTotal, z: '#,##0.00' };
@@ -1621,12 +1638,8 @@ export async function executeBackupTask({
                         <td style="padding:7px 0; color:#0f172a; font-weight:800; text-align:right;">LKR ${bankTransferAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       </tr>
                       <tr>
-                        <td style="padding:7px 0; color:#475569; font-weight:600;">🏛️ Cleared Cheques (Realized):</td>
-                        <td style="padding:7px 0; color:#047857; font-weight:800; text-align:right;">LKR ${clearedChequeAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding:7px 0; color:#475569; font-weight:600;">🪙 Cash Cheques (In Hand):</td>
-                        <td style="padding:7px 0; color:#6b21a8; font-weight:800; text-align:right;">LKR ${cashChequesInHandAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                        <td style="padding:7px 0; color:#475569; font-weight:600;">🏛️ Cheque:</td>
+                        <td style="padding:7px 0; color:#047857; font-weight:800; text-align:right;">LKR ${chequeAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       </tr>
                       <tr>
                         <td colspan="2" style="padding:10px 0 6px 0;"><div style="border-top:1px dashed #cbd5e1; width:100%;"></div></td>
@@ -1725,6 +1738,21 @@ export async function executeBackupTask({
       success: true,
       emailSent,
       fileName,
+      buffer: fileBuffer,
+      metrics: {
+        grossSellingRev,
+        netSellingRev,
+        netCostVal,
+        grossProfit,
+        cashAmount,
+        cardAmount,
+        creditAmount,
+        bankTransferAmount,
+        chequeAmount,
+        cashChequesInHandAmount,
+        pendingChequesAmount,
+        paymentTotal
+      },
       message: emailSent
         ? `Full database Excel backup generated and emailed successfully to ${targetEmail}.`
         : 'Full database Excel backup compiled successfully (SMTP notification failed or not configured).'
