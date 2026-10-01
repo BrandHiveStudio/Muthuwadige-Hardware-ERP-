@@ -28,6 +28,7 @@ import {
   TagIcon
 } from 'lucide-react';
 import { Modal } from '../components/Modal';
+import { notify } from '../components/Notifications';
 import { supabase } from '../lib/supabaseClient';
 import { api } from '../lib/api';
 import { jsPDF } from 'jspdf';
@@ -995,8 +996,27 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
   const addItem = (product: any) => {
     setPoItems((prev) => {
-      if (prev.find((i) => i.productId === product.id || (i as any).id === product.id)) return prev;
-      const initialCost = Number(product.costPrice || product.cost_price || 0);
+      const existingIndex = prev.findIndex((i) => i.productId === product.id || (i as any).id === product.id);
+      if (existingIndex >= 0) {
+        return prev.map((item, idx) => {
+          if (idx === existingIndex) {
+            const newQty = (Number(item.qty) || 0) + 1;
+            const itemData = calculateLineItem(newQty, item.costPrice, item.discount || 0, item.discountType);
+            return {
+              ...item,
+              qty: newQty,
+              total: itemData.netLineTotal,
+              lineTotal: itemData.netLineTotal,
+              unitDiscountAmount: itemData.unitDiscountAmount,
+              lineDiscountTotal: itemData.lineDiscountTotal,
+              grossTotal: itemData.grossLineTotal
+            };
+          }
+          return item;
+        });
+      }
+
+      const initialCost = Number(product.costPrice !== undefined ? product.costPrice : (product.cost_price !== undefined ? product.cost_price : (product.price || 0)));
       const itemData = calculateLineItem(1, initialCost, 0, 'percent');
       return [
         ...prev,
@@ -1954,17 +1974,59 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                   <SearchIcon className="w-5 h-5 text-gray-400 focus-within:text-[#DAA520]" />
                   <input 
                     type="text" 
-                    placeholder="Search by product name..." 
+                    placeholder="Search by product name, barcode or SKU..." 
                     value={productSearch} 
                     onChange={(e) => setProductSearch(e.target.value)} 
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const query = (productSearch || '').trim().toLowerCase();
+                        if (!query) return;
+
+                        const matchedProduct = products.find(p =>
+                          (p.barcode && p.barcode.trim().toLowerCase() === query) ||
+                          (p.sku && p.sku.trim().toLowerCase() === query) ||
+                          p.id === query
+                        );
+
+                        if (matchedProduct) {
+                          e.preventDefault();
+                          addItem(matchedProduct);
+                          notify(`Scanned: ${matchedProduct.name}`, 'Purchasing', 'success');
+                          setProductSearch('');
+                        }
+                      }
+                    }}
                     className="bg-transparent text-sm font-bold text-[#464646] outline-none w-full" 
                   />
                 </div>
-                {products.filter(p => p.name.toLowerCase().includes(productSearch.toLowerCase()) && productSearch.length > 0).length > 0 && (
+                {products.filter(p => {
+                  const q = productSearch.trim().toLowerCase();
+                  if (!q) return false;
+                  return (
+                    p.name.toLowerCase().includes(q) ||
+                    (p.barcode && p.barcode.trim().toLowerCase().includes(q)) ||
+                    (p.sku && p.sku.trim().toLowerCase().includes(q))
+                  );
+                }).length > 0 && (
                   <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-gray-100 rounded-xl shadow-xl z-[100] max-h-60 overflow-y-auto custom-scrollbar">
-                    {products.filter(p => p.name.toLowerCase().includes(productSearch.toLowerCase()) && productSearch.length > 0).map((p) => (
+                    {products.filter(p => {
+                      const q = productSearch.trim().toLowerCase();
+                      if (!q) return false;
+                      return (
+                        p.name.toLowerCase().includes(q) ||
+                        (p.barcode && p.barcode.trim().toLowerCase().includes(q)) ||
+                        (p.sku && p.sku.trim().toLowerCase().includes(q))
+                      );
+                    }).map((p) => (
                       <button key={p.id} onClick={() => addItem(p)} className="w-full flex justify-between items-center px-5 py-4 hover:bg-gray-50 text-sm transition-colors border-b border-gray-50 last:border-0 text-left">
-                        <span className="font-black text-[#464646]">{p.name}</span>
+                        <div>
+                          <span className="font-black text-[#464646] block">{p.name}</span>
+                          {(p.barcode || p.sku) && (
+                            <span className="text-[10px] text-gray-400 font-mono">
+                              {[p.barcode && `Barcode: ${p.barcode}`, p.sku && `SKU: ${p.sku}`].filter(Boolean).join(' | ')}
+                            </span>
+                          )}
+                        </div>
                         <span className="font-black text-[#DAA520]">{symbol} {convert(p.costPrice || p.cost_price || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                       </button>
                     ))}
