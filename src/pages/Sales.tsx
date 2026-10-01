@@ -377,10 +377,33 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
       ? (isSinhala ? 'ණය සටහන් රසීදුව' : 'CREDIT NOTE RECEIPT')
       : (isSinhala ? 'ආපසු භාරගැනීමේ රසීදුව' : 'RETURN RECEIPT');
 
-  const grossReturnVal = returnedItemsList.reduce((sum: number, i: any) => sum + ((i.qty || 1) * Number(i.originalStickerPrice || i.originalUnitPrice || i.price || 0)), 0);
-  const discountReturnVal = returnedItemsList.reduce((sum: number, i: any) => sum + ((i.qty || 1) * Number(i.unitDiscount || (i.discount ? (Number(i.discount) / Number(i.qty || 1)) : 0))), 0);
-  const returnCreditValue = Number(returnRecord.returnAmount !== undefined ? returnRecord.returnAmount : (returnRecord.totalRefunded || (grossReturnVal - discountReturnVal) || 0));
-  const exchangeTotal = Number(returnRecord.exchangeAmount !== undefined ? returnRecord.exchangeAmount : exchangeItemsList.reduce((sum: number, i: any) => sum + (Number(i.qty || 1) * Number(i.price || i.unitPrice || 0)), 0));
+  const totalReturnCredit = returnedItemsList.reduce((sum: number, item: any) => {
+    const displayQty = (Number(item.return_qty) > 0 ? Number(item.return_qty) : undefined)
+      ?? (Number(item.quantity) > 0 ? Number(item.quantity) : undefined)
+      ?? (Number(item.qty) > 0 ? Number(item.qty) : undefined)
+      ?? (Number(item.returned_quantity) > 0 ? Number(item.returned_quantity) : undefined)
+      ?? 1;
+    const { effectivePrice } = calculateEffectiveUnitPricePaid(item, returnRecord);
+    const netUnitPrice = item.net_unit_price !== undefined 
+      ? Number(item.net_unit_price) 
+      : (item.netUnitPrice !== undefined ? Number(item.netUnitPrice) : (effectivePrice || Number(item.originalUnitPrice || item.price || 0)));
+    return sum + (displayQty * netUnitPrice);
+  }, 0);
+
+  const returnCreditValue = (Number(returnRecord.returnAmount) > 0)
+    ? Number(returnRecord.returnAmount)
+    : (totalReturnCredit > 0
+        ? totalReturnCredit
+        : Number(returnRecord.totalRefunded || 0));
+
+  const exchangeTotal = (Number(returnRecord.exchangeAmount) > 0)
+    ? Number(returnRecord.exchangeAmount)
+    : exchangeItemsList.reduce((sum: number, i: any) => {
+        const q = Number(i.quantity ?? i.qty ?? 1);
+        const p = Number(i.price || i.unitPrice || 0);
+        return sum + (q * p);
+      }, 0);
+
   const priceDifference = exchangeTotal - returnCreditValue;
   const settlementMode = returnRecord.differencePaymentMethod || (returnRecord as any).difference_payment_method || (returnRecord as any).paymentMethod || (isCreditBill ? 'Customer Credit Debt' : 'Cash');
 
@@ -439,9 +462,16 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
               {returnedItemsList.map((item: any, idx: number) => {
                 const origPrice = Number(item.originalStickerPrice || item.originalUnitPrice || item.price || 0);
                 const { effectivePrice, unitDiscount } = calculateEffectiveUnitPricePaid(item, returnRecord);
-                const effectiveUnitPrice = item.netUnitPrice !== undefined ? Number(item.netUnitPrice) : effectivePrice;
+                const effectiveUnitPrice = item.net_unit_price !== undefined 
+                  ? Number(item.net_unit_price) 
+                  : (item.netUnitPrice !== undefined ? Number(item.netUnitPrice) : (effectivePrice || origPrice));
                 const unitDisc = item.unitDiscount !== undefined ? Number(item.unitDiscount) : unitDiscount;
-                const lineTotal = Number(item.qty || 1) * effectiveUnitPrice;
+                const displayQty = (Number(item.return_qty) > 0 ? Number(item.return_qty) : undefined)
+                  ?? (Number(item.quantity) > 0 ? Number(item.quantity) : undefined)
+                  ?? (Number(item.qty) > 0 ? Number(item.qty) : undefined)
+                  ?? (Number(item.returned_quantity) > 0 ? Number(item.returned_quantity) : undefined)
+                  ?? 1;
+                const lineTotal = displayQty * effectiveUnitPrice;
 
                 return (
                   <tr key={idx} className="hover:bg-rose-50/30">
@@ -453,7 +483,7 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
                         </div>
                       )}
                     </td>
-                    <td className="py-2 px-3 text-center text-slate-600 font-semibold">{item.qty} {item.unit || ''}</td>
+                    <td className="py-2 px-3 text-center text-slate-600 font-semibold">{displayQty} {item.unit || ''}</td>
                     <td className="py-2 px-3 text-right text-slate-600 font-semibold">{symbol} {formatNum(effectiveUnitPrice)}</td>
                     <td className="py-2 px-3 text-right font-bold text-rose-700">{symbol} {formatNum(lineTotal)}</td>
                   </tr>
@@ -481,12 +511,13 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
               </thead>
               <tbody className="divide-y divide-emerald-50">
                 {exchangeItemsList.map((item: any, idx: number) => {
+                  const displayQty = Number(item.quantity ?? item.qty ?? 1);
                   const unitPrice = Number(item.price || item.unitPrice || 0);
-                  const total = Number(item.total !== undefined ? item.total : (Number(item.qty || 1) * unitPrice));
+                  const total = Number(item.total !== undefined ? item.total : (displayQty * unitPrice));
                   return (
                     <tr key={idx} className="hover:bg-emerald-50/30">
                       <td className="py-2 px-3 font-bold text-slate-800">⇄ {item.productName || item.name}</td>
-                      <td className="py-2 px-3 text-center text-slate-600 font-semibold">{item.qty} {item.unit || ''}</td>
+                      <td className="py-2 px-3 text-center text-slate-600 font-semibold">{displayQty} {item.unit || ''}</td>
                       <td className="py-2 px-3 text-right text-slate-600 font-semibold">{symbol} {formatNum(unitPrice)}</td>
                       <td className="py-2 px-3 text-right font-bold text-emerald-700">{symbol} {formatNum(total)}</td>
                     </tr>
@@ -762,13 +793,16 @@ function QuotationPreview({ quote, isSinhala, shopSettings }: { quote: any; isSi
           </thead>
           <tbody className="divide-y divide-slate-100">
             {rawItems.map((item: any, idx: number) => {
-              const gross = (item.qty || 0) * (item.price || 0);
-              const discVal = Number(item.discount || 0);
-              const discType = item.discountType || 'amount';
-              const discAmt = (discType === 'percent' || discType === 'percentage') ? (gross * discVal / 100) : discVal;
-              const lineTotal = item.total !== undefined ? item.total : Math.max(0, gross - discAmt);
+              const qty = Number(item.quantity ?? item.qty ?? 0);
+              const price = Number(item.unit_price ?? item.price ?? 0);
+              const gross = qty * price;
+              const discVal = Number(item.discount_value ?? item.discount ?? 0);
+              const discType = String(item.discount_type ?? item.discountType ?? 'AMOUNT').toUpperCase();
+              const isPct = discType === 'PERCENT' || discType === 'PERCENTAGE' || discType === '%';
+              const discAmt = isPct ? (gross * (discVal / 100)) : (discVal || 0);
+              const lineTotal = item.total !== undefined ? Number(item.total) : Math.max(0, gross - discAmt);
               const discDisplay = discAmt > 0 
-                ? ((discType === 'percent' || discType === 'percentage') ? `-${discVal}%` : `-${symbol} ${convert(discVal).toLocaleString()}`)
+                ? (isPct ? `-${discVal}%` : `-${symbol} ${convert(discVal).toLocaleString()}`)
                 : '-';
 
               return (
@@ -779,8 +813,8 @@ function QuotationPreview({ quote, isSinhala, shopSettings }: { quote: any; isSi
                     {item.unit && <span className="ml-1.5 px-1.5 py-0.5 bg-amber-50 text-amber-800 text-[9px] font-bold rounded">{item.unit}</span>}
                     {(item.barcode || item.sku) && <div className="text-[9px] font-mono text-slate-400">Code: {item.barcode || item.sku}</div>}
                   </td>
-                  <td className="p-3 text-center font-black text-slate-700">{item.qty}</td>
-                  <td className="p-3 text-right font-semibold text-slate-600">{symbol} {convert(item.price).toLocaleString()}</td>
+                  <td className="p-3 text-center font-black text-slate-700">{qty}</td>
+                  <td className="p-3 text-right font-semibold text-slate-600">{symbol} {convert(price).toLocaleString()}</td>
                   <td className="p-3 text-right font-bold text-emerald-600">{discDisplay}</td>
                   <td className="p-3 text-right font-black text-slate-900">{symbol} {convert(lineTotal).toLocaleString()}</td>
                 </tr>
@@ -792,15 +826,23 @@ function QuotationPreview({ quote, isSinhala, shopSettings }: { quote: any; isSi
 
       {/* Financial Summary */}
       {(() => {
-        const productDiscounts = rawItems.reduce((sum: number, item: any) => {
-          const gross = (item.qty || 0) * (item.price || 0);
-          const discVal = Number(item.discount || 0);
-          const discType = item.discountType || 'amount';
-          const discAmt = (discType === 'percent' || discType === 'percentage') ? (gross * discVal / 100) : discVal;
-          return sum + discAmt;
+        const grossSubtotal = rawItems.reduce((sum: number, item: any) => {
+          const qty = Number(item.quantity ?? item.qty ?? 0);
+          const price = Number(item.unit_price ?? item.price ?? 0);
+          return sum + (qty * price);
         }, 0);
-        const grossSubtotal = rawItems.reduce((sum: number, item: any) => sum + ((item.qty || 0) * (item.price || 0)), 0);
-        const totalSavings = productDiscounts + Number(quote.discount_amount || 0);
+        const totalProductDiscounts = rawItems.reduce((sum: number, item: any) => {
+          const qty = Number(item.quantity ?? item.qty ?? 0);
+          const price = Number(item.unit_price ?? item.price ?? 0);
+          const gross = qty * price;
+          const discVal = Number(item.discount_value ?? item.discount ?? 0);
+          const discType = String(item.discount_type ?? item.discountType ?? 'AMOUNT').toUpperCase();
+          const isPct = discType === 'PERCENT' || discType === 'PERCENTAGE' || discType === '%';
+          return sum + (isPct ? (gross * (discVal / 100)) : (discVal || 0));
+        }, 0);
+        const netTotal = Math.max(0, grossSubtotal - totalProductDiscounts);
+        const transportFee = Number(quote.transportation_fee || 0);
+        const grandTotal = Number(quote.total !== undefined ? quote.total : (netTotal + transportFee));
 
         return (
           <div className="flex justify-end">
@@ -811,33 +853,21 @@ function QuotationPreview({ quote, isSinhala, shopSettings }: { quote: any; isSi
                   <span>{symbol} {convert(grossSubtotal).toLocaleString()}</span>
                 </div>
               )}
-              {productDiscounts > 0 && (
-                <div className="flex justify-between text-emerald-600">
-                  <span>{isSinhala ? 'භාණ්ඩ වට්ටම්:' : 'Product Savings:'}</span>
-                  <span>-{symbol} {convert(productDiscounts).toLocaleString()}</span>
+              {totalProductDiscounts > 0 && (
+                <div className="flex justify-between text-emerald-600 font-bold">
+                  <span>{isSinhala ? 'මුළු වට්ටම:' : 'Total Discount:'}</span>
+                  <span>-{symbol} {convert(totalProductDiscounts).toLocaleString()}</span>
                 </div>
               )}
-              {quote.discount_amount && quote.discount_amount > 0 && (
-                <div className="flex justify-between text-rose-600">
-                  <span>{isSinhala ? 'අමතර වට්ටම්:' : 'Additional Discount:'}</span>
-                  <span>-{symbol} {convert(quote.discount_amount).toLocaleString()}</span>
-                </div>
-              )}
-              {totalSavings > 0 && (
-                <div className="flex justify-between text-emerald-700 font-black border-t border-dashed border-amber-200 pt-1.5 pb-0.5">
-                  <span>{isSinhala ? 'මුළු ඉතිරිය / වට්ටම:' : 'Total Savings / Discount:'}</span>
-                  <span>-{symbol} {convert(totalSavings).toLocaleString()}</span>
-                </div>
-              )}
-              {quote.transportation_fee && quote.transportation_fee > 0 && (
+              {transportFee > 0 && (
                 <div className="flex justify-between text-blue-600">
                   <span>{isSinhala ? 'ප්‍රවාහන ගාස්තු:' : 'Transportation:'}</span>
-                  <span>+{symbol} {convert(quote.transportation_fee).toLocaleString()}</span>
+                  <span>+{symbol} {convert(transportFee).toLocaleString()}</span>
                 </div>
               )}
               <div className="flex justify-between text-sm font-black text-amber-950 border-t border-amber-300 pt-2 mt-1">
                 <span>{isSinhala ? 'මුළු එකතුව:' : 'Grand Total:'}</span>
-                <span className="text-amber-600">{symbol} {convert(quote.total).toLocaleString()}</span>
+                <span className="text-amber-600">{symbol} {convert(grandTotal).toLocaleString()}</span>
               </div>
             </div>
           </div>
@@ -3275,11 +3305,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
         const matchingProd = products.find(p => p.id === prodId || p.sku === item.sku || p.barcode === item.barcode);
         const unitPrice = Number(item.price !== undefined ? item.price : (item.unit_price || item.unitPrice || 0));
         const qty = Number(item.qty || item.quantity || 1);
-        const discountVal = Number(item.discount || 0);
-        const dType = item.discountType || item.discount_type || 'fixed';
-        const isPct = dType === 'percent' || dType === 'percentage';
-        const discountAmt = isPct ? (unitPrice * qty * discountVal) / 100 : (discountVal * qty);
-        const lineTotal = Math.max(0, (unitPrice * qty) - discountAmt);
+        const discountVal = Number(item.discount_value !== undefined ? item.discount_value : (item.discount || 0));
+        const dType = String(item.discount_type || item.discountType || 'AMOUNT').toUpperCase();
+        const isPct = dType === 'PERCENT' || dType === 'PERCENTAGE' || dType === '%';
+        const itemSubtotal = unitPrice * qty;
+        const discountAmt = isPct ? (itemSubtotal * (discountVal / 100)) : (discountVal || 0);
+        const lineTotal = Math.max(0, itemSubtotal - discountAmt);
 
         return {
           productId: prodId || `prod_${Date.now()}_${idx}`,
@@ -5615,27 +5646,36 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
               });
             };
 
-            // Financial Calculations
-            // Financial Calculations
-            const numDiscountValue = Number(quoteDiscountValue || 0);
+            // Financial Calculations aligned with POS Checkout concordance:
+            // Line item: itemSubtotal = item.quantity * item.unit_price;
+            // Line discount: itemDiscount = item.discount_type === 'PERCENT' ? (itemSubtotal * (item.discount_value / 100)) : (item.discount_value || 0);
+            // Line total: itemTotal = itemSubtotal - itemDiscount;
+            // Quotation Gross Subtotal = SUM(item.quantity * item.unit_price)
+            // Quotation Total Discount = SUM(itemDiscount)
+            // Quotation Net Total = Gross Subtotal - Total Discount
+
             const numTransportationFee = Number(quoteTransportationFee || 0);
 
-            const quoteGrossSubtotal = quoteCart.reduce((sum, item) => sum + (item.qty * item.price), 0);
-            const quoteProductDiscounts = quoteCart.reduce((sum, item) => {
-              const gross = item.qty * item.price;
-              const discVal = Number(item.discount || 0);
-              const discType = item.discountType || 'amount';
-              const discAmt = (discType === 'percent') ? (gross * discVal / 100) : discVal;
-              return sum + discAmt;
+            const quoteGrossSubtotal = quoteCart.reduce((sum, item) => {
+              const qty = Number(item.quantity ?? item.qty ?? 0);
+              const price = Number(item.unit_price ?? item.price ?? 0);
+              return sum + (qty * price);
             }, 0);
-            const quoteNetItemSubtotal = Math.max(0, quoteGrossSubtotal - quoteProductDiscounts);
 
-            const quoteOverallDiscountAmount = quoteDiscountType === 'percentage' 
-              ? (quoteNetItemSubtotal * numDiscountValue / 100) 
-              : numDiscountValue;
-            const netAfterOverallDiscount = Math.max(0, quoteNetItemSubtotal - quoteOverallDiscountAmount);
-            const quoteGrandTotal = Math.max(0, netAfterOverallDiscount + numTransportationFee);
-            const quoteTotalSavings = quoteProductDiscounts + quoteOverallDiscountAmount;
+            const quoteProductDiscounts = quoteCart.reduce((sum, item) => {
+              const qty = Number(item.quantity ?? item.qty ?? 0);
+              const price = Number(item.unit_price ?? item.price ?? 0);
+              const itemSubtotal = qty * price;
+              const discVal = Number(item.discount_value ?? item.discount ?? 0);
+              const discType = String(item.discount_type ?? item.discountType ?? 'AMOUNT').toUpperCase();
+              const isPct = discType === 'PERCENT' || discType === 'PERCENTAGE' || discType === '%';
+              const itemDiscount = isPct ? (itemSubtotal * (discVal / 100)) : (discVal || 0);
+              return sum + itemDiscount;
+            }, 0);
+
+            const quoteNetItemSubtotal = Math.max(0, quoteGrossSubtotal - quoteProductDiscounts);
+            const quoteGrandTotal = Math.max(0, quoteNetItemSubtotal + numTransportationFee);
+            const quoteTotalSavings = quoteProductDiscounts;
 
             const handleSaveQuotation = async (action: 'save' | 'print' | 'pdf' = 'save') => {
               if (!quoteCustomerName.trim()) {
@@ -5651,11 +5691,33 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 customer_phone: quoteCustomerPhone,
                 customer_address: quoteCustomerAddress,
                 validity_period: quoteValidityPeriod || '30 Days',
-                items: quoteCart,
+                items: quoteCart.map(item => {
+                  const qty = Number(item.quantity ?? item.qty ?? 0);
+                  const price = Number(item.unit_price ?? item.price ?? 0);
+                  const itemSubtotal = qty * price;
+                  const discVal = Number(item.discount_value ?? item.discount ?? 0);
+                  const discType = String(item.discount_type ?? item.discountType ?? 'AMOUNT').toUpperCase();
+                  const isPct = discType === 'PERCENT' || discType === 'PERCENTAGE' || discType === '%';
+                  const itemDiscount = isPct ? (itemSubtotal * (discVal / 100)) : (discVal || 0);
+                  const itemTotal = Math.max(0, itemSubtotal - itemDiscount);
+                  return {
+                    ...item,
+                    qty,
+                    quantity: qty,
+                    price,
+                    unit_price: price,
+                    discount: discVal,
+                    discount_value: discVal,
+                    discount_type: isPct ? 'PERCENT' : 'AMOUNT',
+                    discountType: isPct ? 'percent' : 'amount',
+                    discount_amount: itemDiscount,
+                    total: itemTotal
+                  };
+                }),
                 subtotal: quoteGrossSubtotal,
-                discount_type: quoteDiscountType,
-                discount_value: numDiscountValue,
-                discount_amount: quoteOverallDiscountAmount,
+                discount_type: 'AMOUNT',
+                discount_value: quoteProductDiscounts,
+                discount_amount: quoteProductDiscounts,
                 transportation_fee: numTransportationFee,
                 tax_amount: 0,
                 total: quoteGrandTotal,
@@ -6127,11 +6189,33 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                 customer_phone: quoteCustomerPhone,
                                 customer_address: quoteCustomerAddress,
                                 validity_period: quoteValidityPeriod,
-                                items: quoteCart,
+                                items: quoteCart.map(item => {
+                                  const qty = Number(item.quantity ?? item.qty ?? 0);
+                                  const price = Number(item.unit_price ?? item.price ?? 0);
+                                  const itemSubtotal = qty * price;
+                                  const discVal = Number(item.discount_value ?? item.discount ?? 0);
+                                  const discType = String(item.discount_type ?? item.discountType ?? 'AMOUNT').toUpperCase();
+                                  const isPct = discType === 'PERCENT' || discType === 'PERCENTAGE' || discType === '%';
+                                  const itemDiscount = isPct ? (itemSubtotal * (discVal / 100)) : (discVal || 0);
+                                  const itemTotal = Math.max(0, itemSubtotal - itemDiscount);
+                                  return {
+                                    ...item,
+                                    qty,
+                                    quantity: qty,
+                                    price,
+                                    unit_price: price,
+                                    discount: discVal,
+                                    discount_value: discVal,
+                                    discount_type: isPct ? 'PERCENT' : 'AMOUNT',
+                                    discountType: isPct ? 'percent' : 'amount',
+                                    discount_amount: itemDiscount,
+                                    total: itemTotal
+                                  };
+                                }),
                                 subtotal: quoteGrossSubtotal,
-                                discount_type: quoteDiscountType,
-                                discount_value: numDiscountValue,
-                                discount_amount: quoteOverallDiscountAmount,
+                                discount_type: 'AMOUNT',
+                                discount_value: quoteProductDiscounts,
+                                discount_amount: quoteProductDiscounts,
                                 transportation_fee: numTransportationFee,
                                 tax_amount: 0,
                                 total: quoteGrandTotal,
@@ -6606,7 +6690,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   const items = Array.isArray(sr.returnedItems) ? sr.returnedItems : safeParseJson(sr.returnedItems, []);
                   items.forEach((ri: any, riIdx: number) => {
                     const lKey = getItemLineKey(ri, ri.lineIndex !== undefined ? ri.lineIndex : riIdx);
-                    alreadyReturnedMap[lKey] = (alreadyReturnedMap[lKey] || 0) + Number(ri.qty || 0);
+                    const riReturnedQty = Number(ri.return_qty ?? ri.quantity ?? ri.qty ?? ri.returned_quantity ?? 0);
+                    alreadyReturnedMap[lKey] = (alreadyReturnedMap[lKey] || 0) + riReturnedQty;
                   });
                 });
 
@@ -6627,11 +6712,17 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     lineId: lKey,
                     lineIndex: idx,
                     qty: qtyVal,
+                    return_qty: qtyVal,
+                    quantity: qtyVal,
+                    returned_quantity: qtyVal,
+                    price: effectivePrice,
+                    unit_price: effectivePrice,
                     originalQty: item.qty || item.quantity || 1,
                     originalUnitPrice: item.price || item.unit_price || 0,
                     originalStickerPrice: item.price || item.unit_price || 0,
                     unitDiscount,
-                    netUnitPrice: effectivePrice
+                    netUnitPrice: effectivePrice,
+                    net_unit_price: effectivePrice
                   };
                 });
 
@@ -6926,11 +7017,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                           if (val.trim()) {
                             const exactMatch = targetItems.find((i: any) => i.barcode && i.barcode.trim().toLowerCase() === val.trim().toLowerCase());
                             if (exactMatch) {
-                              const alreadyReturned = alreadyReturnedMap[exactMatch.productId] || 0;
+                              const matchIdx = targetItems.indexOf(exactMatch);
+                              const lKey = getItemLineKey(exactMatch, matchIdx);
+                              const alreadyReturned = alreadyReturnedMap[lKey] || alreadyReturnedMap[exactMatch.productId] || 0;
                               const maxReturn = Math.max(0, Number(exactMatch.qty || 0) - alreadyReturned);
-                              const curr = returnQtys[exactMatch.productId] || 0;
+                              const curr = returnQtys[lKey] || 0;
                               if (curr < maxReturn) {
-                                setReturnQtys(prev => ({ ...prev, [exactMatch.productId]: curr + 1 }));
+                                setReturnQtys(prev => ({ ...prev, [lKey]: curr + 1 }));
                                 setReturnProductSearch('');
                               }
                             }
@@ -6949,14 +7042,16 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                               alert(t(`Product "${returnProductSearch}" not found in this invoice!`, `මෙම ඉන්වොයිසියේ "${returnProductSearch}" භාණ්ඩය නොමැත!`));
                               return;
                             }
-                            const alreadyReturned = alreadyReturnedMap[matched.productId] || 0;
+                            const matchIdx = targetItems.indexOf(matched);
+                            const lKey = getItemLineKey(matched, matchIdx);
+                            const alreadyReturned = alreadyReturnedMap[lKey] || alreadyReturnedMap[matched.productId] || 0;
                             const maxReturn = Math.max(0, Number(matched.qty || 0) - alreadyReturned);
-                            const curr = returnQtys[matched.productId] || 0;
+                            const curr = returnQtys[lKey] || 0;
                             if (curr + 1 > maxReturn) {
                               alert(t(`Cannot exceed remaining returnable quantity (${maxReturn} remaining).`, `ඉතිරි ආපසු භාරගත හැකි ප්‍රමාණය ${maxReturn} කි.`));
                               return;
                             }
-                            setReturnQtys(prev => ({ ...prev, [matched.productId]: curr + 1 }));
+                            setReturnQtys(prev => ({ ...prev, [lKey]: curr + 1 }));
                             setReturnProductSearch('');
                           }
                         }}
@@ -7713,14 +7808,22 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                               </tr>
                                             </thead>
                                             <tbody className="divide-y divide-rose-100/60">
-                                              {retItemsList.map((ri: any, idx: number) => (
-                                                <tr key={idx}>
-                                                  <td className="py-1.5 px-2.5 font-bold text-slate-800">{ri.productName}</td>
-                                                  <td className="py-1.5 px-2.5 text-center font-semibold text-slate-600">{ri.qty} {ri.unit || ''}</td>
-                                                  <td className="py-1.5 px-2.5 text-right text-slate-600">{symbol} {convert(ri.price).toLocaleString()}</td>
-                                                  <td className="py-1.5 px-2.5 text-right font-black text-rose-700">{symbol} {convert(ri.qty * ri.price).toLocaleString()}</td>
-                                                </tr>
-                                              ))}
+                                              {retItemsList.map((ri: any, idx: number) => {
+                                                const displayQty = (Number(ri.return_qty) > 0 ? Number(ri.return_qty) : undefined)
+                                                  ?? (Number(ri.quantity) > 0 ? Number(ri.quantity) : undefined)
+                                                  ?? (Number(ri.qty) > 0 ? Number(ri.qty) : undefined)
+                                                  ?? (Number(ri.returned_quantity) > 0 ? Number(ri.returned_quantity) : undefined)
+                                                  ?? 1;
+                                                const riPrice = Number(ri.net_unit_price ?? ri.netUnitPrice ?? ri.price ?? ri.unit_price ?? 0);
+                                                return (
+                                                  <tr key={idx}>
+                                                    <td className="py-1.5 px-2.5 font-bold text-slate-800">{ri.productName || ri.name}</td>
+                                                    <td className="py-1.5 px-2.5 text-center font-semibold text-slate-600">{displayQty} {ri.unit || ''}</td>
+                                                    <td className="py-1.5 px-2.5 text-right text-slate-600">{symbol} {convert(riPrice).toLocaleString()}</td>
+                                                    <td className="py-1.5 px-2.5 text-right font-black text-rose-700">{symbol} {convert(displayQty * riPrice).toLocaleString()}</td>
+                                                  </tr>
+                                                );
+                                              })}
                                             </tbody>
                                           </table>
                                         </div>
@@ -7747,14 +7850,21 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                                 </tr>
                                               </thead>
                                               <tbody className="divide-y divide-emerald-100/60">
-                                                {exItemsList.map((ei: any, idx: number) => (
-                                                  <tr key={idx}>
-                                                    <td className="py-1.5 px-2.5 font-bold text-slate-800">{ei.productName}</td>
-                                                    <td className="py-1.5 px-2.5 text-center font-semibold text-slate-600">{ei.qty} {ei.unit || ''}</td>
-                                                    <td className="py-1.5 px-2.5 text-right text-slate-600">{symbol} {convert(ei.price).toLocaleString()}</td>
-                                                    <td className="py-1.5 px-2.5 text-right font-black text-emerald-700">{symbol} {convert(ei.qty * ei.price).toLocaleString()}</td>
-                                                  </tr>
-                                                ))}
+                                                {exItemsList.map((ei: any, idx: number) => {
+                                                  const displayQty = (Number(ei.exchange_qty) > 0 ? Number(ei.exchange_qty) : undefined)
+                                                    ?? (Number(ei.quantity) > 0 ? Number(ei.quantity) : undefined)
+                                                    ?? (Number(ei.qty) > 0 ? Number(ei.qty) : undefined)
+                                                    ?? 1;
+                                                  const eiPrice = Number(ei.price ?? ei.unit_price ?? 0);
+                                                  return (
+                                                    <tr key={idx}>
+                                                      <td className="py-1.5 px-2.5 font-bold text-slate-800">{ei.productName || ei.name}</td>
+                                                      <td className="py-1.5 px-2.5 text-center font-semibold text-slate-600">{displayQty} {ei.unit || ''}</td>
+                                                      <td className="py-1.5 px-2.5 text-right text-slate-600">{symbol} {convert(eiPrice).toLocaleString()}</td>
+                                                      <td className="py-1.5 px-2.5 text-right font-black text-emerald-700">{symbol} {convert(displayQty * eiPrice).toLocaleString()}</td>
+                                                    </tr>
+                                                  );
+                                                })}
                                               </tbody>
                                             </table>
                                           </div>

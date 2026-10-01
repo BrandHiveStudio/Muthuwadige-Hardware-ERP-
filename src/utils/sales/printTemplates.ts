@@ -73,17 +73,39 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
     const formatNum = (num: number) => num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const title = isSi ? 'මිල ගණන් පත්‍රය' : 'QUOTATION';
     
-    const items = typeof quote.items === 'string' ? JSON.parse(quote.items) : (quote.items || []);
-    const productDiscounts = items.reduce((sum: number, i: any) => {
-      const gross = (i.qty || 0) * (i.price || 0);
-      const discVal = Number(i.discount || 0);
-      const discType = i.discountType || 'amount';
-      const discAmt = (discType === 'percent' || discType === 'percentage') ? (gross * discVal / 100) : discVal;
-      return sum + discAmt;
-    }, 0);
-    const grossSubtotal = items.reduce((sum: number, i: any) => sum + ((i.qty || 0) * (i.price || 0)), 0);
+    const items = typeof quote.items === 'string' ? (safeParseJson(quote.items, [])) : (quote.items || []);
+    const itemsWithPricing = items.map((i: any) => {
+      const qty = Number(i.quantity ?? i.qty ?? 0);
+      const price = Number(i.unit_price ?? i.unitPrice ?? i.price ?? 0);
+      const itemSubtotal = qty * price;
+      const dVal = Number(i.discount_value ?? i.discount ?? 0);
+      const dType = String(i.discount_type ?? i.discountType ?? 'AMOUNT').toUpperCase();
+      const isPct = dType === 'PERCENT' || dType === 'PERCENTAGE' || dType === '%';
+      const itemDiscount = isPct ? (itemSubtotal * (dVal / 100)) : (dVal || 0);
+      const itemTotal = i.total !== undefined ? Number(i.total) : Math.max(0, itemSubtotal - itemDiscount);
 
-    const itemsRows = items.map((i: any) => {
+      return {
+        ...i,
+        qty,
+        quantity: qty,
+        price,
+        unit_price: price,
+        itemSubtotal,
+        discount_value: dVal,
+        itemDiscount,
+        itemTotal,
+        isPct
+      };
+    });
+
+    const grossSubtotal = itemsWithPricing.reduce((sum: number, i: any) => sum + i.itemSubtotal, 0);
+    const productDiscounts = itemsWithPricing.reduce((sum: number, i: any) => sum + i.itemDiscount, 0);
+    const totalDiscount = productDiscounts;
+    const netTotal = Math.max(0, grossSubtotal - totalDiscount);
+    const transportFee = Number(quote.transportation_fee || 0);
+    const grandTotal = Number(quote.total !== undefined ? quote.total : (netTotal + transportFee));
+
+    const itemsRows = itemsWithPricing.map((i: any) => {
       let trackingInfo = '';
       if (i.serialNo || i.batchCode) {
         const parts: string[] = [];
@@ -91,12 +113,7 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
         if (i.batchCode) parts.push(`Batch: ${i.batchCode}`);
         trackingInfo = `<div style="font-size: 10px; font-weight: normal; color: #6b7280; margin-top: 1px;">${parts.join(' | ')}</div>`;
       }
-      const gross = (i.qty || 0) * (i.price || 0);
-      const discVal = Number(i.discount || 0);
-      const discType = i.discountType || 'amount';
-      const discAmt = (discType === 'percent' || discType === 'percentage') ? (gross * discVal / 100) : discVal;
-      const lineTotal = i.total !== undefined ? i.total : Math.max(0, gross - discAmt);
-      const discInfo = discAmt > 0 ? `<div style="font-size: 10px; font-weight: normal; color: #16a34a; margin-top: 1px;">Disc: -${discType === 'percent' || discType === 'percentage' ? discVal + '%' : symbolStr + ' ' + formatNum(discVal)} (-${symbolStr} ${formatNum(discAmt)})</div>` : '';
+      const discInfo = i.itemDiscount > 0 ? `<div style="font-size: 10px; font-weight: normal; color: #16a34a; margin-top: 1px;">Disc: -${i.isPct ? i.discount_value + '%' : symbolStr + ' ' + formatNum(i.discount_value)} (-${symbolStr} ${formatNum(i.itemDiscount)})</div>` : '';
 
       return `
         <tr style="border-bottom: 1px dashed #e5e7eb;">
@@ -111,7 +128,7 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
             ${i.qty} x ${symbolStr} ${formatNum(i.price)}
           </td>
           <td style="padding: 2px 0 6px 0; text-align: right; color: #1f2937; font-weight: bold; font-size: 13px;">
-            ${symbolStr} ${formatNum(lineTotal)}
+            ${symbolStr} ${formatNum(i.itemTotal)}
           </td>
         </tr>
       `;
@@ -326,39 +343,27 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
             </table>
             
             <table class="summary-table">
-              ${grossSubtotal !== quote.total ? `
+              ${grossSubtotal > 0 ? `
               <tr>
                 <td>${isSi ? 'උප එකතුව:' : 'Subtotal:'}</td>
                 <td class="value">${symbolStr} ${formatNum(grossSubtotal)}</td>
               </tr>
               ` : ''}
-              ${productDiscounts > 0 ? `
-              <tr style="color: #16a34a;">
-                <td>${isSi ? 'භාණ්ඩ වට්ටම්:' : 'Product Savings:'}</td>
-                <td class="value" style="color: #16a34a;">-${symbolStr} ${formatNum(productDiscounts)}</td>
+              ${totalDiscount > 0 ? `
+              <tr style="color: #16a34a; font-weight: bold;">
+                <td>${isSi ? 'මුළු වට්ටම:' : 'Total Discount:'}</td>
+                <td class="value" style="color: #16a34a;">-${symbolStr} ${formatNum(totalDiscount)}</td>
               </tr>
               ` : ''}
-              ${quote.discount_amount && quote.discount_amount > 0 ? `
-              <tr style="color: #dc2626;">
-                <td>${isSi ? 'අමතර වට්ටම්:' : 'Additional Discount:'}</td>
-                <td class="value" style="color: #dc2626;">-${symbolStr} ${formatNum(quote.discount_amount)}</td>
-              </tr>
-              ` : ''}
-              ${(productDiscounts + (quote.discount_amount || 0)) > 0 ? `
-              <tr style="font-weight: bold; color: #16a34a;">
-                <td>${isSi ? 'මුළු ඉතිරිය / වට්ටම:' : 'Total Savings / Discount:'}</td>
-                <td class="value" style="color: #16a34a;">-${symbolStr} ${formatNum(productDiscounts + (quote.discount_amount || 0))}</td>
-              </tr>
-              ` : ''}
-              ${quote.transportation_fee && quote.transportation_fee > 0 ? `
+              ${transportFee > 0 ? `
               <tr>
                 <td>${isSi ? 'ප්‍රවාහන ගාස්තු:' : 'Transportation:'}</td>
-                <td class="value">+${symbolStr} ${formatNum(quote.transportation_fee)}</td>
+                <td class="value">+${symbolStr} ${formatNum(transportFee)}</td>
               </tr>
               ` : ''}
               <tr class="total-row">
                 <td>${isSi ? 'මුළු එකතුව:' : 'Total Amount:'}</td>
-                <td class="value">${symbolStr} ${formatNum(quote.total)}</td>
+                <td class="value">${symbolStr} ${formatNum(grandTotal)}</td>
               </tr>
             </table>
             
@@ -395,18 +400,39 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
   const noteLine2 = isSi ? 'ඔබගේ ව්‍යාපාරයට ස්තූතියි!' : 'Thank you for your business!';
   const signeeLabel = isSi ? 'බලයලත් අත්සන' : 'Authorized Signee';
 
-  const items = typeof quote.items === 'string' ? JSON.parse(quote.items) : (quote.items || []);
-  const productDiscounts = items.reduce((sum: number, i: any) => {
-    const gross = (i.qty || 0) * (i.price || 0);
-    const discVal = Number(i.discount || 0);
-    const discType = i.discountType || 'amount';
-    const discAmt = (discType === 'percent' || discType === 'percentage') ? (gross * discVal / 100) : discVal;
-    return sum + discAmt;
-  }, 0);
-  const grossSubtotal = items.reduce((sum: number, i: any) => sum + ((i.qty || 0) * (i.price || 0)), 0);
+  const items = typeof quote.items === 'string' ? (safeParseJson(quote.items, [])) : (quote.items || []);
+  const itemsWithPricing = items.map((i: any) => {
+    const qty = Number(i.quantity ?? i.qty ?? 0);
+    const price = Number(i.unit_price ?? i.unitPrice ?? i.price ?? 0);
+    const itemSubtotal = qty * price;
+    const dVal = Number(i.discount_value ?? i.discount ?? 0);
+    const dType = String(i.discount_type ?? i.discountType ?? 'AMOUNT').toUpperCase();
+    const isPct = dType === 'PERCENT' || dType === 'PERCENTAGE' || dType === '%';
+    const itemDiscount = isPct ? (itemSubtotal * (dVal / 100)) : (dVal || 0);
+    const itemTotal = i.total !== undefined ? Number(i.total) : Math.max(0, itemSubtotal - itemDiscount);
+
+    return {
+      ...i,
+      qty,
+      quantity: qty,
+      price,
+      unit_price: price,
+      itemSubtotal,
+      discount_value: dVal,
+      itemDiscount,
+      itemTotal,
+      isPct
+    };
+  });
+
+  const grossSubtotal = itemsWithPricing.reduce((sum: number, i: any) => sum + i.itemSubtotal, 0);
+  const totalDiscount = itemsWithPricing.reduce((sum: number, i: any) => sum + i.itemDiscount, 0);
+  const netTotal = Math.max(0, grossSubtotal - totalDiscount);
+  const transportFee = Number(quote.transportation_fee || 0);
+  const grandTotal = Number(quote.total !== undefined ? quote.total : (netTotal + transportFee));
 
   const discColLabel = isSi ? 'වට්ටම' : 'Discount';
-  const itemsRows = items.map((i: any) => {
+  const itemsRows = itemsWithPricing.map((i: any) => {
     let trackingInfo = '';
     if (i.serialNo || i.batchCode) {
       const parts: string[] = [];
@@ -414,23 +440,18 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
       if (i.batchCode) parts.push(`Batch: ${i.batchCode}`);
       trackingInfo = `<div style="font-size: 9px; font-weight: normal; color: #9ca3af; margin-top: 2px;">${parts.join(' | ')}</div>`;
     }
-    const gross = (i.qty || 0) * (i.price || 0);
-    const discVal = Number(i.discount || 0);
-    const discType = i.discountType || 'amount';
-    const discAmt = (discType === 'percent' || discType === 'percentage') ? (gross * discVal / 100) : discVal;
-    const lineTotal = i.total !== undefined ? i.total : Math.max(0, gross - discAmt);
-    const discStr = discAmt > 0 ? (discType === 'percent' || discType === 'percentage' ? `-${discVal}%` : `-${symbolStr} ${formatNum(discVal)}`) : '-';
+    const discStr = i.itemDiscount > 0 ? (i.isPct ? `-${i.discount_value}%` : `-${symbolStr} ${formatNum(i.discount_value)}`) : '-';
 
     return `
       <tr style="border-bottom: 1px solid #e5e7eb;">
         <td style="padding: 12px 15px; font-weight: 700; text-align: left; color: #464646;">
-          ${i.productName}
+          ${i.productName || i.name}
           ${trackingInfo}
         </td>
         <td style="padding: 12px 15px; text-align: center; color: #4b5563;">${i.qty}</td>
         <td style="padding: 12px 15px; text-align: right; color: #4b5563;">${symbolStr} ${formatNum(i.price)}</td>
         <td style="padding: 12px 15px; text-align: right; color: #16a34a; font-weight: 600;">${discStr}</td>
-        <td style="padding: 12px 15px; text-align: right; color: #464646; font-weight: 700;">${symbolStr} ${formatNum(lineTotal)}</td>
+        <td style="padding: 12px 15px; text-align: right; color: #464646; font-weight: 700;">${symbolStr} ${formatNum(i.itemTotal)}</td>
       </tr>
     `;
   }).join('');
@@ -688,39 +709,27 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
           
           <div class="totals-section">
             <div class="totals-box">
-              ${grossSubtotal !== quote.total ? `
+              ${grossSubtotal > 0 ? `
               <div class="total-row" style="color: #6b7280;">
                 <span>${isSi ? 'උප එකතුව:' : 'Subtotal:'}</span>
                 <span>${symbolStr} ${formatNum(grossSubtotal)}</span>
               </div>
               ` : ''}
-              ${productDiscounts > 0 ? `
-              <div class="total-row" style="color: #16a34a;">
-                <span>${isSi ? 'භාණ්ඩ වට්ටම්:' : 'Product Savings:'}</span>
-                <span>-${symbolStr} ${formatNum(productDiscounts)}</span>
-              </div>
-              ` : ''}
-              ${quote.discount_amount && quote.discount_amount > 0 ? `
-              <div class="total-row" style="color: #dc2626;">
-                <span>${isSi ? 'අමතර වට්ටම්:' : 'Additional Discount:'}</span>
-                <span>-${symbolStr} ${formatNum(quote.discount_amount)}</span>
-              </div>
-              ` : ''}
-              ${(productDiscounts + (quote.discount_amount || 0)) > 0 ? `
-              <div class="total-row" style="font-weight: 700; color: #16a34a; border-top: 1px dashed #e5e7eb; margin-top: 4px; padding-top: 6px;">
+              ${totalDiscount > 0 ? `
+              <div class="total-row" style="font-weight: 700; color: #16a34a;">
                 <span>${isSi ? 'මුළු ඉතිරිය / වට්ටම:' : 'Total Savings / Discount:'}</span>
-                <span>-${symbolStr} ${formatNum(productDiscounts + (quote.discount_amount || 0))}</span>
+                <span>-${symbolStr} ${formatNum(totalDiscount)}</span>
               </div>
               ` : ''}
-              ${quote.transportation_fee && quote.transportation_fee > 0 ? `
+              ${transportFee > 0 ? `
               <div class="total-row" style="color: #2563eb;">
                 <span>${isSi ? 'ප්‍රවාහන ගාස්තු:' : 'Transportation:'}</span>
-                <span>+${symbolStr} ${formatNum(quote.transportation_fee)}</span>
+                <span>+${symbolStr} ${formatNum(transportFee)}</span>
               </div>
               ` : ''}
               <div class="total-row grand-total">
                 <span>${totalDueLabel}</span>
-                <span>${symbolStr} ${formatNum(quote.total)}</span>
+                <span>${symbolStr} ${formatNum(grandTotal)}</span>
               </div>
             </div>
           </div>
@@ -2155,26 +2164,56 @@ const generateReturnPrintHTML = (
     ? (isSi ? 'භාණ්ඩ හුවමාරු රසීදුව' : 'EXCHANGE RECEIPT')
     : (displayMethod === 'Credit Note' ? (isSi ? 'ණය සටහන් රසීදුව' : 'CREDIT NOTE RECEIPT') : (isSi ? 'ආපසු භාරගැනීමේ රසීදුව' : 'RETURN RECEIPT'));
 
-  const grossReturnVal = returnedItems.reduce((sum: number, i: any) => sum + ((i.qty || 1) * Number(i.originalStickerPrice || i.originalUnitPrice || i.price || 0)), 0);
-  const discountReturnVal = returnedItems.reduce((sum: number, i: any) => sum + ((i.qty || 1) * Number(i.unitDiscount || 0)), 0);
-  const returnCreditValue = Number(sr.returnAmount !== undefined ? sr.returnAmount : (sr.totalRefunded || (grossReturnVal - discountReturnVal) || 0));
-  const exchangeTotal = Number(sr.exchangeAmount !== undefined ? sr.exchangeAmount : exchangeItems.reduce((sum: number, i: any) => sum + ((i.qty || 1) * Number(i.price || i.unitPrice || 0)), 0));
+  const totalReturnCredit = returnedItems.reduce((sum: number, item: any) => {
+    const displayQty = (Number(item.return_qty) > 0 ? Number(item.return_qty) : undefined)
+      ?? (Number(item.quantity) > 0 ? Number(item.quantity) : undefined)
+      ?? (Number(item.qty) > 0 ? Number(item.qty) : undefined)
+      ?? (Number(item.returned_quantity) > 0 ? Number(item.returned_quantity) : undefined)
+      ?? 1;
+    const { effectivePrice } = calculateEffectiveUnitPricePaid(item, sr);
+    const netUnitPrice = item.net_unit_price !== undefined 
+      ? Number(item.net_unit_price) 
+      : (item.netUnitPrice !== undefined ? Number(item.netUnitPrice) : (effectivePrice || Number(item.originalUnitPrice || item.price || 0)));
+    return sum + (displayQty * netUnitPrice);
+  }, 0);
+
+  const returnCreditValue = (Number(sr.returnAmount) > 0)
+    ? Number(sr.returnAmount)
+    : (totalReturnCredit > 0
+        ? totalReturnCredit
+        : Number(sr.totalRefunded || 0));
+
+  const exchangeTotal = (Number(sr.exchangeAmount) > 0)
+    ? Number(sr.exchangeAmount)
+    : exchangeItems.reduce((sum: number, i: any) => {
+        const q = Number(i.quantity ?? i.qty ?? 1);
+        const p = Number(i.price || i.unitPrice || 0);
+        return sum + (q * p);
+      }, 0);
+
   const priceDifference = exchangeTotal - returnCreditValue;
   const settlementMode = sr.differencePaymentMethod || (sr as any).difference_payment_method || (sr as any).paymentMethod || (isCreditBill ? 'Customer Credit Debt' : 'Cash');
 
   const retRows = returnedItems.map((i: any) => {
     const origPrice = Number(i.originalStickerPrice || i.originalUnitPrice || i.price || 0);
     const { effectivePrice, unitDiscount } = calculateEffectiveUnitPricePaid(i, sr);
-    const effectiveUnitPrice = i.netUnitPrice !== undefined ? Number(i.netUnitPrice) : effectivePrice;
+    const effectiveUnitPrice = i.net_unit_price !== undefined 
+      ? Number(i.net_unit_price) 
+      : (i.netUnitPrice !== undefined ? Number(i.netUnitPrice) : (effectivePrice || origPrice));
     const unitDisc = i.unitDiscount !== undefined ? Number(i.unitDiscount) : unitDiscount;
-    const lineTotal = Number(i.qty || 1) * effectiveUnitPrice;
+    const displayQty = (Number(i.return_qty) > 0 ? Number(i.return_qty) : undefined)
+      ?? (Number(i.quantity) > 0 ? Number(i.quantity) : undefined)
+      ?? (Number(i.qty) > 0 ? Number(i.qty) : undefined)
+      ?? (Number(i.returned_quantity) > 0 ? Number(i.returned_quantity) : undefined)
+      ?? 1;
+    const lineTotal = displayQty * effectiveUnitPrice;
     return `
       <tr style="border-bottom: 1px dashed #e5e7eb;">
         <td style="padding: 5px 0 3px 0; text-align: left; color: #1f2937; font-weight: bold; font-size: 11px;">
           ${i.productName || i.name}
           ${unitDisc > 0 ? `<div style="font-size: 9px; color: #dc2626; font-weight: normal;">${symbolStr} ${formatNum(origPrice)} - ${symbolStr} ${formatNum(unitDisc)} disc = ${symbolStr} ${formatNum(effectiveUnitPrice)}/pc</div>` : ''}
         </td>
-        <td style="padding: 5px 0 3px 0; text-align: center; font-size: 11px;">${i.qty} ${i.unit || ''}</td>
+        <td style="padding: 5px 0 3px 0; text-align: center; font-size: 11px;">${displayQty} ${i.unit || ''}</td>
         <td style="padding: 5px 0 3px 0; text-align: right; font-weight: bold; font-size: 11px;">${symbolStr} ${formatNum(effectiveUnitPrice)}</td>
         <td style="padding: 5px 0 3px 0; text-align: right; font-weight: bold; color: #dc2626; font-size: 11px;">${symbolStr} ${formatNum(lineTotal)}</td>
       </tr>
@@ -2182,12 +2221,13 @@ const generateReturnPrintHTML = (
   }).join('');
 
   const exRows = exchangeItems.map((i: any) => {
+    const displayQty = Number(i.quantity ?? i.qty ?? 1);
     const unitPrice = Number(i.price || i.unitPrice || 0);
-    const lineTotal = Number(i.total !== undefined ? i.total : (Number(i.qty || 1) * unitPrice));
+    const lineTotal = Number(i.total !== undefined ? i.total : (displayQty * unitPrice));
     return `
       <tr style="border-bottom: 1px dashed #e5e7eb;">
         <td style="padding: 5px 0 3px 0; text-align: left; color: #1f2937; font-weight: bold; font-size: 11px;">⇄ ${i.productName || i.name}</td>
-        <td style="padding: 5px 0 3px 0; text-align: center; font-size: 11px;">${i.qty} ${i.unit || ''}</td>
+        <td style="padding: 5px 0 3px 0; text-align: center; font-size: 11px;">${displayQty} ${i.unit || ''}</td>
         <td style="padding: 5px 0 3px 0; text-align: right; font-size: 11px;">${symbolStr} ${formatNum(unitPrice)}</td>
         <td style="padding: 5px 0 3px 0; text-align: right; font-weight: bold; color: #059669; font-size: 11px;">${symbolStr} ${formatNum(lineTotal)}</td>
       </tr>

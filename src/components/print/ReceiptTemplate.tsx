@@ -189,16 +189,22 @@ export const ReturnReceiptTemplate: React.FC<ReturnReceiptTemplateProps> = ({ re
   // Calculate return items net totals
   const computedReturnedItems = returnedItems.map((item: any) => {
     const origPrice = Number(item.originalStickerPrice || item.originalUnitPrice || item.price || 0);
-    const itemQty = Number(item.qty || item.quantity || 1);
+    const displayQty = (Number(item.return_qty) > 0 ? Number(item.return_qty) : undefined)
+      ?? (Number(item.quantity) > 0 ? Number(item.quantity) : undefined)
+      ?? (Number(item.qty) > 0 ? Number(item.qty) : undefined)
+      ?? (Number(item.returned_quantity) > 0 ? Number(item.returned_quantity) : undefined)
+      ?? 1;
     const { effectivePrice, unitDiscount } = calculateEffectiveUnitPricePaid(item, returnData);
-    const netUnitPrice = item.netUnitPrice !== undefined ? Number(item.netUnitPrice) : effectivePrice;
+    const netUnitPrice = item.net_unit_price !== undefined 
+      ? Number(item.net_unit_price) 
+      : (item.netUnitPrice !== undefined ? Number(item.netUnitPrice) : (effectivePrice || origPrice));
     const unitDisc = item.unitDiscount !== undefined ? Number(item.unitDiscount) : unitDiscount;
-    const lineTotal = itemQty * netUnitPrice;
+    const lineTotal = displayQty * netUnitPrice;
     return {
       ...item,
       name: item.productName || item.name || 'Item',
       sku: item.sku || item.productId || '',
-      qty: itemQty,
+      qty: displayQty,
       origPrice,
       unitDiscount: unitDisc,
       netUnitPrice,
@@ -206,23 +212,20 @@ export const ReturnReceiptTemplate: React.FC<ReturnReceiptTemplateProps> = ({ re
     };
   });
 
-  const grossReturnTotal = computedReturnedItems.reduce((sum, it) => sum + (it.qty * it.origPrice), 0);
-  const totalReturnDiscount = computedReturnedItems.reduce((sum, it) => sum + (it.qty * it.unitDiscount), 0);
-  const returnCreditValue = Number(
-    returnData.netReturnTotal !== undefined
-      ? returnData.netReturnTotal
-      : (returnData.returnAmount !== undefined 
-          ? returnData.returnAmount 
-          : (returnData.totalRefunded || (grossReturnTotal - totalReturnDiscount) || 0))
-  );
+  const totalReturnCredit = computedReturnedItems.reduce((sum, it) => sum + (it.qty * it.netUnitPrice), 0);
+  const returnCreditValue = (Number(returnData.netReturnTotal) > 0)
+    ? Number(returnData.netReturnTotal)
+    : ((Number(returnData.returnAmount) > 0)
+        ? Number(returnData.returnAmount)
+        : (totalReturnCredit > 0
+            ? totalReturnCredit
+            : Number(returnData.totalRefunded || 0)));
 
-  const exchangeTotal = Number(
-    returnData.exchangeItemsTotal !== undefined
-      ? returnData.exchangeItemsTotal
-      : (returnData.exchangeAmount !== undefined
-          ? returnData.exchangeAmount
-          : exchangeItems.reduce((sum, it) => sum + (Number(it.qty || 1) * Number(it.price || it.unitPrice || 0)), 0))
-  );
+  const exchangeTotal = (Number(returnData.exchangeItemsTotal) > 0)
+    ? Number(returnData.exchangeItemsTotal)
+    : ((Number(returnData.exchangeAmount) > 0)
+        ? Number(returnData.exchangeAmount)
+        : exchangeItems.reduce((sum, it) => sum + (Number(it.quantity ?? it.qty ?? 1) * Number(it.price || it.unitPrice || 0)), 0));
 
   const priceDifference = exchangeTotal - returnCreditValue;
   const settlementMode = returnData.differencePaymentMethod || returnData.difference_payment_method || returnData.paymentMethod || (isCreditBill ? 'Customer Credit Debt' : 'Cash');
@@ -311,7 +314,7 @@ export const ReturnReceiptTemplate: React.FC<ReturnReceiptTemplateProps> = ({ re
           </div>
           <div className="space-y-1">
             {exchangeItems.map((item: any, idx: number) => {
-              const qty = Number(item.qty || 1);
+              const qty = Number(item.quantity ?? item.qty ?? 1);
               const unitPrice = Number(item.price || item.unitPrice || 0);
               const total = Number(item.total !== undefined ? item.total : qty * unitPrice);
               const name = item.productName || item.name || 'Exchange Item';

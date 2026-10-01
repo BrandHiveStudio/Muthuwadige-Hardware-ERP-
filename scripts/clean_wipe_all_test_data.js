@@ -32,15 +32,16 @@ const TABLES_TO_WIPE = [
   'barcodes',
   'categories',
 
-  // Purchasing
+  // Purchasing & Suppliers
   'purchases',
   'purchase_items',
   'purchase_orders',
   'purchase_order_items',
   'purchase_returns',
   'purchase_return_items',
+  'suppliers',
 
-  // Financials & Ledger
+  // Financials, Ledger & Cash
   'transactions',
   'cash_book',
   'cheques',
@@ -51,23 +52,39 @@ const TABLES_TO_WIPE = [
   'expenses',
   'customer_transactions',
 
-  // Entities (preserving users, profiles, roles, custom_permissions)
+  // Customers & Staff/Others
   'customers',
-  'suppliers',
   'employees',
 
-  // Synchronization & Logs
+  // Synchronization, Logs & Tombs
   'sync_queue',
   'sync_logs',
   'audit_logs',
-  'backup_logs'
+  'backup_logs',
+  'deleted_records'
 ];
 
 const PRESERVED_TABLES = [
   'users',
-  'profiles',
   'roles',
+  'profiles',
   'custom_permissions'
+];
+
+const VERIFICATION_KEYS = [
+  'users',
+  'roles',
+  'profiles',
+  'custom_permissions',
+  'products',
+  'sales',
+  'purchase_orders',
+  'purchase_returns',
+  'transactions',
+  'cheque_registry',
+  'customers',
+  'suppliers',
+  'sync_queue'
 ];
 
 async function wipeSqlite(filePath, label) {
@@ -85,6 +102,10 @@ async function wipeSqlite(filePath, label) {
     driver: sqlite3.Database
   });
 
+  try {
+    await db.run('PRAGMA foreign_keys = OFF;');
+  } catch (_) {}
+
   for (const table of TABLES_TO_WIPE) {
     try {
       await db.run(`DELETE FROM "${table}"`);
@@ -96,6 +117,12 @@ async function wipeSqlite(filePath, label) {
     }
   }
 
+  // Reset sqlite_sequence for wiped tables if it exists
+  try {
+    const placeholders = TABLES_TO_WIPE.map(t => `'${t}'`).join(',');
+    await db.run(`DELETE FROM sqlite_sequence WHERE name IN (${placeholders})`);
+  } catch (_) {}
+
   // Reset sync tracking in system_settings if table exists
   try {
     await db.run(
@@ -104,9 +131,13 @@ async function wipeSqlite(filePath, label) {
     console.log(`  ✓ Reset system_settings sync counters`);
   } catch (_) {}
 
+  try {
+    await db.run('PRAGMA foreign_keys = ON;');
+  } catch (_) {}
+
   // Vacuum SQLite database
   try {
-    await db.run("VACUUM;");
+    await db.run('VACUUM;');
     console.log(`  ✓ Database VACUUM complete.`);
   } catch (err) {
     console.warn(`  ! VACUUM notice:`, err.message);
@@ -114,17 +145,7 @@ async function wipeSqlite(filePath, label) {
 
   // Report counts
   const report = {};
-  for (const table of PRESERVED_TABLES) {
-    try {
-      const res = await db.get(`SELECT COUNT(*) as count FROM "${table}"`);
-      report[table] = res?.count ?? 'N/A';
-    } catch {
-      report[table] = 'Table not present';
-    }
-  }
-
-  const sampleWiped = ['products', 'sales', 'transactions', 'customers', 'suppliers', 'sync_queue'];
-  for (const table of sampleWiped) {
+  for (const table of VERIFICATION_KEYS) {
     try {
       const res = await db.get(`SELECT COUNT(*) as count FROM "${table}"`);
       report[table] = res?.count ?? 0;
@@ -173,17 +194,7 @@ async function wipeTurso() {
 
   // Report counts
   const report = {};
-  for (const table of PRESERVED_TABLES) {
-    try {
-      const res = await client.execute(`SELECT COUNT(*) as count FROM "${table}"`);
-      report[table] = res?.rows?.[0]?.count ?? 'N/A';
-    } catch {
-      report[table] = 'Table not present';
-    }
-  }
-
-  const sampleWiped = ['products', 'sales', 'transactions', 'customers', 'suppliers', 'sync_queue'];
-  for (const table of sampleWiped) {
+  for (const table of VERIFICATION_KEYS) {
     try {
       const res = await client.execute(`SELECT COUNT(*) as count FROM "${table}"`);
       report[table] = res?.rows?.[0]?.count ?? 0;
@@ -196,7 +207,7 @@ async function wipeTurso() {
 }
 
 async function run() {
-  console.log('🚀 Starting Clean Wipe (Preserving Users, Roles, and Permissions)...');
+  console.log('🚀 Starting Clean Wipe (Strictly Preserving Users, Roles, and Profiles)...');
 
   // 1. Workspace SQLite
   const wsDbPath = path.resolve('hardware.db');
@@ -213,24 +224,36 @@ async function run() {
   // 3. Turso Cloud
   const tursoReport = await wipeTurso();
 
-  console.log('\n========================================');
-  console.log('📊 DATABASE CLEAN STATE VERIFICATION:');
-  console.log('========================================');
-  if (wsReport) {
-    console.log('\n[Workspace SQLite]:');
-    console.table(wsReport);
+  console.log('\n===============================================================');
+  console.log('📊 DATABASE CLEAN STATE VERIFICATION (Target: 0 for operational, >0 for preserved)');
+  console.log('===============================================================');
+
+  const combinedTable = [];
+  for (const key of VERIFICATION_KEYS) {
+    const isPreserved = PRESERVED_TABLES.includes(key);
+    combinedTable.push({
+      Table: key,
+      Type: isPreserved ? 'PRESERVED' : 'OPERATIONAL',
+      'Workspace SQLite': wsReport ? wsReport[key] : 'N/A',
+      'AppData SQLite': appDataReport ? appDataReport[key] : 'N/A',
+      'Turso Cloud': tursoReport ? tursoReport[key] : 'N/A',
+      Status: isPreserved
+        ? (tursoReport && tursoReport[key] > 0 ? '✓ Preserved' : '✓ OK')
+        : (
+            (wsReport ? wsReport[key] === 0 : true) &&
+            (appDataReport ? appDataReport[key] === 0 : true) &&
+            (tursoReport ? tursoReport[key] === 0 : true)
+              ? '✓ Clean (0)'
+              : '❌ Not 0'
+          )
+    });
   }
-  if (appDataReport) {
-    console.log('\n[AppData SQLite]:');
-    console.table(appDataReport);
-  }
-  if (tursoReport) {
-    console.log('\n[Turso Cloud]:');
-    console.table(tursoReport);
-  }
+
+  console.table(combinedTable);
 }
 
 run().catch(err => {
   console.error('Fatal clean wipe error:', err);
   process.exit(1);
 });
+
