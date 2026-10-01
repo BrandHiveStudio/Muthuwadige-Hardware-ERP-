@@ -5657,17 +5657,19 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             const numTransportationFee = Number(quoteTransportationFee || 0);
 
             const quoteGrossSubtotal = quoteCart.reduce((sum, item) => {
-              const qty = Number(item.quantity ?? item.qty ?? 0);
-              const price = Number(item.unit_price ?? item.price ?? 0);
+              const it = item as any;
+              const qty = Number(it.quantity ?? it.qty ?? 0);
+              const price = Number(it.unit_price ?? it.price ?? 0);
               return sum + (qty * price);
             }, 0);
 
             const quoteProductDiscounts = quoteCart.reduce((sum, item) => {
-              const qty = Number(item.quantity ?? item.qty ?? 0);
-              const price = Number(item.unit_price ?? item.price ?? 0);
+              const it = item as any;
+              const qty = Number(it.quantity ?? it.qty ?? 0);
+              const price = Number(it.unit_price ?? it.price ?? 0);
               const itemSubtotal = qty * price;
-              const discVal = Number(item.discount_value ?? item.discount ?? 0);
-              const discType = String(item.discount_type ?? item.discountType ?? 'AMOUNT').toUpperCase();
+              const discVal = Number(it.discount_value ?? it.discount ?? 0);
+              const discType = String(it.discount_type ?? it.discountType ?? 'AMOUNT').toUpperCase();
               const isPct = discType === 'PERCENT' || discType === 'PERCENTAGE' || discType === '%';
               const itemDiscount = isPct ? (itemSubtotal * (discVal / 100)) : (discVal || 0);
               return sum + itemDiscount;
@@ -5692,11 +5694,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 customer_address: quoteCustomerAddress,
                 validity_period: quoteValidityPeriod || '30 Days',
                 items: quoteCart.map(item => {
-                  const qty = Number(item.quantity ?? item.qty ?? 0);
-                  const price = Number(item.unit_price ?? item.price ?? 0);
+                  const it = item as any;
+                  const qty = Number(it.quantity ?? it.qty ?? 0);
+                  const price = Number(it.unit_price ?? it.price ?? 0);
                   const itemSubtotal = qty * price;
-                  const discVal = Number(item.discount_value ?? item.discount ?? 0);
-                  const discType = String(item.discount_type ?? item.discountType ?? 'AMOUNT').toUpperCase();
+                  const discVal = Number(it.discount_value ?? it.discount ?? 0);
+                  const discType = String(it.discount_type ?? it.discountType ?? 'AMOUNT').toUpperCase();
                   const isPct = discType === 'PERCENT' || discType === 'PERCENTAGE' || discType === '%';
                   const itemDiscount = isPct ? (itemSubtotal * (discVal / 100)) : (discVal || 0);
                   const itemTotal = Math.max(0, itemSubtotal - itemDiscount);
@@ -6190,11 +6193,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                 customer_address: quoteCustomerAddress,
                                 validity_period: quoteValidityPeriod,
                                 items: quoteCart.map(item => {
-                                  const qty = Number(item.quantity ?? item.qty ?? 0);
-                                  const price = Number(item.unit_price ?? item.price ?? 0);
+                                  const it = item as any;
+                                  const qty = Number(it.quantity ?? it.qty ?? 0);
+                                  const price = Number(it.unit_price ?? it.price ?? 0);
                                   const itemSubtotal = qty * price;
-                                  const discVal = Number(item.discount_value ?? item.discount ?? 0);
-                                  const discType = String(item.discount_type ?? item.discountType ?? 'AMOUNT').toUpperCase();
+                                  const discVal = Number(it.discount_value ?? it.discount ?? 0);
+                                  const discType = String(it.discount_type ?? it.discountType ?? 'AMOUNT').toUpperCase();
                                   const isPct = discType === 'PERCENT' || discType === 'PERCENTAGE' || discType === '%';
                                   const itemDiscount = isPct ? (itemSubtotal * (discVal / 100)) : (discVal || 0);
                                   const itemTotal = Math.max(0, itemSubtotal - itemDiscount);
@@ -6210,10 +6214,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                     discountType: isPct ? 'percent' : 'amount',
                                     discount_amount: itemDiscount,
                                     total: itemTotal
-                                  };
+                                  } as unknown as SaleItem;
                                 }),
                                 subtotal: quoteGrossSubtotal,
-                                discount_type: 'AMOUNT',
+                                discount_type: 'amount',
                                 discount_value: quoteProductDiscounts,
                                 discount_amount: quoteProductDiscounts,
                                 transportation_fee: numTransportationFee,
