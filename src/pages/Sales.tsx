@@ -799,10 +799,10 @@ function QuotationPreview({ quote, isSinhala, shopSettings }: { quote: any; isSi
               const discVal = Number(item.discount_value ?? item.discount ?? 0);
               const discType = String(item.discount_type ?? item.discountType ?? 'AMOUNT').toUpperCase();
               const isPct = discType === 'PERCENT' || discType === 'PERCENTAGE' || discType === '%';
-              const discAmt = isPct ? (gross * (discVal / 100)) : (discVal || 0);
-              const lineTotal = item.total !== undefined ? Number(item.total) : Math.max(0, gross - discAmt);
+              const discAmt = isPct ? (gross * (discVal / 100)) : (qty * discVal);
+              const lineTotal = Math.max(0, gross - discAmt);
               const discDisplay = discAmt > 0 
-                ? (isPct ? `-${discVal}%` : `-${symbol} ${convert(discVal).toLocaleString()}`)
+                ? (isPct ? `-${discVal}%` : `-${symbol} ${convert(discAmt).toLocaleString()}`)
                 : '-';
 
               return (
@@ -838,11 +838,12 @@ function QuotationPreview({ quote, isSinhala, shopSettings }: { quote: any; isSi
           const discVal = Number(item.discount_value ?? item.discount ?? 0);
           const discType = String(item.discount_type ?? item.discountType ?? 'AMOUNT').toUpperCase();
           const isPct = discType === 'PERCENT' || discType === 'PERCENTAGE' || discType === '%';
-          return sum + (isPct ? (gross * (discVal / 100)) : (discVal || 0));
+          const discAmt = isPct ? (gross * (discVal / 100)) : (qty * discVal);
+          return sum + discAmt;
         }, 0);
         const netTotal = Math.max(0, grossSubtotal - totalProductDiscounts);
         const transportFee = Number(quote.transportation_fee || 0);
-        const grandTotal = Number(quote.total !== undefined ? quote.total : (netTotal + transportFee));
+        const grandTotal = netTotal + transportFee;
 
         return (
           <div className="flex justify-end">
@@ -3309,7 +3310,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
         const dType = String(item.discount_type || item.discountType || 'AMOUNT').toUpperCase();
         const isPct = dType === 'PERCENT' || dType === 'PERCENTAGE' || dType === '%';
         const itemSubtotal = unitPrice * qty;
-        const discountAmt = isPct ? (itemSubtotal * (discountVal / 100)) : (discountVal || 0);
+        const discountAmt = isPct ? (itemSubtotal * (discountVal / 100)) : (qty * discountVal);
         const lineTotal = Math.max(0, itemSubtotal - discountAmt);
 
         return {
@@ -5625,8 +5626,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 const existingIdx = prev.findIndex(i => i.productId === item.productId && (i.unit || '').toLowerCase() === item.unit.toLowerCase());
                 if (existingIdx >= 0) {
                   const updated = [...prev];
-                  updated[existingIdx].qty += 1;
-                  updated[existingIdx].total = updated[existingIdx].qty * updated[existingIdx].price;
+                  const newQty = updated[existingIdx].qty + 1;
+                  updated[existingIdx].qty = newQty;
+                  const itemGross = newQty * updated[existingIdx].price;
+                  const itemDiscVal = updated[existingIdx].discount || 0;
+                  const itemNormType = updated[existingIdx].discountType || 'amount';
+                  const itemDiscAmt = itemNormType === 'percent' ? (itemGross * itemDiscVal / 100) : (newQty * itemDiscVal);
+                  updated[existingIdx].total = Math.max(0, itemGross - itemDiscAmt);
                   return updated;
                 }
 
@@ -5648,7 +5654,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
             // Financial Calculations aligned with POS Checkout concordance:
             // Line item: itemSubtotal = item.quantity * item.unit_price;
-            // Line discount: itemDiscount = item.discount_type === 'PERCENT' ? (itemSubtotal * (item.discount_value / 100)) : (item.discount_value || 0);
+            // Line discount: itemDiscount = item.discount_type === 'PERCENT' ? (itemSubtotal * (item.discount_value / 100)) : (item.quantity * item.discount_value);
             // Line total: itemTotal = itemSubtotal - itemDiscount;
             // Quotation Gross Subtotal = SUM(item.quantity * item.unit_price)
             // Quotation Total Discount = SUM(itemDiscount)
@@ -5671,7 +5677,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
               const discVal = Number(it.discount_value ?? it.discount ?? 0);
               const discType = String(it.discount_type ?? it.discountType ?? 'AMOUNT').toUpperCase();
               const isPct = discType === 'PERCENT' || discType === 'PERCENTAGE' || discType === '%';
-              const itemDiscount = isPct ? (itemSubtotal * (discVal / 100)) : (discVal || 0);
+              const itemDiscount = isPct ? (itemSubtotal * (discVal / 100)) : (qty * discVal);
               return sum + itemDiscount;
             }, 0);
 
@@ -5701,7 +5707,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   const discVal = Number(it.discount_value ?? it.discount ?? 0);
                   const discType = String(it.discount_type ?? it.discountType ?? 'AMOUNT').toUpperCase();
                   const isPct = discType === 'PERCENT' || discType === 'PERCENTAGE' || discType === '%';
-                  const itemDiscount = isPct ? (itemSubtotal * (discVal / 100)) : (discVal || 0);
+                  const itemDiscount = isPct ? (itemSubtotal * (discVal / 100)) : (qty * discVal);
                   const itemTotal = Math.max(0, itemSubtotal - itemDiscount);
                   return {
                     ...item,
@@ -6017,8 +6023,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                 const gross = item.qty * item.price;
                                 const discVal = item.discount || 0;
                                 const normType = item.discountType || 'amount';
-                                const discAmt = normType === 'percent' ? (gross * discVal / 100) : discVal;
-                                const rowTotal = item.total !== undefined ? item.total : Math.max(0, gross - discAmt);
+                                const discAmt = normType === 'percent' ? (gross * discVal / 100) : (item.qty * discVal);
+                                const rowTotal = Math.max(0, gross - discAmt);
 
                                 return (
                                   <tr key={`${item.productId}_${item.unit}_${idx}`} className="hover:bg-slate-50/60 transition-colors">
@@ -6041,7 +6047,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                           const itemGross = newQty * updated[idx].price;
                                           const itemDiscVal = updated[idx].discount || 0;
                                           const itemNormType = updated[idx].discountType || 'amount';
-                                          const itemDiscAmt = itemNormType === 'percent' ? (itemGross * itemDiscVal / 100) : itemDiscVal;
+                                          const itemDiscAmt = itemNormType === 'percent' ? (itemGross * itemDiscVal / 100) : (newQty * itemDiscVal);
                                           updated[idx].total = Math.max(0, itemGross - itemDiscAmt);
                                           setQuoteCart(updated);
                                         }}
@@ -6052,7 +6058,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                             const itemGross = 1 * updated[idx].price;
                                             const itemDiscVal = updated[idx].discount || 0;
                                             const itemNormType = updated[idx].discountType || 'amount';
-                                            const itemDiscAmt = itemNormType === 'percent' ? (itemGross * itemDiscVal / 100) : itemDiscVal;
+                                            const itemDiscAmt = itemNormType === 'percent' ? (itemGross * itemDiscVal / 100) : (1 * itemDiscVal);
                                             updated[idx].total = Math.max(0, itemGross - itemDiscAmt);
                                             setQuoteCart(updated);
                                           }
@@ -6077,7 +6083,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                           const itemGross = updated[idx].qty * newPrice;
                                           const itemDiscVal = updated[idx].discount || 0;
                                           const itemNormType = updated[idx].discountType || 'amount';
-                                          const itemDiscAmt = itemNormType === 'percent' ? (itemGross * itemDiscVal / 100) : itemDiscVal;
+                                          const itemDiscAmt = itemNormType === 'percent' ? (itemGross * itemDiscVal / 100) : (updated[idx].qty * itemDiscVal);
                                           updated[idx].total = Math.max(0, itemGross - itemDiscAmt);
                                           setQuoteCart(updated);
                                         }}
@@ -6094,7 +6100,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                             updated[idx].discountType = newDiscType;
                                             const itemGross = updated[idx].qty * updated[idx].price;
                                             const itemDiscVal = updated[idx].discount || 0;
-                                            const itemDiscAmt = newDiscType === 'percent' ? (itemGross * itemDiscVal / 100) : itemDiscVal;
+                                            const itemDiscAmt = newDiscType === 'percent' ? (itemGross * itemDiscVal / 100) : (updated[idx].qty * itemDiscVal);
                                             updated[idx].total = Math.max(0, itemGross - itemDiscAmt);
                                             setQuoteCart(updated);
                                           }}
@@ -6114,7 +6120,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                             updated[idx].discount = newDiscVal;
                                             const itemGross = updated[idx].qty * updated[idx].price;
                                             const itemNormType = updated[idx].discountType || 'amount';
-                                            const itemDiscAmt = itemNormType === 'percent' ? (itemGross * newDiscVal / 100) : newDiscVal;
+                                            const itemDiscAmt = itemNormType === 'percent' ? (itemGross * newDiscVal / 100) : (updated[idx].qty * newDiscVal);
                                             updated[idx].total = Math.max(0, itemGross - itemDiscAmt);
                                             setQuoteCart(updated);
                                           }}
@@ -6200,7 +6206,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                   const discVal = Number(it.discount_value ?? it.discount ?? 0);
                                   const discType = String(it.discount_type ?? it.discountType ?? 'AMOUNT').toUpperCase();
                                   const isPct = discType === 'PERCENT' || discType === 'PERCENTAGE' || discType === '%';
-                                  const itemDiscount = isPct ? (itemSubtotal * (discVal / 100)) : (discVal || 0);
+                                  const itemDiscount = isPct ? (itemSubtotal * (discVal / 100)) : (qty * discVal);
                                   const itemTotal = Math.max(0, itemSubtotal - itemDiscount);
                                   return {
                                     ...item,

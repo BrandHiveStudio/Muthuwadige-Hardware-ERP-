@@ -81,8 +81,8 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
       const dVal = Number(i.discount_value ?? i.discount ?? 0);
       const dType = String(i.discount_type ?? i.discountType ?? 'AMOUNT').toUpperCase();
       const isPct = dType === 'PERCENT' || dType === 'PERCENTAGE' || dType === '%';
-      const itemDiscount = isPct ? (itemSubtotal * (dVal / 100)) : (dVal || 0);
-      const itemTotal = i.total !== undefined ? Number(i.total) : Math.max(0, itemSubtotal - itemDiscount);
+      const itemDiscount = isPct ? (itemSubtotal * (dVal / 100)) : (qty * dVal);
+      const itemTotal = Math.max(0, itemSubtotal - itemDiscount);
 
       return {
         ...i,
@@ -103,7 +103,7 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
     const totalDiscount = productDiscounts;
     const netTotal = Math.max(0, grossSubtotal - totalDiscount);
     const transportFee = Number(quote.transportation_fee || 0);
-    const grandTotal = Number(quote.total !== undefined ? quote.total : (netTotal + transportFee));
+    const grandTotal = netTotal + transportFee;
 
     const itemsRows = itemsWithPricing.map((i: any) => {
       let trackingInfo = '';
@@ -408,8 +408,8 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
     const dVal = Number(i.discount_value ?? i.discount ?? 0);
     const dType = String(i.discount_type ?? i.discountType ?? 'AMOUNT').toUpperCase();
     const isPct = dType === 'PERCENT' || dType === 'PERCENTAGE' || dType === '%';
-    const itemDiscount = isPct ? (itemSubtotal * (dVal / 100)) : (dVal || 0);
-    const itemTotal = i.total !== undefined ? Number(i.total) : Math.max(0, itemSubtotal - itemDiscount);
+    const itemDiscount = isPct ? (itemSubtotal * (dVal / 100)) : (qty * dVal);
+    const itemTotal = Math.max(0, itemSubtotal - itemDiscount);
 
     return {
       ...i,
@@ -429,7 +429,7 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
   const totalDiscount = itemsWithPricing.reduce((sum: number, i: any) => sum + i.itemDiscount, 0);
   const netTotal = Math.max(0, grossSubtotal - totalDiscount);
   const transportFee = Number(quote.transportation_fee || 0);
-  const grandTotal = Number(quote.total !== undefined ? quote.total : (netTotal + transportFee));
+  const grandTotal = netTotal + transportFee;
 
   const discColLabel = isSi ? 'වට්ටම' : 'Discount';
   const itemsRows = itemsWithPricing.map((i: any) => {
@@ -440,7 +440,7 @@ const generateQuotePrintHTML = (quote: any, isSi: boolean, shopSettings?: any) =
       if (i.batchCode) parts.push(`Batch: ${i.batchCode}`);
       trackingInfo = `<div style="font-size: 9px; font-weight: normal; color: #9ca3af; margin-top: 2px;">${parts.join(' | ')}</div>`;
     }
-    const discStr = i.itemDiscount > 0 ? (i.isPct ? `-${i.discount_value}%` : `-${symbolStr} ${formatNum(i.discount_value)}`) : '-';
+    const discStr = i.itemDiscount > 0 ? (i.isPct ? `-${i.discount_value}%` : `-${symbolStr} ${formatNum(i.itemDiscount)}`) : '-';
 
     return `
       <tr style="border-bottom: 1px solid #e5e7eb;">
