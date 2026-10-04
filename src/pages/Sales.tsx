@@ -6729,6 +6729,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   const lKey = getItemLineKey(item, idx);
                   const qtyVal = returnQtys[lKey] !== undefined ? returnQtys[lKey] : 0;
                   const { effectivePrice, unitDiscount } = calculateEffectiveUnitPricePaid(item, targetReturnInvoice);
+                  const lineUnitPrice = includeReturnDiscount ? effectivePrice : Number(item.price || item.unit_price || 0);
                   return {
                     ...item,
                     lineId: lKey,
@@ -6737,14 +6738,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     return_qty: qtyVal,
                     quantity: qtyVal,
                     returned_quantity: qtyVal,
-                    price: effectivePrice,
-                    unit_price: effectivePrice,
+                    price: lineUnitPrice,
+                    unit_price: lineUnitPrice,
                     originalQty: item.qty || item.quantity || 1,
                     originalUnitPrice: item.price || item.unit_price || 0,
                     originalStickerPrice: item.price || item.unit_price || 0,
-                    unitDiscount,
-                    netUnitPrice: effectivePrice,
-                    net_unit_price: effectivePrice
+                    unitDiscount: includeReturnDiscount ? unitDiscount : 0,
+                    netUnitPrice: lineUnitPrice,
+                    net_unit_price: lineUnitPrice
                   };
                 });
 
@@ -6753,13 +6754,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
               const origTax = Number(targetReturnInvoice.tax || 0);
               const origTransportFee = Number(targetReturnInvoice.transportation_fee !== undefined ? targetReturnInvoice.transportation_fee : ((targetReturnInvoice as any).transportationFee || 0));
 
-              const returnedProductsSubtotal = itemsToReturn.reduce((sum: number, i: any) => sum + (i.qty * (i.price || 0)), 0);
-              const returnRatio = Math.min(1, Math.max(0, returnedProductsSubtotal / origSubtotal));
+              const returnedGrossSubtotal = itemsToReturn.reduce((sum: number, i: any) => sum + (i.qty * (i.originalUnitPrice || i.price || 0)), 0);
+              const returnedNetSubtotal = itemsToReturn.reduce((sum: number, i: any) => sum + (i.qty * (i.price || 0)), 0);
+              const applicableTransport = includeReturnTransport ? (origTransportFee * (returnedGrossSubtotal > 0 ? 1 : 0)) : 0;
 
-              const applicableDiscount = includeReturnDiscount ? (origDiscount * returnRatio) : 0;
-              const applicableTransport = includeReturnTransport ? (origTransportFee * (returnedProductsSubtotal > 0 ? 1 : 0)) : 0;
-
-              const returnTotalValue = Math.max(0, returnedProductsSubtotal - applicableDiscount + applicableTransport);
+              const returnTotalValue = Math.max(0, Math.round((returnedNetSubtotal + applicableTransport) * 100) / 100);
 
               // Calculate exchange cart total value from selected replacement items
               const exchangeCartSubtotal = exchangeCartItems.reduce((sum: number, i: any) => sum + (i.total || 0), 0);
@@ -7103,7 +7102,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                           const prevReturned = alreadyReturnedMap[lKey] || 0;
                           const maxReturn = Math.max(0, origQty - prevReturned);
                           const currReturn = returnQtys[lKey] || 0;
-                          const itemRefund = currReturn * item.price;
+                          const { effectivePrice, unitDiscount } = calculateEffectiveUnitPricePaid(item, targetReturnInvoice);
+                          const lineUnitPrice = includeReturnDiscount ? effectivePrice : Number(item.price || item.unit_price || 0);
+                          const itemRefund = Math.round(currReturn * lineUnitPrice * 100) / 100;
                           return (
                             <tr key={lKey} className={`hover:bg-slate-50/50 ${maxReturn === 0 ? 'bg-slate-50/60 opacity-60' : ''}`}>
                               <td className="px-4 py-3 font-black text-slate-800 text-xs">
@@ -7115,7 +7116,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                               <td className="px-4 py-3 text-center font-black text-emerald-700 text-xs">
                                 {maxReturn > 0 ? `${maxReturn} ${item.unit || ''}` : <span className="text-rose-600 font-bold uppercase">{t('Fully Returned', 'සම්පූර්ණයෙන්ම ආපසු')}</span>}
                               </td>
-                              <td className="px-4 py-3 text-right font-bold text-slate-600 text-xs">{symbol} {convert(item.price).toLocaleString()}</td>
+                              <td className="px-4 py-3 text-right font-bold text-slate-600 text-xs">
+                                <div>{symbol} {convert(lineUnitPrice).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                                {includeReturnDiscount && unitDiscount > 0 && (
+                                  <div className="text-[9px] text-amber-600 font-semibold font-mono">
+                                    (-{symbol} {convert(unitDiscount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })})
+                                  </div>
+                                )}
+                              </td>
                               <td className="px-4 py-3 text-center">
                                 <input
                                   type="number"
@@ -7130,7 +7138,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                   className="w-20 px-2 py-1 text-center bg-white border border-slate-300 rounded-lg font-bold text-slate-800 text-xs outline-none focus:border-amber-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
                                 />
                               </td>
-                              <td className="px-4 py-3 text-right font-black text-emerald-600 text-xs">{symbol} {convert(itemRefund).toLocaleString()}</td>
+                              <td className="px-4 py-3 text-right font-black text-emerald-600 text-xs">{symbol} {convert(itemRefund).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                             </tr>
                           );
                         })}
