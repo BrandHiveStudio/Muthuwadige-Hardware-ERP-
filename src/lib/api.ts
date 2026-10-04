@@ -910,6 +910,10 @@ export const api = {
     receivePo: async (data: {
       po_id: string;
       po_number?: string;
+      supplier_id?: string;
+      supplier_name?: string;
+      supplier_advance_applied?: number;
+      supplierAdvanceApplied?: number;
       status?: string;
       received_at?: string;
       received_by?: string;

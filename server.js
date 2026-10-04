@@ -1986,7 +1986,9 @@ export async function initializeDatabase() {
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN net_total REAL DEFAULT 0;"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN original_total REAL;"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_code TEXT;"); } catch (e) { }
-  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_applied REAL DEFAULT 0;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_applied REAL DEFAULT 0;
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN supplier_advance_applied REAL DEFAULT 0;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE suppliers ADD COLUMN current_balance REAL DEFAULT 0;"); } catch (e) { }"); } catch (e) { }
   try { await db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT;"); } catch (e) { }
   try { await db.exec("ALTER TABLE customers ADD COLUMN credit_limit REAL DEFAULT 0;"); } catch (e) { }
   try { await db.exec("ALTER TABLE customers ADD COLUMN credit_period INTEGER DEFAULT 0;"); } catch (e) { }
@@ -2488,7 +2490,9 @@ export async function initializeDatabase() {
   try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN redeemed_in_po_number TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN original_total REAL"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_code TEXT"); } catch (e) { }
-  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_applied REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_applied REAL DEFAULT 0"
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN supplier_advance_applied REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE suppliers ADD COLUMN current_balance REAL DEFAULT 0"); } catch (e) { }); } catch (e) { }
   try { await db.exec("UPDATE purchase_returns SET balance_remaining = total_returned_cost WHERE balance_remaining IS NULL AND (status IS NULL OR status = 'ACTIVE')"); } catch (e) { }
   try { await db.exec("ALTER TABLE products ADD COLUMN parent_product_id TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE products ADD COLUMN is_batch INTEGER DEFAULT 0"); } catch (e) { }
@@ -2530,6 +2534,9 @@ export async function initializeDatabase() {
     "ALTER TABLE purchase_orders ADD COLUMN discount_value REAL DEFAULT 0",
     "ALTER TABLE purchase_orders ADD COLUMN discount_amount REAL DEFAULT 0",
     "ALTER TABLE purchase_orders ADD COLUMN net_total REAL DEFAULT 0",
+    "ALTER TABLE purchase_orders ADD COLUMN supplier_advance_applied REAL DEFAULT 0",
+    "ALTER TABLE suppliers ADD COLUMN current_balance REAL DEFAULT 0",
+    "UPDATE suppliers SET current_balance = payable_balance WHERE current_balance IS NULL",
     "ALTER TABLE purchase_orders ADD COLUMN transportation_fee REAL DEFAULT 0",
     "ALTER TABLE sync_queue ADD COLUMN retry_count INTEGER DEFAULT 0",
     "ALTER TABLE sync_queue ADD COLUMN error_message TEXT",
@@ -4991,6 +4998,9 @@ app.get('/api/suppliers', async (req, res) => {
       address: s.address,
       creditTerms: s.credit_terms,
       payableBalance: s.payable_balance,
+      payable_balance: s.payable_balance,
+      currentBalance: s.current_balance ?? s.payable_balance,
+      current_balance: s.current_balance ?? s.payable_balance,
       nic: s.nic,
       createdAt: s.created_at
     }));
@@ -8090,6 +8100,8 @@ app.get(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
       debit_note_code: po.debit_note_code || '',
       debitNoteApplied: Number(po.debit_note_applied || 0),
       debit_note_applied: Number(po.debit_note_applied || 0),
+      supplierAdvanceApplied: Number(po.supplier_advance_applied ?? ((String(po.debit_note_code || '').trim().toUpperCase() === 'SUPPLIER_ADVANCE') ? (po.debit_note_applied || 0) : 0)),
+      supplier_advance_applied: Number(po.supplier_advance_applied ?? ((String(po.debit_note_code || '').trim().toUpperCase() === 'SUPPLIER_ADVANCE') ? (po.debit_note_applied || 0) : 0)),
       transportation_fee: Number(po.transportation_fee ?? po.shipping_cost ?? po.delivery_fee ?? 0),
       transportationFee: Number(po.transportation_fee ?? po.shipping_cost ?? po.delivery_fee ?? 0),
       shipping_cost: Number(po.shipping_cost ?? po.transportation_fee ?? po.delivery_fee ?? 0),
@@ -8281,16 +8293,25 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
         } catch (_) { }
       }
 
+      const supplierAdvanceApplied = Math.max(
+        0,
+        Number(
+          po.supplier_advance_applied ??
+          po.supplierAdvanceApplied ??
+          ((debitNoteCode.toUpperCase() === 'SUPPLIER_ADVANCE') ? debitNoteApplied : 0)
+        )
+      );
+
       await db.run(
         `INSERT INTO purchase_orders (
           id, po_number, supplier_name, items, total,
           subtotal, discount_type, discount_value, discount_amount, transportation_fee, net_total,
-          original_total, debit_note_code, debit_note_applied, status, due_date, user_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          original_total, debit_note_code, debit_note_applied, supplier_advance_applied, status, due_date, user_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id, po.po_number, po.supplier_name, JSON.stringify(items), netTotal,
           subtotal, discountType, discountValue, discountAmount, transportationFee, netTotal,
-          originalTotal, debitNoteCode || null, debitNoteApplied, po.status || 'pending', po.due_date, po.user_id, created_at
+          originalTotal, debitNoteCode || null, debitNoteApplied, supplierAdvanceApplied, po.status || 'pending', po.due_date, po.user_id, created_at
         ]
       );
 
@@ -8370,10 +8391,18 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
         const validMode = (rawMode === 'BANK_TRANSFER' || rawMode === 'TRANSFER' || rawMode === 'ONLINE') ? 'BANK' : rawMode;
         if (validMode === 'CREDIT') {
           if (po.supplier_name) {
+            const creditAdjustment = netTotal + supplierAdvanceApplied;
             await db.run(
-              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
-              [netTotal, po.supplier_id || '', po.supplier_name]
+              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+              [creditAdjustment, creditAdjustment, po.supplier_id || '', po.supplier_name]
             );
+            const supp = await db.get(
+              'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+              [po.supplier_id || '', po.supplier_name]
+            );
+            if (supp?.id) {
+              enqueueSync(db, 'suppliers', supp.id, 'UPSERT').catch(() => { });
+            }
           }
         } else if (validMode === 'CASH') {
           const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
@@ -8384,6 +8413,20 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
             [txId, 'expense', 'PURCHASE', payDesc, netTotal, todayStr, `PO-SETTLE-${po.po_number || id}`, po.user_id || 'Admin', created_at, 'CASH']
           );
           await enqueueSync(db, 'transactions', txId, 'INSERT');
+
+          if (supplierAdvanceApplied > 0 && po.supplier_name) {
+            await db.run(
+              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+              [supplierAdvanceApplied, supplierAdvanceApplied, po.supplier_id || '', po.supplier_name]
+            );
+            const supp = await db.get(
+              'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+              [po.supplier_id || '', po.supplier_name]
+            );
+            if (supp?.id) {
+              enqueueSync(db, 'suppliers', supp.id, 'UPSERT').catch(() => { });
+            }
+          }
         } else if (validMode === 'BANK') {
           const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
           const payDesc = `Supplier Payment - ${po.supplier_name || 'Vendor'} (PO #${po.po_number || id}) [Bank Transfer]`;
@@ -8393,6 +8436,49 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
             [txId, 'expense', 'PURCHASE', payDesc, netTotal, todayStr, `PO-SETTLE-${po.po_number || id}`, po.user_id || 'Admin', created_at, 'BANK']
           );
           await enqueueSync(db, 'transactions', txId, 'INSERT');
+
+          if (supplierAdvanceApplied > 0 && po.supplier_name) {
+            await db.run(
+              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+              [supplierAdvanceApplied, supplierAdvanceApplied, po.supplier_id || '', po.supplier_name]
+            );
+            const supp = await db.get(
+              'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+              [po.supplier_id || '', po.supplier_name]
+            );
+            if (supp?.id) {
+              enqueueSync(db, 'suppliers', supp.id, 'UPSERT').catch(() => { });
+            }
+          }
+        }
+
+        if (supplierAdvanceApplied > 0) {
+          const advTxId = 'tx_adv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+          const poRefNum = po.po_number || id;
+          await db.run(
+            `INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at, payment_method)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              advTxId,
+              'expense',
+              'Supplier Advance',
+              `Advance absorbed against PO: ${poRefNum}`,
+              supplierAdvanceApplied,
+              todayStr,
+              `PO-ADV-${poRefNum}`,
+              po.user_id || 'Admin',
+              created_at,
+              'ADVANCE_ABSORPTION'
+            ]
+          );
+          try {
+            await db.run(
+              `INSERT INTO supplier_ledger (id, supplier_id, supplier_name, type, reference_type, reference_no, description, amount, balance_after, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              ['sl_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6), po.supplier_id || null, po.supplier_name, 'DEBIT', 'PURCHASE_ORDER', poRefNum, `Advance absorbed against PO: ${poRefNum}`, supplierAdvanceApplied, 0, created_at]
+            );
+          } catch (_) {}
+          await enqueueSync(db, 'transactions', advTxId, 'INSERT');
         }
       }
 
@@ -8530,15 +8616,27 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
         }
       }
 
+      const supplierAdvanceApplied = Math.max(
+        0,
+        Number(
+          req.body.supplier_advance_applied ??
+          req.body.supplierAdvanceApplied ??
+          po.supplier_advance_applied ??
+          po.supplierAdvanceApplied ??
+          ((String(po.debit_note_code || '').trim().toUpperCase() === 'SUPPLIER_ADVANCE') ? (po.debit_note_applied || 0) : 0)
+        )
+      );
+
       if (payMethod === 'CREDIT') {
-        if (po.supplier_name) {
+        if (po.supplier_name || po.supplier_id) {
+          const creditIncrease = poNetTotal + supplierAdvanceApplied;
           await db.run(
-            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
-            [poNetTotal, po.supplier_id || '', po.supplier_name]
+            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+            [creditIncrease, creditIncrease, po.supplier_id || '', po.supplier_name || '']
           );
           const supp = await db.get(
             'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
-            [po.supplier_id || '', po.supplier_name]
+            [po.supplier_id || '', po.supplier_name || '']
           );
           if (supp?.id) {
             enqueueSync(db, 'suppliers', supp.id, 'UPSERT').catch(() => { });
@@ -8567,6 +8665,20 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
           ]
         );
         enqueueSync(db, 'transactions', txId, 'INSERT').catch(() => { });
+
+        if (supplierAdvanceApplied > 0 && (po.supplier_name || po.supplier_id)) {
+          await db.run(
+            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+            [supplierAdvanceApplied, supplierAdvanceApplied, po.supplier_id || '', po.supplier_name || '']
+          );
+          const supp = await db.get(
+            'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+            [po.supplier_id || '', po.supplier_name || '']
+          );
+          if (supp?.id) {
+            enqueueSync(db, 'suppliers', supp.id, 'UPSERT').catch(() => { });
+          }
+        }
       } else if (payMethod === 'BANK' || payMethod === 'BANK_TRANSFER' || payMethod === 'TRANSFER' || payMethod === 'ONLINE') {
         const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
         const payDesc = `Supplier Payment - ${po.supplier_name || 'Vendor'} (PO #${po.po_number || id}) [Bank Transfer]`;
@@ -8590,6 +8702,20 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
           ]
         );
         enqueueSync(db, 'transactions', txId, 'INSERT').catch(() => { });
+
+        if (supplierAdvanceApplied > 0 && (po.supplier_name || po.supplier_id)) {
+          await db.run(
+            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+            [supplierAdvanceApplied, supplierAdvanceApplied, po.supplier_id || '', po.supplier_name || '']
+          );
+          const supp = await db.get(
+            'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+            [po.supplier_id || '', po.supplier_name || '']
+          );
+          if (supp?.id) {
+            enqueueSync(db, 'suppliers', supp.id, 'UPSERT').catch(() => { });
+          }
+        }
       } else if (payMethod === 'CHEQUE') {
         const chqNo = req.body.cheque_number || req.body.chequeNo;
         if (chqNo) {
@@ -8622,7 +8748,51 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
             ]
           );
           enqueueSync(db, 'cheque_registry', chqId, 'INSERT').catch(() => { });
+
+          if (supplierAdvanceApplied > 0 && (po.supplier_name || po.supplier_id)) {
+            await db.run(
+              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+              [supplierAdvanceApplied, supplierAdvanceApplied, po.supplier_id || '', po.supplier_name || '']
+            );
+            const supp = await db.get(
+              'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+              [po.supplier_id || '', po.supplier_name || '']
+            );
+            if (supp?.id) {
+              enqueueSync(db, 'suppliers', supp.id, 'UPSERT').catch(() => { });
+            }
+          }
         }
+      }
+
+      if (supplierAdvanceApplied > 0) {
+        const poRefNum = po.po_number || po.po_no || id;
+        const advTxId = 'tx_adv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        const todayStr = req.body.payment_date || new Date().toLocaleDateString('sv-SE');
+        await db.run(
+          `INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at, payment_method)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            advTxId,
+            'expense',
+            'Supplier Advance',
+            `Advance absorbed against PO: ${poRefNum}`,
+            supplierAdvanceApplied,
+            todayStr,
+            `PO-ADV-${poRefNum}`,
+            recBy || 'Admin',
+            recAt || new Date().toISOString(),
+            'ADVANCE_ABSORPTION'
+          ]
+        );
+        try {
+          await db.run(
+            `INSERT INTO supplier_ledger (id, supplier_id, supplier_name, type, reference_type, reference_no, description, amount, balance_after, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ['sl_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6), po.supplier_id || null, po.supplier_name || 'Vendor', 'DEBIT', 'PURCHASE_ORDER', poRefNum, `Advance absorbed against PO: ${poRefNum}`, supplierAdvanceApplied, 0, recAt || new Date().toISOString()]
+          );
+        } catch (_) {}
+        enqueueSync(db, 'transactions', advTxId, 'INSERT').catch(() => { });
       }
 
       for (const it of updatedItems) {
@@ -9940,28 +10110,43 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
         [nowIso, staffUser, validMode, validMode, JSON.stringify(updatedPoItems), nowIso, po.id]
       );
 
-      // 4. Execute Settlement Mode
+      // 4. Execute Settlement Mode & Supplier Advance Absorption
       let suppSyncId = null;
       let settleTxId = null;
       let settleChqId = null;
+      let advTxId = null;
+
+      const supplierAdvanceApplied = Math.max(
+        0,
+        Number(
+          req.body.supplier_advance_applied ??
+          req.body.supplierAdvanceApplied ??
+          po.supplier_advance_applied ??
+          po.supplierAdvanceApplied ??
+          ((String(po.debit_note_code || '').trim().toUpperCase() === 'SUPPLIER_ADVANCE') ? (po.debit_note_applied || 0) : 0)
+        )
+      );
+
+      const supp = await db.get(
+        'SELECT * FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+        [po.supplier_id || req.body.supplier_id || supplierName, supplierName]
+      );
+      if (supp) {
+        suppSyncId = supp.id;
+      }
 
       if (validMode === 'CREDIT') {
-        // Increase Supplier's Payable Balance
-        const supp = await db.get(
-          'SELECT * FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
-          [po.supplier_id || supplierName, supplierName]
-        );
-
+        // Increase Supplier's Payable Balance (Net total + advance absorbed)
+        const creditIncrease = poGrandTotal + supplierAdvanceApplied;
         if (supp) {
-          suppSyncId = supp.id;
           await db.run(
-            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE id = ?',
-            [poGrandTotal, supp.id]
+            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ?',
+            [creditIncrease, creditIncrease, supp.id]
           );
         } else {
           await db.run(
-            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ? WHERE name = ?',
-            [poGrandTotal, supplierName]
+            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE name = ?',
+            [creditIncrease, creditIncrease, supplierName]
           );
         }
       } else if (validMode === 'CASH') {
@@ -9988,6 +10173,20 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
           ]
         );
         settleTxId = txId;
+
+        if (supplierAdvanceApplied > 0) {
+          if (supp) {
+            await db.run(
+              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ?',
+              [supplierAdvanceApplied, supplierAdvanceApplied, supp.id]
+            );
+          } else {
+            await db.run(
+              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE name = ?',
+              [supplierAdvanceApplied, supplierAdvanceApplied, supplierName]
+            );
+          }
+        }
       } else if (validMode === 'BANK') {
         const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
         const payDesc = `Supplier Payment - ${supplierName} (PO #${po.po_number || po.po_no}) [Bank Transfer]`;
@@ -10011,6 +10210,20 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
           ]
         );
         settleTxId = txId;
+
+        if (supplierAdvanceApplied > 0) {
+          if (supp) {
+            await db.run(
+              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ?',
+              [supplierAdvanceApplied, supplierAdvanceApplied, supp.id]
+            );
+          } else {
+            await db.run(
+              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE name = ?',
+              [supplierAdvanceApplied, supplierAdvanceApplied, supplierName]
+            );
+          }
+        }
       } else if (validMode === 'CHEQUE') {
         if (!cheque_number || !cheque_number.toString().trim()) {
           return { status: 400, error: 'Cheque number is required for Cheque settlement.' };
@@ -10046,6 +10259,63 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
           ]
         );
         settleChqId = chqId;
+
+        if (supplierAdvanceApplied > 0) {
+          if (supp) {
+            await db.run(
+              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ?',
+              [supplierAdvanceApplied, supplierAdvanceApplied, supp.id]
+            );
+          } else {
+            await db.run(
+              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE name = ?',
+              [supplierAdvanceApplied, supplierAdvanceApplied, supplierName]
+            );
+          }
+        }
+      }
+
+      if (supplierAdvanceApplied > 0) {
+        const poRefNum = po.po_number || po.po_no || po.id;
+        const absorptionTxId = 'tx_adv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        await db.run(
+          `INSERT INTO transactions (
+            id, type, category, description, amount, date, reference, user_id, created_at, payment_method
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            absorptionTxId,
+            'expense',
+            'Supplier Advance',
+            `Advance absorbed against PO: ${poRefNum}`,
+            supplierAdvanceApplied,
+            todayStr,
+            `PO-ADV-${poRefNum}`,
+            staffUser,
+            nowIso,
+            'ADVANCE_ABSORPTION'
+          ]
+        );
+        advTxId = absorptionTxId;
+
+        try {
+          await db.run(
+            `INSERT INTO supplier_ledger (
+              id, supplier_id, supplier_name, type, reference_type, reference_no, description, amount, balance_after, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              'sl_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+              supp?.id || po.supplier_id || null,
+              supplierName,
+              'DEBIT',
+              'PURCHASE_ORDER',
+              poRefNum,
+              `Advance absorbed against PO: ${poRefNum}`,
+              supplierAdvanceApplied,
+              0,
+              nowIso
+            ]
+          );
+        } catch (_) {}
       }
 
       // 5. Audit Log
@@ -10065,6 +10335,9 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
         }
         if (settleTxId) {
           await enqueueSync(db, 'transactions', settleTxId, 'UPSERT');
+        }
+        if (advTxId) {
+          await enqueueSync(db, 'transactions', advTxId, 'INSERT');
         }
         if (settleChqId) {
           await enqueueSync(db, 'cheque_registry', settleChqId, 'UPSERT');
@@ -10612,6 +10885,15 @@ async function executeRevertPurchaseOrderReceipt({ po_ref, user_email }) {
       const deletedChequeIds = [];
       const poNetTotal = Number(po.net_total !== null && po.net_total !== undefined ? po.net_total : (po.total || 0));
 
+      const supplierAdvanceApplied = Math.max(
+        0,
+        Number(
+          po.supplier_advance_applied ??
+          po.supplierAdvanceApplied ??
+          ((String(po.debit_note_code || '').trim().toUpperCase() === 'SUPPLIER_ADVANCE') ? (po.debit_note_applied || 0) : 0)
+        )
+      );
+
       if (settleMode === 'CREDIT') {
         if (po.supplier_name || po.supplier_id) {
           const supp = await db.get(
@@ -10620,10 +10902,46 @@ async function executeRevertPurchaseOrderReceipt({ po_ref, user_email }) {
           );
           if (supp) affectedSupplierId = supp.id;
 
+          const reversalAmount = poNetTotal + supplierAdvanceApplied;
           await db.run(
-            'UPDATE suppliers SET payable_balance = MAX(0, COALESCE(payable_balance, 0) - ?) WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
-            [poNetTotal, po.supplier_id || '', po.supplier_name || '']
+            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) - ?, current_balance = COALESCE(current_balance, 0) - ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+            [reversalAmount, reversalAmount, po.supplier_id || '', po.supplier_name || '']
           );
+        }
+      } else {
+        if (supplierAdvanceApplied > 0 && (po.supplier_name || po.supplier_id)) {
+          const supp = await db.get(
+            'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+            [po.supplier_id || '', po.supplier_name || '']
+          );
+          if (supp) affectedSupplierId = supp.id;
+
+          await db.run(
+            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) - ?, current_balance = COALESCE(current_balance, 0) - ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+            [supplierAdvanceApplied, supplierAdvanceApplied, po.supplier_id || '', po.supplier_name || '']
+          );
+        }
+      }
+
+      if (supplierAdvanceApplied > 0) {
+        const rawPoNum = (po.po_number || po.po_no || poNum || po.id).toString();
+        const strippedPoNum = rawPoNum.startsWith('PO-') ? rawPoNum.slice(3) : rawPoNum;
+        const advCandidateRefs = Array.from(new Set([
+          'PO-ADV-' + poNum,
+          'PO-ADV-' + rawPoNum,
+          'PO-ADV-' + strippedPoNum,
+          'PO-ADV-' + po.id
+        ])).filter(Boolean);
+        const advPlaceholders = advCandidateRefs.map(() => '?').join(', ');
+        const advTxs = await db.all(
+          `SELECT id FROM transactions WHERE reference IN (${advPlaceholders})`,
+          advCandidateRefs
+        );
+        if (advTxs && advTxs.length > 0) {
+          const advIds = advTxs.map(t => t.id);
+          const delAdvPl = advIds.map(() => '?').join(', ');
+          await db.run(`DELETE FROM transactions WHERE id IN (${delAdvPl})`, advIds);
+          deletedTxIds.push(...advIds);
         }
       } else if (settleMode === 'CASH' || settleMode === 'BANK') {
         const rawPoNum = (po.po_number || po.po_no || '').toString();

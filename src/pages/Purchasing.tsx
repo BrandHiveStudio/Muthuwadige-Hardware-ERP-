@@ -1172,12 +1172,17 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       }
     }
 
+    const isAdvance = selectedDebitNoteCode.trim().toUpperCase() === 'SUPPLIER_ADVANCE';
+    const supplierAdvanceAmount = isAdvance ? finalDebitNoteApplied : 0;
+
     setIsLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       const staffName = currentUser?.name || currentUser?.full_name || currentUser?.username || 'Muthuwadige Hardware';
       const { error } = await supabase.from('purchase_orders').insert([{
         po_number: `PO-${Date.now().toString().slice(-6)}`,
+        supplier_id: selectedSupplierObj?.id || null,
+        supplierId: selectedSupplierObj?.id || null,
         supplier_name: selectedSupplier,
         items: poItems.map(i => {
           const itemData = calculateLineItem(i.qty, i.costPrice, i.discount || 0, i.discountType);
@@ -1201,6 +1206,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
         original_total: poGrossSubtotal,
         debit_note_code: finalDebitNoteApplied > 0 ? selectedDebitNoteCode.trim().toUpperCase() : null,
         debit_note_applied: finalDebitNoteApplied,
+        supplier_advance_applied: supplierAdvanceAmount,
+        supplierAdvanceApplied: supplierAdvanceAmount,
         status: 'pending',
         due_date: dueDate || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
         user_id: user?.id,
@@ -1263,11 +1270,23 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       const nowIso = new Date().toISOString();
       const settlementPaymentMethod = receiveSettlementMode || (receivingOrder as any).payment_method || 'CREDIT';
 
+      const advanceToSettle = Number(
+        (receivingOrder as any).supplier_advance_applied ??
+        (receivingOrder as any).supplierAdvanceApplied ??
+        (((receivingOrder as any).debit_note_code === 'SUPPLIER_ADVANCE' || (receivingOrder as any).debitNoteCode === 'SUPPLIER_ADVANCE')
+          ? ((receivingOrder as any).debit_note_applied || (receivingOrder as any).debitNoteApplied || 0)
+          : 0)
+      );
+
       // 1. Attempt Atomic Backend Settlement
       try {
         const result = await api.purchasing.receivePo({
           po_id: receivingOrder.id,
           po_number: receivingOrder.poNumber,
+          supplier_id: receivingOrder.supplierId || (receivingOrder as any).supplier_id,
+          supplier_name: receivingOrder.supplierName || (receivingOrder as any).supplier_name,
+          supplier_advance_applied: advanceToSettle,
+          supplierAdvanceApplied: advanceToSettle,
           status: 'Received',
           received_at: nowIso,
           received_by: staffName,
@@ -1341,6 +1360,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
         .from('purchase_orders')
         .update({
           status: 'Received',
+          supplier_advance_applied: advanceToSettle,
+          supplierAdvanceApplied: advanceToSettle,
           received_at: nowIso,
           received_by: staffName,
           payment_method: settlementPaymentMethod,

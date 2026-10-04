@@ -59,6 +59,8 @@ export interface Supplier {
   balance?: number;
   payableBalance?: number;
   payable_balance?: number;
+  current_balance?: number;
+  currentBalance?: number;
   creditTerms?: string;
   credit_terms?: string;
   nic?: string;
@@ -165,6 +167,8 @@ export interface PurchaseOrder {
   debitNoteCode?: string;
   debit_note_applied?: number;
   debitNoteApplied?: number;
+  supplier_advance_applied?: number;
+  supplierAdvanceApplied?: number;
   transportation_fee?: number;
   transportationFee?: number;
   shipping_cost?: number;
