@@ -14,6 +14,7 @@
     "electron-dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:dev": "npm run electron-dev",
     "electron:start": "electron .",
+    "electron:build": "npm run build:electron",
     "verify:release-gate": "node scripts/verify_no_legacy_transactions.js",
     "dist": "npm run verify:release-gate && npm run build && node build-dist.js",
     "build:electron": "npm run verify:release-gate && npm run build && node build-dist.js",
