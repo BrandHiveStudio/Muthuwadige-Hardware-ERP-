@@ -2769,7 +2769,17 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
           setQuoteCart(prev => {
             const existing = prev.find(i => i.productId === matchedSelectable.productId);
             if (existing) {
-              return prev.map(i => i.productId === matchedSelectable.productId ? { ...i, qty: i.qty + 1, total: (i.qty + 1) * i.price } : i);
+              return prev.map(i => {
+                if (i.productId === matchedSelectable.productId) {
+                  const newQty = i.qty + 1;
+                  const itemGross = newQty * i.price;
+                  const itemDiscVal = i.discount || 0;
+                  const itemNormType = i.discountType || 'amount';
+                  const itemDiscAmt = itemNormType === 'percent' ? (itemGross * itemDiscVal / 100) : (newQty * itemDiscVal);
+                  return { ...i, qty: newQty, total: Math.max(0, itemGross - itemDiscAmt) };
+                }
+                return i;
+              });
             }
             return [...prev, {
               productId: matchedSelectable.productId,
@@ -2779,7 +2789,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
               taxRate: 0,
               total: matchedSelectable.price,
               unit: matchedSelectable.unit,
-              conversionRate: matchedSelectable.conversionRate
+              conversionRate: matchedSelectable.conversionRate,
+              discount: 0,
+              discountType: 'amount'
             }];
           });
           notify(t(`Added to Quotation: ${matchedSelectable.displayName}`, `මිල ගණන් ලැයිස්තුවට එකතු කරන ලදී: ${matchedSelectable.displayName}`), undefined, 'success');

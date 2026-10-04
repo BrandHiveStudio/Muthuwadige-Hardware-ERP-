@@ -338,6 +338,22 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
     return Math.max(0, Math.round((poTotalWithTransport - finalDebitNoteApplied) * 100) / 100);
   }, [poTotalWithTransport, finalDebitNoteApplied]);
 
+  // Selected Supplier & Advance Credit Calculation
+  const selectedSupplierObj = useMemo(() => {
+    if (!selectedSupplier) return null;
+    const supp = selectedSupplier.trim().toLowerCase();
+    return supplierList.find(s => (s.name || '').trim().toLowerCase() === supp || (s.id || '').trim().toLowerCase() === supp) || null;
+  }, [selectedSupplier, supplierList]);
+
+  const supplierPayableBalance = useMemo(() => {
+    if (!selectedSupplierObj) return 0;
+    return Number(selectedSupplierObj.payableBalance ?? (selectedSupplierObj as any).payable_balance ?? selectedSupplierObj.balance ?? 0);
+  }, [selectedSupplierObj]);
+
+  const supplierAdvanceCredit = useMemo(() => {
+    return supplierPayableBalance < 0 ? Math.abs(supplierPayableBalance) : 0;
+  }, [supplierPayableBalance]);
+
   // Active Debit Notes for Selected Supplier in New PO
   const availableSupplierDebitNotes = useMemo(() => {
     if (!selectedSupplier) return [];
@@ -356,19 +372,29 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
   }, [selectedSupplier, purchaseReturns]);
 
   const activeDebitBalance = useMemo(() => {
-    return availableSupplierDebitNotes.reduce((sum, pr) => {
+    const debitNotesSum = availableSupplierDebitNotes.reduce((sum, pr) => {
       const bal = Number(pr.balance_remaining !== undefined && pr.balance_remaining !== null ? pr.balance_remaining : (pr.total_returned_cost || pr.totalReturnedCost || pr.total || 0));
       return sum + bal;
     }, 0);
-  }, [availableSupplierDebitNotes]);
+    return debitNotesSum + supplierAdvanceCredit;
+  }, [availableSupplierDebitNotes, supplierAdvanceCredit]);
 
   const matchedDebitNote = useMemo(() => {
     if (!selectedDebitNoteCode.trim()) return null;
     const q = selectedDebitNoteCode.trim().toUpperCase();
+    if (q === 'SUPPLIER_ADVANCE') {
+      return {
+        id: 'SUPPLIER_ADVANCE',
+        return_number: 'Supplier Advance Credit',
+        total_returned_cost: supplierAdvanceCredit,
+        balance_remaining: supplierAdvanceCredit,
+        status: 'ACTIVE'
+      } as any;
+    }
     return purchaseReturns.find(pr =>
       ((pr.return_number || pr.returnNumber || pr.id || '').toUpperCase() === q)
     ) || null;
-  }, [selectedDebitNoteCode, purchaseReturns]);
+  }, [selectedDebitNoteCode, purchaseReturns, supplierAdvanceCredit]);
 
   useEffect(() => {
     setSelectedDebitNoteCode('');
@@ -381,6 +407,10 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       return;
     }
     const q = selectedDebitNoteCode.trim().toUpperCase();
+    if (q === 'SUPPLIER_ADVANCE') {
+      setDebitNoteApplied(Math.min(supplierAdvanceCredit, poTotalWithTransport));
+      return;
+    }
     const found = purchaseReturns.find(pr =>
       ((pr.return_number || pr.returnNumber || pr.id || '').toUpperCase() === q) &&
       (pr.status || 'ACTIVE').toUpperCase() !== 'VOIDED' &&
@@ -390,7 +420,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
       const bal = Number(found.balance_remaining !== undefined && found.balance_remaining !== null ? found.balance_remaining : (found.total_returned_cost || found.totalReturnedCost || found.total || 0));
       setDebitNoteApplied(Math.min(bal, poTotalWithTransport));
     }
-  }, [selectedDebitNoteCode, purchaseReturns, poTotalWithTransport]);
+  }, [selectedDebitNoteCode, purchaseReturns, poTotalWithTransport, supplierAdvanceCredit]);
 
   // Unsaved Changes Warning Guard (Web Browser Only - Disabled in Electron to prevent reload lockup)
   useEffect(() => {
@@ -1121,17 +1151,24 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
     if (finalDebitNoteApplied > 0 && selectedDebitNoteCode.trim()) {
       const q = selectedDebitNoteCode.trim().toUpperCase();
-      const found = purchaseReturns.find(pr =>
-        ((pr.return_number || pr.returnNumber || pr.id || '').toUpperCase() === q)
-      );
-      if (!found) {
-        alert(`Debit Note code "${selectedDebitNoteCode}" not found in system.`);
-        return;
-      }
-      const avail = Number(found.balance_remaining !== undefined && found.balance_remaining !== null ? found.balance_remaining : (found.total_returned_cost || found.totalReturnedCost || found.total || 0));
-      if (avail <= 0 || (found.status || '').toUpperCase() === 'VOIDED' || (found.status || '').toUpperCase() === 'REDEEMED') {
-        alert(`Debit Note "${selectedDebitNoteCode}" is fully used or voided.`);
-        return;
+      if (q === 'SUPPLIER_ADVANCE') {
+        if (supplierAdvanceCredit <= 0) {
+          alert('Supplier Advance Credit is no longer available or already utilized.');
+          return;
+        }
+      } else {
+        const found = purchaseReturns.find(pr =>
+          ((pr.return_number || pr.returnNumber || pr.id || '').toUpperCase() === q)
+        );
+        if (!found) {
+          alert(`Debit Note code "${selectedDebitNoteCode}" not found in system.`);
+          return;
+        }
+        const avail = Number(found.balance_remaining !== undefined && found.balance_remaining !== null ? found.balance_remaining : (found.total_returned_cost || found.totalReturnedCost || found.total || 0));
+        if (avail <= 0 || (found.status || '').toUpperCase() === 'VOIDED' || (found.status || '').toUpperCase() === 'REDEEMED') {
+          alert(`Debit Note "${selectedDebitNoteCode}" is fully used or voided.`);
+          return;
+        }
       }
     }
 
@@ -2183,7 +2220,9 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                       onChange={(e) => {
                         const val = e.target.value;
                         setSelectedDebitNoteCode(val);
-                        if (val) {
+                        if (val === 'SUPPLIER_ADVANCE') {
+                          setDebitNoteApplied(Math.min(supplierAdvanceCredit, poTotal));
+                        } else if (val) {
                           const found = purchaseReturns.find((pr: any) => (pr.return_number || pr.returnNumber || pr.id) === val);
                           if (found) {
                             const bal = Number(found.balance_remaining !== undefined && found.balance_remaining !== null ? found.balance_remaining : (found.total_returned_cost || found.totalReturnedCost || found.total || 0));
@@ -2195,7 +2234,16 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                       }}
                       className="w-full px-3 py-2 bg-white border border-indigo-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 shadow-sm"
                     >
-                      <option value="">{availableSupplierDebitNotes.length > 0 ? '-- Select Active Supplier Debit Note --' : '-- No Active Supplier Debit Notes --'}</option>
+                      <option value="">
+                        {(availableSupplierDebitNotes.length > 0 || supplierAdvanceCredit > 0)
+                          ? '-- Select Active Supplier Debit Note / Credit --'
+                          : '-- No Active Supplier Debit Notes --'}
+                      </option>
+                      {supplierAdvanceCredit > 0 && (
+                        <option value="SUPPLIER_ADVANCE">
+                          Available Supplier Advance Credit (-Rs. {supplierAdvanceCredit.toFixed(2)})
+                        </option>
+                      )}
                       {availableSupplierDebitNotes.map((pr: any) => {
                         const code = pr.return_number || pr.returnNumber || pr.id;
                         const bal = Number(pr.balance_remaining !== undefined && pr.balance_remaining !== null ? pr.balance_remaining : (pr.total_returned_cost || pr.totalReturnedCost || pr.total || 0));
@@ -2274,7 +2322,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
 
                       {finalDebitNoteApplied > 0 && (
                         <div className="flex justify-between text-xs font-black text-indigo-600 uppercase tracking-wider">
-                          <span>Debit Note Applied ({selectedDebitNoteCode}):</span>
+                          <span>{selectedDebitNoteCode === 'SUPPLIER_ADVANCE' ? 'Supplier Advance Applied:' : `Debit Note Applied (${selectedDebitNoteCode}):`}</span>
                           <span className="font-mono">-{symbol} {convert(finalDebitNoteApplied).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
                       )}
