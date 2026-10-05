@@ -8189,12 +8189,41 @@ async function resolveOrCreateBatchProduct(db, product, itemCost, qty, poSupplie
       isExistingIncremented: true
     };
   }
+  let maxBatchNum = 1;
   const batchRows = await db.all('SELECT sku FROM products WHERE sku LIKE ?', [baseSku + '-B%']);
-  const nextBatchNum = batchRows.length + 1;
-  const newSku = baseSku + '-B' + nextBatchNum;
+  for (const row of (batchRows || [])) {
+    const match = String(row.sku || '').match(/-B(\d+)$/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (!isNaN(num) && num >= maxBatchNum) maxBatchNum = num;
+    }
+  }
+  let nextBatchNum = maxBatchNum + 1;
+  let newSku = baseSku + '-B' + nextBatchNum;
+
+  // Ensure SKU is strictly unique
+  let skuExists = await db.get('SELECT id FROM products WHERE sku = ?', [newSku]);
+  while (skuExists) {
+    nextBatchNum++;
+    newSku = baseSku + '-B' + nextBatchNum;
+    skuExists = await db.get('SELECT id FROM products WHERE sku = ?', [newSku]);
+  }
+
   const newBatchId = 'prod_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
   const batchName = product.name + ' (Batch ' + nextBatchNum + ' @ Rs.' + newCost + ')';
-  await db.run('INSERT INTO products (id, name, sku, category, price, cost_price, stock, min_stock, supplier, unit, barcode, brand, batch_code, is_batch, parent_product_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)', [newBatchId, batchName, newSku, product.category || 'General', product.price, newCost, qty, product.min_stock || 0, poSupplierName || product.supplier || '', product.unit || 'pcs', product.barcode || '', product.brand || '', 'BATCH-' + nextBatchNum, product.id]);
+  const prodPrice = (product.price !== undefined && product.price !== null) ? Number(product.price) : Number(product.selling_price || newCost || 0);
+  const minStock = (product.min_stock !== undefined && product.min_stock !== null) ? Number(product.min_stock) : 0;
+  const suppName = poSupplierName || product.supplier || '';
+  const unitVal = product.unit || 'pcs';
+  const barVal = product.barcode ? `${product.barcode}-B${nextBatchNum}` : '';
+  const brandVal = product.brand || '';
+  const batchCodeVal = 'BATCH-' + nextBatchNum;
+  const parentId = product.id || null;
+
+  await db.run(
+    'INSERT INTO products (id, name, sku, category, price, cost_price, stock, min_stock, supplier, unit, barcode, brand, batch_code, is_batch, parent_product_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)',
+    [newBatchId, batchName, newSku, product.category || 'General', prodPrice, newCost, qty, minStock, suppName, unitVal, barVal, brandVal, batchCodeVal, parentId]
+  );
   try {
     if (typeof enqueueSync === 'function') await enqueueSync(db, 'products', newBatchId, 'INSERT');
   } catch (_) {}
@@ -8538,223 +8567,141 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
         return { status: 404, error: 'Purchase order not found' };
       }
 
-    const isReceived = (status || '').toLowerCase() === 'received';
-    const recAt = received_at || req.body.receivedAt || (isReceived ? new Date().toISOString() : null);
-    const recBy = received_by || req.body.receivedBy || (isReceived ? (req.user?.name || req.user?.username || 'Admin') : null);
-    const payMethod = (payment_method || settlement_mode || req.body.settlementMode || (isReceived ? 'CREDIT' : null))?.toString().toUpperCase();
+      const isReceived = (status || '').toLowerCase() === 'received';
+      const recAt = received_at || req.body.receivedAt || (isReceived ? new Date().toISOString() : null);
+      const recBy = received_by || req.body.receivedBy || (isReceived ? (req.user?.name || req.user?.username || 'Admin') : null);
+      const payMethod = (payment_method || settlement_mode || req.body.settlementMode || (isReceived ? 'CREDIT' : null))?.toString().toUpperCase();
 
-    if (isReceived) {
-      await db.run(
-        `UPDATE purchase_orders SET
-          status = 'Received',
-          received_at = COALESCE(?, received_at, CURRENT_TIMESTAMP),
-          received_by = COALESCE(?, received_by, 'Admin'),
-          settlement_mode = COALESCE(?, settlement_mode, 'CREDIT'),
-          payment_method = COALESCE(?, payment_method, 'CREDIT'),
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?`,
-        [recAt, recBy, payMethod, payMethod, id]
-      );
-    } else {
-      await db.run('UPDATE purchase_orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [status, id]);
-    }
-
-    // If marked received, allocate stock using Batch Versioning and update weighted average cost
-    if (isReceived) {
-      let items = [];
-      try {
-        items = typeof po.items === 'string' ? JSON.parse(po.items) : (po.items || []);
-      } catch (_e) {
-        items = [];
+      if (isReceived) {
+        await db.run(
+          `UPDATE purchase_orders SET
+            status = 'Received',
+            received_at = COALESCE(?, received_at, CURRENT_TIMESTAMP),
+            received_by = COALESCE(?, received_by, 'Admin'),
+            settlement_mode = COALESCE(?, settlement_mode, 'CREDIT'),
+            payment_method = COALESCE(?, payment_method, 'CREDIT'),
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?`,
+          [recAt, recBy, payMethod, payMethod, id]
+        );
+      } else {
+        await db.run('UPDATE purchase_orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [status, id]);
       }
 
-      const poSubtotal = Number(po.subtotal !== null && po.subtotal !== undefined ? po.subtotal : (po.original_total || po.total || 0));
-      const poDiscountAmount = Number(po.discount_amount || 0);
-      const totalLineDisc = items.reduce((sum, it) => {
-        const q = Math.max(0, Number(it.qty || it.quantity || 0));
-        const c = Math.max(0, Number(it.costPrice || it.cost_price || it.unitCostPrice || 0));
-        const isF = (it.discountType || it.discount_type || '').toLowerCase() === 'fixed';
-        const d = Math.max(0, Number(it.discount || it.line_discount || 0));
-        const uDisc = isF ? d : (c * Math.min(100, d) / 100);
-        return sum + Math.min(q * c, Math.round(uDisc * q * 100) / 100);
-      }, 0);
-      const netAfterLines = Math.max(0, poSubtotal - totalLineDisc);
-      const orderDiscountAmount = Math.max(0, poDiscountAmount - totalLineDisc);
-      const poOrderDiscountRatio = netAfterLines > 0 ? (orderDiscountAmount / netAfterLines) : 0;
-      const poNetTotal = Number(po.net_total !== null && po.net_total !== undefined ? po.net_total : po.total);
-
       let updatedItems = [];
-      for (const item of items) {
-        const prodId = item.productId || item.product_id || item.id;
-        const qty = Math.max(0, Number(item.qty || item.quantity || 0));
-        const itemGrossCost = Number(item.costPrice || item.cost_price || item.unitCostPrice || 0);
-        const isFixed = (item.discountType || item.discount_type || '').toLowerCase() === 'fixed';
-        const disc = Math.max(0, Number(item.discount || item.line_discount || 0));
-        const unitAfterLineDisc = isFixed ? Math.max(0, itemGrossCost - disc) : itemGrossCost * (1 - Math.min(100, disc) / 100);
-        // Net purchase price accounting for line discount and overall order-level discount
-        const netUnitCost = Math.round(unitAfterLineDisc * (1 - poOrderDiscountRatio) * 100) / 100;
 
-        if (prodId && qty > 0) {
-          const product = await db.get('SELECT * FROM products WHERE id = ?', [prodId]);
-          if (product) {
-            // Recalculate average weighted cost (cost_price) in products based on net purchase prices
-            const currentStock = Number(product.stock || 0);
-            const currentCost = Number(product.cost_price !== undefined && product.cost_price !== null ? product.cost_price : (product.costPrice || 0));
-            let weightedCost = netUnitCost;
-            if (currentStock > 0 && currentCost > 0) {
-              weightedCost = Math.round(((currentStock * currentCost) + (qty * netUnitCost)) / (currentStock + qty) * 100) / 100;
+      // If marked received, allocate stock using Batch Versioning and update weighted average cost
+      if (isReceived) {
+        let items = [];
+        try {
+          items = typeof po.items === 'string' ? JSON.parse(po.items) : (po.items || []);
+        } catch (_e) {
+          items = [];
+        }
+
+        const poSubtotal = Number(po.subtotal !== null && po.subtotal !== undefined ? po.subtotal : (po.original_total || po.total || 0));
+        const poDiscountAmount = Number(po.discount_amount || 0);
+        const totalLineDisc = items.reduce((sum, it) => {
+          const q = Math.max(0, Number(it.qty || it.quantity || 0));
+          const c = Math.max(0, Number(it.costPrice || it.cost_price || it.unitCostPrice || 0));
+          const isF = (it.discountType || it.discount_type || '').toLowerCase() === 'fixed';
+          const d = Math.max(0, Number(it.discount || it.line_discount || 0));
+          const uDisc = isF ? d : (c * Math.min(100, d) / 100);
+          return sum + Math.min(q * c, Math.round(uDisc * q * 100) / 100);
+        }, 0);
+        const netAfterLines = Math.max(0, poSubtotal - totalLineDisc);
+        const orderDiscountAmount = Math.max(0, poDiscountAmount - totalLineDisc);
+        const poOrderDiscountRatio = netAfterLines > 0 ? (orderDiscountAmount / netAfterLines) : 0;
+        const poNetTotal = Number(po.net_total !== null && po.net_total !== undefined ? po.net_total : po.total);
+
+        for (const item of items) {
+          const prodId = item.productId || item.product_id || item.id;
+          const qty = Math.max(0, Number(item.qty || item.quantity || 0));
+          const itemGrossCost = Number(item.costPrice || item.cost_price || item.unitCostPrice || 0);
+          const isFixed = (item.discountType || item.discount_type || '').toLowerCase() === 'fixed';
+          const disc = Math.max(0, Number(item.discount || item.line_discount || 0));
+          const unitAfterLineDisc = isFixed ? Math.max(0, itemGrossCost - disc) : itemGrossCost * (1 - Math.min(100, disc) / 100);
+          // Net purchase price accounting for line discount and overall order-level discount
+          const netUnitCost = Math.round(unitAfterLineDisc * (1 - poOrderDiscountRatio) * 100) / 100;
+
+          if (prodId && qty > 0) {
+            const product = await db.get('SELECT * FROM products WHERE id = ?', [prodId]);
+            if (product) {
+              // Recalculate average weighted cost (cost_price) in products based on net purchase prices
+              const currentStock = Number(product.stock || 0);
+              const currentCost = Number(product.cost_price !== undefined && product.cost_price !== null ? product.cost_price : (product.costPrice || 0));
+              let weightedCost = netUnitCost;
+              if (currentStock > 0 && currentCost > 0) {
+                weightedCost = Math.round(((currentStock * currentCost) + (qty * netUnitCost)) / (currentStock + qty) * 100) / 100;
+              }
+              await db.run('UPDATE products SET cost_price = ? WHERE id = ?', [weightedCost, product.id]);
+
+              const batchResult = await resolveOrCreateBatchProduct(db, product, netUnitCost, qty, po.supplier_name);
+              updatedItems.push({
+                ...item,
+                netUnitCost,
+                receivedProductId: batchResult.productId,
+                receivedSku: batchResult.sku,
+                isNewBatch: batchResult.isNewBatch,
+                batchNumber: batchResult.batchNumber
+              });
+            } else {
+              updatedItems.push(item);
             }
-            await db.run('UPDATE products SET cost_price = ? WHERE id = ?', [weightedCost, product.id]);
-
-            const batchResult = await resolveOrCreateBatchProduct(db, product, netUnitCost, qty, po.supplier_name);
-            updatedItems.push({
-              ...item,
-              netUnitCost,
-              receivedProductId: batchResult.productId,
-              receivedSku: batchResult.sku,
-              isNewBatch: batchResult.isNewBatch,
-              batchNumber: batchResult.batchNumber
-            });
           } else {
             updatedItems.push(item);
           }
-        } else {
-          updatedItems.push(item);
         }
-      }
 
-      const supplierAdvanceApplied = Math.max(
-        0,
-        Number(
-          req.body.supplier_advance_applied ??
-          req.body.supplierAdvanceApplied ??
-          po.supplier_advance_applied ??
-          po.supplierAdvanceApplied ??
-          ((String(po.debit_note_code || '').trim().toUpperCase() === 'SUPPLIER_ADVANCE') ? (po.debit_note_applied || 0) : 0)
-        )
-      );
-
-      if (payMethod === 'CREDIT') {
-        if (po.supplier_name || po.supplier_id) {
-          const creditIncrease = poNetTotal + supplierAdvanceApplied;
-          await db.run(
-            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
-            [creditIncrease, creditIncrease, po.supplier_id || '', po.supplier_name || '']
-          );
-          const supp = await db.get(
-            'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
-            [po.supplier_id || '', po.supplier_name || '']
-          );
-          if (supp?.id) {
-            enqueueSync(db, 'suppliers', supp.id, 'UPSERT').catch(() => { });
-          }
-        }
-      } else if (payMethod === 'CASH') {
-        const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-        const payDesc = `Supplier Payment - ${po.supplier_name || 'Vendor'} (PO #${po.po_number || id}) [Cash Drawer]`;
-        const txRef = req.body.reference || `PO-SETTLE-${po.po_number || id}`;
-        const todayStr = req.body.payment_date || new Date().toLocaleDateString('sv-SE');
-        await db.run(
-          `INSERT INTO transactions (
-            id, type, category, description, amount, date, reference, user_id, created_at, payment_method
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            txId,
-            'expense',
-            'PURCHASE',
-            payDesc,
-            poNetTotal,
-            todayStr,
-            txRef,
-            recBy,
-            recAt,
-            'CASH'
-          ]
+        const supplierAdvanceApplied = Math.max(
+          0,
+          Number(
+            req.body.supplier_advance_applied ??
+            req.body.supplierAdvanceApplied ??
+            po.supplier_advance_applied ??
+            po.supplierAdvanceApplied ??
+            ((String(po.debit_note_code || '').trim().toUpperCase() === 'SUPPLIER_ADVANCE') ? (po.debit_note_applied || 0) : 0)
+          )
         );
-        enqueueSync(db, 'transactions', txId, 'INSERT').catch(() => { });
 
-        if (supplierAdvanceApplied > 0 && (po.supplier_name || po.supplier_id)) {
-          await db.run(
-            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
-            [supplierAdvanceApplied, supplierAdvanceApplied, po.supplier_id || '', po.supplier_name || '']
-          );
-          const supp = await db.get(
-            'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
-            [po.supplier_id || '', po.supplier_name || '']
-          );
-          if (supp?.id) {
-            enqueueSync(db, 'suppliers', supp.id, 'UPSERT').catch(() => { });
+        if (payMethod === 'CREDIT') {
+          if (po.supplier_name || po.supplier_id) {
+            const creditIncrease = poNetTotal + supplierAdvanceApplied;
+            await db.run(
+              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+              [creditIncrease, creditIncrease, po.supplier_id || '', po.supplier_name || '']
+            );
+            const supp = await db.get(
+              'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+              [po.supplier_id || '', po.supplier_name || '']
+            );
+            if (supp?.id) {
+              enqueueSync(db, 'suppliers', supp.id, 'UPSERT').catch(() => { });
+            }
           }
-        }
-      } else if (payMethod === 'BANK' || payMethod === 'BANK_TRANSFER' || payMethod === 'TRANSFER' || payMethod === 'ONLINE') {
-        const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-        const payDesc = `Supplier Payment - ${po.supplier_name || 'Vendor'} (PO #${po.po_number || id}) [Bank Transfer]`;
-        const txRef = req.body.reference || `PO-SETTLE-${po.po_number || id}`;
-        const todayStr = req.body.payment_date || new Date().toLocaleDateString('sv-SE');
-        await db.run(
-          `INSERT INTO transactions (
-            id, type, category, description, amount, date, reference, user_id, created_at, payment_method
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            txId,
-            'expense',
-            'PURCHASE',
-            payDesc,
-            poNetTotal,
-            todayStr,
-            txRef,
-            recBy,
-            recAt,
-            'BANK'
-          ]
-        );
-        enqueueSync(db, 'transactions', txId, 'INSERT').catch(() => { });
-
-        if (supplierAdvanceApplied > 0 && (po.supplier_name || po.supplier_id)) {
+        } else if (payMethod === 'CASH') {
+          const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+          const payDesc = `Supplier Payment - ${po.supplier_name || 'Vendor'} (PO #${po.po_number || id}) [Cash Drawer]`;
+          const txRef = req.body.reference || `PO-SETTLE-${po.po_number || id}`;
+          const todayStr = req.body.payment_date || new Date().toLocaleDateString('sv-SE');
           await db.run(
-            'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
-            [supplierAdvanceApplied, supplierAdvanceApplied, po.supplier_id || '', po.supplier_name || '']
-          );
-          const supp = await db.get(
-            'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
-            [po.supplier_id || '', po.supplier_name || '']
-          );
-          if (supp?.id) {
-            enqueueSync(db, 'suppliers', supp.id, 'UPSERT').catch(() => { });
-          }
-        }
-      } else if (payMethod === 'CHEQUE') {
-        const chqNo = req.body.cheque_number || req.body.chequeNo;
-        if (chqNo) {
-          const chqId = 'CHQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
-          const chqBank = (req.body.bank_name || req.body.bankName || 'Commercial Bank of Ceylon').toString().trim();
-          const chqDate = req.body.cheque_date || req.body.chequeDate || new Date().toLocaleDateString('sv-SE');
-          await db.run(
-            `INSERT INTO cheque_registry (
-              id, direction, cheque_type, cheque_number, bank_name, branch,
-              cheque_date, amount, party_id, party_name, reference_type,
-              reference_id, status, notes, created_by, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO transactions (
+              id, type, category, description, amount, date, reference, user_id, created_at, payment_method
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
-              chqId,
-              'OUTWARD',
-              'CROSSED_ACCOUNT_PAYEE',
-              chqNo.toString().trim(),
-              chqBank,
-              '',
-              chqDate,
+              txId,
+              'expense',
+              'PURCHASE',
+              payDesc,
               poNetTotal,
-              po.supplier_id || null,
-              po.supplier_name || 'Vendor',
-              'PURCHASE_ORDER',
-              po.id || po.po_number,
-              'PENDING',
-              req.body.notes || `Issued for Purchase Order #${po.po_number || id}`,
-              recBy,
-              recAt
+              todayStr,
+              txRef,
+              recBy || 'Admin',
+              recAt || new Date().toISOString(),
+              'CASH'
             ]
           );
-          enqueueSync(db, 'cheque_registry', chqId, 'INSERT').catch(() => { });
+          enqueueSync(db, 'transactions', txId, 'INSERT').catch(() => { });
 
           if (supplierAdvanceApplied > 0 && (po.supplier_name || po.supplier_id)) {
             await db.run(
@@ -8769,49 +8716,132 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
               enqueueSync(db, 'suppliers', supp.id, 'UPSERT').catch(() => { });
             }
           }
-        }
-      }
-
-      if (supplierAdvanceApplied > 0) {
-        const poRefNum = po.po_number || po.po_no || id;
-        const advTxId = 'tx_adv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-        const todayStr = req.body.payment_date || new Date().toLocaleDateString('sv-SE');
-        await db.run(
-          `INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at, payment_method)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            advTxId,
-            'expense',
-            'Supplier Advance',
-            `Advance absorbed against PO: ${poRefNum}`,
-            supplierAdvanceApplied,
-            todayStr,
-            `PO-ADV-${poRefNum}`,
-            recBy || 'Admin',
-            recAt || new Date().toISOString(),
-            'ADVANCE_ABSORPTION'
-          ]
-        );
-        try {
+        } else if (payMethod === 'BANK' || payMethod === 'BANK_TRANSFER' || payMethod === 'TRANSFER' || payMethod === 'ONLINE') {
+          const txId = 't_po_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+          const payDesc = `Supplier Payment - ${po.supplier_name || 'Vendor'} (PO #${po.po_number || id}) [Bank Transfer]`;
+          const txRef = req.body.reference || `PO-SETTLE-${po.po_number || id}`;
+          const todayStr = req.body.payment_date || new Date().toLocaleDateString('sv-SE');
           await db.run(
-            `INSERT INTO supplier_ledger (id, supplier_id, supplier_name, type, reference_type, reference_no, description, amount, balance_after, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            ['sl_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6), po.supplier_id || null, po.supplier_name || 'Vendor', 'DEBIT', 'PURCHASE_ORDER', poRefNum, `Advance absorbed against PO: ${poRefNum}`, supplierAdvanceApplied, 0, recAt || new Date().toISOString()]
+            `INSERT INTO transactions (
+              id, type, category, description, amount, date, reference, user_id, created_at, payment_method
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              txId,
+              'expense',
+              'PURCHASE',
+              payDesc,
+              poNetTotal,
+              todayStr,
+              txRef,
+              recBy || 'Admin',
+              recAt || new Date().toISOString(),
+              'BANK'
+            ]
           );
-        } catch (_) {}
-        enqueueSync(db, 'transactions', advTxId, 'INSERT').catch(() => { });
-      }
+          enqueueSync(db, 'transactions', txId, 'INSERT').catch(() => { });
 
-      for (const it of updatedItems) {
-        const pId = it.receivedProductId || it.productId || it.product_id;
-        if (pId) {
-          await enqueueSync(db, 'products', pId, 'UPSERT');
+          if (supplierAdvanceApplied > 0 && (po.supplier_name || po.supplier_id)) {
+            await db.run(
+              'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+              [supplierAdvanceApplied, supplierAdvanceApplied, po.supplier_id || '', po.supplier_name || '']
+            );
+            const supp = await db.get(
+              'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+              [po.supplier_id || '', po.supplier_name || '']
+            );
+            if (supp?.id) {
+              enqueueSync(db, 'suppliers', supp.id, 'UPSERT').catch(() => { });
+            }
+          }
+        } else if (payMethod === 'CHEQUE') {
+          const chqNo = req.body.cheque_number || req.body.chequeNo;
+          if (chqNo) {
+            const chqId = 'CHQ-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
+            const chqBank = (req.body.bank_name || req.body.bankName || 'Commercial Bank of Ceylon').toString().trim();
+            const chqDate = req.body.cheque_date || req.body.chequeDate || new Date().toLocaleDateString('sv-SE');
+            await db.run(
+              `INSERT INTO cheque_registry (
+                id, direction, cheque_type, cheque_number, bank_name, branch,
+                cheque_date, amount, party_id, party_name, reference_type,
+                reference_id, status, notes, created_by, created_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                chqId,
+                'OUTWARD',
+                'CROSSED_ACCOUNT_PAYEE',
+                chqNo.toString().trim(),
+                chqBank,
+                '',
+                chqDate,
+                poNetTotal,
+                po.supplier_id || null,
+                po.supplier_name || 'Vendor',
+                'PURCHASE_ORDER',
+                po.id || po.po_number,
+                'PENDING',
+                req.body.notes || `Issued for Purchase Order #${po.po_number || id}`,
+                recBy || 'Admin',
+                recAt || new Date().toISOString()
+              ]
+            );
+            enqueueSync(db, 'cheque_registry', chqId, 'INSERT').catch(() => { });
+
+            if (supplierAdvanceApplied > 0 && (po.supplier_name || po.supplier_id)) {
+              await db.run(
+                'UPDATE suppliers SET payable_balance = COALESCE(payable_balance, 0) + ?, current_balance = COALESCE(current_balance, 0) + ? WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+                [supplierAdvanceApplied, supplierAdvanceApplied, po.supplier_id || '', po.supplier_name || '']
+              );
+              const supp = await db.get(
+                'SELECT id FROM suppliers WHERE id = ? OR (name IS NOT NULL AND LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+                [po.supplier_id || '', po.supplier_name || '']
+              );
+              if (supp?.id) {
+                enqueueSync(db, 'suppliers', supp.id, 'UPSERT').catch(() => { });
+              }
+            }
+          }
         }
-        if (it.productId && it.receivedProductId && it.productId !== it.receivedProductId) {
-          await enqueueSync(db, 'products', it.productId, 'UPSERT');
+
+        if (supplierAdvanceApplied > 0) {
+          const poRefNum = po.po_number || po.po_no || id;
+          const advTxId = 'tx_adv_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+          const todayStr = req.body.payment_date || new Date().toLocaleDateString('sv-SE');
+          await db.run(
+            `INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at, payment_method)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              advTxId,
+              'expense',
+              'Supplier Advance',
+              `Advance absorbed against PO: ${poRefNum}`,
+              supplierAdvanceApplied,
+              todayStr,
+              `PO-ADV-${poRefNum}`,
+              recBy || 'Admin',
+              recAt || new Date().toISOString(),
+              'ADVANCE_ABSORPTION'
+            ]
+          );
+          try {
+            await db.run(
+              `INSERT INTO supplier_ledger (id, supplier_id, supplier_name, type, reference_type, reference_no, description, amount, balance_after, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              ['sl_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6), po.supplier_id || null, po.supplier_name || 'Vendor', 'DEBIT', 'PURCHASE_ORDER', poRefNum, `Advance absorbed against PO: ${poRefNum}`, supplierAdvanceApplied, 0, recAt || new Date().toISOString()]
+            );
+          } catch (_) {}
+          enqueueSync(db, 'transactions', advTxId, 'INSERT').catch(() => { });
+        }
+
+        for (const it of updatedItems) {
+          const pId = it.receivedProductId || it.productId || it.product_id;
+          if (pId) {
+            await enqueueSync(db, 'products', pId, 'UPSERT');
+          }
+          if (it.productId && it.receivedProductId && it.productId !== it.receivedProductId) {
+            await enqueueSync(db, 'products', it.productId, 'UPSERT');
+          }
         }
       }
-    }
 
       await enqueueSync(db, 'purchase_orders', id, 'UPSERT');
       if (Array.isArray(updatedItems) && updatedItems.length > 0) {
@@ -8845,6 +8875,8 @@ app.put('/api/purchase-orders/:id', async (req, res) => {
     triggerPush(db).catch(() => { });
     res.json(txnResult.body || txnResult);
   } catch (err) {
+    console.error('[PO RECEIVE ERROR DETAILS] PUT /api/purchase-orders/:id failed:', err);
+    console.error('[PO ADVANCE SETTLEMENT CRASH]:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -10332,23 +10364,23 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
         `Received PO #${po.po_number || po.po_no} for "${supplierName}" (Total: Rs. ${poGrandTotal.toLocaleString()}, Settlement Mode: ${validMode})`
       );
 
-              // 6. Enqueue Sync inside managed transaction
-        await enqueueSync(db, 'purchase_orders', po.id, 'UPSERT');
-        if (suppSyncId) {
-          await enqueueSync(db, 'suppliers', suppSyncId, 'UPSERT');
-        }
-        if (transSyncTxId) {
-          await enqueueSync(db, 'transactions', transSyncTxId, 'UPSERT');
-        }
-        if (settleTxId) {
-          await enqueueSync(db, 'transactions', settleTxId, 'UPSERT');
-        }
-        if (advTxId) {
-          await enqueueSync(db, 'transactions', advTxId, 'INSERT');
-        }
-        if (settleChqId) {
-          await enqueueSync(db, 'cheque_registry', settleChqId, 'UPSERT');
-        }
+      // 6. Enqueue Sync inside managed transaction
+      await enqueueSync(db, 'purchase_orders', po.id, 'UPSERT');
+      if (suppSyncId) {
+        await enqueueSync(db, 'suppliers', suppSyncId, 'UPSERT');
+      }
+      if (transSyncTxId) {
+        await enqueueSync(db, 'transactions', transSyncTxId, 'INSERT');
+      }
+      if (settleTxId) {
+        await enqueueSync(db, 'transactions', settleTxId, 'INSERT');
+      }
+      if (advTxId) {
+        await enqueueSync(db, 'transactions', advTxId, 'INSERT');
+      }
+      if (settleChqId) {
+        await enqueueSync(db, 'cheque_registry', settleChqId, 'INSERT');
+      }
       if (Array.isArray(updatedPoItems) && updatedPoItems.length > 0) {
         for (let i = 0; i < updatedPoItems.length; i++) {
           const it = updatedPoItems[i];
@@ -10370,18 +10402,6 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
             });
           } catch (_) {}
         }
-      }
-      if (suppSyncId) {
-        await enqueueSync(db, 'suppliers', suppSyncId, 'UPSERT');
-      }
-      if (settleTxId) {
-        await enqueueSync(db, 'transactions', settleTxId, 'INSERT');
-      }
-      if (settleChqId) {
-        await enqueueSync(db, 'cheque_registry', settleChqId, 'INSERT');
-      }
-      if (transSyncTxId) {
-        await enqueueSync(db, 'transactions', transSyncTxId, 'INSERT');
       }
       for (const it of updatedPoItems) {
         const pId = it.receivedProductId || it.productId || it.product_id;
@@ -10414,6 +10434,8 @@ app.post('/api/purchasing/receive-po', async (req, res) => {
 
     res.json(txnResult.body || txnResult);
   } catch (err) {
+    console.error('[PO RECEIVE ERROR DETAILS] POST /api/purchasing/receive-po failed:', err);
+    console.error('[PO ADVANCE SETTLEMENT CRASH]:', err);
     res.status(500).json({ error: err.message });
   }
 });

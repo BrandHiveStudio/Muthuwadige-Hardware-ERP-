@@ -550,7 +550,14 @@ export const api = {
           ...metadata
         })
       });
-      if (!res.ok) throw new Error('Failed to check in purchase order stock');
+      if (!res.ok) {
+        let msg = 'Failed to check in purchase order stock';
+        try {
+          const j = await res.json();
+          if (j.error) msg = `Failed to check in purchase order stock: ${j.error}`;
+        } catch (_) {}
+        throw new Error(msg);
+      }
       return res.json();
     },
     delete: async (id: string) => {
