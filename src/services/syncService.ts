@@ -271,6 +271,18 @@ export async function ensureTursoSchema(tursoClient: Client | null): Promise<voi
         branch_id TEXT,
         station_id TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );`,
+      `CREATE TABLE IF NOT EXISTS supplier_ledger (
+        id TEXT PRIMARY KEY,
+        supplier_id TEXT,
+        supplier_name TEXT,
+        type TEXT,
+        reference_type TEXT,
+        reference_no TEXT,
+        description TEXT,
+        amount REAL DEFAULT 0,
+        balance_after REAL DEFAULT 0,
+        created_at TEXT
       );`
     ], 'write');
     const cols = [
@@ -580,6 +592,26 @@ export async function ensureSyncSchema(db: any): Promise<void> {
       } catch (poiErr: any) {
         const msg = (poiErr?.message || String(poiErr)).toLowerCase();
         if (!msg.includes('already exists')) throw poiErr;
+      }
+
+      try {
+        await targetExec(`
+          CREATE TABLE IF NOT EXISTS supplier_ledger (
+            id TEXT PRIMARY KEY,
+            supplier_id TEXT,
+            supplier_name TEXT,
+            type TEXT,
+            reference_type TEXT,
+            reference_no TEXT,
+            description TEXT,
+            amount REAL DEFAULT 0,
+            balance_after REAL DEFAULT 0,
+            created_at TEXT
+          );
+        `);
+      } catch (slErr: any) {
+        const msg = (slErr?.message || String(slErr)).toLowerCase();
+        if (!msg.includes('already exists')) throw slErr;
       }
 
       // 4. Safe column additions (harmless duplicate column ignored, operational errors thrown)

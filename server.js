@@ -2181,6 +2181,24 @@ export async function initializeDatabase() {
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_debit_notes_supplier ON debit_notes(supplier_name)"); } catch (e) { }
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_debit_notes_po ON debit_notes(po_number)"); } catch (e) { }
 
+  // 21.5 Create Supplier Ledger Table
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS supplier_ledger (
+      id TEXT PRIMARY KEY,
+      supplier_id TEXT,
+      supplier_name TEXT,
+      type TEXT,
+      reference_type TEXT,
+      reference_no TEXT,
+      description TEXT,
+      amount REAL DEFAULT 0,
+      balance_after REAL DEFAULT 0,
+      created_at TEXT
+    )
+  `);
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_supplier_ledger_supplier_id ON supplier_ledger(supplier_id)"); } catch (e) { }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_supplier_ledger_ref_no ON supplier_ledger(reference_no)"); } catch (e) { }
+
   // 22. Create Shift Logs Table
   await db.exec(`
     CREATE TABLE IF NOT EXISTS shift_logs (
