@@ -1986,9 +1986,9 @@ export async function initializeDatabase() {
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN net_total REAL DEFAULT 0;"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN original_total REAL;"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_code TEXT;"); } catch (e) { }
-  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_applied REAL DEFAULT 0;
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_applied REAL DEFAULT 0;"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN supplier_advance_applied REAL DEFAULT 0;"); } catch (e) { }
-  try { await db.exec("ALTER TABLE suppliers ADD COLUMN current_balance REAL DEFAULT 0;"); } catch (e) { }"); } catch (e) { }
+  try { await db.exec("ALTER TABLE suppliers ADD COLUMN current_balance REAL DEFAULT 0;"); } catch (e) { }
   try { await db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT;"); } catch (e) { }
   try { await db.exec("ALTER TABLE customers ADD COLUMN credit_limit REAL DEFAULT 0;"); } catch (e) { }
   try { await db.exec("ALTER TABLE customers ADD COLUMN credit_period INTEGER DEFAULT 0;"); } catch (e) { }
@@ -2490,9 +2490,9 @@ export async function initializeDatabase() {
   try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN redeemed_in_po_number TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN original_total REAL"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_code TEXT"); } catch (e) { }
-  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_applied REAL DEFAULT 0"
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_applied REAL DEFAULT 0"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN supplier_advance_applied REAL DEFAULT 0"); } catch (e) { }
-  try { await db.exec("ALTER TABLE suppliers ADD COLUMN current_balance REAL DEFAULT 0"); } catch (e) { }); } catch (e) { }
+  try { await db.exec("ALTER TABLE suppliers ADD COLUMN current_balance REAL DEFAULT 0"); } catch (e) { }
   try { await db.exec("UPDATE purchase_returns SET balance_remaining = total_returned_cost WHERE balance_remaining IS NULL AND (status IS NULL OR status = 'ACTIVE')"); } catch (e) { }
   try { await db.exec("ALTER TABLE products ADD COLUMN parent_product_id TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE products ADD COLUMN is_batch INTEGER DEFAULT 0"); } catch (e) { }
@@ -3228,15 +3228,21 @@ app.post('/api/auth/login', async (req, res) => {
       db.get('SELECT * FROM users WHERE LOWER(email) = LOWER(?)', [cleanEmail]).catch(() => null)
     ]);
 
-    const localAccount = localProfile || (localUser ? {
-      id: localUser.id,
-      email: localUser.email,
-      name: localUser.name,
-      role: localUser.role,
-      password: localUser.password || localUser.password_hash,
-      password_hash: localUser.password_hash || localUser.password,
-      created_at: localUser.created_at
-    } : null);
+    let localAccount = null;
+    if (localProfile || localUser) {
+      localAccount = {
+        id: localProfile?.id || localUser?.id || ('usr_' + Date.now()),
+        email: localProfile?.email || localUser?.email || cleanEmail,
+        name: localProfile?.name || localUser?.name || 'Admin',
+        role: localProfile?.role || localUser?.role || 'Staff',
+        password: localProfile?.password || localUser?.password || localUser?.password_hash || localProfile?.password_hash || '',
+        password_hash: localProfile?.password_hash || localUser?.password_hash || localProfile?.password || localUser?.password || '',
+        created_at: localProfile?.created_at || localUser?.created_at,
+        avatar: localProfile?.avatar || localUser?.avatar,
+        permissions: localProfile?.permissions || localUser?.permissions,
+        custom_permissions: localProfile?.custom_permissions || localUser?.custom_permissions
+      };
+    }
 
     if (localAccount) {
       // User exists locally: verify password against local record, return session token, and proceed as normal
@@ -3703,7 +3709,8 @@ app.post('/api/auth/login', async (req, res) => {
       }
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('LOGIN ERROR:', err);
+    res.status(500).json({ error: err.message || 'Authentication error' });
   }
 });
 
