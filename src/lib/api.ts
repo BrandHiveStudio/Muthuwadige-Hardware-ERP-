@@ -1,10 +1,34 @@
+// 0. AUTOMATIC SANITIZATION OF STALE CONFIGURATION KEYS
+if (typeof window !== 'undefined' && window.localStorage) {
+  try {
+    const keysToCheck = [
+      'erp_host_address',
+      'api_server_url',
+      'server_address',
+      'custom_server_url',
+      'api_base_url',
+      'custom_api_url',
+      'erp_api_url',
+      'custom_server',
+      'custom_url'
+    ];
+    for (const key of keysToCheck) {
+      const val = localStorage.getItem(key);
+      if (val && (val.includes('erp.mhardware.lk') || val.includes('undefined') || val.includes('null'))) {
+        localStorage.removeItem(key);
+      }
+    }
+  } catch (_) {}
+}
+
 export function getBaseUrl(): string {
   if (typeof window === 'undefined') return 'http://127.0.0.1:5001/api';
 
   // 1. ELECTRON DESKTOP APP CHECK (D01.1: Immutable Local Lock)
-  const isElectron = Boolean((window as any).electronAPI) || 
+  const isElectron = Boolean((window as any).electron) ||
+                     Boolean((window as any).electronAPI) || 
                      window.location.protocol === 'file:' || 
-                     (typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron'));
+                     (typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('electron'));
   
   if (isElectron) {
     // D01.1 & D01.5: Electron desktop UI must use ONLY loopback backend.
@@ -12,21 +36,32 @@ export function getBaseUrl(): string {
     return 'http://127.0.0.1:5001/api';
   }
 
-  // 2. LIVE WEB DEPLOYMENT / SAME-ORIGIN (Vercel, custom domain, or direct LAN browser)
+  // 2. LOCAL DEV BROWSER (Vite on :5173 or direct loopback localhost/127.0.0.1)
   const hostname = window.location.hostname || '';
-  const isLocalWeb = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '';
+  const isLocalWeb = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '' || hostname === '0.0.0.0';
   
-  if (!isLocalWeb) {
-    const stored = localStorage.getItem('erp_host_address') || localStorage.getItem('api_server_url') || localStorage.getItem('server_address');
-    if (stored) {
+  if (isLocalWeb) {
+    const stored = localStorage.getItem('erp_host_address') || 
+                   localStorage.getItem('api_server_url') || 
+                   localStorage.getItem('server_address') || 
+                   localStorage.getItem('custom_server_url') || 
+                   localStorage.getItem('api_base_url');
+    if (stored && !stored.includes('erp.mhardware.lk')) {
       return stored.replace(/\/+$/, '').replace(/\/api$/, '') + '/api';
     }
-    return `${window.location.origin}/api`;
+    return 'http://127.0.0.1:5001/api';
   }
 
-  // 3. LOCAL DEV BROWSER (Vite on :5173 connecting to backend on :5001)
-  const stored = localStorage.getItem('erp_host_address') || localStorage.getItem('api_server_url') || localStorage.getItem('server_address');
-  return (stored ? stored.replace(/\/+$/, '').replace(/\/api$/, '') : 'http://127.0.0.1:5001') + '/api';
+  // 3. LIVE WEB DEPLOYMENT / SAME-ORIGIN (Vercel, custom domain, or direct LAN browser)
+  const stored = localStorage.getItem('erp_host_address') || 
+                 localStorage.getItem('api_server_url') || 
+                 localStorage.getItem('server_address') || 
+                 localStorage.getItem('custom_server_url') || 
+                 localStorage.getItem('api_base_url');
+  if (stored && !stored.includes('erp.mhardware.lk')) {
+    return stored.replace(/\/+$/, '').replace(/\/api$/, '') + '/api';
+  }
+  return `${window.location.origin}/api`;
 }
 
 export let API_URL = getBaseUrl();
@@ -34,9 +69,10 @@ export let BASE_URL = API_URL.replace(/\/api$/, '');
 
 export const setApiUrl = (newUrl: string | null) => {
   const isElectron = typeof window !== 'undefined' && (
+    Boolean((window as any).electron) ||
     Boolean((window as any).electronAPI) ||
     window.location.protocol === 'file:' ||
-    (typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron'))
+    (typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('electron'))
   );
 
   if (newUrl) {
@@ -50,6 +86,10 @@ export const setApiUrl = (newUrl: string | null) => {
     localStorage.removeItem('erp_host_address');
     localStorage.removeItem('api_server_url');
     localStorage.removeItem('server_address');
+    localStorage.removeItem('custom_server_url');
+    localStorage.removeItem('api_base_url');
+    localStorage.removeItem('custom_api_url');
+    localStorage.removeItem('erp_api_url');
     if (!isElectron) {
       API_URL = getBaseUrl();
     }

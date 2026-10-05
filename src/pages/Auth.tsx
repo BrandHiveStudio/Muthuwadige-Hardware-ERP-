@@ -122,16 +122,16 @@ export function Auth({ onLogin }: AuthProps) {
   };
   
   const [showConnectionSettings, setShowConnectionSettings] = useState(false);
-  const [connectionError, setConnectionError] = useState(false);
   const [hostAddressInput, setHostAddressInput] = useState(() => {
     const isElectron = typeof window !== 'undefined' && (
+      Boolean((window as any).electron) ||
       Boolean((window as any).electronAPI) || 
       window.location.protocol === 'file:' || 
-      (typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron'))
+      (typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('electron'))
     );
 
     const stored = localStorage.getItem('erp_host_address') || localStorage.getItem('api_server_url') || localStorage.getItem('server_address');
-    if (stored && !isElectron) return stored;
+    if (stored && !isElectron && !stored.includes('erp.mhardware.lk')) return stored;
 
     if (!isElectron && typeof window !== 'undefined' && window.location) {
       const hostname = window.location.hostname || '';
@@ -148,9 +148,10 @@ export function Auth({ onLogin }: AuthProps) {
   useEffect(() => {
     let isMounted = true;
     const isElectronEnv = typeof window !== 'undefined' && (
+      Boolean((window as any).electron) ||
       Boolean((window as any).electronAPI) || 
       window.location.protocol === 'file:' || 
-      (typeof navigator !== 'undefined' && navigator.userAgent.includes('Electron'))
+      (typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('electron'))
     );
 
     // Pre-auth background sync: Flush pending mutations and pull newly created staff profiles on desktop counter
@@ -162,14 +163,11 @@ export function Auth({ onLogin }: AuthProps) {
     const fetchSettings = async () => {
       const activeBaseUrl = getBaseUrl();
       
-      // Multi-attempt grace period: probe health up to 3 times (with 1s delay) so momentary startup lag
-      // while SQLite / Express binds to port 5001 never pops up the "Configure Settings" banner.
       for (let attempt = 1; attempt <= 3; attempt++) {
         if (!isMounted) return;
         try {
           const healthRes = await fetchWithTimeout(`${activeBaseUrl}/health`, {}, 3000).catch(() => null);
           if (healthRes && healthRes.ok) {
-            if (isMounted) setConnectionError(false);
             try {
               const { data } = await supabase.from('system_settings').select('*').single();
               if (data && isMounted) {
@@ -182,21 +180,6 @@ export function Auth({ onLogin }: AuthProps) {
 
         if (attempt < 3) {
           await new Promise(r => setTimeout(r, 1000));
-        }
-      }
-
-      if (isMounted) {
-        // In local desktop / Electron counter mode, backend is local loopback on 5001 - never show connection error on boot
-        if (!isElectronEnv) {
-          const hostname = typeof window !== 'undefined' ? (window.location.hostname || '') : '';
-          const isLiveWebDomain = Boolean(hostname && hostname !== 'localhost' && hostname !== '127.0.0.1');
-          if (isLiveWebDomain) {
-            setConnectionError(true);
-          } else {
-            setConnectionError(false);
-          }
-        } else {
-          setConnectionError(false);
         }
       }
     };
@@ -230,7 +213,6 @@ export function Auth({ onLogin }: AuthProps) {
           success: true, 
           message: 'Connection successful! Host is online.' 
         });
-        setConnectionError(false);
       } else {
         setConnectionTestResult({ 
           success: false, 
@@ -285,22 +267,10 @@ export function Auth({ onLogin }: AuthProps) {
       const cleanEmail = email.trim().toLowerCase();
       const cleanPassword = password.trim();
 
-      const loginEndpoint = (typeof window !== 'undefined' && window.location.protocol !== 'file:')
-        ? '/api/auth/login'
-        : `${API_URL}/auth/login`;
+      const { data, error: authError } = await api.auth.login(cleanEmail, cleanPassword);
 
-      const res = await fetch(loginEndpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email: cleanEmail, password: cleanPassword }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok || data.success === false || (!data.token && !data.user)) {
-        throw new Error(data.error || 'Invalid email or password.');
+      if (authError || !data || data.success === false || (!data.token && !data.user)) {
+        throw new Error(authError || (data && data.error) || 'Invalid email or password.');
       }
 
       // Store session tokens consistently across all keys used in the app
@@ -453,25 +423,6 @@ export function Auth({ onLogin }: AuthProps) {
               {authMode === 'forgot' && "We'll send a 6-digit verification code to your email address"}
               {authMode === 'verify' && 'Enter the 6-digit verification code and your new password'}
             </p>
-
-            {connectionError && (
-              <div className="flex flex-col gap-1.5 bg-amber-50 border border-amber-100 text-amber-800 rounded-xl px-5 py-4 mb-6 text-xs font-bold animate-in slide-in-from-top-2 text-left">
-                <div className="flex items-center gap-2">
-                  <AlertCircleIcon className="w-5 h-5 flex-shrink-0 text-amber-600" />
-                  <span>Cannot connect to database server</span>
-                </div>
-                <p className="text-gray-500 font-medium text-[11px] leading-relaxed">
-                  The local database server is unreachable at <code className="bg-amber-100/50 px-1 py-0.5 rounded font-mono font-bold">{API_URL}</code>. If this app is hosted on Vercel or running on a client machine, please update the Server Address.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setShowConnectionSettings(true)}
-                  className="text-amber-800 hover:text-amber-950 underline text-left w-fit mt-1"
-                >
-                  Configure Connection Settings
-                </button>
-              </div>
-            )}
 
             {successMessage && (
               <div className="flex items-center gap-3 bg-emerald-50 border border-emerald-100 text-emerald-600 rounded-xl px-5 py-4 mb-6 text-sm font-bold animate-in slide-in-from-top-2">
