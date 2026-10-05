@@ -192,11 +192,46 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
         .order('created_at', { ascending: false });
 
       if (poData) {
-        const mappedOrders = poData.map((po: any) => ({
+        const mappedOrders = poData.map((po: any) => {
+          const advApplied = Number(
+            po.supplier_advance_applied ??
+            po.supplierAdvanceApplied ??
+            ((String(po.debit_note_code || po.debitNoteCode || '').trim().toUpperCase() === 'SUPPLIER_ADVANCE')
+              ? (po.debit_note_applied ?? po.debitNoteApplied ?? 0)
+              : 0)
+          );
+          const dnApplied = Number(po.debit_note_applied ?? po.debitNoteApplied ?? 0);
+          const dnCode = po.debit_note_code || po.debitNoteCode || '';
+          const isAdvCode = dnCode.trim().toUpperCase() === 'SUPPLIER_ADVANCE';
+          const totalVal = Number(po.total ?? 0);
+          const netTotalVal = Number(
+            po.net_total !== undefined && po.net_total !== null
+              ? po.net_total
+              : (po.netTotal !== undefined && po.netTotal !== null
+                ? po.netTotal
+                : Math.max(0, totalVal - advApplied - (isAdvCode ? 0 : dnApplied)))
+          );
+
+          return {
             ...po,
             poNumber: po.po_number !== undefined ? po.po_number : po.poNumber,
+            po_number: po.po_number !== undefined ? po.po_number : po.poNumber,
             supplierName: po.supplier_name !== undefined ? po.supplier_name : po.supplierName,
+            supplier_name: po.supplier_name !== undefined ? po.supplier_name : po.supplierName,
+            supplierId: po.supplier_id !== undefined ? po.supplier_id : po.supplierId,
+            supplier_id: po.supplier_id !== undefined ? po.supplier_id : po.supplierId,
             dueDate: po.due_date !== undefined ? po.due_date : po.dueDate,
+            due_date: po.due_date !== undefined ? po.due_date : po.dueDate,
+            total: totalVal,
+            net_total: netTotalVal,
+            netTotal: netTotalVal,
+            subtotal: Number(po.subtotal ?? po.original_total ?? totalVal),
+            debit_note_code: dnCode,
+            debitNoteCode: dnCode,
+            debit_note_applied: dnApplied,
+            debitNoteApplied: dnApplied,
+            supplier_advance_applied: advApplied,
+            supplierAdvanceApplied: advApplied,
             transportation_fee: Math.max(0, Number(po.transportation_fee ?? po.transportationFee ?? po.shipping_cost ?? po.delivery_fee ?? 0)),
             transportationFee: Math.max(0, Number(po.transportation_fee ?? po.transportationFee ?? po.shipping_cost ?? po.delivery_fee ?? 0)),
             shipping_cost: Math.max(0, Number(po.transportation_fee ?? po.transportationFee ?? po.shipping_cost ?? po.delivery_fee ?? 0)),
@@ -209,7 +244,8 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
             received_at: po.received_at || po.receivedAt || null,
             receivedAt: po.received_at || po.receivedAt || null,
             date: po.created_at ? new Date(po.created_at).toLocaleDateString() : (po.date || new Date().toLocaleDateString())
-          }));
+          };
+        });
         setOrders(mappedOrders);
         setCachedData('purchaseOrders', mappedOrders);
       }
@@ -1195,7 +1231,7 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
             grossTotal: itemData.grossLineTotal
           };
         }),
-        total: finalPayable,
+        total: poTotalWithTransport,
         subtotal: poGrossSubtotal,
         discount_type: discountType,
         discount_value: discountValue,
@@ -2442,7 +2478,16 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
                       <td className="px-6 py-4 font-black text-slate-800">{order.supplierName}</td>
                       <td className="px-6 py-4 text-center"><span className="bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-wider">{order.items?.length || 0} ITEMS</span></td>
                       <td className="px-6 py-4 text-slate-500 font-bold">{order.dueDate}</td>
-                      <td className="px-6 py-4 text-right font-black text-[#DAA520]">{symbol} {convert(order.total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td className="px-6 py-4 text-right font-black text-[#DAA520]">
+                        <div>
+                          <span>{symbol} {convert(order.net_total !== undefined && order.net_total !== null ? order.net_total : order.total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          {Number(order.supplier_advance_applied || (order as any).supplierAdvanceApplied || 0) > 0 && (
+                            <span className="block text-[9px] text-emerald-600 font-bold">
+                              Adv: -{symbol} {convert(Number(order.supplier_advance_applied || (order as any).supplierAdvanceApplied || 0)).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-6 py-4 text-center">
                           <span className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest ${statusColors[order.status]}`}>{order.status}</span>
                       </td>
@@ -3976,270 +4021,308 @@ export function Purchasing({ currentUser }: PurchasingProps = {}) {
         title={`Receive & Settle Purchase Order — ${receivingOrder?.poNumber || ''}`} 
         size="lg"
       >
-        {receivingOrder && (
-          <div className="p-2 space-y-5 text-left">
-            {/* Top Summary Banner */}
-            <div className="bg-slate-900 rounded-2xl p-5 text-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border border-slate-800">
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-amber-400">Receiving PO Details</p>
-                <h3 className="text-lg font-black text-white mt-0.5">{receivingOrder.supplierName}</h3>
-                <p className="text-xs text-slate-400 font-medium">Ref: {receivingOrder.poNumber} | Ordered On: {receivingOrder.date}</p>
-              </div>
-              <div className="text-right sm:text-right bg-white/10 p-3.5 rounded-xl border border-white/10 w-full sm:w-auto">
-                <p className="text-[10px] font-black uppercase tracking-widest text-amber-300">Total Purchase Commitment</p>
-                <p className="text-2xl font-black text-[#DAA520] mt-0.5">
-                  {symbol} {Number(receivingOrder.total || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                </p>
-              </div>
-            </div>
+        {receivingOrder && (() => {
+          const orderCommitment = Number(receivingOrder.total ?? receivingOrder.subtotal ?? 0);
+          const advanceAbsorbed = Number(
+            receivingOrder.supplier_advance_applied ??
+            (receivingOrder as any).supplierAdvanceApplied ??
+            (((receivingOrder as any).debit_note_code === 'SUPPLIER_ADVANCE' || (receivingOrder as any).debitNoteCode === 'SUPPLIER_ADVANCE')
+              ? (receivingOrder.debit_note_applied ?? (receivingOrder as any).debitNoteApplied ?? 0)
+              : 0)
+          );
+          const otherDebitApplied = ((receivingOrder as any).debit_note_code !== 'SUPPLIER_ADVANCE' && (receivingOrder as any).debitNoteCode !== 'SUPPLIER_ADVANCE')
+            ? Number(receivingOrder.debit_note_applied ?? (receivingOrder as any).debitNoteApplied ?? 0)
+            : 0;
+          const totalDeductions = advanceAbsorbed + otherDebitApplied;
+          const netPayableNow = Math.max(
+            0,
+            Number(
+              receivingOrder.net_total !== undefined && receivingOrder.net_total !== null
+                ? receivingOrder.net_total
+                : ((receivingOrder as any).netTotal !== undefined && (receivingOrder as any).netTotal !== null
+                  ? (receivingOrder as any).netTotal
+                  : (orderCommitment - totalDeductions))
+            )
+          );
 
-            {/* Restock Items Preview Table */}
-            <div className="border border-slate-200 rounded-xl overflow-hidden text-left bg-white">
-              <div className="bg-slate-50 px-4 py-2 border-b border-slate-200 flex justify-between items-center">
-                <span className="text-[11px] font-black uppercase tracking-wider text-slate-600">
-                  Restocked Line Items ({receivingOrder.items?.length || 0})
-                </span>
-                <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                  Inventory Stock will increase
-                </span>
+          return (
+            <div className="p-2 space-y-5 text-left">
+              {/* Top Summary Banner */}
+              <div className="bg-slate-900 rounded-2xl p-5 text-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border border-slate-800">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-amber-400">Receiving PO Details</p>
+                  <h3 className="text-lg font-black text-white mt-0.5">{receivingOrder.supplierName}</h3>
+                  <p className="text-xs text-slate-400 font-medium">Ref: {receivingOrder.poNumber} | Ordered On: {receivingOrder.date}</p>
+                </div>
+                <div className="text-right sm:text-right bg-white/10 p-3.5 rounded-xl border border-white/10 w-full sm:w-auto">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-amber-300">
+                    {advanceAbsorbed > 0 || otherDebitApplied > 0 ? 'Net Balance Payable Now' : 'Total Purchase Commitment'}
+                  </p>
+                  <p className="text-2xl font-black text-[#DAA520] mt-0.5">
+                    {symbol} {netPayableNow.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </p>
+                  {(advanceAbsorbed > 0 || otherDebitApplied > 0) && (
+                    <div className="mt-1.5 pt-1.5 border-t border-white/10 text-[10px] text-slate-300 flex flex-col items-end gap-0.5 font-medium">
+                      <span>Order Subtotal: {symbol} {orderCommitment.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                      {advanceAbsorbed > 0 && (
+                        <span className="text-emerald-400 font-bold">Advance Absorbed: -{symbol} {advanceAbsorbed.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                      )}
+                      {otherDebitApplied > 0 && (
+                        <span className="text-amber-400 font-bold">Debit Note Applied: -{symbol} {otherDebitApplied.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="max-h-40 overflow-y-auto">
-                <table className="w-full text-xs text-left">
-                  <thead className="bg-slate-100/50 text-[10px] font-black text-slate-400 uppercase tracking-wider">
-                    <tr>
-                      <th className="py-2.5 px-4">Item Name</th>
-                      <th className="py-2.5 px-2 text-center">Receiving Qty</th>
-                      <th className="py-2.5 px-2 text-right">Unit Cost</th>
-                      <th className="py-2.5 px-4 text-right">Subtotal</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {receivingOrder.items?.map((item, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50/50">
-                        <td className="py-2.5 px-4 font-bold text-slate-800">{item.productName}</td>
-                        <td className="py-2.5 px-2 text-center font-black text-emerald-600">+{item.qty}</td>
-                        <td className="py-2.5 px-2 text-right font-medium text-slate-600">{symbol} {convert(item.costPrice).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                        <td className="py-2.5 px-4 text-right font-black text-slate-800">{symbol} {convert(item.total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+
+              {/* Restock Items Preview Table */}
+              <div className="border border-slate-200 rounded-xl overflow-hidden text-left bg-white">
+                <div className="bg-slate-50 px-4 py-2 border-b border-slate-200 flex justify-between items-center">
+                  <span className="text-[11px] font-black uppercase tracking-wider text-slate-600">
+                    Restocked Line Items ({receivingOrder.items?.length || 0})
+                  </span>
+                  <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                    Inventory Stock will increase
+                  </span>
+                </div>
+                <div className="max-h-40 overflow-y-auto">
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-slate-100/50 text-[10px] font-black text-slate-400 uppercase tracking-wider">
+                      <tr>
+                        <th className="py-2.5 px-4">Item Name</th>
+                        <th className="py-2.5 px-2 text-center">Receiving Qty</th>
+                        <th className="py-2.5 px-2 text-right">Unit Cost</th>
+                        <th className="py-2.5 px-4 text-right">Subtotal</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Settlement Method Selector */}
-            <div>
-              <label className="block text-[11px] font-black uppercase tracking-widest text-slate-500 mb-2">
-                Select PO Settlement Method *
-              </label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {/* Credit */}
-                <button
-                  type="button"
-                  onClick={() => setReceiveSettlementMode('CREDIT')}
-                  className={`p-3.5 rounded-xl border flex items-start gap-3 transition-all text-left ${
-                    receiveSettlementMode === 'CREDIT'
-                      ? 'bg-indigo-50/70 border-indigo-500 text-indigo-950 ring-2 ring-indigo-500/20'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <div className={`p-2 rounded-lg ${receiveSettlementMode === 'CREDIT' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
-                    <LayersIcon className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <span className="text-xs font-black uppercase tracking-wider block">Add to Supplier Credit</span>
-                    <span className="text-[10px] text-slate-500 font-medium block mt-0.5 leading-tight">
-                      Increases {receivingOrder.supplierName}'s payable balance. Settled later in Supplier Ledger.
-                    </span>
-                  </div>
-                </button>
-
-                {/* Cash */}
-                <button
-                  type="button"
-                  onClick={() => setReceiveSettlementMode('CASH')}
-                  className={`p-3.5 rounded-xl border flex items-start gap-3 transition-all text-left ${
-                    receiveSettlementMode === 'CASH'
-                      ? 'bg-emerald-50/70 border-emerald-500 text-emerald-950 ring-2 ring-emerald-500/20'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <div className={`p-2 rounded-lg ${receiveSettlementMode === 'CASH' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
-                    <WalletIcon className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <span className="text-xs font-black uppercase tracking-wider block">Pay Now - Cash Drawer</span>
-                    <span className="text-[10px] text-slate-500 font-medium block mt-0.5 leading-tight">
-                      Deducts {symbol} {Number(receivingOrder.total || 0).toLocaleString()} immediately from Cash Drawer as Purchase Expense.
-                    </span>
-                  </div>
-                </button>
-
-                {/* Bank Transfer */}
-                <button
-                  type="button"
-                  onClick={() => setReceiveSettlementMode('BANK')}
-                  className={`p-3.5 rounded-xl border flex items-start gap-3 transition-all text-left ${
-                    receiveSettlementMode === 'BANK'
-                      ? 'bg-blue-50/70 border-blue-500 text-blue-950 ring-2 ring-blue-500/20'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <div className={`p-2 rounded-lg ${receiveSettlementMode === 'BANK' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
-                    <Building2Icon className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <span className="text-xs font-black uppercase tracking-wider block">Pay Now - Bank Transfer</span>
-                    <span className="text-[10px] text-slate-500 font-medium block mt-0.5 leading-tight">
-                      Logs a bank withdrawal expense of {symbol} {Number(receivingOrder.total || 0).toLocaleString()} in Accounting Cash Book.
-                    </span>
-                  </div>
-                </button>
-
-                {/* Outward Cheque */}
-                <button
-                  type="button"
-                  onClick={() => setReceiveSettlementMode('CHEQUE')}
-                  className={`p-3.5 rounded-xl border flex items-start gap-3 transition-all text-left ${
-                    receiveSettlementMode === 'CHEQUE'
-                      ? 'bg-amber-50/70 border-[#DAA520] text-amber-950 ring-2 ring-[#DAA520]/20'
-                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <div className={`p-2 rounded-lg ${receiveSettlementMode === 'CHEQUE' ? 'bg-[#DAA520] text-slate-900' : 'bg-slate-100 text-slate-600'}`}>
-                    <FileCheckIcon className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <span className="text-xs font-black uppercase tracking-wider block">Issue Cheque (PDC)</span>
-                    <span className="text-[10px] text-slate-500 font-medium block mt-0.5 leading-tight">
-                      Records an Outward Pending Cheque in Cheque Registry linked to this PO.
-                    </span>
-                  </div>
-                </button>
-              </div>
-            </div>
-
-            {/* Cheque Specific Input Fields */}
-            {receiveSettlementMode === 'CHEQUE' && (
-              <div className="bg-amber-50/50 p-4 rounded-xl border border-amber-200/60 space-y-3 animate-in fade-in duration-300">
-                <div className="flex items-center gap-2 text-xs font-black text-amber-800 uppercase tracking-wider">
-                  <ShieldCheckIcon className="w-4 h-4 text-[#DAA520]" />
-                  <span>Outward Account Payee Cheque Parameters</span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
-                      Cheque Number *
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. 004821"
-                      value={receiveChequeNo}
-                      onChange={(e) => setReceiveChequeNo(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
-                      Bank Name *
-                    </label>
-                    <select
-                      value={receiveBankName}
-                      onChange={(e) => setReceiveBankName(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
-                    >
-                      {SRI_LANKA_BANKS.map((b, i) => (
-                        <option key={i} value={b}>{b}</option>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {receivingOrder.items?.map((item, idx) => (
+                        <tr key={idx} className="hover:bg-slate-50/50">
+                          <td className="py-2.5 px-4 font-bold text-slate-800">{item.productName}</td>
+                          <td className="py-2.5 px-2 text-center font-black text-emerald-600">+{item.qty}</td>
+                          <td className="py-2.5 px-2 text-right font-medium text-slate-600">{symbol} {convert(item.costPrice).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                          <td className="py-2.5 px-4 text-right font-black text-slate-800">{symbol} {convert(item.total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                        </tr>
                       ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
-                      Cheque Date (PDC) *
-                    </label>
-                    <input
-                      type="date"
-                      value={receiveChequeDate}
-                      onChange={(e) => setReceiveChequeDate(e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
-                      required
-                    />
-                  </div>
+                    </tbody>
+                  </table>
                 </div>
               </div>
-            )}
 
-            {/* Date & Voucher Ref */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Settlement Method Selector */}
+              <div>
+                <label className="block text-[11px] font-black uppercase tracking-widest text-slate-500 mb-2">
+                  Select PO Settlement Method *
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Credit */}
+                  <button
+                    type="button"
+                    onClick={() => setReceiveSettlementMode('CREDIT')}
+                    className={`p-3.5 rounded-xl border flex items-start gap-3 transition-all text-left ${
+                      receiveSettlementMode === 'CREDIT'
+                        ? 'bg-indigo-50/70 border-indigo-500 text-indigo-950 ring-2 ring-indigo-500/20'
+                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className={`p-2 rounded-lg ${receiveSettlementMode === 'CREDIT' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                      <LayersIcon className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <span className="text-xs font-black uppercase tracking-wider block">Add to Supplier Credit</span>
+                      <span className="text-[10px] text-slate-500 font-medium block mt-0.5 leading-tight">
+                        Increases {receivingOrder.supplierName}'s payable balance by {symbol} {netPayableNow.toLocaleString(undefined, { minimumFractionDigits: 2 })}. Settled later in Supplier Ledger.{advanceAbsorbed > 0 ? ` (Advance of ${symbol} ${advanceAbsorbed.toLocaleString(undefined, { minimumFractionDigits: 2 })} absorbed)` : ''}
+                      </span>
+                    </div>
+                  </button>
+
+                  {/* Cash */}
+                  <button
+                    type="button"
+                    onClick={() => setReceiveSettlementMode('CASH')}
+                    className={`p-3.5 rounded-xl border flex items-start gap-3 transition-all text-left ${
+                      receiveSettlementMode === 'CASH'
+                        ? 'bg-emerald-50/70 border-emerald-500 text-emerald-950 ring-2 ring-emerald-500/20'
+                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className={`p-2 rounded-lg ${receiveSettlementMode === 'CASH' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                      <WalletIcon className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <span className="text-xs font-black uppercase tracking-wider block">Pay Now - Cash Drawer</span>
+                      <span className="text-[10px] text-slate-500 font-medium block mt-0.5 leading-tight">
+                        Deducts {symbol} {netPayableNow.toLocaleString(undefined, { minimumFractionDigits: 2 })} immediately from Cash Drawer as Purchase Expense.{advanceAbsorbed > 0 ? ` (${symbol} ${advanceAbsorbed.toLocaleString(undefined, { minimumFractionDigits: 2 })} absorbed from Supplier Advance)` : ''}
+                      </span>
+                    </div>
+                  </button>
+
+                  {/* Bank Transfer */}
+                  <button
+                    type="button"
+                    onClick={() => setReceiveSettlementMode('BANK')}
+                    className={`p-3.5 rounded-xl border flex items-start gap-3 transition-all text-left ${
+                      receiveSettlementMode === 'BANK'
+                        ? 'bg-blue-50/70 border-blue-500 text-blue-950 ring-2 ring-blue-500/20'
+                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className={`p-2 rounded-lg ${receiveSettlementMode === 'BANK' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                      <Building2Icon className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <span className="text-xs font-black uppercase tracking-wider block">Pay Now - Bank Transfer</span>
+                      <span className="text-[10px] text-slate-500 font-medium block mt-0.5 leading-tight">
+                        Logs a bank withdrawal expense of {symbol} {netPayableNow.toLocaleString(undefined, { minimumFractionDigits: 2 })} in Accounting Cash Book.{advanceAbsorbed > 0 ? ` (${symbol} ${advanceAbsorbed.toLocaleString(undefined, { minimumFractionDigits: 2 })} absorbed from Supplier Advance)` : ''}
+                      </span>
+                    </div>
+                  </button>
+
+                  {/* Outward Cheque */}
+                  <button
+                    type="button"
+                    onClick={() => setReceiveSettlementMode('CHEQUE')}
+                    className={`p-3.5 rounded-xl border flex items-start gap-3 transition-all text-left ${
+                      receiveSettlementMode === 'CHEQUE'
+                        ? 'bg-amber-50/70 border-[#DAA520] text-amber-950 ring-2 ring-[#DAA520]/20'
+                        : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className={`p-2 rounded-lg ${receiveSettlementMode === 'CHEQUE' ? 'bg-[#DAA520] text-slate-900' : 'bg-slate-100 text-slate-600'}`}>
+                      <FileCheckIcon className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <span className="text-xs font-black uppercase tracking-wider block">Issue Cheque (PDC)</span>
+                      <span className="text-[10px] text-slate-500 font-medium block mt-0.5 leading-tight">
+                        Records an Outward Pending Cheque ({symbol} {netPayableNow.toLocaleString(undefined, { minimumFractionDigits: 2 })}) in Cheque Registry linked to this PO.
+                      </span>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Cheque Specific Input Fields */}
+              {receiveSettlementMode === 'CHEQUE' && (
+                <div className="bg-amber-50/50 p-4 rounded-xl border border-amber-200/60 space-y-3 animate-in fade-in duration-300">
+                  <div className="flex items-center gap-2 text-xs font-black text-amber-800 uppercase tracking-wider">
+                    <ShieldCheckIcon className="w-4 h-4 text-[#DAA520]" />
+                    <span>Outward Account Payee Cheque Parameters</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
+                        Cheque Number *
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 004821"
+                        value={receiveChequeNo}
+                        onChange={(e) => setReceiveChequeNo(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
+                        Bank Name *
+                      </label>
+                      <select
+                        value={receiveBankName}
+                        onChange={(e) => setReceiveBankName(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
+                      >
+                        {SRI_LANKA_BANKS.map((b, i) => (
+                          <option key={i} value={b}>{b}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
+                        Cheque Date (PDC) *
+                      </label>
+                      <input
+                        type="date"
+                        value={receiveChequeDate}
+                        onChange={(e) => setReceiveChequeDate(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
+                        required
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Date & Voucher Ref */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
+                    Receipt & Payment Date
+                  </label>
+                  <input
+                    type="date"
+                    value={receivePaymentDate}
+                    onChange={(e) => setReceivePaymentDate(e.target.value)}
+                    className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
+                    Voucher / Ref #
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="PO-REC-..."
+                    value={receiveRef}
+                    onChange={(e) => setReceiveRef(e.target.value)}
+                    className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
-                  Receipt & Payment Date
+                  Receipt Notes (Optional)
                 </label>
-                <input
-                  type="date"
-                  value={receivePaymentDate}
-                  onChange={(e) => setReceivePaymentDate(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
+                <textarea
+                  rows={2}
+                  placeholder="Goods receipt notes, delivery truck number, driver notes..."
+                  value={receiveNotes}
+                  onChange={(e) => setReceiveNotes(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
                 />
               </div>
-              <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
-                  Voucher / Ref #
-                </label>
-                <input
-                  type="text"
-                  placeholder="PO-REC-..."
-                  value={receiveRef}
-                  onChange={(e) => setReceiveRef(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
-                />
+
+              {/* Modal Actions */}
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setReceivingOrder(null)}
+                  className="px-6 py-2.5 text-xs font-black text-slate-400 hover:text-slate-600 transition-colors uppercase tracking-widest"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isSubmittingReceive}
+                  onClick={handleConfirmReceiveAndSettle}
+                  className="flex items-center gap-2 px-8 py-2.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black shadow-lg shadow-emerald-600/20 transition-all uppercase tracking-widest disabled:opacity-50"
+                >
+                  {isSubmittingReceive ? (
+                    <>
+                      <Loader2Icon className="w-4 h-4 animate-spin" />
+                      <span>Receiving & Restocking...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircleIcon className="w-4 h-4" />
+                      <span>Confirm Receipt & Settle ({symbol} {netPayableNow.toLocaleString(undefined, { minimumFractionDigits: 2 })})</span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
-
-            <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">
-                Receipt Notes (Optional)
-              </label>
-              <textarea
-                rows={2}
-                placeholder="Goods receipt notes, delivery truck number, driver notes..."
-                value={receiveNotes}
-                onChange={(e) => setReceiveNotes(e.target.value)}
-                className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 outline-none focus:ring-2 focus:ring-[#DAA520]"
-              />
-            </div>
-
-            {/* Modal Actions */}
-            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setReceivingOrder(null)}
-                className="px-6 py-2.5 text-xs font-black text-slate-400 hover:text-slate-600 transition-colors uppercase tracking-widest"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={isSubmittingReceive}
-                onClick={handleConfirmReceiveAndSettle}
-                className="flex items-center gap-2 px-8 py-2.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black shadow-lg shadow-emerald-600/20 transition-all uppercase tracking-widest disabled:opacity-50"
-              >
-                {isSubmittingReceive ? (
-                  <>
-                    <Loader2Icon className="w-4 h-4 animate-spin" />
-                    <span>Receiving & Restocking...</span>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircleIcon className="w-4 h-4" />
-                    <span>Confirm Receipt & Settle ({symbol} {Number(receivingOrder.total || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })})</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        )}
+          );
+        })()}
       </Modal>
     </div>
   );

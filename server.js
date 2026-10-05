@@ -1988,6 +1988,8 @@ export async function initializeDatabase() {
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_code TEXT;"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN debit_note_applied REAL DEFAULT 0;"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN supplier_advance_applied REAL DEFAULT 0;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN supplier_id TEXT;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN created_by TEXT;"); } catch (e) { }
   try { await db.exec("ALTER TABLE suppliers ADD COLUMN current_balance REAL DEFAULT 0;"); } catch (e) { }
   try { await db.exec("ALTER TABLE customers ADD COLUMN updated_at TEXT;"); } catch (e) { }
   try { await db.exec("ALTER TABLE customers ADD COLUMN credit_limit REAL DEFAULT 0;"); } catch (e) { }
@@ -8302,16 +8304,26 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
   const transportationFee = Math.max(0, Number(po.transportation_fee !== undefined && po.transportation_fee !== null ? po.transportation_fee : (po.transportationFee !== undefined && po.transportationFee !== null ? po.transportationFee : 0)));
   const debitNoteCode = (po.debit_note_code || po.debitNoteCode || '').toString().trim();
   const debitNoteApplied = Math.max(0, Number(po.debit_note_applied || po.debitNoteApplied || 0));
+  const isAdvanceCode = debitNoteCode.toUpperCase() === 'SUPPLIER_ADVANCE';
+  const supplierAdvanceApplied = Math.max(
+    0,
+    Number(
+      po.supplier_advance_applied ??
+      po.supplierAdvanceApplied ??
+      (isAdvanceCode ? debitNoteApplied : 0)
+    )
+  );
+  const otherDebitApplied = isAdvanceCode ? 0 : debitNoteApplied;
   const originalTotal = Number(po.original_total !== undefined ? po.original_total : (po.originalTotal !== undefined ? po.originalTotal : subtotal));
   const afterDiscount = Math.max(0, Math.round((subtotal - discountAmount) * 100) / 100);
   const totalWithTransport = Math.max(0, Math.round((afterDiscount + transportationFee) * 100) / 100);
-  const netTotal = Math.max(0, Math.round((totalWithTransport - debitNoteApplied) * 100) / 100);
+  const netTotal = Math.max(0, Math.round((totalWithTransport - supplierAdvanceApplied - otherDebitApplied) * 100) / 100);
 
   try {
     await ensureSyncSchema(db);
     await db.transaction(async () => {
       // If debit note applied, deduct from purchase_returns & debit_notes
-      if (debitNoteApplied > 0 && debitNoteCode) {
+      if (debitNoteApplied > 0 && debitNoteCode && !isAdvanceCode) {
         const pr = await db.get(
           'SELECT * FROM purchase_returns WHERE (return_number = ? OR id = ?) AND status NOT IN (\'VOIDED\', \'REDEEMED\')',
           [debitNoteCode, debitNoteCode]
@@ -8347,25 +8359,18 @@ app.post(['/api/purchase-orders', '/api/purchases'], async (req, res) => {
         } catch (_) { }
       }
 
-      const supplierAdvanceApplied = Math.max(
-        0,
-        Number(
-          po.supplier_advance_applied ??
-          po.supplierAdvanceApplied ??
-          ((debitNoteCode.toUpperCase() === 'SUPPLIER_ADVANCE') ? debitNoteApplied : 0)
-        )
-      );
-
       await db.run(
         `INSERT INTO purchase_orders (
           id, po_number, supplier_name, items, total,
           subtotal, discount_type, discount_value, discount_amount, transportation_fee, net_total,
-          original_total, debit_note_code, debit_note_applied, supplier_advance_applied, status, due_date, user_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          original_total, debit_note_code, debit_note_applied, supplier_advance_applied, status, due_date, user_id, created_at,
+          supplier_id, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          id, po.po_number, po.supplier_name, JSON.stringify(items), netTotal,
+          id, po.po_number, po.supplier_name, JSON.stringify(items), totalWithTransport,
           subtotal, discountType, discountValue, discountAmount, transportationFee, netTotal,
-          originalTotal, debitNoteCode || null, debitNoteApplied, supplierAdvanceApplied, po.status || 'pending', po.due_date, po.user_id, created_at
+          originalTotal, debitNoteCode || null, debitNoteApplied, supplierAdvanceApplied, po.status || 'pending', po.due_date, po.user_id, created_at,
+          po.supplier_id || po.supplierId || null, po.created_by || po.createdBy || null
         ]
       );
 
