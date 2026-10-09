@@ -430,31 +430,25 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         toDate: today
       });
 
-      // Unified Liquid Cash Calculation (incorporates Direct POS Cash, Credit Settlements & Encashed Cheques)
-      let dynamicCashInHand = todayPaymentBreakdown.totalCashCollected;
-      if (allTransactions && allTransactions.length > 0) {
-        const cashIncome = allTransactions
-          .filter((t: any) => {
-            const tDate = toSriLankaDateStr(t.date || t.created_at);
-            const method = (t.payment_method || t.paymentMethod || 'CASH').toString().toUpperCase().trim();
-            const type = (t.flow_type || t.type || '').toString().toUpperCase().trim();
-            return tDate === today && type === 'INCOME' && (method === 'CASH' || method === 'CASH_BEARER');
-          })
-          .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
+      // Cash Drawer Expenses Today (Drawer Petty Outflows)
+      const todayCashExpenses = (allTransactions || [])
+        .filter((t: any) => {
+          if (!t) return false;
+          if (t.status && t.status.toUpperCase() === 'VOIDED') return false;
+          const tDate = toSriLankaDateStr(t.date || t.created_at);
+          if (tDate !== today) return false;
+          const type = (t.flow_type || t.type || '').toString().toUpperCase().trim();
+          const method = (t.payment_method || t.paymentMethod || 'CASH').toString().toUpperCase().trim();
+          const isCash = method === 'CASH' || method === 'CASH_BEARER';
+          const cat = String(t.category || '').toUpperCase();
+          const desc = String(t.description || '').toUpperCase();
+          const isSalesRet = type === 'CONTRA_REVENUE' || type === 'SALES_RETURN' || cat.includes('SALES RETURN') || desc.includes('SALES RETURN');
+          return type === 'EXPENSE' && isCash && !isSalesRet;
+        })
+        .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
 
-        const cashExpense = allTransactions
-          .filter((t: any) => {
-            const tDate = toSriLankaDateStr(t.date || t.created_at);
-            const method = (t.payment_method || t.paymentMethod || 'CASH').toString().toUpperCase().trim();
-            const type = (t.flow_type || t.type || '').toString().toUpperCase().trim();
-            return tDate === today && type === 'EXPENSE' && (method === 'CASH' || method === 'CASH_BEARER');
-          })
-          .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
-
-        if (cashIncome > 0 || cashExpense > 0) {
-          dynamicCashInHand = Math.max(0, cashIncome - cashExpense);
-        }
-      }
+      // Formula: net_cash = total_cash_sales - total_cash_refunds - total_cash_expenses
+      const dynamicCashInHand = Math.max(0, todayPaymentBreakdown.totalCashCollected - todayCashExpenses);
 
       setTodayProfit(todayFinancialSummary.grossProfit);
       setCashBalance(dynamicCashInHand);
@@ -616,7 +610,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               <div className="text-left">
                 <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">{t("Cash Drawable Balance", "ලැබිය හැකි ශුද්ධ මුදල් ශේෂය")}</p>
                 <p className="text-2xl font-black text-slate-800 tracking-tight">{symbol} {cashBalance.toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
-                <span className="text-[9px] font-black text-slate-400">{t("Total revenue minus non-paid credit orders", "මුළු ආදායමෙන් නොගෙවූ ණය ඇණවුම් අඩු කළ පසු")}</span>
+                <span className="text-[9px] font-black text-slate-400">{t("Net physical cash in drawer today", "අද දින ලාච්චුවේ ඇති ශුද්ධ මුදල් ප්‍රමාණය")}</span>
               </div>
               <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-500 flex items-center justify-center shrink-0">
                 <span className="font-black text-sm text-blue-600">Rs.</span>

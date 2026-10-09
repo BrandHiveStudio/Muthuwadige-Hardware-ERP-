@@ -459,11 +459,30 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   }, 0);
 
   const totalSalesRevenue = Math.max(0, grossSalesSellingRevenue - returnsSellingRevenue);
+  const totalOrders = filteredSales.filter(s => {
+    const statusLower = (s.status || '').toString().toLowerCase().trim();
+    return statusLower !== 'cancelled' && statusLower !== 'voided';
+  }).length;
+
   const paidOrders = filteredSales.filter(o => {
-    if (o.status === 'cancelled' || o.status === 'Cancelled') return false;
-    const rem = Math.max(0, Number(o.total_amount !== undefined ? o.total_amount : (o.total || 0)) - Number(o.payment_received || 0));
-    const statusLower = (o.status || '').toLowerCase();
-    return statusLower === 'paid' || statusLower === 'fully settled' || rem <= 0.01;
+    if (!o) return false;
+    const statusLower = (o.status || '').toString().toLowerCase().trim();
+    if (statusLower === 'cancelled' || statusLower === 'voided') return false;
+    const balanceDue = o.balance_due !== undefined && o.balance_due !== null
+      ? Number(o.balance_due)
+      : (o.balance_amount !== undefined && o.balance_amount !== null
+        ? Number(o.balance_amount)
+        : (o.balance !== undefined && o.balance !== null
+          ? Number(o.balance)
+          : Math.max(0, Number(o.total_amount !== undefined ? o.total_amount : (o.total || 0)) - Number(o.payment_received || 0))));
+
+    if (['paid', 'completed', 'fully settled', 'partially_refunded', 'partially refunded'].includes(statusLower)) {
+      if (statusLower === 'partially_refunded' || statusLower === 'partially refunded') {
+        return balanceDue <= 0.01;
+      }
+      return true;
+    }
+    return balanceDue <= 0.01;
   }).length;
 
   const dailySalesData = (() => {
@@ -1509,7 +1528,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
                   <FileTextIcon className="w-4 h-4" />
                 </div>
               </div>
-              <p className="text-3xl font-black text-white tracking-tight">{sales.length}</p>
+              <p className="text-3xl font-black text-white tracking-tight">{totalOrders}</p>
               <p className="text-[10px] text-violet-100/90 font-medium mt-3.5 flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
                 {t('All recorded invoices', 'සියලුම ඉන්වොයිසි සංඛ්‍යාව')}

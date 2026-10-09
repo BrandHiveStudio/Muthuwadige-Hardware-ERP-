@@ -699,7 +699,7 @@ export function Finance({ currentUser }: FinanceProps = {}) {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-[10px] font-black text-white/80 uppercase tracking-widest">Total Cash Out (Expenses)</p>
-                  <p className="text-3xl font-black text-white mt-1.5">{symbol} {convert(cashExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  <p className="text-3xl font-black text-white mt-1.5">{symbol} {convert(totalExpense).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                 </div>
                 <div className="w-12 h-12 bg-white/20 text-white rounded-xl flex items-center justify-center shadow-lg">
                   <ArrowDownRightIcon className="w-6 h-6" />
