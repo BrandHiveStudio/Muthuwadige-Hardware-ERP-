@@ -325,6 +325,13 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     return true;
   });
 
+  const filteredCreditPayments = creditPayments.filter(cp => {
+    const cpDate = safeGetDateString(cp.payment_date || cp.created_at || cp.date);
+    if (effectiveFromDate && cpDate < effectiveFromDate) return false;
+    if (effectiveToDate && cpDate > effectiveToDate) return false;
+    return true;
+  });
+
   const getSaleSellingSubtotal = (s: any) => {
     const tot = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
     const tax = Number(s.tax || 0);
@@ -439,7 +446,13 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     return sum;
   }, 0);
 
-  const totalCashCollected = Math.max(0, rawCashCollected + exchangeCashInflowsTotal - cashRefundsTotal);
+  const totalCreditSettlementsCollected = filteredCreditPayments.reduce((sum, cp) => {
+    const cpStatus = (cp.status || '').toLowerCase();
+    if (cpStatus === 'voided' || cpStatus === 'cancelled') return sum;
+    return sum + Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0));
+  }, 0);
+
+  const totalCashCollected = Math.max(0, rawCashCollected + totalCreditSettlementsCollected + exchangeCashInflowsTotal - cashRefundsTotal);
 
   const grossSalesSellingRevenue = filteredSales.reduce((sum, s) => {
     const statusLower = (s.status || '').toString().toLowerCase().trim();
@@ -459,12 +472,21 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   }, 0);
 
   const totalSalesRevenue = Math.max(0, grossSalesSellingRevenue - returnsSellingRevenue);
-  const totalOrders = filteredSales.filter(s => {
+  
+  const totalSalesOrders = filteredSales.filter(s => {
     const statusLower = (s.status || '').toString().toLowerCase().trim();
     return statusLower !== 'cancelled' && statusLower !== 'voided';
   }).length;
 
-  const paidOrders = filteredSales.filter(o => {
+  const totalExchangeOrders = filteredSalesReturns.filter(r => {
+    const statusLower = (r.status || '').toString().toLowerCase().trim();
+    const type = (r.return_type || r.returnType || r.returnMethod || r.type || '').toString().toLowerCase().trim();
+    return statusLower !== 'cancelled' && statusLower !== 'voided' && type === 'exchange';
+  }).length;
+
+  const totalOrders = totalSalesOrders + totalExchangeOrders;
+
+  const paidSalesOrders = filteredSales.filter(o => {
     if (!o) return false;
     const statusLower = (o.status || '').toString().toLowerCase().trim();
     if (statusLower === 'cancelled' || statusLower === 'voided') return false;
@@ -476,14 +498,13 @@ export function Reports({ currentUser }: ReportsProps = {}) {
           ? Number(o.balance)
           : Math.max(0, Number(o.total_amount !== undefined ? o.total_amount : (o.total || 0)) - Number(o.payment_received || 0))));
 
-    if (['paid', 'completed', 'fully settled', 'partially_refunded', 'partially refunded'].includes(statusLower)) {
-      if (statusLower === 'partially_refunded' || statusLower === 'partially refunded') {
-        return balanceDue <= 0.01;
-      }
+    if (['paid', 'completed', 'fully settled', 'partially_refunded', 'partially refunded', 'partial refund'].includes(statusLower)) {
       return true;
     }
     return balanceDue <= 0.01;
   }).length;
+
+  const paidOrders = paidSalesOrders + totalExchangeOrders;
 
   const dailySalesData = (() => {
     const map: Record<string, number> = {};
@@ -775,7 +796,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   const totalReceivables = filteredSales.reduce((sum, s) => {
     if (s.status === 'cancelled' || s.status === 'Cancelled' || s.status === 'voided' || s.status === 'Voided') return sum;
     if (!isCreditSaleRecord(s)) return sum;
-    const acct = calculateSaleAccounting(s, salesReturns);
+    const acct = calculateSaleAccounting(s, salesReturns, creditPayments);
     return sum + acct.netOutstanding;
   }, 0);
   const totalPayables = suppliers.reduce((sum, s) => sum + Number(s.payable_balance || 0), 0);
@@ -813,7 +834,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     const isCreditSale = isCreditSaleRecord(s);
 
     if (isCreditSale) {
-      const acct = calculateSaleAccounting(s, salesReturns);
+      const acct = calculateSaleAccounting(s, salesReturns, creditPayments);
       calcCredit += acct.netOutstanding;
     } else {
       if (Array.isArray(s.split_payments) && s.split_payments.length > 0) {

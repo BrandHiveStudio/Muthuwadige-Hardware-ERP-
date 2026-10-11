@@ -229,7 +229,7 @@ export function computeFinancialSummary(params: {
     });
   });
 
-  const netSalesRevenue = Math.max(0, Math.round((grossStickerSales - customerDiscounts - returnsSellingRevenue + transportFees) * 100) / 100);
+  const netSalesRevenue = Math.max(0, Math.round((grossStickerSales - customerDiscounts - returnsSellingRevenue + exchangeSellingRevenue + transportFees) * 100) / 100);
   const netCOGS = Math.max(0, Math.round((grossCOGS + exchangeCostVal - returnsCostVal) * 100) / 100);
   const grossProfit = Math.round((netSalesRevenue - netCOGS) * 100) / 100;
   const grossMarginPct = netSalesRevenue > 0 ? Math.round(((grossProfit / netSalesRevenue) * 100) * 100) / 100 : 0;
@@ -374,7 +374,7 @@ export function computePaymentBreakdown(params: {
   // Customer Credit Outstanding
   const customerCreditOutstanding = validSales.reduce((sum: number, s: any) => {
     if (!isCreditSaleRecord(s)) return sum;
-    const acct = calculateSaleAccounting(s, salesReturns);
+    const acct = calculateSaleAccounting(s, salesReturns, validPayments);
     return sum + acct.netOutstanding;
   }, 0);
 

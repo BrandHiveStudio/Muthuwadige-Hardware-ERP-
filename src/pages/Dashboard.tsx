@@ -262,7 +262,14 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         return saleDateStr === today && s.status !== 'cancelled' && s.status !== 'Voided' && s.status !== 'voided';
       }) : [];
 
-      const todayOrders = salesToday.length;
+      const returnsToday = allReturns ? allReturns.filter((r: any) => {
+        if (!r) return false;
+        const rDateStr = toSriLankaDateStr(r.created_at || r.return_date || r.date);
+        const type = (r.return_type || r.returnType || r.returnMethod || r.type || '').toString().toLowerCase().trim();
+        return rDateStr === today && r.status !== 'cancelled' && r.status !== 'voided' && type === 'exchange';
+      }) : [];
+
+      const todayOrders = salesToday.length + returnsToday.length;
 
       // 2. Fetch Customers & Suppliers
       const { data: custData } = await supabase.from('customers').select('*');
@@ -430,13 +437,30 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         toDate: today
       });
 
-      // Cash Drawer Expenses Today (Drawer Petty Outflows)
-      const todayCashExpenses = (allTransactions || [])
+      const todayTransactions = (allTransactions || []).filter((t: any) => {
+        if (!t) return false;
+        if (t.status && t.status.toUpperCase() === 'VOIDED') return false;
+        const tDate = toSriLankaDateStr(t.date || t.created_at);
+        return tDate === today;
+      });
+
+      // Cash Purchase Returns (Suppliers refunding us cash)
+      const todayCashPurchaseReturns = todayTransactions
         .filter((t: any) => {
-          if (!t) return false;
-          if (t.status && t.status.toUpperCase() === 'VOIDED') return false;
-          const tDate = toSriLankaDateStr(t.date || t.created_at);
-          if (tDate !== today) return false;
+          const cat = String(t.category || '').toUpperCase();
+          const desc = String(t.description || '').toUpperCase();
+          const ref = String(t.reference || '').toUpperCase();
+          const method = String(t.payment_method || t.paymentMethod || t.method || '').trim().toUpperCase();
+          
+          const isPR = cat.includes('PURCHASE RETURN') || cat.includes('SUPPLIER REFUND') || cat.includes('PURCHASE REFUND') || desc.includes('PURCHASE RETURN') || desc.includes('SUPPLIER REFUND') || ref.startsWith('PR-');
+          const isCash = !['BANK', 'BANK TRANSFER', 'BANK_TRANSFER', 'TRANSFER', 'CREDIT', 'CARD'].includes(method) && !desc.includes('BANK TRANSFER') && !cat.includes('CREDIT');
+          return (t.flow_type?.toLowerCase() === 'income' || t.type?.toLowerCase() === 'income') && isPR && isCash;
+        })
+        .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
+
+      // Cash Drawer Expenses Today (Drawer Petty Outflows)
+      const rawTodayCashExpenses = todayTransactions
+        .filter((t: any) => {
           const type = (t.flow_type || t.type || '').toString().toUpperCase().trim();
           const method = (t.payment_method || t.paymentMethod || 'CASH').toString().toUpperCase().trim();
           const isCash = method === 'CASH' || method === 'CASH_BEARER';
@@ -446,6 +470,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
           return type === 'EXPENSE' && isCash && !isSalesRet;
         })
         .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
+
+      const todayCashExpenses = Math.max(0, rawTodayCashExpenses - todayCashPurchaseReturns);
 
       // Formula: net_cash = total_cash_sales - total_cash_refunds - total_cash_expenses
       const dynamicCashInHand = Math.max(0, todayPaymentBreakdown.totalCashCollected - todayCashExpenses);
@@ -459,8 +485,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       setPendingPOs(pendingCount);
 
       const calculatedStats = {
-        revenue: todayFinancialSummary.grossStickerSales,
-        grossSales: todayFinancialSummary.grossStickerSales,
+        revenue: todayFinancialSummary.grossStickerSales + todayFinancialSummary.exchangeSellingRevenue,
+        grossSales: todayFinancialSummary.grossStickerSales + todayFinancialSummary.exchangeSellingRevenue,
         netSales: todayFinancialSummary.netSalesRevenue,
         cogs: todayFinancialSummary.netCOGS,
         profit: todayFinancialSummary.grossProfit,

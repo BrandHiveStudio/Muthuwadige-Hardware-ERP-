@@ -147,8 +147,16 @@ export function Finance({ currentUser }: FinanceProps = {}) {
     return type === 'contra_revenue' || type === 'sales_return' || cat.startsWith('sales return') || cat === 'exchange refund';
   };
 
+  const isNonCashExchangeTicket = (t: any) => {
+    if (!t) return false;
+    const desc = (t.description || '').toLowerCase();
+    const cat = (t.category || '').toLowerCase();
+    return desc.includes('exchange return') || cat.includes('exchange return');
+  };
+
   const filtered = transactions.filter((t) => {
     if (t.status && t.status.toUpperCase() === 'VOIDED') return false;
+    if (isNonCashExchangeTicket(t)) return false;
     const matchesSearch = t.description.toLowerCase().includes(search.toLowerCase()) || 
                           t.reference.toLowerCase().includes(search.toLowerCase()) ||
                           t.category.toLowerCase().includes(search.toLowerCase());

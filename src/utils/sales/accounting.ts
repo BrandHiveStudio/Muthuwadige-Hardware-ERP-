@@ -51,20 +51,16 @@ export function isCreditSaleRecord(sale: any): boolean {
  *   totalPaid = originalPaid + exchangePaid
  *   netOutstanding = max(0, effectiveTotal - totalPaid)
  */
-export function calculateSaleAccounting(sale: any, salesReturnsList: any[] = []): SaleAccountingSummary {
+export function calculateSaleAccounting(
+  sale: any, 
+  salesReturnsList: any[] = [], 
+  creditPaymentsList: any[] = [] // Added the payments ledger parameter
+): SaleAccountingSummary {
   if (!sale) {
     return {
-      originalTotal: 0,
-      originalPaid: 0,
-      totalReturn: 0,
-      totalExchange: 0,
-      exchangePaid: 0,
-      effectiveTotal: 0,
-      totalPaid: 0,
-      netOutstanding: 0,
-      customerCreditEntitlement: 0,
-      isFullySettled: true,
-      isCreditSale: false
+      originalTotal: 0, originalPaid: 0, totalReturn: 0, totalExchange: 0,
+      exchangePaid: 0, effectiveTotal: 0, totalPaid: 0, netOutstanding: 0,
+      customerCreditEntitlement: 0, isFullySettled: true, isCreditSale: false
     };
   }
 
@@ -72,11 +68,20 @@ export function calculateSaleAccounting(sale: any, salesReturnsList: any[] = [])
   const isCredit = isCreditSaleRecord(sale);
   const originalTotal = Number(sale.total_amount !== undefined ? sale.total_amount : (sale.total || 0));
 
+  // Dynamically calculate the sum of all subsequent partial payments from the ledger
+  const subsequentPayments = creditPaymentsList.filter(cp => {
+    if (!cp) return false;
+    const cpStatus = (cp.status || '').toLowerCase();
+    if (cpStatus === 'voided' || cpStatus === 'cancelled') return false;
+    return cp.sale_id === sale.id || (invNo && cp.invoice_no === invNo);
+  }).reduce((sum, cp) => sum + Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0)), 0);
+
   let originalPaid = 0;
   if (isCredit) {
-    originalPaid = Number(sale.payment_received || 0);
+    // Include initial down payment PLUS the sum of all partial settlements
+    originalPaid = Number(sale.payment_received || 0) + subsequentPayments;
   } else {
-    // For cash / paid sales, original payment equals original total unless payment_received is explicitly recorded
+    // For cash / paid sales
     originalPaid = sale.payment_received !== undefined && sale.payment_received !== null && Number(sale.payment_received) > 0
       ? Number(sale.payment_received)
       : (sale.status?.toLowerCase() === 'paid' ? originalTotal : Number(sale.payment_received || 0));
@@ -87,8 +92,7 @@ export function calculateSaleAccounting(sale: any, salesReturnsList: any[] = [])
     if (!r) return false;
     const rStatus = (r.status || '').toString().toLowerCase().trim();
     if (rStatus === 'voided' || rStatus === 'cancelled') return false;
-    const rInv = r.invoice_no || r.invoiceNo;
-    return rInv === invNo;
+    return (r.invoice_no || r.invoiceNo) === invNo;
   });
 
   const totalReturn = activeReturns.reduce((sum, r) => sum + Number(r.return_amount !== undefined ? r.return_amount : (r.returnAmount || 0)), 0);
@@ -99,7 +103,6 @@ export function calculateSaleAccounting(sale: any, salesReturnsList: any[] = [])
   const totalPaid = originalPaid + exchangePaid;
   const netOutstanding = Math.max(0, effectiveTotal - totalPaid);
 
-  // Calculate genuine store credit entitlement (if returns exceed total goods taken on cash sales)
   let customerCreditEntitlement = 0;
   if (!isCredit && totalReturn > originalTotal + totalExchange) {
     customerCreditEntitlement = totalReturn - (originalTotal + totalExchange);
