@@ -27,17 +27,24 @@ export function isCreditSaleRecord(sale: any): boolean {
   const method = (sale.payment_method || sale.paymentMethod || '').toString().toLowerCase().trim();
   const status = (sale.status || '').toString().toLowerCase().trim();
 
-  if (method === 'cash' || method === 'card' || method === 'bank transfer' || method === 'online' || method === 'pos') {
-    return false;
-  }
-
+  // 1. Explicit Credit Flags
   if (method === 'credit' || method === 'credit sale' || sale.is_credit === true || sale.is_credit === 1) {
     return true;
   }
 
-  if ((status === 'non paid' || status === 'non-paid' || status === 'pending' || status === 'partially paid' || status === 'partially settled' || status === 'fully settled') &&
-      method !== 'cash' && method !== 'card' && method !== 'bank transfer') {
+  // 2. Active Debt Status (Overrides any accidental "CASH" overwrite during partial payments)
+  if (status === 'non paid' || status === 'non-paid' || status === 'pending' || status === 'partially paid' || status === 'partially settled') {
     return true;
+  }
+
+  // 3. Paid Cash/Card Status
+  if (method === 'cash' || method === 'card' || method === 'bank transfer' || method === 'online' || method === 'pos') {
+    return false;
+  }
+
+  // 4. Settled Debt Status
+  if (status === 'fully settled') {
+    return true; 
   }
 
   return false;

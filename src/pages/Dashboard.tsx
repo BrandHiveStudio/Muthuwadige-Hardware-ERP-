@@ -473,8 +473,34 @@ export function Dashboard({ onNavigate }: DashboardProps) {
 
       const todayCashExpenses = Math.max(0, rawTodayCashExpenses - todayCashPurchaseReturns);
 
-      // Formula: net_cash = total_cash_sales - total_cash_refunds - total_cash_expenses
-      const dynamicCashInHand = Math.max(0, todayPaymentBreakdown.totalCashCollected - todayCashExpenses);
+      // FIX: Dynamically pull in Encashed Cheques & Manual Ledger Inflows to fix the Mobile Blindspot
+      const todayManualCashInflows = todayTransactions.filter((t: any) => {
+        const cat = String(t.category || '').toUpperCase();
+        const desc = String(t.description || '').toUpperCase();
+        const method = String(t.payment_method || t.paymentMethod || t.method || '').toUpperCase();
+        const isIncome = t.flow_type?.toLowerCase() === 'income' || t.type?.toLowerCase() === 'income';
+        
+        const isEncashed = cat.includes('ENCASHED') || cat.includes('POS CHEQUE REALIZATION') || desc.includes('ENCASHED CHEQUE');
+        const isManualCash = method === 'CASH' && !cat.includes('SALES') && !desc.includes('POS SALE');
+        
+        return isIncome && (isEncashed || isManualCash);
+      }).reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
+
+      // FIX: Dynamically track Actual Cash Refunds Given during Exchanges
+      const todayCashRefunds = todayTransactions.filter((t: any) => {
+        const type = String(t.flow_type || t.type || '').toUpperCase();
+        const cat = String(t.category || '').toUpperCase();
+        const desc = String(t.description || '').toUpperCase();
+        const method = String(t.payment_method || t.paymentMethod || t.method || '').toUpperCase();
+        
+        const isReturn = type === 'CONTRA_REVENUE' || type === 'SALES_RETURN' || cat.includes('EXCHANGE') || desc.includes('EXCHANGE') || desc.includes('REFUND');
+        const isActualCashRefund = method === 'CASH' || desc.includes('CASH REFUND') || cat.includes('CASH REFUND');
+        
+        return isReturn && isActualCashRefund;
+      }).reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
+
+      // Formula: net_cash = POS cash + manual ledger inflows - actual cash refunds - petty cash expenses
+      const dynamicCashInHand = Math.max(0, todayPaymentBreakdown.totalCashCollected + todayManualCashInflows - todayCashRefunds - todayCashExpenses);
 
       setTodayProfit(todayFinancialSummary.grossProfit);
       setCashBalance(dynamicCashInHand);
