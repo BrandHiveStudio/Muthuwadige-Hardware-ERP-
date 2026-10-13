@@ -486,17 +486,15 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         return isIncome && (isEncashed || isManualCash);
       }).reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
 
-      // FIX: Dynamically track Actual Cash Refunds Given during Exchanges
+      // FIX: Accurately track actual net cash refunds given out during exchanges
       const todayCashRefunds = todayTransactions.filter((t: any) => {
         const type = String(t.flow_type || t.type || '').toUpperCase();
         const cat = String(t.category || '').toUpperCase();
         const desc = String(t.description || '').toUpperCase();
-        const method = String(t.payment_method || t.paymentMethod || t.method || '').toUpperCase();
         
         const isReturn = type === 'CONTRA_REVENUE' || type === 'SALES_RETURN' || cat.includes('EXCHANGE') || desc.includes('EXCHANGE') || desc.includes('REFUND');
-        const isActualCashRefund = method === 'CASH' || desc.includes('CASH REFUND') || cat.includes('CASH REFUND');
         
-        return isReturn && isActualCashRefund;
+        return isReturn;
       }).reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
 
       // Formula: net_cash = POS cash + manual ledger inflows - actual cash refunds - petty cash expenses

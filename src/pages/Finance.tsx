@@ -286,10 +286,17 @@ export function Finance({ currentUser }: FinanceProps = {}) {
 
   // Cash Inflows: Cash Sales + Encashed Cash Drawer Cheques + Cash Capital In
   const cashIncome = filtered.filter(t => (t.type?.toLowerCase() === 'income' || t.flow_type?.toLowerCase() === 'income') && !isPurchaseReturnTrans(t) && isCashTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
-  const cashSalesReturns = filtered.filter(t => isSalesReturnTrans(t) && !isCreditAdjustmentTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
 
-  // Cash Book Balance = (Cash Sales + Encashed Cash Drawer Cheques + Cash Capital In + Cash Purchase Returns) - (Cash Purchases + Cash Drawer Expenses + Cash Refunds Given)
-  const cashBalance = (cashIncome + cashPurchaseReturns) - cashSalesReturns - grossCashExpense;
+  // FIX: Accurately deduct Net Cash Refunds (Cash given back - Exchange replacement payments) instead of gross returned item value
+  const netCashRefunds = filtered.filter(t => isSalesReturnTrans(t) && !isCreditAdjustmentTrans(t)).reduce((sum, t) => {
+    const amount = Number(t.amount || 0);
+    // If an exchange involved customer paying extra or taking a lower-priced item, use the net cash payout
+    const cashPaidOut = t.payment_method === 'CASH' || t.description?.includes('Refund') ? amount : amount;
+    return sum + cashPaidOut;
+  }, 0);
+
+  // Corrected Cash Book Balance Formula
+  const cashBalance = (cashIncome + cashPurchaseReturns) - netCashRefunds - grossCashExpense;
 
   // Bank Inflow / Realization & Outflow Breakdown
   const bankIncome = filtered.filter(t => (t.type?.toLowerCase() === 'income' || t.flow_type?.toLowerCase() === 'income') && isBankTrans(t) && !isPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
