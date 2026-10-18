@@ -7022,6 +7022,47 @@ async function executeSalesReturn(payload = {}, options = {}) {
         await enqueueSync(targetDb, 'transactions', txId, 'INSERT');
         await enqueueSync(targetDb, 'cash_book', txId, 'INSERT');
       }
+
+      // Post Contra-Revenue Entry when an Exchange results in cash refunded to customer
+      const rawStoreRefund = Number(payload.store_refund || payload.storeRefund || 0);
+      const isCashSettlement = (finalDiffMethod || '').toString().toLowerCase().trim() === 'cash' || !finalDiffMethod || finalReturnMethod === 'Cash Refund';
+      const exchangeCashRefund = Number(
+        rawStoreRefund > 0
+          ? rawStoreRefund
+          : (finalTotalRefunded > 0
+              ? finalTotalRefunded
+              : (calcReturnAmount > calcExchangeAmount && isCashSettlement
+                  ? calcReturnAmount - calcExchangeAmount
+                  : (finalChangeGiven > 0 && finalCustomerPaid === 0 ? finalChangeGiven : 0)))
+      );
+
+      if (finalReturnMethod === 'Exchange' && exchangeCashRefund > 0 && isCashSettlement) {
+        const refTxId = 't_' + Date.now() + '_ex_ref';
+        const refundAmt = -Math.abs(exchangeCashRefund);
+        const refundDesc = `Exchange Cash Refund for Return #${return_no} (Invoice #${invoiceNo})`;
+        const txDate = new Date(created_at).toLocaleDateString('sv-SE');
+        await targetDb.run(
+          `INSERT INTO transactions (
+            id, type, flow_type, category, description, amount, date, reference, user_id, payment_method, status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            refTxId,
+            'contra_revenue',
+            'CONTRA-REVENUE',
+            'EXCHANGE REFUND',
+            refundDesc,
+            refundAmt,
+            txDate,
+            return_no || invoiceNo,
+            userEmail || 'system',
+            'CASH',
+            'ACTIVE',
+            created_at
+          ]
+        );
+        await enqueueSync(targetDb, 'transactions', refTxId, 'INSERT');
+        await enqueueSync(targetDb, 'cash_book', refTxId, 'INSERT');
+      }
     }
 
     const updatedActiveReturns = await targetDb.all('SELECT returned_items FROM sales_returns WHERE invoice_no = ? AND status = ?', [invoiceNo, 'active']);

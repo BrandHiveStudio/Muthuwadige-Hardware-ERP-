@@ -104,6 +104,35 @@ export async function processSalesReturn(returnPayload: SalesReturnPayload) {
     };
 
     await supabase.from('sales_returns').insert([returnRecord]);
+ 
+    // Post Contra-Revenue Entry when an Exchange results in cash refunded to customer
+    const exItems = returnPayload.exchange_items || [];
+    const isExchange = (returnPayload.refund_method === 'Exchange' || exItems.length > 0);
+    const refundDiff = Number(returnPayload.refund_amount || 0);
+    const isCashSettlement = (returnPayload.differencePaymentMethod || returnPayload.difference_payment_method || 'Cash').toLowerCase() === 'cash';
+    if (isExchange && refundDiff > 0 && isCashSettlement) {
+      const txId = `t_${Date.now()}_ex_ref`;
+      const refundDesc = `Exchange Cash Refund for Return #${returnNo} (Invoice #${returnPayload.invoice_no || invoiceId})`;
+      const txDate = new Date(timestamp).toISOString().slice(0, 10);
+      try {
+        await supabase.from('transactions').insert([{
+          id: txId,
+          type: 'contra_revenue',
+          flow_type: 'CONTRA-REVENUE',
+          category: 'EXCHANGE REFUND',
+          description: refundDesc,
+          reference: returnNo || invoiceId,
+          amount: -Math.abs(refundDiff),
+          date: txDate,
+          payment_method: 'CASH',
+          status: 'ACTIVE',
+          user_id: returnPayload.userEmail || 'system',
+          created_at: timestamp
+        }]);
+      } catch (txErr) {
+        console.warn('Fallback transaction insert notice:', txErr);
+      }
+    }
 
     // 2. Restock physical inventory
     if (returnPayload.sku) {
@@ -213,6 +242,29 @@ export async function processReturnAndExchange(payload: ExchangeTransactionPaylo
       created_at: new Date().toISOString()
     }
   ]);
+
+  if (payload.priceDifference < 0) {
+    const refundAmt = -Math.abs(payload.priceDifference);
+    const txId = `t_${Date.now()}_ex_ref`;
+    try {
+      await supabase.from('transactions').insert([{
+        id: txId,
+        type: 'contra_revenue',
+        flow_type: 'CONTRA-REVENUE',
+        category: 'EXCHANGE REFUND',
+        description: `Exchange Cash Refund for Return #${returnRecordId} (Invoice #${payload.returnInvoiceId})`,
+        reference: returnRecordId,
+        amount: refundAmt,
+        date: new Date().toISOString().slice(0, 10),
+        payment_method: 'CASH',
+        status: 'ACTIVE',
+        user_id: payload.userEmail || 'system',
+        created_at: new Date().toISOString()
+      }]);
+    } catch (txErr) {
+      console.warn('Exchange refund transaction insert notice:', txErr);
+    }
+  }
 
   return { success: true, returnNo: returnRecordId };
 }

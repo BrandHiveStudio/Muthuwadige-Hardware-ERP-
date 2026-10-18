@@ -142,15 +142,25 @@ export function Finance({ currentUser }: FinanceProps = {}) {
 
   const isSalesReturnTrans = (t: any) => {
     if (!t) return false;
-    const type = (t.type || '').toLowerCase();
+    const type = (t.type || t.flow_type || '').toLowerCase();
     const cat = (t.category || '').toLowerCase();
-    return type === 'contra_revenue' || type === 'sales_return' || cat.startsWith('sales return') || cat === 'exchange refund';
+    const desc = (t.description || '').toLowerCase();
+    return type === 'contra_revenue' || 
+           type === 'contra-revenue' || 
+           type === 'sales_return' || 
+           cat.startsWith('sales return') || 
+           cat === 'exchange refund' ||
+           cat.includes('exchange refund') ||
+           desc.includes('exchange cash refund');
   };
 
   const isNonCashExchangeTicket = (t: any) => {
     if (!t) return false;
     const desc = (t.description || '').toLowerCase();
     const cat = (t.category || '').toLowerCase();
+    if (desc.includes('cash refund') || cat.includes('refund') || cat === 'exchange refund') {
+      return false; // Cash refund is NOT a non-cash exchange ticket
+    }
     return desc.includes('exchange return') || cat.includes('exchange return');
   };
 
@@ -271,7 +281,7 @@ export function Finance({ currentUser }: FinanceProps = {}) {
 
   // Sales & Operating Inflow (Strictly excludes all supplier purchase returns/refunds from gross sales income)
   const totalIncome = filtered.filter(t => (t.type?.toLowerCase() === 'income' || t.flow_type?.toLowerCase() === 'income') && !isPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
-  const totalSalesReturns = filtered.filter(t => isSalesReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
+  const totalSalesReturns = filtered.filter(t => isSalesReturnTrans(t)).reduce((sum, t) => sum + Math.abs(Number(t.amount || 0)), 0);
   const netSalesIncome = calculateNetSalesRevenue(totalIncome, 0, totalSalesReturns, 0);
 
   // Net Cash In strictly reflects customer sales income and debt settlements ONLY (supplier refunds excluded)
@@ -289,10 +299,8 @@ export function Finance({ currentUser }: FinanceProps = {}) {
 
   // FIX: Accurately deduct Net Cash Refunds (Cash given back - Exchange replacement payments) instead of gross returned item value
   const netCashRefunds = filtered.filter(t => isSalesReturnTrans(t) && !isCreditAdjustmentTrans(t)).reduce((sum, t) => {
-    const amount = Number(t.amount || 0);
-    // If an exchange involved customer paying extra or taking a lower-priced item, use the net cash payout
-    const cashPaidOut = t.payment_method === 'CASH' || t.description?.includes('Refund') ? amount : amount;
-    return sum + cashPaidOut;
+    const amount = Math.abs(Number(t.amount || 0));
+    return sum + amount;
   }, 0);
 
   // Corrected Cash Book Balance Formula
@@ -398,7 +406,7 @@ export function Finance({ currentUser }: FinanceProps = {}) {
     doc.setFont('helvetica', 'bold');
     doc.text("Total Settled:", 20, 86.5);
     doc.setTextColor(gold[0], gold[1], gold[2]);
-    doc.text(`${symbol} ${t.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, pageWidth - 45, 86.5);
+    doc.text(`${symbol} ${Math.abs(Number(t.amount || 0)).toLocaleString(undefined, { minimumFractionDigits: 2 })}`, pageWidth - 45, 86.5);
 
     // Signatures
     doc.setTextColor(120, 120, 120);
@@ -475,10 +483,10 @@ export function Finance({ currentUser }: FinanceProps = {}) {
     // Table using autoTable with proportional column widths and auto-wrapping
     const tableRows = filtered.map(t => [
       t.date,
-      t.type.toUpperCase(),
+      (t.flow_type || t.type || '').toUpperCase(),
       t.category || '',
       t.reference || '—',
-      `${t.type === 'income' ? '+' : '-'}${symbol} ${convert(t.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}`
+      `${(t.type === 'income' || t.flow_type === 'INCOME') ? '+' : '-'}${symbol} ${convert(Math.abs(Number(t.amount || 0))).toLocaleString(undefined, { minimumFractionDigits: 2 })}`
     ]);
 
     autoTable(doc, {
@@ -848,13 +856,13 @@ export function Finance({ currentUser }: FinanceProps = {}) {
                         <td className="px-6 py-4 text-slate-600 font-bold">{t.date}</td>
                         <td className="px-6 py-4">
                           <span className={`px-2.5 py-1 text-[9px] font-black rounded-lg uppercase tracking-wider ${
-                            t.type === 'income' 
+                            (t.type === 'income' || t.flow_type === 'INCOME')
                               ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' 
                               : isSalesReturnTrans(t)
                               ? 'bg-amber-50 text-amber-600 border border-amber-100'
                               : 'bg-red-50 text-red-500 border border-red-100'
                           }`}>
-                            {isSalesReturnTrans(t) ? 'Contra-Revenue' : t.type}
+                            {isSalesReturnTrans(t) ? 'Contra-Revenue' : (t.flow_type || t.type)}
                           </span>
                         </td>
                         <td className="px-6 py-4">
@@ -865,8 +873,8 @@ export function Finance({ currentUser }: FinanceProps = {}) {
                         <td className="px-6 py-4 font-black text-slate-800">{t.description}</td>
                         <td className="px-6 py-4 font-mono font-bold text-slate-500">{t.reference}</td>
                         <td className="px-6 py-4 text-right font-black">
-                          <span className={t.type === 'income' ? 'text-emerald-600' : isSalesReturnTrans(t) ? 'text-amber-600' : 'text-red-500'}>
-                            {t.type === 'income' ? '+' : '-'} {symbol} {convert(t.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          <span className={(t.type === 'income' || t.flow_type === 'INCOME') ? 'text-emerald-600' : isSalesReturnTrans(t) ? 'text-amber-600' : 'text-red-500'}>
+                            {(t.type === 'income' || t.flow_type === 'INCOME') ? '+' : '-'} {symbol} {convert(Math.abs(Number(t.amount || 0))).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                           </span>
                         </td>
                         <td className="px-6 py-4 text-center">

@@ -6821,6 +6821,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       exchangeAmount: exchangeTotalValue,
                       balanceAmount: netExchangeBalance,
                       totalRefunded: calculatedRefund,
+                      store_refund: calculatedRefund,
+                      storeRefund: calculatedRefund,
                       customerPaid: calculatedPaid,
                       changeGiven: calculatedChange,
                       differencePaymentMethod: effectiveDifferencePaymentMethod,
@@ -6878,6 +6880,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   fetchSalesReturns();
                   fetchCreditNotes();
                   fetchData();
+                  window.dispatchEvent(new Event('refresh-all-data'));
+                  window.dispatchEvent(new Event('refresh-finance'));
+                  window.dispatchEvent(new Event('refresh-reports'));
                 } catch (err: any) {
                   alert(t('Failed to process return: ', 'ආපසු භාරගැනීම අසමත් විය: ') + err.message);
                 } finally {

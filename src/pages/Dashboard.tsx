@@ -466,7 +466,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
           const isCash = method === 'CASH' || method === 'CASH_BEARER';
           const cat = String(t.category || '').toUpperCase();
           const desc = String(t.description || '').toUpperCase();
-          const isSalesRet = type === 'CONTRA_REVENUE' || type === 'SALES_RETURN' || cat.includes('SALES RETURN') || desc.includes('SALES RETURN');
+          const isSalesRet = type === 'CONTRA_REVENUE' || type === 'CONTRA-REVENUE' || type === 'SALES_RETURN' || cat.includes('SALES RETURN') || desc.includes('SALES RETURN') || cat.includes('EXCHANGE REFUND') || desc.includes('EXCHANGE CASH REFUND');
           return type === 'EXPENSE' && isCash && !isSalesRet;
         })
         .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
@@ -492,10 +492,10 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         const cat = String(t.category || '').toUpperCase();
         const desc = String(t.description || '').toUpperCase();
         
-        const isReturn = type === 'CONTRA_REVENUE' || type === 'SALES_RETURN' || cat.includes('EXCHANGE') || desc.includes('EXCHANGE') || desc.includes('REFUND');
+        const isReturn = type === 'CONTRA_REVENUE' || type === 'CONTRA-REVENUE' || type === 'SALES_RETURN' || cat.includes('SALES RETURN') || cat.includes('EXCHANGE') || desc.includes('EXCHANGE') || desc.includes('REFUND');
         
         return isReturn;
-      }).reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
+      }).reduce((sum: number, t: any) => sum + Math.abs(Number(t.amount || 0)), 0);
 
       // Formula: net_cash = POS cash + manual ledger inflows - actual cash refunds - petty cash expenses
       const dynamicCashInHand = Math.max(0, todayPaymentBreakdown.totalCashCollected + todayManualCashInflows - todayCashRefunds - todayCashExpenses);

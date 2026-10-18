@@ -657,9 +657,16 @@ export function Reports({ currentUser }: ReportsProps = {}) {
 
   const isSalesReturnTrans = (t: any) => {
     if (!t) return false;
-    const type = (t.type || '').toLowerCase();
+    const type = (t.type || t.flow_type || '').toLowerCase();
     const cat = (t.category || '').toLowerCase();
-    return type === 'contra_revenue' || type === 'sales_return' || cat.startsWith('sales return') || cat === 'exchange refund';
+    const desc = (t.description || '').toLowerCase();
+    return type === 'contra_revenue' || 
+           type === 'contra-revenue' || 
+           type === 'sales_return' || 
+           cat.startsWith('sales return') || 
+           cat === 'exchange refund' ||
+           cat.includes('exchange refund') ||
+           desc.includes('exchange cash refund');
   };
 
   const isPurchaseReturnTrans = (t: any) => {
@@ -742,7 +749,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
           match.revenue += amount;
         }
       } else if (isSalesReturnTrans(trans)) {
-        match.revenue -= amount;
+        match.revenue -= Math.abs(amount);
       } else if (trans.type === 'expense' || trans.flow_type === 'EXPENSE') {
         match.expenses += amount;
       }
@@ -757,7 +764,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     .filter(t => (t.type?.toLowerCase() === 'income' || t.flow_type?.toLowerCase() === 'income') && !isPurchaseReturnTrans(t))
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
-  const totalSalesReturns = filteredTransactions.filter(t => isSalesReturnTrans(t)).reduce((sum, t) => sum + Number(t.amount || 0), 0);
+  const totalSalesReturns = filteredTransactions.filter(t => isSalesReturnTrans(t)).reduce((sum, t) => sum + Math.abs(Number(t.amount || 0)), 0);
   const netRevenue = Math.max(0, totalIncome - totalSalesReturns);
 
   const grossExpenses = filteredTransactions
