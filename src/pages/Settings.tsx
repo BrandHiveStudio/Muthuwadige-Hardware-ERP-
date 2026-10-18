@@ -1216,7 +1216,7 @@ export function Settings({ currentUser }: SettingsProps = {}) {
                         onClick={() => setShowSmtpPass(!showSmtpPass)}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1"
                       >
-                        {showSmtpPass ? <EyeOffIcon className="w-4 h-4" /> : <EyeIcon className="w-4 h-4" />}
+                        {showSmtpPass ? <EyeIcon className="w-4 h-4" /> : <EyeOffIcon className="w-4 h-4" />}
                       </button>
                     </div>
                   </div>

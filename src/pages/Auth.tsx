@@ -468,7 +468,7 @@ export function Auth({ onLogin }: AuthProps) {
                       onClick={() => setShowPassword(!showPassword)}
                       className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#DAA520] transition-colors"
                     >
-                      {showPassword ? <EyeOffIcon className="w-5 h-5" /> : <EyeIcon className="w-5 h-5" />}
+                      {showPassword ? <EyeIcon className="w-5 h-5" /> : <EyeOffIcon className="w-5 h-5" />}
                     </button>
                   </div>
                   <div className="text-right mt-2">
