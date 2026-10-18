@@ -379,7 +379,9 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     const isCredit = method === 'credit' || method === 'credit sale' || (s as any).is_credit === true;
 
     if (isCredit) {
-      return sum + Number(s.payment_received || 0);
+      // FIX: Rely entirely on the credit_payments table for credit revenue. 
+      // Adding payment_received here causes double-counting!
+      return sum;
     } else {
       const paid = s.payment_received !== undefined && s.payment_received !== null && Number(s.payment_received) > 0
         ? Number(s.payment_received)
@@ -803,9 +805,9 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     
     if (!isCredit) return sum;
     
-    const acct = calculateSaleAccounting(s, salesReturns, creditPayments);
-    // Fallback to direct balanceDue if accounting netOutstanding is 0 due to method mismatch
-    const outstanding = acct.netOutstanding > 0 ? acct.netOutstanding : balanceDue;
+    // FIX: Use the actual balance_due from the database as the source of truth.
+    // Recalculating it here double-subtracts the credit_payments array.
+    const outstanding = balanceDue > 0 ? balanceDue : Math.max(0, Number(s.total_amount || 0) - Number(s.payment_received || 0));
     return sum + outstanding;
   }, 0);
   const totalPayables = suppliers.reduce((sum, s) => sum + Number(s.payable_balance || 0), 0);
@@ -843,8 +845,9 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     const isCreditSale = isCreditSaleRecord(s);
 
     if (isCreditSale) {
-      const acct = calculateSaleAccounting(s, salesReturns, creditPayments);
-      calcCredit += acct.netOutstanding;
+      const balanceDue = Number(s.balance_due !== undefined ? s.balance_due : (s.balance_amount || s.balance || 0));
+      const outstanding = balanceDue > 0 ? balanceDue : Math.max(0, totalAmt - Number(s.payment_received || 0));
+      calcCredit += outstanding;
     } else {
       if (Array.isArray(s.split_payments) && s.split_payments.length > 0) {
         for (const sp of s.split_payments) {
