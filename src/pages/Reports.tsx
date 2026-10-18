@@ -795,9 +795,18 @@ export function Reports({ currentUser }: ReportsProps = {}) {
 
   const totalReceivables = filteredSales.reduce((sum, s) => {
     if (s.status === 'cancelled' || s.status === 'Cancelled' || s.status === 'voided' || s.status === 'Voided') return sum;
-    if (!isCreditSaleRecord(s)) return sum;
+    
+    // Robust check: include if explicitly a credit sale OR has an active remaining balance due
+    const balanceDue = Number(s.balance_due !== undefined ? s.balance_due : (s.balance_amount || s.balance || 0));
+    const statusLower = (s.status || '').toString().toLowerCase().trim();
+    const isCredit = isCreditSaleRecord(s) || balanceDue > 0.01 || statusLower.includes('partially') || statusLower.includes('pending');
+    
+    if (!isCredit) return sum;
+    
     const acct = calculateSaleAccounting(s, salesReturns, creditPayments);
-    return sum + acct.netOutstanding;
+    // Fallback to direct balanceDue if accounting netOutstanding is 0 due to method mismatch
+    const outstanding = acct.netOutstanding > 0 ? acct.netOutstanding : balanceDue;
+    return sum + outstanding;
   }, 0);
   const totalPayables = suppliers.reduce((sum, s) => sum + Number(s.payable_balance || 0), 0);
 
