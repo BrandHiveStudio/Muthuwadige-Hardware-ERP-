@@ -55,6 +55,7 @@ import {
   formatInvoiceDateTime
 } from '../utils/sales/printTemplates';
 import { hasPermission } from '../utils/permissions';
+import { getCompactLaserBarcode } from './BarcodePrint';
 
 export const SRI_LANKAN_BANKS = [
   'Bank of Ceylon',
@@ -2707,11 +2708,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
     // 1. If active tab is 'new' (POS Checkout)
     if (tab === 'new') {
-      // Find matching product in catalog by barcode, SKU, or ID
+      // Find matching product in catalog by barcode, SKU, ID, or compact laser barcode
       const matchedProduct = products.find(p => 
         (p.barcode && p.barcode.trim().toLowerCase() === code.toLowerCase()) ||
         (p.sku && p.sku.trim().toLowerCase() === code.toLowerCase()) ||
-        p.id === code
+        p.id === code ||
+        getCompactLaserBarcode(p) === code
       );
 
       if (matchedProduct) {
@@ -2742,7 +2744,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       const matchedProduct = products.find(p => 
         (p.barcode && p.barcode.trim().toLowerCase() === code.toLowerCase()) ||
         (p.sku && p.sku.trim().toLowerCase() === code.toLowerCase()) ||
-        p.id === code
+        p.id === code ||
+        getCompactLaserBarcode(p) === code
       );
 
       if (matchedProduct) {
@@ -3913,7 +3916,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       setSelectedIndex(0);
                       // Auto-add if exact barcode match
                       if (val.trim()) {
-                        const exactBarcode = products.find(p => p.barcode && p.barcode.trim().toLowerCase() === val.trim().toLowerCase());
+                        const exactBarcode = products.find(p => (p.barcode && p.barcode.trim().toLowerCase() === val.trim().toLowerCase()) || getCompactLaserBarcode(p) === val.trim());
                         if (exactBarcode) {
                           addToCart(exactBarcode);
                           setProductSearch('');
@@ -5015,7 +5018,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       setCreditProductSearch(val);
                       setSelectedIndex(0);
                       if (val.trim()) {
-                        const exactBarcode = products.find(p => p.barcode && p.barcode.trim().toLowerCase() === val.trim().toLowerCase());
+                        const exactBarcode = products.find(p => (p.barcode && p.barcode.trim().toLowerCase() === val.trim().toLowerCase()) || getCompactLaserBarcode(p) === val.trim());
                         if (exactBarcode) {
                           addCreditCartItemDirect(exactBarcode);
                           setCreditProductSearch('');

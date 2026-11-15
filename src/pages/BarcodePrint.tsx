@@ -49,6 +49,44 @@ export const getSafeBarcode = (product?: Product | null): string => {
 };
 
 /**
+ * Compact Laser Barcode Resolver for 30mm x 15mm Micro Stickers:
+ * Derives a clean, even-length 4-to-6 digit numeric code that triggers
+ * high-density Code 128 Subset C double-digit packing (57 modules).
+ */
+export const getCompactLaserBarcode = (product?: Product | null): string => {
+  if (!product) return '0001';
+
+  // 1. If product.barcode is already a 4-to-6 digit pure numeric string, use it
+  if (product.barcode && typeof product.barcode === 'string') {
+    const trimmedBc = product.barcode.trim();
+    if (/^\d{4,6}$/.test(trimmedBc)) {
+      return trimmedBc.length === 5 ? trimmedBc.padStart(6, '0') : trimmedBc;
+    }
+  }
+
+  // 2. Extract digits from product.id or map into a 4-to-6 digit numeric string
+  const idDigits = String(product.id || '').replace(/\D/g, '');
+  if (idDigits) {
+    if (idDigits.length <= 4) {
+      return idDigits.padStart(4, '0');
+    }
+    if (idDigits.length === 5) {
+      return idDigits.padStart(6, '0');
+    }
+    return idDigits.slice(-4);
+  }
+
+  // 3. Fallback: extract digits from SKU or raw barcode
+  const fallbackDigits = String(product.sku || product.barcode || '').replace(/\D/g, '');
+  if (fallbackDigits) {
+    return fallbackDigits.slice(-4).padStart(4, '0');
+  }
+
+  // 4. Default deterministic 4-digit code
+  return '0001';
+};
+
+/**
  * Generates an ultra-crisp 1-bit raster Data URL using an offscreen canvas.
  * This guarantees optical readability on 203 DPI thermal printers without sub-pixel blurring.
  */
@@ -165,6 +203,7 @@ export const StickerPreviewCard: React.FC<{ product: Product; preset: PresetType
   const is30x15 = preset === '30x15_3up';
 
   if (is30x15) {
+    const laserCode = getCompactLaserBarcode(product);
     return (
       <div className="flex gap-1.5 bg-white p-2 border-2 border-black rounded shadow-md w-[360px]">
         {[0, 1, 2].map((idx) => (
@@ -175,7 +214,7 @@ export const StickerPreviewCard: React.FC<{ product: Product; preset: PresetType
             {/* Barcode-Only Ultra-Reliable 1D Barcode with 3mm quiet zones and centered alignment */}
             <div className="flex justify-center items-center w-full px-1 overflow-hidden">
               <BarcodeSvg
-                value={barcodeValue}
+                value={laserCode}
                 format="CODE128"
                 width={2}
                 height={42}
@@ -282,7 +321,7 @@ const printThermalLabelsIsolated = (queue: QueueItem[], preset: PresetType) => {
           if (!prod) {
             return `<div class="cell-30x15 cell-empty" style="visibility: hidden;"></div>`;
           }
-          const code = getSafeBarcode(prod);
+          const code = getCompactLaserBarcode(prod);
           const barcodeSvg = generateCrispBarcodeSvg(code, 2, 42);
           return `
             <div class="cell-30x15">
@@ -904,6 +943,9 @@ export function BarcodePrint() {
                       <div className="flex items-center gap-2 text-[10px] text-gray-400 font-mono mt-0.5">
                         <span>SKU: {p.sku || 'N/A'}</span>
                         <span className="text-amber-600 font-bold">BC: {displayCode}</span>
+                        {preset === '30x15_3up' && (
+                          <span className="text-emerald-600 font-bold">Laser: {getCompactLaserBarcode(p)}</span>
+                        )}
                       </div>
                       <div className="text-xs font-black text-slate-700 mt-1">
                         Rs. {Number(p.price || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
@@ -979,6 +1021,9 @@ export function BarcodePrint() {
                         </div>
                         <div className="flex items-center gap-3 text-[10px] text-gray-500 font-mono mt-0.5">
                           <span>Barcode: {code}</span>
+                          {preset === '30x15_3up' && (
+                            <span className="text-emerald-600 font-bold">Laser: {getCompactLaserBarcode(item.product)}</span>
+                          )}
                           <span className="font-bold text-slate-700">
                             Rs. {Number(item.product.price || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                           </span>
