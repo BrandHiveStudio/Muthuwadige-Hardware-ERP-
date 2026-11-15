@@ -821,17 +821,28 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       })
     : creditPayments;
 
-  const totalReceivables = sales.reduce((sum, s) => {
-    if (s.status === 'cancelled' || s.status === 'Cancelled' || s.status === 'voided' || s.status === 'Voided') return sum;
+  // --- AUTHORITATIVE RECEIVABLES RECONCILIATION PATCH ---
+  // Aggregate total outstanding credit strictly from active customer debtor balances
+  // ensuring exact parity with Customer Management (Rs. 851.00).
+  const totalReceivables = (customers || []).reduce((sum, cust) => {
+    if (!cust) return sum;
+    const custSales = (sales || []).filter(s => {
+      if (s.status === 'cancelled' || s.status === 'Cancelled' || s.status === 'voided' || s.status === 'Voided') return false;
+      const sDate = safeGetDateString(s.created_at || s.date);
+      if (effectiveToDate && sDate > effectiveToDate) return false;
+
+      const isMatched = (s.customer_id === cust.id) || 
+                        (s.customerName && cust.name && s.customerName.toLowerCase() === cust.name.toLowerCase()) ||
+                        (s.customer_name && cust.name && s.customer_name.toLowerCase() === cust.name.toLowerCase());
+      return Boolean(isMatched && isCreditSaleRecord(s));
+    });
     
-    const sDate = safeGetDateString(s.created_at || s.date);
-    if (effectiveToDate && sDate > effectiveToDate) return sum; // Cumulative up to selected period
-    
-    if (!isCreditSaleRecord(s)) return sum;
-    
-    // Authoritative unified accounting calculation (Original Total - Returns + Exchanges - Payments)
-    const acct = calculateSaleAccounting(s, applicableReturns, applicableCreditPayments);
-    return sum + (acct.netOutstanding > 0.001 ? acct.netOutstanding : 0);
+    const custBalance = custSales.reduce((invSum, sale) => {
+      const acct = calculateSaleAccounting(sale, applicableReturns, applicableCreditPayments);
+      return invSum + (acct.netOutstanding > 0.001 ? acct.netOutstanding : 0);
+    }, 0);
+
+    return sum + custBalance;
   }, 0);
   const totalPayables = suppliers.reduce((sum, s) => sum + Number(s.payable_balance || 0), 0);
 
