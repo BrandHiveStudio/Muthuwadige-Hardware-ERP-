@@ -52,7 +52,7 @@ export const getSafeBarcode = (product?: Product | null): string => {
  * Generates an ultra-crisp 1-bit raster Data URL using an offscreen canvas.
  * This guarantees optical readability on 203 DPI thermal printers without sub-pixel blurring.
  */
-const generateCrispBarcodeDataUrl = (value: string, is3Up: boolean, customWidth?: number): string => {
+const generateCrispBarcodeDataUrl = (value: string, is3Up: boolean, customWidth?: number, customHeight?: number): string => {
   try {
     const canvas = document.createElement('canvas');
     const safeVal = value && value.trim() ? value.trim() : 'HW10001';
@@ -60,7 +60,7 @@ const generateCrispBarcodeDataUrl = (value: string, is3Up: boolean, customWidth?
     JsBarcode(canvas, safeVal, {
       format: 'CODE128',
       width: customWidth !== undefined ? customWidth : (is3Up ? 1 : 2),
-      height: is3Up ? 36 : 45,
+      height: customHeight !== undefined ? customHeight : (is3Up ? 42 : 45),
       displayValue: false,
       margin: 0,
       background: '#ffffff',
@@ -78,7 +78,7 @@ const generateCrispBarcodeDataUrl = (value: string, is3Up: boolean, customWidth?
  * Generates a zero-aliasing vector SVG string for direct thermal print dispatch.
  * Enforces crispEdges and exact integer scaling for 1D laser scanners (BWHS-25L).
  */
-const generateCrispBarcodeSvg = (value: string, width = 2, height = 36): string => {
+const generateCrispBarcodeSvg = (value: string, width = 2, height = 42): string => {
   try {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     const safeVal = value && value.trim() ? value.trim() : 'HW10001';
@@ -97,7 +97,7 @@ const generateCrispBarcodeSvg = (value: string, width = 2, height = 36): string 
     svg.setAttribute('class', 'barcode-svg-30x15');
     svg.removeAttribute('width');
     svg.removeAttribute('height');
-    svg.setAttribute('style', 'display: block; max-width: 100%; height: 9mm; shape-rendering: crispEdges; image-rendering: pixelated;');
+    svg.setAttribute('style', 'display: block; max-width: 100%; height: 10.5mm; shape-rendering: crispEdges; image-rendering: pixelated;');
 
     return svg.outerHTML || new XMLSerializer().serializeToString(svg);
   } catch (e) {
@@ -170,28 +170,18 @@ export const StickerPreviewCard: React.FC<{ product: Product; preset: PresetType
         {[0, 1, 2].map((idx) => (
           <div
             key={idx}
-            className="flex-1 bg-white border border-gray-400 p-1 flex flex-col justify-between items-center text-center font-sans overflow-hidden h-[95px] box-border"
+            className="flex-1 bg-white border border-gray-400 p-2 flex items-center justify-center text-center font-sans overflow-hidden h-[85px] box-border"
           >
-            {/* 1. Top: Product Name (6.5pt bold, single line text-overflow: ellipsis, max width 26mm) */}
-            <div className="font-bold text-[6.5pt] text-black leading-tight truncate w-full max-w-[26mm]">
-              {product.name}
-            </div>
-
-            {/* 2. Middle: Tall, crisp 1D Barcode (displayValue: false) with pure white quiet zones */}
-            <div className="my-0.5 flex justify-center items-center w-full px-2 overflow-hidden">
+            {/* Barcode-Only Ultra-Reliable 1D Barcode with 3mm quiet zones and centered alignment */}
+            <div className="flex justify-center items-center w-full px-1 overflow-hidden">
               <BarcodeSvg
                 value={barcodeValue}
                 format="CODE128"
                 width={2}
-                height={36}
+                height={42}
                 margin={0}
                 displayValue={false}
               />
-            </div>
-
-            {/* 3. Bottom: Human-readable Barcode Number + Price (6.5pt-7pt bold, e.g., 5BC500 • Rs. 10,000) */}
-            <div className="font-bold text-[6.5pt] text-black leading-tight truncate w-full">
-              {barcodeValue} • Rs. {Number(product.price || 0).toLocaleString(undefined, { minimumFractionDigits: 0 })}
             </div>
           </div>
         ))}
@@ -293,15 +283,12 @@ const printThermalLabelsIsolated = (queue: QueueItem[], preset: PresetType) => {
             return `<div class="cell-30x15 cell-empty" style="visibility: hidden;"></div>`;
           }
           const code = getSafeBarcode(prod);
-          const barcodeSvg = generateCrispBarcodeSvg(code, 2, 36);
-          const formattedPrice = Number(prod.price || 0).toLocaleString(undefined, { minimumFractionDigits: 0 });
+          const barcodeSvg = generateCrispBarcodeSvg(code, 2, 42);
           return `
             <div class="cell-30x15">
-              <div class="item-title-30x15">${prod.name || 'Product'}</div>
               <div class="barcode-container-30x15">
-                ${barcodeSvg || `<img src="${generateCrispBarcodeDataUrl(code, false, 2)}" alt="barcode" class="barcode-img-30x15" />`}
+                ${barcodeSvg || `<img src="${generateCrispBarcodeDataUrl(code, false, 2, 42)}" alt="barcode" class="barcode-img-30x15" />`}
               </div>
-              <div class="footer-30x15">${code} &bull; Rs. ${formattedPrice}</div>
             </div>
           `;
         }).join('')}
@@ -422,36 +409,23 @@ const printThermalLabelsIsolated = (queue: QueueItem[], preset: PresetType) => {
             max-height: 15mm;
             min-height: 15mm;
             display: flex;
-            flex-direction: column;
-            justify-content: space-between;
             align-items: center;
+            justify-content: center;
             text-align: center;
             overflow: hidden;
-            padding: 0.5mm 0;
+            padding: 2mm 3mm; /* 2mm top/bottom feed buffer, 3mm pure white quiet zones */
             margin: 0;
             box-sizing: border-box;
             background: #ffffff !important;
-          }
-          .item-title-30x15 {
-            font-size: 6.5pt;
-            font-weight: 700;
-            max-width: 26mm;
-            width: 100%;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            line-height: 1.1;
-            text-align: center;
-            color: #000000;
           }
           .barcode-container-30x15 {
             display: flex;
             justify-content: center;
             align-items: center;
             width: 100%;
-            height: 9mm;
-            max-height: 9.5mm;
-            padding: 0 2.5mm; /* Enforces 2.5mm-3mm pure white quiet zone on both left & right sides */
+            height: 10.5mm;
+            max-height: 11mm;
+            padding: 0;
             box-sizing: border-box;
             overflow: hidden;
             background: #ffffff !important;
@@ -460,7 +434,7 @@ const printThermalLabelsIsolated = (queue: QueueItem[], preset: PresetType) => {
           .barcode-svg-30x15,
           .barcode-img-30x15 {
             display: block;
-            height: 9mm !important;
+            height: 10.5mm !important;
             max-width: 100% !important;
             shape-rendering: crispEdges !important;
             image-rendering: pixelated !important;
@@ -468,18 +442,6 @@ const printThermalLabelsIsolated = (queue: QueueItem[], preset: PresetType) => {
             image-rendering: crisp-edges !important;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
-          }
-          .footer-30x15 {
-            font-size: 6.5pt;
-            font-weight: 700;
-            max-width: 28mm;
-            width: 100%;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            line-height: 1.1;
-            text-align: center;
-            color: #000000;
           }
           .page-single {
             display: flex;
@@ -584,11 +546,24 @@ const printThermalLabelsIsolated = (queue: QueueItem[], preset: PresetType) => {
               height: 15mm !important;
               max-height: 15mm !important;
               min-height: 15mm !important;
+              display: flex !important;
+              align-items: center !important;
+              justify-content: center !important;
+              padding: 2mm 3mm !important;
               overflow: hidden !important;
+            }
+            .barcode-container-30x15 {
+              height: 10.5mm !important;
+              max-height: 11mm !important;
+              display: flex !important;
+              align-items: center !important;
+              justify-content: center !important;
             }
             .barcode-container-30x15 svg,
             .barcode-svg-30x15,
             .barcode-img-30x15 {
+              height: 10.5mm !important;
+              max-width: 100% !important;
               shape-rendering: crispEdges !important;
               image-rendering: pixelated !important;
               image-rendering: -moz-crisp-edges !important;
