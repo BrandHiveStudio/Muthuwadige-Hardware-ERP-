@@ -76,17 +76,24 @@ export function calculateSaleAccounting(
   const originalTotal = Number(sale.total_amount !== undefined ? sale.total_amount : (sale.total || 0));
 
   // Dynamically calculate the sum of all subsequent partial payments from the ledger
-  const subsequentPayments = creditPaymentsList.filter(cp => {
+  const subsequentPayments = (creditPaymentsList || []).filter(cp => {
     if (!cp) return false;
     const cpStatus = (cp.status || '').toLowerCase();
     if (cpStatus === 'voided' || cpStatus === 'cancelled') return false;
-    return cp.sale_id === sale.id || (invNo && cp.invoice_no === invNo);
+    return (cp.sale_id && (cp.sale_id === sale.id || cp.sale_id === invNo)) ||
+           (invNo && (cp.invoice_no === invNo || cp.invoice_id === invNo)) ||
+           (sale.id && (cp.invoice_no === sale.id || cp.invoice_id === sale.id));
   }).reduce((sum, cp) => sum + Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0)), 0);
 
   let originalPaid = 0;
   if (isCredit) {
-    // Include initial down payment PLUS the sum of all partial settlements
-    originalPaid = Number(sale.payment_received || 0) + subsequentPayments;
+    // When credit_payments ledger entries exist, avoid double-counting if sale.payment_received
+    // was already updated by settlement routines in Customers.tsx
+    if (subsequentPayments > 0) {
+      originalPaid = Math.max(Number(sale.payment_received || 0), subsequentPayments);
+    } else {
+      originalPaid = Number(sale.payment_received || 0);
+    }
   } else {
     // For cash / paid sales
     originalPaid = sale.payment_received !== undefined && sale.payment_received !== null && Number(sale.payment_received) > 0
@@ -99,10 +106,28 @@ export function calculateSaleAccounting(
     if (!r) return false;
     const rStatus = (r.status || '').toString().toLowerCase().trim();
     if (rStatus === 'voided' || rStatus === 'cancelled') return false;
-    return (r.invoice_no || r.invoiceNo) === invNo;
+    return (r.invoice_no && (r.invoice_no === invNo || r.invoice_no === sale.id)) ||
+           (r.invoiceNo && (r.invoiceNo === invNo || r.invoiceNo === sale.id)) ||
+           (r.invoice_id && (r.invoice_id === invNo || r.invoice_id === sale.id)) ||
+           (r.invoiceId && (r.invoiceId === invNo || r.invoiceId === sale.id));
   });
 
-  const totalReturn = activeReturns.reduce((sum, r) => sum + Number(r.return_amount !== undefined ? r.return_amount : (r.returnAmount || 0)), 0);
+  const totalReturn = activeReturns.reduce((sum, r) => {
+    const val = r.return_amount !== undefined && r.return_amount !== null
+      ? Number(r.return_amount)
+      : r.returnAmount !== undefined && r.returnAmount !== null
+      ? Number(r.returnAmount)
+      : r.refund_amount !== undefined && r.refund_amount !== null
+      ? Number(r.refund_amount)
+      : r.refundAmount !== undefined && r.refundAmount !== null
+      ? Number(r.refundAmount)
+      : r.total_refunded !== undefined && r.total_refunded !== null
+      ? Number(r.total_refunded)
+      : r.totalRefunded !== undefined && r.totalRefunded !== null
+      ? Number(r.totalRefunded)
+      : 0;
+    return sum + (isNaN(val) ? 0 : val);
+  }, 0);
   const totalExchange = activeReturns.reduce((sum, r) => sum + Number(r.exchange_amount !== undefined ? r.exchange_amount : (r.exchangeAmount || 0)), 0);
   const exchangePaid = activeReturns.reduce((sum, r) => sum + Number(r.customer_paid !== undefined ? r.customer_paid : (r.customerPaid || 0)), 0);
 

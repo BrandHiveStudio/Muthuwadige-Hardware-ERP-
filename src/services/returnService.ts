@@ -10,6 +10,8 @@ export interface SalesReturnPayload {
   productId?: string;
   quantity?: number;
   refund_amount?: number;
+  return_amount?: number;
+  returnAmount?: number;
   refund_method?: string;
   items?: any[];
   returned_items?: any[];
@@ -84,6 +86,12 @@ export async function processSalesReturn(returnPayload: SalesReturnPayload) {
     }
 
     // 1. Insert distinct return record (contra-revenue)
+    const retAmount = Number(
+      returnPayload.refund_amount !== undefined && returnPayload.refund_amount !== null
+        ? returnPayload.refund_amount
+        : (returnPayload.returnAmount !== undefined ? returnPayload.returnAmount : (returnPayload.return_amount || 0))
+    );
+
     const returnRecord = {
       id: `sr_${Date.now()}`,
       return_no: returnNo,
@@ -95,7 +103,9 @@ export async function processSalesReturn(returnPayload: SalesReturnPayload) {
       qty_returned: returnPayload.quantity || (returnPayload.items ? returnPayload.items.reduce((s, i) => s + Number(i.qty || 1), 0) : 1),
       returned_items: JSON.stringify(returnPayload.items || returnPayload.returned_items || []),
       exchange_items: JSON.stringify(returnPayload.exchange_items || []),
-      refund_amount: Number(returnPayload.refund_amount || 0),
+      return_amount: retAmount,
+      refund_amount: retAmount,
+      total_refunded: retAmount,
       refund_method: returnPayload.refund_method || 'Cash Refund',
       difference_payment_method: returnPayload.differencePaymentMethod || returnPayload.difference_payment_method || 'Cash',
       status: 'active',
