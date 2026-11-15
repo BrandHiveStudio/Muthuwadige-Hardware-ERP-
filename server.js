@@ -1015,6 +1015,34 @@ async function getRuntimeSettingsSnapshot() {
               backup_email: settings.backup_email || cloudRow.backup_email
             };
           }
+
+          // Persist to local system_settings so child processes (backup-worker.js) find them
+          try {
+            await db.run(
+              `UPDATE system_settings SET
+                smtp_user = COALESCE(NULLIF(smtp_user, ''), ?),
+                smtp_pass = COALESCE(NULLIF(smtp_pass, ''), ?),
+                smtp_host = COALESCE(NULLIF(smtp_host, ''), ?),
+                smtp_port = COALESCE(NULLIF(smtp_port, ''), ?),
+                smtp_destination = COALESCE(NULLIF(smtp_destination, ''), ?),
+                gmail_user = COALESCE(NULLIF(gmail_user, ''), ?),
+                gmail_pass = COALESCE(NULLIF(gmail_pass, ''), ?),
+                auto_backup_enabled = COALESCE(auto_backup_enabled, ?),
+                backup_email = COALESCE(NULLIF(backup_email, ''), ?)
+               WHERE id = 'global'`,
+              [
+                cloudRow.smtp_user || null,
+                cloudRow.smtp_pass || null,
+                cloudRow.smtp_host || null,
+                cloudRow.smtp_port || null,
+                cloudRow.smtp_destination || null,
+                cloudRow.gmail_user || null,
+                cloudRow.gmail_pass || null,
+                cloudRow.auto_backup_enabled ?? null,
+                cloudRow.backup_email || null
+              ]
+            );
+          } catch (_) { }
         }
       } catch (_) { }
     }
@@ -1967,6 +1995,14 @@ export async function initializeDatabase() {
   try {
     await db.exec("ALTER TABLE system_settings ADD COLUMN counter_sync_status TEXT DEFAULT 'IDLE'");
   } catch (e) { }
+  try { await db.exec("ALTER TABLE system_settings ADD COLUMN smtp_user TEXT;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE system_settings ADD COLUMN smtp_pass TEXT;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE system_settings ADD COLUMN smtp_host TEXT DEFAULT 'smtp.gmail.com';"); } catch (e) { }
+  try { await db.exec("ALTER TABLE system_settings ADD COLUMN smtp_port TEXT DEFAULT '465';"); } catch (e) { }
+  try { await db.exec("ALTER TABLE system_settings ADD COLUMN smtp_destination TEXT;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE system_settings ADD COLUMN gmail_user TEXT;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE system_settings ADD COLUMN gmail_pass TEXT;"); } catch (e) { }
+  try { await db.exec("ALTER TABLE system_settings ADD COLUMN auto_backup_enabled INTEGER DEFAULT 0;"); } catch (e) { }
   try {
     await db.exec("ALTER TABLE sales ADD COLUMN transportation_fee REAL DEFAULT 0");
   } catch (e) { }
@@ -2379,7 +2415,20 @@ export async function initializeDatabase() {
           'credit_payments',
           NEW.id,
           'INSERT',
-          json_object('id', NEW.id, 'sale_id', NEW.sale_id, 'invoice_no', NEW.invoice_no, 'customer_id', NEW.customer_id, 'amount_paid', NEW.amount_paid, 'remaining_balance', NEW.remaining_balance, 'payment_method', NEW.payment_method, 'created_at', NEW.created_at),
+          json_object(
+            'id', NEW.id,
+            'sale_id', NEW.sale_id,
+            'invoice_no', NEW.invoice_no,
+            'customer_id', NEW.customer_id,
+            'customer_name', NEW.customer_name,
+            'amount_paid', NEW.amount_paid,
+            'remaining_balance', NEW.remaining_balance,
+            'payment_method', NEW.payment_method,
+            'payment_date', NEW.payment_date,
+            'recorded_by', NEW.recorded_by,
+            'notes', NEW.notes,
+            'created_at', NEW.created_at
+          ),
           'PENDING',
           strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         );
@@ -2683,9 +2732,76 @@ async function seedInitialData() {
       if (!settingsCols.some(c => c.name === 'system_wipe_timestamp')) {
         await db.run('ALTER TABLE system_settings ADD COLUMN system_wipe_timestamp TEXT;');
       }
+      if (!settingsCols.some(c => c.name === 'smtp_user')) {
+        await db.run('ALTER TABLE system_settings ADD COLUMN smtp_user TEXT;');
+      }
+      if (!settingsCols.some(c => c.name === 'smtp_pass')) {
+        await db.run('ALTER TABLE system_settings ADD COLUMN smtp_pass TEXT;');
+      }
+      if (!settingsCols.some(c => c.name === 'smtp_host')) {
+        await db.run("ALTER TABLE system_settings ADD COLUMN smtp_host TEXT DEFAULT 'smtp.gmail.com';");
+      }
+      if (!settingsCols.some(c => c.name === 'smtp_port')) {
+        await db.run("ALTER TABLE system_settings ADD COLUMN smtp_port TEXT DEFAULT '465';");
+      }
+      if (!settingsCols.some(c => c.name === 'smtp_destination')) {
+        await db.run('ALTER TABLE system_settings ADD COLUMN smtp_destination TEXT;');
+      }
+      if (!settingsCols.some(c => c.name === 'gmail_user')) {
+        await db.run('ALTER TABLE system_settings ADD COLUMN gmail_user TEXT;');
+      }
+      if (!settingsCols.some(c => c.name === 'gmail_pass')) {
+        await db.run('ALTER TABLE system_settings ADD COLUMN gmail_pass TEXT;');
+      }
+      if (!settingsCols.some(c => c.name === 'auto_backup_enabled')) {
+        await db.run('ALTER TABLE system_settings ADD COLUMN auto_backup_enabled INTEGER DEFAULT 0;');
+      }
     }
   } catch (colsErr) {
     console.warn('[Startup] Notice verifying system_settings columns:', colsErr.message);
+  }
+
+  // On startup, if local SQLite system_settings lacks SMTP credentials, synchronize them from Turso Cloud or environment
+  try {
+    const localSet = await db.get("SELECT * FROM system_settings WHERE id = 'global'");
+    if (localSet && (!localSet.smtp_pass || !localSet.smtp_user)) {
+      const tursoClient = getTursoClient();
+      let cloudSmtp = null;
+      if (tursoClient) {
+        try {
+          const rs = await tursoClient.execute({ sql: "SELECT * FROM system_settings WHERE id = 'global'", args: [] });
+          if (rs?.rows?.length > 0) {
+            cloudSmtp = rs.rows[0];
+          }
+        } catch (_) {}
+      }
+      const uUser = (cloudSmtp?.smtp_user || cloudSmtp?.gmail_user || process.env.SMTP_USER || process.env.GMAIL_USER || process.env.EMAIL_USER || '').trim();
+      const uPass = (cloudSmtp?.smtp_pass || cloudSmtp?.gmail_pass || process.env.SMTP_PASS || process.env.GMAIL_PASS || process.env.EMAIL_PASS || '').trim();
+      const uHost = (cloudSmtp?.smtp_host || process.env.SMTP_HOST || 'smtp.gmail.com').trim();
+      const uPort = String(cloudSmtp?.smtp_port || process.env.SMTP_PORT || '465').trim();
+      const uDest = (cloudSmtp?.smtp_destination || cloudSmtp?.backup_email || process.env.SMTP_DESTINATION || process.env.BACKUP_EMAIL || uUser || 'sanojhardware@gmail.com').trim();
+      const uAuto = cloudSmtp?.auto_backup_enabled !== undefined ? cloudSmtp.auto_backup_enabled : (localSet.backup_enabled || 0);
+
+      if (uUser || uPass) {
+        await db.run(
+          `UPDATE system_settings SET
+            smtp_user = COALESCE(NULLIF(smtp_user, ''), ?),
+            smtp_pass = COALESCE(NULLIF(smtp_pass, ''), ?),
+            smtp_host = COALESCE(NULLIF(smtp_host, ''), ?),
+            smtp_port = COALESCE(NULLIF(smtp_port, ''), ?),
+            smtp_destination = COALESCE(NULLIF(smtp_destination, ''), ?),
+            gmail_user = COALESCE(NULLIF(gmail_user, ''), ?),
+            gmail_pass = COALESCE(NULLIF(gmail_pass, ''), ?),
+            backup_email = COALESCE(NULLIF(backup_email, ''), ?),
+            auto_backup_enabled = COALESCE(auto_backup_enabled, ?)
+           WHERE id = 'global'`,
+          [uUser, uPass, uHost, uPort, uDest, uUser, uPass, uDest, uAuto]
+        );
+        console.log('✅ Synchronized SMTP backup configuration into local system_settings table.');
+      }
+    }
+  } catch (syncErr) {
+    console.warn('[Startup] Notice synchronizing SMTP settings to local DB:', syncErr.message);
   }
 
   // Seed custom permissions if empty

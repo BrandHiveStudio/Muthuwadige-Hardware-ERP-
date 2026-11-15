@@ -117,27 +117,44 @@ function seedDefaultEnv(userDataPath) {
 
     let externalTursoUrl = '';
     let externalTursoToken = '';
+    let externalEmailUser = '';
+    let externalEmailPass = '';
+    let externalSmtpHost = '';
+    let externalSmtpPort = '';
+    let externalBackupEmail = '';
 
     for (const cand of candidatePaths) {
       try {
         if (cand !== envFile && fs.existsSync(cand)) {
           const candContent = fs.readFileSync(cand, 'utf-8');
           const lines = candContent.split('\n');
-          let u = '';
-          let t = '';
           for (const rawLine of lines) {
             const line = rawLine.trim();
             if (line.startsWith('#')) continue;
             if (line.startsWith('TURSO_DATABASE_URL=')) {
-              u = line.substring('TURSO_DATABASE_URL='.length).trim().replace(/^["']|["']$/g, '');
+              const u = line.substring('TURSO_DATABASE_URL='.length).trim().replace(/^["']|["']$/g, '');
+              if (u && u.startsWith('libsql://') && !u.includes('your-database.turso.io')) externalTursoUrl = u;
             } else if (line.startsWith('TURSO_AUTH_TOKEN=')) {
-              t = line.substring('TURSO_AUTH_TOKEN='.length).trim().replace(/^["']|["']$/g, '');
+              const t = line.substring('TURSO_AUTH_TOKEN='.length).trim().replace(/^["']|["']$/g, '');
+              if (t) externalTursoToken = t;
+            } else if (line.startsWith('EMAIL_USER=') || line.startsWith('SMTP_USER=') || line.startsWith('GMAIL_USER=')) {
+              const u = line.substring(line.indexOf('=') + 1).trim().replace(/^["']|["']$/g, '');
+              if (u && !externalEmailUser) externalEmailUser = u;
+            } else if (line.startsWith('EMAIL_PASS=') || line.startsWith('SMTP_PASS=') || line.startsWith('GMAIL_PASS=') || line.startsWith('GMAIL_APP_PASSWORD=')) {
+              const p = line.substring(line.indexOf('=') + 1).trim().replace(/^["']|["']$/g, '');
+              if (p && !externalEmailPass) externalEmailPass = p;
+            } else if (line.startsWith('SMTP_HOST=')) {
+              const h = line.substring('SMTP_HOST='.length).trim().replace(/^["']|["']$/g, '');
+              if (h && !externalSmtpHost) externalSmtpHost = h;
+            } else if (line.startsWith('SMTP_PORT=')) {
+              const pt = line.substring('SMTP_PORT='.length).trim().replace(/^["']|["']$/g, '');
+              if (pt && !externalSmtpPort) externalSmtpPort = pt;
+            } else if (line.startsWith('BACKUP_EMAIL=') || line.startsWith('SMTP_DESTINATION=')) {
+              const b = line.substring(line.indexOf('=') + 1).trim().replace(/^["']|["']$/g, '');
+              if (b && !externalBackupEmail) externalBackupEmail = b;
             }
           }
-          if (u && t && u.startsWith('libsql://') && !u.includes('your-database.turso.io')) {
-            externalTursoUrl = u;
-            externalTursoToken = t;
-            console.log('✅ Discovered valid external Turso provisioning configuration from:', cand);
+          if (externalTursoUrl && externalTursoToken && externalEmailUser && externalEmailPass) {
             break;
           }
         }
@@ -152,6 +169,15 @@ function seedDefaultEnv(userDataPath) {
         '# Optional: To enable cloud sync with Turso Cloud, specify your credentials below:',
         externalTursoUrl ? `TURSO_DATABASE_URL=${externalTursoUrl}` : '# TURSO_DATABASE_URL=libsql://your-database.turso.io',
         externalTursoToken ? `TURSO_AUTH_TOKEN=${externalTursoToken}` : '# TURSO_AUTH_TOKEN=your_turso_auth_token',
+        '',
+        '# Email & SMTP Backup Delivery Configuration',
+        externalEmailUser ? `EMAIL_USER=${externalEmailUser}` : '# EMAIL_USER=sanojhardware@gmail.com',
+        externalEmailUser ? `SMTP_USER=${externalEmailUser}` : '# SMTP_USER=sanojhardware@gmail.com',
+        externalEmailPass ? `EMAIL_PASS=${externalEmailPass}` : '# EMAIL_PASS=your_app_password',
+        externalEmailPass ? `SMTP_PASS=${externalEmailPass}` : '# SMTP_PASS=your_app_password',
+        `SMTP_HOST=${externalSmtpHost || 'smtp.gmail.com'}`,
+        `SMTP_PORT=${externalSmtpPort || '465'}`,
+        `BACKUP_EMAIL=${externalBackupEmail || externalEmailUser || 'sanojhardware@gmail.com'}`,
         '',
         '# Persistent Machine Secret for Local Session Authentication (Auto-generated)',
         `JWT_SECRET=${machineSecret}`,
@@ -180,6 +206,27 @@ function seedDefaultEnv(userDataPath) {
         console.log('✅ Adopted externally provisioned Turso credentials into existing AppData .env');
       }
 
+      if (externalEmailUser && !/^\s*(EMAIL_USER|SMTP_USER|GMAIL_USER)=/m.test(content)) {
+        content += `\nEMAIL_USER=${externalEmailUser}\nSMTP_USER=${externalEmailUser}\n`;
+        updated = true;
+      }
+      if (externalEmailPass && !/^\s*(EMAIL_PASS|SMTP_PASS|GMAIL_PASS|GMAIL_APP_PASSWORD)=/m.test(content)) {
+        content += `\nEMAIL_PASS=${externalEmailPass}\nSMTP_PASS=${externalEmailPass}\n`;
+        updated = true;
+      }
+      if (externalSmtpHost && !/^\s*SMTP_HOST=/m.test(content)) {
+        content += `\nSMTP_HOST=${externalSmtpHost}\n`;
+        updated = true;
+      }
+      if (externalSmtpPort && !/^\s*SMTP_PORT=/m.test(content)) {
+        content += `\nSMTP_PORT=${externalSmtpPort}\n`;
+        updated = true;
+      }
+      if (externalBackupEmail && !/^\s*BACKUP_EMAIL=/m.test(content)) {
+        content += `\nBACKUP_EMAIL=${externalBackupEmail}\n`;
+        updated = true;
+      }
+
       if (!content.includes('JWT_SECRET=')) {
         content += `\nJWT_SECRET=${machineSecret}\n`;
         updated = true;
@@ -204,6 +251,23 @@ function seedDefaultEnv(userDataPath) {
           } else if (line.startsWith('TURSO_AUTH_TOKEN=')) {
             const val = line.substring('TURSO_AUTH_TOKEN='.length).trim().replace(/^["']|["']$/g, '');
             if (val && !process.env.TURSO_AUTH_TOKEN) process.env.TURSO_AUTH_TOKEN = val;
+          } else if (line.startsWith('EMAIL_USER=') || line.startsWith('SMTP_USER=') || line.startsWith('GMAIL_USER=')) {
+            const val = line.substring(line.indexOf('=') + 1).trim().replace(/^["']|["']$/g, '');
+            if (val && !process.env.EMAIL_USER) process.env.EMAIL_USER = val;
+            if (val && !process.env.SMTP_USER) process.env.SMTP_USER = val;
+          } else if (line.startsWith('EMAIL_PASS=') || line.startsWith('SMTP_PASS=') || line.startsWith('GMAIL_PASS=') || line.startsWith('GMAIL_APP_PASSWORD=')) {
+            const val = line.substring(line.indexOf('=') + 1).trim().replace(/^["']|["']$/g, '');
+            if (val && !process.env.EMAIL_PASS) process.env.EMAIL_PASS = val;
+            if (val && !process.env.SMTP_PASS) process.env.SMTP_PASS = val;
+          } else if (line.startsWith('SMTP_HOST=')) {
+            const val = line.substring('SMTP_HOST='.length).trim().replace(/^["']|["']$/g, '');
+            if (val && !process.env.SMTP_HOST) process.env.SMTP_HOST = val;
+          } else if (line.startsWith('SMTP_PORT=')) {
+            const val = line.substring('SMTP_PORT='.length).trim().replace(/^["']|["']$/g, '');
+            if (val && !process.env.SMTP_PORT) process.env.SMTP_PORT = val;
+          } else if (line.startsWith('BACKUP_EMAIL=') || line.startsWith('SMTP_DESTINATION=')) {
+            const val = line.substring(line.indexOf('=') + 1).trim().replace(/^["']|["']$/g, '');
+            if (val && !process.env.BACKUP_EMAIL) process.env.BACKUP_EMAIL = val;
           }
         }
       } catch (_) {}
@@ -263,6 +327,17 @@ function startBackendServer() {
   if (process.env.TURSO_AUTH_TOKEN) {
     serverEnv.TURSO_AUTH_TOKEN = process.env.TURSO_AUTH_TOKEN;
   }
+
+  // Preserve email and SMTP configuration for automated backups
+  if (process.env.EMAIL_USER) serverEnv.EMAIL_USER = process.env.EMAIL_USER;
+  if (process.env.EMAIL_PASS) serverEnv.EMAIL_PASS = process.env.EMAIL_PASS;
+  if (process.env.SMTP_USER) serverEnv.SMTP_USER = process.env.SMTP_USER;
+  if (process.env.SMTP_PASS) serverEnv.SMTP_PASS = process.env.SMTP_PASS;
+  if (process.env.SMTP_HOST) serverEnv.SMTP_HOST = process.env.SMTP_HOST;
+  if (process.env.SMTP_PORT) serverEnv.SMTP_PORT = process.env.SMTP_PORT;
+  if (process.env.BACKUP_EMAIL) serverEnv.BACKUP_EMAIL = process.env.BACKUP_EMAIL;
+  if (process.env.GMAIL_USER) serverEnv.GMAIL_USER = process.env.GMAIL_USER;
+  if (process.env.GMAIL_PASS) serverEnv.GMAIL_PASS = process.env.GMAIL_PASS;
 
   if (USER_DATA_PATH) {
     serverEnv.USER_DATA_PATH = USER_DATA_PATH;
