@@ -802,18 +802,19 @@ export function Reports({ currentUser }: ReportsProps = {}) {
 
   const totalSalesProfit = financialSummaryMetrics.grossProfit;
 
-  const totalReceivables = filteredSales.reduce((sum, s) => {
+  // Accounts Receivable is a cumulative balance sheet metric (up to selected date)
+  // Dynamically deducts both sales returns and payments via calculateSaleAccounting
+  const totalReceivables = sales.reduce((sum, s) => {
     if (s.status === 'cancelled' || s.status === 'Cancelled' || s.status === 'voided' || s.status === 'Voided') return sum;
     
-    // Strictly verify if the transaction is a credit sale
-    const method = (s.payment_method || s.paymentMethod || '').toString().toLowerCase().trim();
-    const isCredit = method === 'credit' || method === 'credit sale' || (s as any).is_credit === true || isCreditSaleRecord(s);
+    const sDate = safeGetDateString(s.created_at || s.date);
+    if (effectiveToDate && sDate > effectiveToDate) return sum; // Cumulative up to selected period
     
-    if (!isCredit) return sum;
+    if (!isCreditSaleRecord(s)) return sum;
     
-    const balanceDue = Number(s.balance_due !== undefined ? s.balance_due : (s.balance_amount || s.balance || 0));
-    const outstanding = balanceDue > 0 ? balanceDue : Math.max(0, Number(s.total_amount || 0) - Number(s.payment_received || 0));
-    return sum + outstanding;
+    // Authoritative unified accounting calculation (Original Total - Returns + Exchanges - Payments)
+    const acct = calculateSaleAccounting(s, salesReturns);
+    return sum + (acct.netOutstanding > 0.001 ? acct.netOutstanding : 0);
   }, 0);
   const totalPayables = suppliers.reduce((sum, s) => sum + Number(s.payable_balance || 0), 0);
 
