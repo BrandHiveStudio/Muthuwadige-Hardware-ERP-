@@ -28,6 +28,7 @@ export interface BarcodeSvgProps {
   height?: number;
   fontSize?: number;
   displayValue?: boolean;
+  margin?: number;
 }
 
 /**
@@ -51,14 +52,14 @@ export const getSafeBarcode = (product?: Product | null): string => {
  * Generates an ultra-crisp 1-bit raster Data URL using an offscreen canvas.
  * This guarantees optical readability on 203 DPI thermal printers without sub-pixel blurring.
  */
-const generateCrispBarcodeDataUrl = (value: string, is3Up: boolean): string => {
+const generateCrispBarcodeDataUrl = (value: string, is3Up: boolean, customWidth?: number): string => {
   try {
     const canvas = document.createElement('canvas');
     const safeVal = value && value.trim() ? value.trim() : 'HW10001';
 
     JsBarcode(canvas, safeVal, {
       format: 'CODE128',
-      width: is3Up ? 1 : 2,
+      width: customWidth !== undefined ? customWidth : (is3Up ? 1 : 2),
       height: is3Up ? 36 : 45,
       displayValue: false,
       margin: 0,
@@ -74,6 +75,38 @@ const generateCrispBarcodeDataUrl = (value: string, is3Up: boolean): string => {
 };
 
 /**
+ * Generates a zero-aliasing vector SVG string for direct thermal print dispatch.
+ * Enforces crispEdges and exact integer scaling for 1D laser scanners (BWHS-25L).
+ */
+const generateCrispBarcodeSvg = (value: string, width = 2, height = 36): string => {
+  try {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const safeVal = value && value.trim() ? value.trim() : 'HW10001';
+
+    JsBarcode(svg, safeVal, {
+      format: 'CODE128',
+      width,
+      height,
+      displayValue: false,
+      margin: 0,
+      background: '#ffffff',
+      lineColor: '#000000'
+    });
+
+    svg.setAttribute('shape-rendering', 'crispEdges');
+    svg.setAttribute('class', 'barcode-svg-30x15');
+    svg.removeAttribute('width');
+    svg.removeAttribute('height');
+    svg.setAttribute('style', 'display: block; max-width: 100%; height: 9mm; shape-rendering: crispEdges; image-rendering: pixelated;');
+
+    return svg.outerHTML || new XMLSerializer().serializeToString(svg);
+  } catch (e) {
+    console.error('Failed to generate crisp barcode SVG:', e);
+    return '';
+  }
+};
+
+/**
  * Standalone Barcode SVG Component for Screen Preview.
  */
 export const BarcodeSvg: React.FC<BarcodeSvgProps> = ({
@@ -82,7 +115,8 @@ export const BarcodeSvg: React.FC<BarcodeSvgProps> = ({
   width = 1.2,
   height = 30,
   fontSize = 11,
-  displayValue = false
+  displayValue = false,
+  margin = 0
 }) => {
   const svgRef = useRef<SVGSVGElement | null>(null);
 
@@ -99,16 +133,26 @@ export const BarcodeSvg: React.FC<BarcodeSvgProps> = ({
         fontSize,
         fontOptions: 'bold',
         font: 'monospace',
-        margin: 2,
+        margin,
         background: '#ffffff',
         lineColor: '#000000'
       });
+      svgRef.current.setAttribute('shape-rendering', 'crispEdges');
+      svgRef.current.style.shapeRendering = 'crispEdges';
+      svgRef.current.style.imageRendering = 'pixelated';
     } catch (err) {
       console.warn('Barcode SVG generation warning:', err);
     }
-  }, [value, format, width, height, fontSize, displayValue]);
+  }, [value, format, width, height, fontSize, displayValue, margin]);
 
-  return <svg ref={svgRef} className="mx-auto block max-w-full" />;
+  return (
+    <svg
+      ref={svgRef}
+      className="mx-auto block max-w-full"
+      shapeRendering="crispEdges"
+      style={{ shapeRendering: 'crispEdges', imageRendering: 'pixelated' }}
+    />
+  );
 };
 
 /**
@@ -124,16 +168,30 @@ export const StickerPreviewCard: React.FC<{ product: Product; preset: PresetType
     return (
       <div className="flex gap-1.5 bg-white p-2 border-2 border-black rounded shadow-md w-[360px]">
         {[0, 1, 2].map((idx) => (
-          <div key={idx} className="flex-1 bg-white border border-gray-400 p-1 flex flex-col justify-between text-center font-sans overflow-hidden h-[95px]">
-            <div className="font-bold text-[8px] text-black leading-tight truncate">
+          <div
+            key={idx}
+            className="flex-1 bg-white border border-gray-400 p-1 flex flex-col justify-between items-center text-center font-sans overflow-hidden h-[95px] box-border"
+          >
+            {/* 1. Top: Product Name (6.5pt bold, single line text-overflow: ellipsis, max width 26mm) */}
+            <div className="font-bold text-[6.5pt] text-black leading-tight truncate w-full max-w-[26mm]">
               {product.name}
             </div>
-            <div className="my-0.5 flex justify-center px-0.5">
-              <BarcodeSvg value={barcodeValue} width={0.8} height={16} displayValue={false} />
+
+            {/* 2. Middle: Tall, crisp 1D Barcode (displayValue: false) with pure white quiet zones */}
+            <div className="my-0.5 flex justify-center items-center w-full px-2 overflow-hidden">
+              <BarcodeSvg
+                value={barcodeValue}
+                format="CODE128"
+                width={2}
+                height={36}
+                margin={0}
+                displayValue={false}
+              />
             </div>
-            <div className="font-mono text-[6.5px] font-bold text-black leading-none truncate">{barcodeValue}</div>
-            <div className="font-black text-[9px] text-black border-t border-black pt-0.5 mt-0.5 leading-tight">
-              Rs. {Number(product.price || 0).toLocaleString(undefined, { minimumFractionDigits: 0 })}
+
+            {/* 3. Bottom: Human-readable Barcode Number + Price (6.5pt-7pt bold, e.g., 5BC500 • Rs. 10,000) */}
+            <div className="font-bold text-[6.5pt] text-black leading-tight truncate w-full">
+              {barcodeValue} • Rs. {Number(product.price || 0).toLocaleString(undefined, { minimumFractionDigits: 0 })}
             </div>
           </div>
         ))}
@@ -223,24 +281,33 @@ const printThermalLabelsIsolated = (queue: QueueItem[], preset: PresetType) => {
       rows.push(allLabels.slice(i, i + 3));
     }
 
-    labelsHtml = rows.map(row => `
+    labelsHtml = rows.map(row => {
+      const paddedRow: (Product | null)[] = [...row];
+      while (paddedRow.length < 3) {
+        paddedRow.push(null);
+      }
+      return `
       <div class="page-row-30x15">
-        ${row.map(prod => {
+        ${paddedRow.map(prod => {
+          if (!prod) {
+            return `<div class="cell-30x15 cell-empty" style="visibility: hidden;"></div>`;
+          }
           const code = getSafeBarcode(prod);
-          const barcodeImg = generateCrispBarcodeDataUrl(code, true);
+          const barcodeSvg = generateCrispBarcodeSvg(code, 2, 36);
+          const formattedPrice = Number(prod.price || 0).toLocaleString(undefined, { minimumFractionDigits: 0 });
           return `
             <div class="cell-30x15">
               <div class="item-title-30x15">${prod.name || 'Product'}</div>
               <div class="barcode-container-30x15">
-                <img src="${barcodeImg}" alt="barcode" class="barcode-img-30x15" />
+                ${barcodeSvg || `<img src="${generateCrispBarcodeDataUrl(code, false, 2)}" alt="barcode" class="barcode-img-30x15" />`}
               </div>
-              <div class="code-text-30x15">${code}</div>
-              <div class="price-tag-30x15">Rs. ${Number(prod.price || 0).toLocaleString(undefined, { minimumFractionDigits: 0 })}</div>
+              <div class="footer-30x15">${code} &bull; Rs. ${formattedPrice}</div>
             </div>
           `;
         }).join('')}
       </div>
-    `).join('');
+    `;
+    }).join('');
   } else if (preset === '100x25_3up') {
     const rows: Product[][] = [];
     for (let i = 0; i < allLabels.length; i += 3) {
@@ -294,16 +361,17 @@ const printThermalLabelsIsolated = (queue: QueueItem[], preset: PresetType) => {
         <style>
           @page {
             ${pageSizeStyle}
-            margin: 0 !important;
+            margin: 0mm !important;
+            padding: 0mm !important;
           }
           * {
             box-sizing: border-box;
-            -webkit-print-color-adjust: exact;
-            print-color-adjust: exact;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
           html, body {
-            margin: 0 !important;
-            padding: 0 !important;
+            margin: 0mm !important;
+            padding: 0mm !important;
             background: #ffffff !important;
             color: #000000 !important;
             font-family: Arial, Helvetica, sans-serif;
@@ -334,70 +402,84 @@ const printThermalLabelsIsolated = (queue: QueueItem[], preset: PresetType) => {
           .page-row-30x15 {
             width: 95mm;
             height: 15mm;
+            max-height: 15mm;
+            min-height: 15mm;
             display: flex;
             justify-content: space-between;
             align-items: center;
             padding: 0 1mm;
+            margin: 0mm !important;
             page-break-after: always;
             break-after: page;
+            page-break-inside: avoid;
+            break-inside: avoid;
             overflow: hidden;
             box-sizing: border-box;
           }
           .cell-30x15 {
             width: 30mm;
-            height: 14.5mm;
+            height: 15mm;
+            max-height: 15mm;
+            min-height: 15mm;
             display: flex;
             flex-direction: column;
             justify-content: space-between;
             align-items: center;
             text-align: center;
             overflow: hidden;
-            border: 0.5px solid #000000;
-            padding: 0.4mm 0.8mm;
+            padding: 0.5mm 0;
+            margin: 0;
             box-sizing: border-box;
+            background: #ffffff !important;
           }
           .item-title-30x15 {
-            font-size: 5.5px;
+            font-size: 6.5pt;
             font-weight: 700;
+            max-width: 26mm;
             width: 100%;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-            line-height: 1;
+            line-height: 1.1;
+            text-align: center;
+            color: #000000;
           }
           .barcode-container-30x15 {
             display: flex;
             justify-content: center;
             align-items: center;
             width: 100%;
-            height: 5.5mm;
+            height: 9mm;
+            max-height: 9.5mm;
+            padding: 0 2.5mm; /* Enforces 2.5mm-3mm pure white quiet zone on both left & right sides */
+            box-sizing: border-box;
             overflow: hidden;
+            background: #ffffff !important;
           }
+          .barcode-container-30x15 svg,
+          .barcode-svg-30x15,
           .barcode-img-30x15 {
             display: block;
-            image-rendering: pixelated;
-            image-rendering: -moz-crisp-edges;
-            image-rendering: crisp-edges;
-            max-width: 100%;
-            height: 5.5mm;
+            height: 9mm !important;
+            max-width: 100% !important;
+            shape-rendering: crispEdges !important;
+            image-rendering: pixelated !important;
+            image-rendering: -moz-crisp-edges !important;
+            image-rendering: crisp-edges !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
-          .code-text-30x15 {
-            font-family: monospace;
-            font-size: 5px;
-            font-weight: 800;
-            line-height: 1;
-            letter-spacing: 0.2px;
+          .footer-30x15 {
+            font-size: 6.5pt;
+            font-weight: 700;
+            max-width: 28mm;
+            width: 100%;
             white-space: nowrap;
             overflow: hidden;
-          }
-          .price-tag-30x15 {
-            font-size: 6.5px;
-            font-weight: 900;
-            line-height: 1;
-            border-top: 0.5px solid #000000;
-            width: 100%;
-            padding-top: 0.2mm;
-            white-space: nowrap;
+            text-overflow: ellipsis;
+            line-height: 1.1;
+            text-align: center;
+            color: #000000;
           }
           .page-single {
             display: flex;
@@ -473,6 +555,48 @@ const printThermalLabelsIsolated = (queue: QueueItem[], preset: PresetType) => {
             padding-top: 0.5px;
             line-height: 1;
           }
+          @media print {
+            @page {
+              ${pageSizeStyle}
+              margin: 0mm !important;
+            }
+            html, body {
+              margin: 0mm !important;
+              padding: 0mm !important;
+              background: #ffffff !important;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+            .page-row-30x15 {
+              width: 95mm !important;
+              height: 15mm !important;
+              max-height: 15mm !important;
+              min-height: 15mm !important;
+              margin: 0mm !important;
+              page-break-after: always !important;
+              break-after: page !important;
+              page-break-inside: avoid !important;
+              break-inside: avoid !important;
+              overflow: hidden !important;
+            }
+            .cell-30x15 {
+              width: 30mm !important;
+              height: 15mm !important;
+              max-height: 15mm !important;
+              min-height: 15mm !important;
+              overflow: hidden !important;
+            }
+            .barcode-container-30x15 svg,
+            .barcode-svg-30x15,
+            .barcode-img-30x15 {
+              shape-rendering: crispEdges !important;
+              image-rendering: pixelated !important;
+              image-rendering: -moz-crisp-edges !important;
+              image-rendering: crisp-edges !important;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+          }
         </style>
       </head>
       <body>
@@ -519,7 +643,7 @@ export function BarcodePrint() {
   const [loading, setLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
-  const [preset, setPreset] = useState<PresetType>('50x25');
+  const [preset, setPreset] = useState<PresetType>('30x15_3up');
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [previewIndex, setPreviewIndex] = useState<number>(0);
   const [isSinhala, setIsSinhala] = useState<boolean>(false);
@@ -718,7 +842,7 @@ export function BarcodePrint() {
               }`}
           >
             <div className="font-black text-xs text-slate-800">Standard Single Sticker</div>
-            <div className="text-[10px] text-gray-500 font-bold mt-0.5">50mm × 25mm (Recommended)</div>
+            <div className="text-[10px] text-gray-500 font-bold mt-0.5">50mm × 25mm</div>
           </button>
 
           <button
@@ -739,8 +863,11 @@ export function BarcodePrint() {
               : 'border-gray-200 hover:bg-gray-50'
               }`}
           >
-            <div className="font-black text-xs text-slate-800">30mm × 15mm (3-Up)</div>
-            <div className="text-[10px] text-gray-500 font-bold mt-0.5">3-Up Micro across ~95mm</div>
+            <div className="flex items-center justify-between">
+              <span className="font-black text-xs text-slate-800">30mm × 15mm (3-Up)</span>
+              <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded bg-amber-500/10 text-[#DAA520]">Default</span>
+            </div>
+            <div className="text-[10px] text-gray-500 font-bold mt-0.5">3-Up Micro across ~95mm (Default)</div>
           </button>
         </div>
       </div>
