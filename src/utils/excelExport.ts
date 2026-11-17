@@ -183,7 +183,7 @@ export async function exportFullDatabaseExcelBackup(options: ExcelExportOptions 
   const paymentTotal = payBreakdown.totalPaymentMethods;
 
   const totalPurchases = purchaseOrders.filter((po: any) => po.status?.toUpperCase() !== 'CANCELLED').reduce((sum: number, po: any) => sum + Number(po.total || 0), 0);
-  const totalStockValue = products.reduce((sum: number, p: any) => sum + (Number(p.stock || 0) * Number(p.cost_price || 0)), 0);
+  const totalStockValue = Math.round(products.reduce((sum: number, p: any) => sum + (Number(p.stock || 0) * Number(p.cost_price || 0)), 0) * 100) / 100;
 
   const finalStart = fromDate || 'Start';
   const finalEnd = toDate || 'Present';

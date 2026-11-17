@@ -603,10 +603,10 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     const minStk = p.minStock !== undefined ? p.minStock : p.min_stock !== undefined ? p.min_stock : 5;
     return p.stock < minStk;
   });
-  const totalStockValue = products.reduce((sum, p) => {
+  const totalStockValue = Math.round(products.reduce((sum, p) => {
     const cost = Number(p.cost_price !== undefined ? p.cost_price : p.costPrice !== undefined ? p.costPrice : 0);
     return sum + (p.stock * cost);
-  }, 0);
+  }, 0) * 100) / 100;
   const totalCategories = [...new Set(products.map(p => p.category))].length;
 
   const getCategoryTranslation = (cat: string) => {

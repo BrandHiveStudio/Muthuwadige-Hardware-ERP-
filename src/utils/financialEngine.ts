@@ -286,7 +286,7 @@ export function computePaymentBreakdown(params: {
 
   const validCheques = cheques.filter((c: any) => {
     if (!c) return false;
-    return isWithinDateRange(c.cheque_date || c.created_at, fromDate, toDate);
+    return isWithinDateRange(c.cleared_date || c.cleared_at || c.created_at || c.cheque_date, fromDate, toDate);
   });
 
   let directCash = 0;
@@ -371,14 +371,22 @@ export function computePaymentBreakdown(params: {
   const pendingCheques = validCheques.filter((c: any) => c.direction === 'INWARD' && (c.status === 'PENDING' || c.status === 'DEPOSITED'));
   const pendingChequesAmount = pendingCheques.reduce((sum: number, c: any) => sum + Number(c.amount || 0), 0);
 
-  // Customer Credit Outstanding
-  const customerCreditOutstanding = validSales.reduce((sum: number, s: any) => {
-    if (!isCreditSaleRecord(s)) return sum;
-    const acct = calculateSaleAccounting(s, salesReturns, validPayments);
-    return sum + acct.netOutstanding;
+  // Customer Credit Outstanding (Cumulative balance sheet metric up to toDate)
+  const receivableSales = sales.filter((s: any) => {
+    if (!s) return false;
+    const status = (s.status || '').toString().toLowerCase().trim();
+    if (status === 'cancelled' || status === 'voided') return false;
+    const sDate = toSriLankaDateStr(s.created_at || s.date);
+    if (toDate && sDate > toDate) return false;
+    return isCreditSaleRecord(s);
+  });
+
+  const customerCreditOutstanding = receivableSales.reduce((sum: number, s: any) => {
+    const acct = calculateSaleAccounting(s, salesReturns, creditPayments);
+    return sum + (acct.netOutstanding > 0.001 ? acct.netOutstanding : 0);
   }, 0);
 
-  const totalRevenueCollected = Math.round((totalCashCollected + totalCardCollected + totalBankCollected + clearedChequesAmount) * 100) / 100;
+  const totalRevenueCollected = Math.round((totalCashCollected + totalCardCollected + totalBankCollected + clearedChequesAmount + cashChequesInHandAmount) * 100) / 100;
   const totalPaymentMethods = Math.round((totalRevenueCollected + customerCreditOutstanding) * 100) / 100;
 
   return {

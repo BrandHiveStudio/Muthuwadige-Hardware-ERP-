@@ -655,6 +655,10 @@ export async function executeBackupTask({
       return true;
     };
 
+    const allSalesUnfiltered = [...sales];
+    const allReturnsUnfiltered = [...salesReturns];
+    const allCreditPaymentsUnfiltered = [...creditPayments];
+
     if (fromDate || toDate) {
       sales = sales.filter(s => isWithinDateRange(s.created_at || s.date));
       salesReturns = salesReturns.filter(sr => isWithinDateRange(sr.created_at || sr.return_date || sr.date));
@@ -663,7 +667,7 @@ export async function executeBackupTask({
       stockAdjustments = stockAdjustments.filter(sa => isWithinDateRange(sa.created_at));
       quotations = quotations.filter(q => isWithinDateRange(q.created_at));
       creditPayments = creditPayments.filter(cp => isWithinDateRange(cp.payment_date || cp.created_at));
-      cheques = cheques.filter(c => isWithinDateRange(c.cheque_date || c.created_at));
+      cheques = cheques.filter(c => isWithinDateRange(c.cleared_date || c.cleared_at || c.created_at || c.cheque_date));
       purchaseReturns = purchaseReturns.filter(pr => isWithinDateRange(pr.created_at || pr.return_date));
     }
 
@@ -856,7 +860,7 @@ export async function executeBackupTask({
 
     const netReturns = returnedSellingRev;
     const grossSellingRev = Math.round(grossStickerSales * 100) / 100;
-    const netSellingRev = Math.max(0, Math.round((grossStickerSales - customerDiscounts - netReturns + transportFees) * 100) / 100);
+    const netSellingRev = Math.max(0, Math.round((grossStickerSales - customerDiscounts - netReturns + exchangeSellingRev + transportFees) * 100) / 100);
     const netCostVal = Math.max(0, Math.round((grossCostVal + exchangeCostVal - returnedCostVal) * 100) / 100);
     const grossProfit = Math.round((netSellingRev - netCostVal) * 100) / 100;
 
@@ -884,7 +888,7 @@ export async function executeBackupTask({
     validSales.forEach(s => {
       const rawMethod = (s.payment_method || s.paymentMethod || '').toString().trim();
       const methodCategory = classifyPaymentMethod(rawMethod);
-      const isCredit = methodCategory === 'credit' || s.is_credit === 1 || s.is_credit === true || s.status?.toLowerCase() === 'non paid' || s.status?.toLowerCase() === 'partially settled' || s.status?.toLowerCase() === 'pending';
+      const isCredit = methodCategory === 'credit' || s.is_credit === 1 || s.is_credit === true;
 
       const totalAmt = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
 
@@ -947,34 +951,66 @@ export async function executeBackupTask({
       return sum;
     }, 0);
 
-    // Outstanding customer credit calculation
-    const totalCreditOutstanding = validSales.reduce((sum, s) => {
-      const inv = s.invoice_no || s.invoiceNo;
-      const invReturns = activeReturns.filter(r => (r.invoice_no === inv || r.invoiceNo === inv));
-      const retAmt = invReturns.reduce((acc, r) => acc + Number(r.return_amount || r.returnAmount || 0), 0);
-      const exAmt = invReturns.reduce((acc, r) => acc + Number(r.exchange_amount || r.exchangeAmount || 0), 0);
-      const exPaid = invReturns.reduce((acc, r) => acc + Number(r.customer_paid || r.customerPaid || 0), 0);
+    // Outstanding customer credit calculation (Cumulative accounts receivable up to finalEnd)
+    const isCreditSale = (sale) => {
+      if (!sale) return false;
+      const m = (sale.payment_method || sale.paymentMethod || '').toString().toLowerCase().trim();
+      const st = (sale.status || '').toString().toLowerCase().trim();
+      if (m === 'credit' || m === 'credit sale' || sale.is_credit === 1 || sale.is_credit === true) return true;
+      if (m === 'cheque' || m === 'check' || m === 'cash' || m === 'card' || m === 'bank transfer' || m === 'online' || m === 'pos') return false;
+      if (st === 'non paid' || st === 'non-paid' || st === 'pending' || st === 'partially paid' || st === 'partially settled') return true;
+      return false;
+    };
 
-      const method = (s.payment_method || '').toLowerCase();
-      const isCredit = method === 'credit' || s.is_credit === 1 || s.is_credit === true || s.status?.toLowerCase() === 'non paid' || s.status?.toLowerCase() === 'partially settled' || s.status?.toLowerCase() === 'pending';
-
-      if (!isCredit && s.status?.toLowerCase() === 'paid') return sum;
-
-      const origTotal = Number(s.total_amount || 0);
-      const origPaid = Number(s.payment_received || 0);
+    const calcNetOutstanding = (sale) => {
+      const inv = sale.invoice_no || sale.invoiceNo;
+      const origTotal = Number(sale.total_amount !== undefined ? sale.total_amount : (sale.total || 0));
+      const invReturns = allReturnsUnfiltered.filter(r => {
+        const rSt = (r.status || '').toString().toLowerCase().trim();
+        if (rSt === 'voided' || rSt === 'cancelled') return false;
+        return r.invoice_no === inv || r.invoiceNo === inv;
+      });
+      const retAmt = invReturns.reduce((sum, r) => sum + Number(r.return_amount !== undefined ? r.return_amount : (r.refund_amount || 0)), 0);
+      const exAmt = invReturns.reduce((sum, r) => sum + Number(r.exchange_amount || 0), 0);
       const effTotal = Math.max(0, origTotal - retAmt + exAmt);
-      const netOutstanding = Math.max(0, effTotal - origPaid - exPaid);
 
-      return sum + netOutstanding;
-    }, 0);
+      const invPayments = allCreditPaymentsUnfiltered.filter(cp => {
+        const cpSt = (cp.status || '').toLowerCase();
+        if (cpSt === 'voided' || cpSt === 'cancelled') return false;
+        return cp.sale_id === sale.id || (inv && cp.invoice_no === inv);
+      });
+      const paidAmt = invPayments.reduce((sum, cp) => sum + Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0)), 0);
+      const totalPaid = Math.max(Number(sale.payment_received || 0), paidAmt);
+      return Math.max(0, effTotal - totalPaid);
+    };
 
-    const clearedInwardCheques = (cheques || []).filter(c => c.direction === 'INWARD' && c.status === 'CLEARED');
+    const receivableSales = allSalesUnfiltered.filter(s => {
+      if (!s) return false;
+      const st = (s.status || '').toLowerCase().trim();
+      if (st === 'cancelled' || st === 'voided') return false;
+      const sDate = getSriLankaDateStr(s.created_at || s.date);
+      if (finalEnd && sDate > finalEnd) return false;
+      return isCreditSale(s);
+    });
+
+    const totalCreditOutstanding = receivableSales.reduce((sum, s) => sum + calcNetOutstanding(s), 0);
+
+    const clearedInwardCheques = (cheques || []).filter(c => {
+      if (c.direction !== 'INWARD' || c.status !== 'CLEARED') return false;
+      return isWithinDateRange(c.cleared_date || c.cleared_at || c.created_at || c.cheque_date);
+    });
     const clearedChequeAmount = clearedInwardCheques.reduce((sum, c) => sum + Number(c.amount || 0), 0);
 
-    const cashChequesInHand = (cheques || []).filter(c => c.direction === 'INWARD' && c.status === 'IN_HAND');
+    const cashChequesInHand = (cheques || []).filter(c => {
+      if (c.direction !== 'INWARD' || c.status !== 'IN_HAND') return false;
+      return isWithinDateRange(c.cleared_date || c.cleared_at || c.created_at || c.cheque_date);
+    });
     const cashChequesInHandAmount = cashChequesInHand.reduce((sum, c) => sum + Number(c.amount || 0), 0);
 
-    const pendingInwardCheques = (cheques || []).filter(c => c.direction === 'INWARD' && (c.status === 'PENDING' || c.status === 'DEPOSITED'));
+    const pendingInwardCheques = (cheques || []).filter(c => {
+      if (c.direction !== 'INWARD' || (c.status !== 'PENDING' && c.status !== 'DEPOSITED')) return false;
+      return isWithinDateRange(c.cleared_date || c.cleared_at || c.created_at || c.cheque_date);
+    });
     const pendingChequesAmount = pendingInwardCheques.reduce((sum, c) => sum + Number(c.amount || 0), 0);
 
     const cashAmount = Math.max(0, directCash + settledCash + exchangeCashInflowsTotal - cashRefundsTotal);
@@ -990,7 +1026,7 @@ export async function executeBackupTask({
       return st !== 'CANCELLED' && st !== 'VOIDED';
     }).reduce((sum, po) => sum + (Number(po.total_amount !== undefined ? po.total_amount : (po.total || 0))), 0);
     const valB10 = transactions.filter(t => (t.flow_type || t.type || '').toUpperCase() === 'EXPENSE' && t.category !== 'Purchases').reduce((sum, t) => sum + (Number(t.amount || 0)), 0);
-    const valB12 = products.reduce((sum, p) => sum + ((Number(p.stock || 0)) * (Number(p.cost_price !== undefined ? p.cost_price : (p.costPrice || 0)))), 0);
+    const valB12 = Math.round(products.reduce((sum, p) => sum + ((Number(p.stock || 0)) * (Number(p.cost_price !== undefined ? p.cost_price : (p.costPrice || 0)))), 0) * 100) / 100;
 
     const totalSalesRevenue = valB6;
     const totalSalesProfit = valB11;
@@ -1645,8 +1681,12 @@ export async function executeBackupTask({
                         <td colspan="2" style="padding:10px 0 6px 0;"><div style="border-top:1px dashed #cbd5e1; width:100%;"></div></td>
                       </tr>
                       <tr>
-                        <td style="padding:4px 0 0 0; color:#0f172a; font-weight:900; font-size:14px;">Total Collected & Settled:</td>
-                        <td style="padding:4px 0 0 0; color:#0f172a; font-weight:900; font-size:15px; text-align:right;">LKR ${paymentTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                        <td style="padding:4px 0 0 0; color:#0f172a; font-weight:900; font-size:14px;">Total Revenue Collected:</td>
+                        <td style="padding:4px 0 0 0; color:#0f172a; font-weight:900; font-size:15px; text-align:right;">LKR ${valB7.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding:4px 0 0 0; color:#64748b; font-weight:700; font-size:12px;">Total Payment Methods:</td>
+                        <td style="padding:4px 0 0 0; color:#64748b; font-weight:800; font-size:13px; text-align:right;">LKR ${paymentTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1744,6 +1784,7 @@ export async function executeBackupTask({
         netSellingRev,
         netCostVal,
         grossProfit,
+        totalRevenueCollected: valB7,
         cashAmount,
         cardAmount,
         creditAmount,

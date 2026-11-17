@@ -32,14 +32,14 @@ export function isCreditSaleRecord(sale: any): boolean {
     return true;
   }
 
-  // 2. Active Debt Status (Overrides any accidental "CASH" overwrite during partial payments)
-  if (status === 'non paid' || status === 'non-paid' || status === 'pending' || status === 'partially paid' || status === 'partially settled') {
-    return true;
+  // 2. Explicit Non-Credit Payment Methods (Cheque, Cash, Card, Bank Transfer)
+  if (method === 'cheque' || method === 'check' || method === 'cash' || method === 'card' || method === 'bank transfer' || method === 'online' || method === 'pos') {
+    return false;
   }
 
-  // 3. Paid Cash/Card Status
-  if (method === 'cash' || method === 'card' || method === 'bank transfer' || method === 'online' || method === 'pos') {
-    return false;
+  // 3. Active Debt Status (Overrides any accidental fallback during partial payments)
+  if (status === 'non paid' || status === 'non-paid' || status === 'pending' || status === 'partially paid' || status === 'partially settled') {
+    return true;
   }
 
   // 4. Settled Debt Status

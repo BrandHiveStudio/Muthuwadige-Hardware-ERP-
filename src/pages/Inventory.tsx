@@ -595,7 +595,7 @@ export function Inventory() {
   }, [products, search, categoryFilter]);
 
   const lowStockCount = useMemo(() => products.filter((p) => p.stock < p.minStock).length, [products]);
-  const totalValue = useMemo(() => products.reduce((sum, p) => sum + p.stock * convert(p.costPrice), 0), [products]);
+  const totalValue = useMemo(() => Math.round(products.reduce((sum, p) => sum + p.stock * convert(p.costPrice), 0) * 100) / 100, [products, convert]);
   const uniqueCategories = useMemo(() => [...new Set(products.map((p) => p.category))].length, [products]);
 
   const openAdd = () => {
