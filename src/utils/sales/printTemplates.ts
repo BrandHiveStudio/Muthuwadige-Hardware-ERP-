@@ -1307,11 +1307,60 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
   const custPhone = order.customerPhone || order.customer_phone || matchedCust?.phone || '';
   const custAddress = order.customerAddress || order.customer_address || matchedCust?.address || '';
 
+  const allReturns: any[] = shopSettings?.salesReturns || shopSettings?.allReturns || (order as any).returns || [];
+  const invNo = order.invoiceNo || order.invoice_no || (order as any).invoice_number || (order as any).id;
+  const activeOrderReturns = allReturns.filter((r: any) => {
+    if (!r) return false;
+    const rStatus = (r.status || '').toString().toLowerCase().trim();
+    if (rStatus === 'voided' || rStatus === 'cancelled') return false;
+    const rInv = r.invoiceNo || r.invoice_no || r.invoice_id || r.invoiceId || r.original_invoice_number || r.originalInvoiceNumber;
+    return Boolean(
+      (invNo && rInv && String(invNo).trim().toLowerCase() === String(rInv).trim().toLowerCase()) ||
+      (order.id && rInv && String(order.id).trim().toLowerCase() === String(rInv).trim().toLowerCase()) ||
+      (invNo && r.invoice_id && String(invNo).trim().toLowerCase() === String(r.invoice_id).trim().toLowerCase()) ||
+      (order.id && r.invoice_id && String(order.id).trim().toLowerCase() === String(r.invoice_id).trim().toLowerCase())
+    );
+  });
+
+  const totalReturnsForInvoice = activeOrderReturns.reduce((sum: number, r: any) => {
+    const val = r.return_amount !== undefined && r.return_amount !== null
+      ? Number(r.return_amount)
+      : r.returnAmount !== undefined && r.returnAmount !== null
+      ? Number(r.returnAmount)
+      : r.refund_amount !== undefined && r.refund_amount !== null
+      ? Number(r.refund_amount)
+      : r.refundAmount !== undefined && r.refundAmount !== null
+      ? Number(r.refundAmount)
+      : 0;
+    return sum + (isNaN(val) ? 0 : val);
+  }, 0);
+
+  const totalExchangeForInvoice = activeOrderReturns.reduce((sum: number, r: any) => 
+    sum + Number(r.exchange_amount !== undefined ? r.exchange_amount : (r.exchangeAmount || 0)), 0
+  );
+  const exchangePaid = activeOrderReturns.reduce((sum: number, r: any) => 
+    sum + Number(r.customer_paid !== undefined ? r.customer_paid : (r.customerPaid || 0)), 0
+  );
+
+  const methodLower = (order.payment_method || (order as any).paymentMethod || '').toString().toLowerCase().trim();
+  const statusLower = (order.status || '').toString().toLowerCase().trim();
+  const isCredit = methodLower === 'credit' || methodLower === 'credit sale' || (order as any).is_credit === true || (order as any).is_credit === 1 || statusLower === 'non paid' || statusLower === 'non-paid' || statusLower === 'pending' || statusLower === 'partially paid' || statusLower === 'partially settled' || statusLower === 'fully settled';
+
+  const orderOriginalTotal = Number(order.total_amount !== undefined ? order.total_amount : (order.total || 0));
+  const effectiveInvoiceTotal = Math.max(0, orderOriginalTotal - totalReturnsForInvoice + totalExchangeForInvoice);
+  const orderPaidAmt = Number(order.payment_received || (order as any).amount_paid || (order as any).amountPaid || 0) + exchangePaid;
+  const netInvoiceBalance = Math.max(0, effectiveInvoiceTotal - orderPaidAmt);
+  const prevCustomerBalance = Number((order as any).previous_balance ?? (order as any).previousBalance ?? matchedCust?.credit_balance ?? 0);
+  const updatedCustomerOutstanding = ((order as any).updated_balance !== undefined && (order as any).updated_balance !== null)
+    ? Number((order as any).updated_balance)
+    : ((order as any).updatedBalance !== undefined && (order as any).updatedBalance !== null)
+      ? Number((order as any).updatedBalance)
+      : (prevCustomerBalance + netInvoiceBalance);
+
   if (paperSize === '80mm' || paperSize === '58mm') {
     const is58mm = paperSize === '58mm';
     const symbolStr = isSi ? 'රු.' : 'Rs.';
     const formatNum = (num: number) => num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const isCredit = order.payment_method === 'Credit' || order.status === 'Non Paid';
     const title = isCredit 
       ? (isSi ? 'ණය ඉන්වොයිසිය' : 'CREDIT INVOICE')
       : (isSi ? 'ඉන්වොයිසිය' : 'INVOICE');
@@ -1621,19 +1670,37 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
               </tr>
               ` : ''}
               ${isCredit ? `
+              ${totalReturnsForInvoice > 0 ? `
+              <tr style="color: #dc2626;">
+                <td>${isSi ? 'ආපසු අඩුකිරීම්:' : 'Returns Deducted:'}</td>
+                <td class="value" style="color: #dc2626;">-${symbolStr} ${formatNum(totalReturnsForInvoice)}</td>
+              </tr>
+              ` : ''}
+              ${totalExchangeForInvoice > 0 ? `
+              <tr style="color: #2563eb;">
+                <td>${isSi ? 'භාණ්ඩ මාරුකිරීම්:' : 'Exchange Adjustment:'}</td>
+                <td class="value" style="color: #2563eb;">+${symbolStr} ${formatNum(totalExchangeForInvoice)}</td>
+              </tr>
+              ` : ''}
+              ${orderPaidAmt > 0 ? `
+              <tr style="color: #059669;">
+                <td>${isSi ? 'දැනට ගෙවූ මුදල:' : 'Amount Paid:'}</td>
+                <td class="value" style="color: #059669;">-${symbolStr} ${formatNum(orderPaidAmt)}</td>
+              </tr>
+              ` : ''}
+              ${(totalReturnsForInvoice > 0 || orderPaidAmt > 0) ? `
+              <tr style="font-weight: 700; color: #b91c1c;">
+                <td>${isSi ? 'ඉන්වොයිස් හිඟ මුදල:' : 'Invoice Balance Due:'}</td>
+                <td class="value">${symbolStr} ${formatNum(netInvoiceBalance)}</td>
+              </tr>
+              ` : ''}
               <tr style="border-top: 1px dashed #9ca3af; padding-top: 3px;">
                 <td style="color: #4b5563;">${isSi ? 'පෙර හිඟ ශේෂය:' : 'Previous Balance:'}</td>
-                <td class="value" style="color: #4b5563;">${symbolStr} ${formatNum(Number((order as any).previous_balance ?? (order as any).previousBalance ?? matchedCust?.credit_balance ?? 0))}</td>
+                <td class="value" style="color: #4b5563;">${symbolStr} ${formatNum(prevCustomerBalance)}</td>
               </tr>
               <tr style="font-weight: 800; color: #b91c1c;">
                 <td>${isSi ? 'වත්මන් හිඟ ශේෂය:' : 'Updated Outstanding:'}</td>
-                <td class="value" style="color: #b91c1c;">${symbolStr} ${formatNum(
-                  ((order as any).updated_balance !== undefined && (order as any).updated_balance !== null)
-                    ? Number((order as any).updated_balance)
-                    : ((order as any).updatedBalance !== undefined && (order as any).updatedBalance !== null)
-                      ? Number((order as any).updatedBalance)
-                      : (Number((order as any).previous_balance ?? (order as any).previousBalance ?? matchedCust?.credit_balance ?? 0) + Number(order.total_amount !== undefined ? order.total_amount : order.total || 0))
-                )}</td>
+                <td class="value" style="color: #b91c1c;">${symbolStr} ${formatNum(updatedCustomerOutstanding)}</td>
               </tr>
               ` : ''}
             </table>
@@ -1654,7 +1721,6 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
   const symbolStr = isSi ? 'රු.' : 'Rs.';
   const formatNum = (num: number) => num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   
-  const isCredit = order.payment_method === 'Credit' || order.status === 'Non Paid';
   const title = isCredit 
     ? (isSi ? 'ණය ඉන්වොයිසිය / CREDIT' : 'CREDIT')
     : (isSi ? 'ඉන්වොයිසිය' : 'INVOICE');
@@ -2093,19 +2159,37 @@ const generatePrintHTML = (order: SaleOrder, isSi: boolean, shopSettings?: any) 
                 </tr>
                 ` : ''}
                 ${isCredit ? `
+                ${totalReturnsForInvoice > 0 ? `
+                <tr>
+                  <td class="label" style="color: #dc2626;">${isSi ? 'ආපසු අඩුකිරීම්:' : 'Returns Deducted:'}</td>
+                  <td class="value" style="color: #dc2626;">-${symbolStr} ${formatNum(totalReturnsForInvoice)}</td>
+                </tr>
+                ` : ''}
+                ${totalExchangeForInvoice > 0 ? `
+                <tr>
+                  <td class="label" style="color: #2563eb;">${isSi ? 'භාණ්ඩ මාරුකිරීම්:' : 'Exchange Adjustment:'}</td>
+                  <td class="value" style="color: #2563eb;">+${symbolStr} ${formatNum(totalExchangeForInvoice)}</td>
+                </tr>
+                ` : ''}
+                ${orderPaidAmt > 0 ? `
+                <tr>
+                  <td class="label" style="color: #059669;">${isSi ? 'දැනට ගෙවූ මුදල:' : 'Amount Paid:'}</td>
+                  <td class="value" style="color: #059669;">-${symbolStr} ${formatNum(orderPaidAmt)}</td>
+                </tr>
+                ` : ''}
+                ${(totalReturnsForInvoice > 0 || orderPaidAmt > 0) ? `
+                <tr style="font-weight: 700; color: #b91c1c;">
+                  <td class="label" style="color: #b91c1c;">${isSi ? 'ඉන්වොයිස් හිඟ මුදල:' : 'Invoice Balance Due:'}</td>
+                  <td class="value">${symbolStr} ${formatNum(netInvoiceBalance)}</td>
+                </tr>
+                ` : ''}
                 <tr>
                   <td class="label" style="color: #4b5563;">${isSi ? 'පෙර හිඟ ශේෂය:' : 'Previous Balance:'}</td>
-                  <td class="value" style="color: #4b5563;">${symbolStr} ${formatNum(Number((order as any).previous_balance ?? (order as any).previousBalance ?? matchedCust?.credit_balance ?? 0))}</td>
+                  <td class="value" style="color: #4b5563;">${symbolStr} ${formatNum(prevCustomerBalance)}</td>
                 </tr>
                 <tr style="font-weight: 800; color: #b91c1c;">
                   <td class="label" style="color: #b91c1c;">${isSi ? 'වත්මන් හිඟ ශේෂය:' : 'Updated Outstanding:'}</td>
-                  <td class="value" style="color: #b91c1c;">${symbolStr} ${formatNum(
-                    ((order as any).updated_balance !== undefined && (order as any).updated_balance !== null)
-                      ? Number((order as any).updated_balance)
-                      : ((order as any).updatedBalance !== undefined && (order as any).updatedBalance !== null)
-                        ? Number((order as any).updatedBalance)
-                        : (Number((order as any).previous_balance ?? (order as any).previousBalance ?? matchedCust?.credit_balance ?? 0) + Number(order.total_amount !== undefined ? order.total_amount : order.total || 0))
-                  )}</td>
+                  <td class="value" style="color: #b91c1c;">${symbolStr} ${formatNum(updatedCustomerOutstanding)}</td>
                 </tr>
                 ` : ''}
               </table>

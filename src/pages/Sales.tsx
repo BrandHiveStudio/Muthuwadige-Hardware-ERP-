@@ -122,12 +122,21 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
   const custPhone = order.customerPhone || order.customer_phone || matchedCust?.phone || '';
   const custAddress = order.customerAddress || order.customer_address || matchedCust?.address || '';
 
-  const activeOrderReturns = (salesReturns || []).filter(sr => 
-    sr.status !== 'voided' && 
-    sr.status !== 'cancelled' &&
-    (sr.invoiceNo === order.invoiceNo || sr.invoice_no === order.invoiceNo) &&
-    (!order.created_at || !sr.created_at || new Date(sr.created_at).getTime() >= new Date(order.created_at).getTime() - 60000)
-  );
+  const orderInvNo = order.invoiceNo || order.invoice_no || (order as any).invoice_number || (order as any).id;
+  const activeOrderReturns = (salesReturns || []).filter(sr => {
+    if (!sr) return false;
+    const srStatus = (sr.status || '').toString().toLowerCase().trim();
+    if (srStatus === 'voided' || srStatus === 'cancelled') return false;
+    const srInv = sr.invoiceNo || sr.invoice_no || (sr as any).invoice_id || (sr as any).invoiceId || (sr as any).original_invoice_number || (sr as any).originalInvoiceNumber;
+    const matchesInv = Boolean(
+      (orderInvNo && srInv && String(orderInvNo).trim().toLowerCase() === String(srInv).trim().toLowerCase()) ||
+      (order.id && srInv && String(order.id).trim().toLowerCase() === String(srInv).trim().toLowerCase()) ||
+      (orderInvNo && (sr as any).invoice_id && String(orderInvNo).trim().toLowerCase() === String((sr as any).invoice_id).trim().toLowerCase()) ||
+      (order.id && (sr as any).invoice_id && String(order.id).trim().toLowerCase() === String((sr as any).invoice_id).trim().toLowerCase())
+    );
+    if (!matchesInv) return false;
+    return (!order.created_at || !sr.created_at || new Date(sr.created_at).getTime() >= new Date(order.created_at).getTime() - 60000);
+  });
 
   return (
     <div id="receipt-preview" className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-inner text-left max-w-2xl mx-auto my-4 font-sans leading-relaxed">
@@ -315,11 +324,39 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
             if (!isCredit) return null;
 
             const totalAmt = Number(order.total_amount !== undefined ? order.total_amount : order.total);
-            const paidAmt = Number(order.payment_received || 0);
-            const remBal = Math.max(0, totalAmt - paidAmt);
+            const totalReturnsForInvoice = activeOrderReturns.reduce((sum, r) => {
+              const val = (r as any).return_amount !== undefined && (r as any).return_amount !== null
+                ? Number((r as any).return_amount)
+                : (r as any).returnAmount !== undefined && (r as any).returnAmount !== null
+                ? Number((r as any).returnAmount)
+                : (r as any).refund_amount !== undefined && (r as any).refund_amount !== null
+                ? Number((r as any).refund_amount)
+                : (r as any).refundAmount !== undefined && (r as any).refundAmount !== null
+                ? Number((r as any).refundAmount)
+                : 0;
+              return sum + (isNaN(val) ? 0 : val);
+            }, 0);
+            const totalExchangeForInvoice = activeOrderReturns.reduce((sum, r) => sum + Number((r as any).exchange_amount !== undefined ? (r as any).exchange_amount : ((r as any).exchangeAmount || 0)), 0);
+            const exchangePaid = activeOrderReturns.reduce((sum, r) => sum + Number((r as any).customer_paid !== undefined ? (r as any).customer_paid : ((r as any).customerPaid || 0)), 0);
+
+            const effectiveTotal = Math.max(0, totalAmt - totalReturnsForInvoice + totalExchangeForInvoice);
+            const paidAmt = Number(order.payment_received || (order as any).amount_paid || (order as any).amountPaid || 0) + exchangePaid;
+            const remBal = Math.max(0, effectiveTotal - paidAmt);
             const isSettled = remBal <= 0.01;
             return (
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 space-y-1.5 mt-2 text-xs text-left">
+                {totalReturnsForInvoice > 0 && (
+                  <div className="flex justify-between font-bold text-rose-600">
+                    <span>{isSinhala ? 'ආපසු ලබාදුන් වටිනාකම:' : 'Returns Deducted:'}</span>
+                    <span className="font-black">-{symbol} {formatNum(totalReturnsForInvoice)}</span>
+                  </div>
+                )}
+                {totalExchangeForInvoice > 0 && (
+                  <div className="flex justify-between font-bold text-blue-600">
+                    <span>{isSinhala ? 'භාණ්ඩ මාරුකිරීම්:' : 'Exchange Adjustment:'}</span>
+                    <span className="font-black">+{symbol} {formatNum(totalExchangeForInvoice)}</span>
+                  </div>
+                )}
                 <div className="flex justify-between font-bold text-emerald-700">
                   <span>{isSinhala ? 'දැනට ගෙවා ඇති මුදල:' : 'Amount Paid So Far:'}</span>
                   <span className="font-black">{symbol} {formatNum(paidAmt)}</span>
@@ -331,7 +368,7 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
                 <div className="flex justify-between items-center text-[10px] font-black uppercase pt-1 border-t border-slate-200">
                   <span className="text-slate-500">{isSinhala ? 'ණය ගෙවීමේ තත්ත්වය:' : 'Payment Status:'}</span>
                   {(() => {
-                    const isFullyPaid = paidAmt >= totalAmt - 0.01 || remBal <= 0.01;
+                    const isFullyPaid = isSettled || paidAmt >= effectiveTotal - 0.01;
                     const isUnpaid = paidAmt <= 0.01 && remBal > 0.01;
                     return (
                       <span className={`px-2 py-0.5 rounded ${isFullyPaid ? 'bg-emerald-100 text-emerald-800' : isUnpaid ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'}`}>
@@ -2352,7 +2389,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   // Natively print beautiful receipts in selected language
   const handlePrintReceipt = (order: SaleOrder) => {
     try {
-      const htmlContent = generatePrintHTML(order, isSinhala, shopSettings);
+      const htmlContent = generatePrintHTML(order, isSinhala, {
+        ...shopSettings,
+        customers,
+        salesReturns: salesReturnsList
+      });
       const iframe = document.createElement('iframe');
       iframe.style.position = 'fixed';
       iframe.style.right = '0';

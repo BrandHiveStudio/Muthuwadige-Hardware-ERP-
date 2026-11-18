@@ -879,9 +879,8 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     const isCreditSale = isCreditSaleRecord(s);
 
     if (isCreditSale) {
-      const balanceDue = Number(s.balance_due !== undefined ? s.balance_due : (s.balance_amount || s.balance || 0));
-      const outstanding = balanceDue > 0 ? balanceDue : Math.max(0, totalAmt - Number(s.payment_received || 0));
-      calcCredit += outstanding;
+      const acct = calculateSaleAccounting(s, filteredSalesReturns, filteredCreditPayments);
+      calcCredit += (acct.netOutstanding > 0.001 ? acct.netOutstanding : 0);
     } else {
       if (Array.isArray(s.split_payments) && s.split_payments.length > 0) {
         for (const sp of s.split_payments) {
