@@ -1336,6 +1336,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   const [returnQtys, setReturnQtys] = useState<Record<string, number>>({});
   const [returnMethod, setReturnMethod] = useState<'Cash Refund' | 'Exchange' | 'Credit Note'>('Cash Refund');
   const [returnReason, setReturnReason] = useState('');
+  const [isProcessingReturn, setIsProcessingReturn] = useState(false);
 
   useEffect(() => {
     if (tab === 'returns') {
@@ -6567,13 +6568,21 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                         setIncludeReturnTransport(false);
                         const initialQtys: Record<string, number> = {};
                         const items = Array.isArray(selected.items) ? selected.items : safeParseJson(selected.items, []);
-                        items.forEach((item: any) => { 
-                          const isMatch = q && (
+                        const invNo = selected.invoiceNo || selected.invoice_no || selected.id || '';
+                        const isSingleItem = items.length === 1;
+                        items.forEach((item: any, idx: number) => { 
+                          const isMatch = (q && (
                             (item.barcode && item.barcode.trim().toLowerCase().includes(q)) ||
                             (item.productName && item.productName.toLowerCase().includes(q)) ||
+                            (item.name && item.name.toLowerCase().includes(q)) ||
                             (item.productId && matchedProdIds.has(item.productId))
-                          );
-                          initialQtys[item.productId] = isMatch ? 1 : 0; 
+                          )) || isSingleItem;
+                          const lineKey = (item.lineId || item.line_id) 
+                            ? `${invNo}_${item.lineId || item.line_id}`
+                            : (item.lineIndex !== undefined ? `${invNo}_line_${item.lineIndex}` : `${invNo}_line_${idx}`);
+                          const pKey = item.productId || item.product_id || '';
+                          initialQtys[lineKey] = isMatch ? 1 : 0; 
+                          if (pKey) initialQtys[pKey] = isMatch ? 1 : 0;
                         });
                         setReturnQtys(initialQtys);
                         setShowBillSearchResults(false);
@@ -6628,13 +6637,21 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       setIncludeReturnTransport(false);
                       const initialQtys: Record<string, number> = {};
                       const items = Array.isArray(selected.items) ? selected.items : safeParseJson(selected.items, []);
-                      items.forEach((item: any) => { 
-                        const isMatch = q && (
+                      const invNo = selected.invoiceNo || selected.invoice_no || selected.id || '';
+                      const isSingleItem = items.length === 1;
+                      items.forEach((item: any, idx: number) => { 
+                        const isMatch = (q && (
                           (item.barcode && item.barcode.trim().toLowerCase().includes(q)) ||
                           (item.productName && item.productName.toLowerCase().includes(q)) ||
+                          (item.name && item.name.toLowerCase().includes(q)) ||
                           (item.productId && matchedProdIds.has(item.productId))
-                        );
-                        initialQtys[item.productId] = isMatch ? 1 : 0; 
+                        )) || isSingleItem;
+                        const lineKey = (item.lineId || item.line_id) 
+                          ? `${invNo}_${item.lineId || item.line_id}`
+                          : (item.lineIndex !== undefined ? `${invNo}_line_${item.lineIndex}` : `${invNo}_line_${idx}`);
+                        const pKey = item.productId || item.product_id || '';
+                        initialQtys[lineKey] = isMatch ? 1 : 0; 
+                        if (pKey) initialQtys[pKey] = isMatch ? 1 : 0;
                       });
                       setReturnQtys(initialQtys);
                       setShowBillSearchResults(false);
@@ -6722,11 +6739,21 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                               setTargetReturnInvoice(inv);
                               setIncludeReturnTransport(false);
                               const initialQtys: Record<string, number> = {};
-                              items.forEach((item: any) => { 
-                                const isMatch = (item.barcode && item.barcode.trim().toLowerCase().includes(q)) ||
-                                                (item.productName && item.productName.toLowerCase().includes(q)) ||
-                                                (item.productId && matchedProdIds.has(item.productId));
-                                initialQtys[item.productId] = isMatch ? 1 : 0; 
+                              const invNo = inv.invoiceNo || inv.invoice_no || inv.id || '';
+                              const isSingleItem = items.length === 1;
+                              items.forEach((item: any, idx: number) => { 
+                                const isMatch = (q && (
+                                  (item.barcode && item.barcode.trim().toLowerCase().includes(q)) ||
+                                  (item.productName && item.productName.toLowerCase().includes(q)) ||
+                                  (item.name && item.name.toLowerCase().includes(q)) ||
+                                  (item.productId && matchedProdIds.has(item.productId))
+                                )) || isSingleItem;
+                                const lineKey = (item.lineId || item.line_id) 
+                                  ? `${invNo}_${item.lineId || item.line_id}`
+                                  : (item.lineIndex !== undefined ? `${invNo}_line_${item.lineIndex}` : `${invNo}_line_${idx}`);
+                                const pKey = item.productId || item.product_id || '';
+                                initialQtys[lineKey] = isMatch ? 1 : 0; 
+                                if (pKey) initialQtys[pKey] = isMatch ? 1 : 0;
                               });
                               setReturnQtys(initialQtys);
                               setShowBillSearchResults(false);
@@ -6770,25 +6797,36 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
             {/* Selected Invoice Return Details */}
             {targetReturnInvoice && (() => {
+              const currentInvNo = (targetReturnInvoice.invoiceNo || targetReturnInvoice.invoice_no || (targetReturnInvoice as any).id || '').toString().trim();
               // Helper to generate a unique invoice line item key (using lineId or invoiceNo + lineIndex)
               const getItemLineKey = (item: any, idx?: number) => {
-                if (item.lineId || item.line_id) return `${targetReturnInvoice.invoiceNo}_${item.lineId || item.line_id}`;
+                if (item.lineId || item.line_id) return `${currentInvNo}_${item.lineId || item.line_id}`;
                 const pId = item.productId || item.product_id || '';
                 const uKey = (item.unit || '').toLowerCase().trim();
                 const lineIdx = item.lineIndex !== undefined ? item.lineIndex : idx;
-                return lineIdx !== undefined ? `${targetReturnInvoice.invoiceNo}_line_${lineIdx}` : `${targetReturnInvoice.invoiceNo}_${pId}_${uKey}`;
+                return lineIdx !== undefined ? `${currentInvNo}_line_${lineIdx}` : `${currentInvNo}_${pId}_${uKey}`;
               };
 
               // Calculate already returned quantities map per line item for this invoice across active returns
               const alreadyReturnedMap: Record<string, number> = {};
               salesReturnsList
-                .filter(sr => sr.status !== 'voided' && (sr.invoiceNo === targetReturnInvoice.invoiceNo || sr.invoice_no === targetReturnInvoice.invoiceNo))
+                .filter(sr => sr.status !== 'voided' && (
+                  sr.invoiceNo === currentInvNo ||
+                  sr.invoice_no === currentInvNo ||
+                  (sr as any).invoice_id === currentInvNo ||
+                  (targetReturnInvoice.invoiceNo && sr.invoiceNo === targetReturnInvoice.invoiceNo) ||
+                  (targetReturnInvoice.invoice_no && sr.invoice_no === targetReturnInvoice.invoice_no)
+                ))
                 .forEach(sr => {
                   const items = Array.isArray(sr.returnedItems) ? sr.returnedItems : safeParseJson(sr.returnedItems, []);
                   items.forEach((ri: any, riIdx: number) => {
                     const lKey = getItemLineKey(ri, ri.lineIndex !== undefined ? ri.lineIndex : riIdx);
+                    const pKey = ri.productId || ri.product_id || '';
                     const riReturnedQty = Number(ri.return_qty ?? ri.quantity ?? ri.qty ?? ri.returned_quantity ?? 0);
                     alreadyReturnedMap[lKey] = (alreadyReturnedMap[lKey] || 0) + riReturnedQty;
+                    if (pKey) {
+                      alreadyReturnedMap[pKey] = (alreadyReturnedMap[pKey] || 0) + riReturnedQty;
+                    }
                   });
                 });
 
@@ -6797,12 +6835,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
               const itemsToReturn = targetItems
                 .filter((item: any, idx: number) => {
                   const lKey = getItemLineKey(item, idx);
-                  const qtyVal = returnQtys[lKey] !== undefined ? returnQtys[lKey] : 0;
+                  const pKey = item.productId || item.product_id || '';
+                  const qtyVal = returnQtys[lKey] !== undefined ? returnQtys[lKey] : (pKey && returnQtys[pKey] !== undefined ? returnQtys[pKey] : 0);
                   return qtyVal > 0;
                 })
                 .map((item: any, idx: number) => {
                   const lKey = getItemLineKey(item, idx);
-                  const qtyVal = returnQtys[lKey] !== undefined ? returnQtys[lKey] : 0;
+                  const pKey = item.productId || item.product_id || '';
+                  const qtyVal = returnQtys[lKey] !== undefined ? returnQtys[lKey] : (pKey && returnQtys[pKey] !== undefined ? returnQtys[pKey] : 0);
                   const { effectivePrice, unitDiscount } = calculateEffectiveUnitPricePaid(item, targetReturnInvoice);
                   const lineUnitPrice = includeReturnDiscount ? effectivePrice : Number(item.price || item.unit_price || 0);
                   return {
@@ -6850,9 +6890,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 if (!targetReturnInvoice) return false;
                 const method = (targetReturnInvoice.payment_method || (targetReturnInvoice as any).paymentMethod || '').toString().toLowerCase().trim();
                 const status = (targetReturnInvoice.status || '').toString().toLowerCase().trim();
-                const isCreditBill = method === 'credit' || method === 'credit sale' || (targetReturnInvoice as any).is_credit === true || status === 'non paid' || status === 'non-paid' || status === 'partially paid' || status === 'partially settled';
+                const paidAmt = Number((targetReturnInvoice as any).payment_received ?? (targetReturnInvoice as any).paidAmount ?? (targetReturnInvoice as any).paid_amount ?? 0);
+                const totalAmt = Number((targetReturnInvoice as any).total_amount ?? targetReturnInvoice.total ?? (targetReturnInvoice as any).subtotal ?? 0);
+                const isCreditBill = method === 'credit' || method === 'credit sale' || (targetReturnInvoice as any).is_credit === true || (targetReturnInvoice as any).is_credit === 1 || status === 'non paid' || status === 'non-paid' || status === 'partially paid' || status === 'partially settled' || (paidAmt < totalAmt && status !== 'paid');
                 const customerObj = targetReturnInvoice.customer_id ? customers.find(c => c.id === targetReturnInvoice.customer_id) : null;
-                const isCreditCust = customerObj ? (((customerObj as any).type || '').toLowerCase() === 'credit' || (customerObj as any).is_credit === true || !!(customerObj as any).credit_terms) : false;
+                const isCreditCust = customerObj ? (((customerObj as any).type || '').toLowerCase() === 'credit' || (customerObj as any).is_credit === true || (customerObj as any).is_credit === 1 || !!(customerObj as any).credit_terms) : false;
                 return isCreditBill || isCreditCust;
               })();
 
@@ -6862,8 +6904,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
               const handleConfirmProcessReturn = async () => {
                 if (itemsToReturn.length === 0) {
-                  return alert(t('Please select at least 1 product quantity to return.', 'කරුණාකර ආපසු බාරදීමට අවම වශයෙන් එක් භාණ්ඩයකවත් ප්‍රමාණයක් ඇතුළත් කරන්න.'));
+                  const msg = t('Please select at least 1 product quantity to return.', 'කරුණාකර ආපසු බාරදීමට අවම වශයෙන් එක් භාණ්ඩයකවත් ප්‍රමාණයක් ඇතුළත් කරන්න.');
+                  notify(msg, 'Sales Return', 'warning');
+                  return alert(msg);
                 }
+
+                const resolvedInvoiceNo = (targetReturnInvoice.invoiceNo || targetReturnInvoice.invoice_no || (targetReturnInvoice as any).id || '').toString().trim();
+                const resolvedInvoiceId = ((targetReturnInvoice as any).id || resolvedInvoiceNo).toString().trim();
 
                 const calculatedRefund = isCreditCustomer 
                   ? 0 
@@ -6881,52 +6928,67 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       : (effectiveReturnMethod === 'Credit Note' ? 'Credit Note' : 'Cash'));
 
                 const invoiceAccountingBeforeReturn = calculateSaleAccounting(targetReturnInvoice, salesReturnsList, creditPaymentsList);
-                const previousInvoiceBalance = invoiceAccountingBeforeReturn.netOutstanding;
+                const fallbackBalance = Math.max(0, Number(targetReturnInvoice.balance_due ?? (targetReturnInvoice as any).balance ?? (Number(targetReturnInvoice.total_amount ?? targetReturnInvoice.total ?? 0) - Number(targetReturnInvoice.payment_received ?? 0))));
+                const previousInvoiceBalance = Number(invoiceAccountingBeforeReturn?.netOutstanding ?? fallbackBalance ?? 0);
 
                 try {
+                  setIsProcessingReturn(true);
                   setIsLoading(true);
                   const activeCashierName = resolveCurrentCashierName();
                   const activeUserEmail = currentUser?.email || 'admin@hardware.erp';
+                  const returnPayload = {
+                    invoiceNo: resolvedInvoiceNo,
+                    invoice_no: resolvedInvoiceNo,
+                    invoiceId: resolvedInvoiceId,
+                    invoice_id: resolvedInvoiceId,
+                    returnedItems: itemsToReturn,
+                    exchangeItems: exchangeCartItems,
+                    returnMethod: effectiveReturnMethod,
+                    returnAmount: returnTotalValue,
+                    exchangeAmount: exchangeTotalValue,
+                    balanceAmount: netExchangeBalance,
+                    totalRefunded: calculatedRefund,
+                    store_refund: calculatedRefund,
+                    storeRefund: calculatedRefund,
+                    customerPaid: calculatedPaid,
+                    changeGiven: calculatedChange,
+                    settlementMode: effectiveDifferencePaymentMethod,
+                    settlement_mode: effectiveDifferencePaymentMethod,
+                    differencePaymentMethod: effectiveDifferencePaymentMethod,
+                    difference_payment_method: effectiveDifferencePaymentMethod,
+                    previousInvoiceBalance,
+                    previous_invoice_balance: previousInvoiceBalance,
+                    customerName: targetReturnInvoice.customerName || (targetReturnInvoice as any).customer_name || 'Guest Customer',
+                    customerPhone: targetReturnInvoice.customerPhone || (targetReturnInvoice as any).customer_phone || '',
+                    userEmail: activeUserEmail,
+                    cashier: activeCashierName,
+                    reason: returnReason || 'Customer Return',
+                    isCredit: isCreditCustomer,
+                    is_credit: isCreditCustomer ? 1 : 0
+                  };
+
                   const res = await fetchWithTimeout(`${API_URL}/sales/returns`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      invoiceNo: targetReturnInvoice.invoiceNo,
-                      returnedItems: itemsToReturn,
-                      exchangeItems: exchangeCartItems,
-                      returnMethod: effectiveReturnMethod,
-                      returnAmount: returnTotalValue,
-                      exchangeAmount: exchangeTotalValue,
-                      balanceAmount: netExchangeBalance,
-                      totalRefunded: calculatedRefund,
-                      store_refund: calculatedRefund,
-                      storeRefund: calculatedRefund,
-                      customerPaid: calculatedPaid,
-                      changeGiven: calculatedChange,
-                      differencePaymentMethod: effectiveDifferencePaymentMethod,
-                      previousInvoiceBalance,
-                      previous_invoice_balance: previousInvoiceBalance,
-                      customerName: targetReturnInvoice.customerName,
-                      customerPhone: targetReturnInvoice.customerPhone,
-                      userEmail: activeUserEmail,
-                      cashier: activeCashierName,
-                      reason: returnReason,
-                      isCredit: isCreditCustomer,
-                      is_credit: isCreditCustomer ? 1 : 0
-                    })
-                  });
+                    body: JSON.stringify(returnPayload)
+                  }, 15000);
 
-                  const result = await res.json();
-                  if (!res.ok) throw new Error(result.error || 'Failed to process sales return');
+                  const result = await res.json().catch(() => ({}));
+                  if (!res.ok) {
+                    const errorMsg = result.error || result.message || `Server returned status ${res.status}`;
+                    notify(errorMsg, 'Sales Return Error', 'error');
+                    throw new Error(errorMsg);
+                  }
 
+                  notify(t('Sales Return processed successfully!', 'විකුණුම් ආපසු භාරගැනීම සාර්ථකයි!'), 'Sales Return', 'success');
                   alert(t('Sales Return processed successfully!', 'විකුණුම් ආපසු භාරගැනීම සාර්ථකයි!'));
                   
                   const newReturnRecord: SalesReturn = {
                     id: result.id,
                     returnNo: result.returnNo || result.return_no,
-                    invoiceNo: targetReturnInvoice.invoiceNo,
-                    customerName: targetReturnInvoice.customerName,
-                    customerPhone: targetReturnInvoice.customerPhone,
+                    invoiceNo: resolvedInvoiceNo,
+                    customerName: targetReturnInvoice.customerName || (targetReturnInvoice as any).customer_name,
+                    customerPhone: targetReturnInvoice.customerPhone || (targetReturnInvoice as any).customer_phone,
                     returnedItems: itemsToReturn,
                     exchangeItems: exchangeCartItems,
                     returnMethod: effectiveReturnMethod,
@@ -6966,8 +7028,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   window.dispatchEvent(new Event('refresh-finance'));
                   window.dispatchEvent(new Event('refresh-reports'));
                 } catch (err: any) {
-                  alert(t('Failed to process return: ', 'ආපසු භාරගැනීම අසමත් විය: ') + err.message);
+                  const errorMsg = err?.message || 'Failed to process sales return';
+                  notify(errorMsg, 'Return Failed', 'error');
+                  alert(t('Failed to process return: ', 'ආපසු භාරගැනීම අසමත් විය: ') + errorMsg);
                 } finally {
+                  setIsProcessingReturn(false);
                   setIsLoading(false);
                 }
               };
@@ -6977,7 +7042,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   <div className="flex justify-between items-center flex-wrap gap-2 border-b border-slate-200/60 pb-3">
                     <div>
                       <h4 className="text-base font-black text-slate-800 flex items-center gap-2">
-                        {t('Invoice:', 'ඉන්වොයිසිය:')} <span className="font-mono text-amber-600">{targetReturnInvoice.invoiceNo}</span>
+                        {t('Invoice:', 'ඉන්වොයිසිය:')} <span className="font-mono text-amber-600">{currentInvNo}</span>
                         <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-black uppercase ${targetReturnInvoice.status === 'Fully Returned' ? 'bg-rose-100 text-rose-700' : targetReturnInvoice.status === 'Partially Returned' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-700'}`}>
                           {targetReturnInvoice.status}
                         </span>
@@ -7127,11 +7192,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                             if (exactMatch) {
                               const matchIdx = targetItems.indexOf(exactMatch);
                               const lKey = getItemLineKey(exactMatch, matchIdx);
-                              const alreadyReturned = alreadyReturnedMap[lKey] || alreadyReturnedMap[exactMatch.productId] || 0;
+                              const pKey = exactMatch.productId || exactMatch.product_id || '';
+                              const alreadyReturned = alreadyReturnedMap[lKey] || (pKey ? alreadyReturnedMap[pKey] : 0) || 0;
                               const maxReturn = Math.max(0, Number(exactMatch.qty || 0) - alreadyReturned);
-                              const curr = returnQtys[lKey] || 0;
+                              const curr = returnQtys[lKey] !== undefined ? returnQtys[lKey] : (pKey && returnQtys[pKey] !== undefined ? returnQtys[pKey] : 0);
                               if (curr < maxReturn) {
-                                setReturnQtys(prev => ({ ...prev, [lKey]: curr + 1 }));
+                                setReturnQtys(prev => ({ ...prev, [lKey]: curr + 1, ...(pKey ? { [pKey]: curr + 1 } : {}) }));
                                 setReturnProductSearch('');
                               }
                             }
@@ -7152,14 +7218,15 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                             }
                             const matchIdx = targetItems.indexOf(matched);
                             const lKey = getItemLineKey(matched, matchIdx);
-                            const alreadyReturned = alreadyReturnedMap[lKey] || alreadyReturnedMap[matched.productId] || 0;
+                            const pKey = matched.productId || matched.product_id || '';
+                            const alreadyReturned = alreadyReturnedMap[lKey] || (pKey ? alreadyReturnedMap[pKey] : 0) || 0;
                             const maxReturn = Math.max(0, Number(matched.qty || 0) - alreadyReturned);
-                            const curr = returnQtys[lKey] || 0;
+                            const curr = returnQtys[lKey] !== undefined ? returnQtys[lKey] : (pKey && returnQtys[pKey] !== undefined ? returnQtys[pKey] : 0);
                             if (curr + 1 > maxReturn) {
                               alert(t(`Cannot exceed remaining returnable quantity (${maxReturn} remaining).`, `ඉතිරි ආපසු භාරගත හැකි ප්‍රමාණය ${maxReturn} කි.`));
                               return;
                             }
-                            setReturnQtys(prev => ({ ...prev, [lKey]: curr + 1 }));
+                            setReturnQtys(prev => ({ ...prev, [lKey]: curr + 1, ...(pKey ? { [pKey]: curr + 1 } : {}) }));
                             setReturnProductSearch('');
                           }
                         }}
@@ -7185,10 +7252,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       <tbody className="divide-y divide-slate-100">
                         {targetItems.map((item: any, idx: number) => {
                           const lKey = getItemLineKey(item, idx);
+                          const pKey = item.productId || item.product_id || '';
                           const origQty = Number(item.qty || 0);
-                          const prevReturned = alreadyReturnedMap[lKey] || 0;
+                          const prevReturned = alreadyReturnedMap[lKey] || (pKey ? alreadyReturnedMap[pKey] : 0) || 0;
                           const maxReturn = Math.max(0, origQty - prevReturned);
-                          const currReturn = returnQtys[lKey] || 0;
+                          const currReturn = returnQtys[lKey] !== undefined ? returnQtys[lKey] : (pKey && returnQtys[pKey] !== undefined ? returnQtys[pKey] : 0);
                           const { effectivePrice, unitDiscount } = calculateEffectiveUnitPricePaid(item, targetReturnInvoice);
                           const lineUnitPrice = includeReturnDiscount ? effectivePrice : Number(item.price || item.unit_price || 0);
                           const itemRefund = Math.round(currReturn * lineUnitPrice * 100) / 100;
@@ -7220,7 +7288,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                   value={currReturn || ''}
                                   onChange={(e) => {
                                     const val = Math.min(maxReturn, Math.max(0, parseFloat(e.target.value) || 0));
-                                    setReturnQtys(prev => ({ ...prev, [lKey]: val }));
+                                    setReturnQtys(prev => ({ ...prev, [lKey]: val, ...(pKey ? { [pKey]: val } : {}) }));
                                   }}
                                   className="w-20 px-2 py-1 text-center bg-white border border-slate-300 rounded-lg font-bold text-slate-800 text-xs outline-none focus:border-amber-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
                                 />
@@ -7707,16 +7775,25 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   <div className="pt-2">
                     <button
                       type="button"
-                      disabled={isLoading}
+                      disabled={isProcessingReturn || isLoading}
                       onClick={handleConfirmProcessReturn}
                       className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-xs uppercase tracking-wider transition-all shadow-md flex items-center justify-center gap-2 disabled:opacity-50"
                     >
-                      <CheckCircleIcon className="w-4 h-4" />
-                      {returnMethod === 'Exchange' 
-                        ? t('Confirm & Process Exchange', 'භාණ්ඩ හුවමාරුව තහවුරු කරන්න') 
-                        : returnMethod === 'Credit Note' 
-                          ? t('Confirm & Issue Credit Note', 'ණය සටහන නිකුත් කිරීම තහවුරු කරන්න') 
-                          : t('Confirm & Process Return', 'ආපසු භාරගැනීම තහවුරු කරන්න')}
+                      {isProcessingReturn ? (
+                        <span className="flex items-center gap-2">
+                          <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                          {t('Processing Return...', 'ආපසු භාරගැනීම ක්‍රියාත්මක වෙමින් පවතී...')}
+                        </span>
+                      ) : (
+                        <>
+                          <CheckCircleIcon className="w-4 h-4" />
+                          {returnMethod === 'Exchange' 
+                            ? t('Confirm & Process Exchange', 'භාණ්ඩ හුවමාරුව තහවුරු කරන්න') 
+                            : returnMethod === 'Credit Note' 
+                              ? t('Confirm & Issue Credit Note', 'ණය සටහන නිකුත් කිරීම තහවුරු කරන්න') 
+                              : t('Confirm & Process Return', 'ආපසු භාරගැනීම තහවුරු කරන්න')}
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>

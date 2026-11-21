@@ -6779,7 +6779,10 @@ app.post('/api/sales/returns', async (req, res) => {
  */
 async function executeSalesReturn(payload = {}, options = {}) {
   const {
-    invoiceNo,
+    invoiceNo: rawInvoiceNo,
+    invoice_no: rawInvoiceNoSnake,
+    invoiceId: rawInvoiceId,
+    invoice_id: rawInvoiceIdSnake,
     returnedItems = [],
     exchangeItems = [],
     returnMethod = 'Cash Refund',
@@ -6794,6 +6797,8 @@ async function executeSalesReturn(payload = {}, options = {}) {
     customerPhone = '',
     differencePaymentMethod,
     difference_payment_method,
+    settlementMode,
+    settlement_mode,
     previousInvoiceBalance: rawInputPrevBalance,
     previous_invoice_balance: rawInputPrevBalanceSnake,
     userEmail: payloadUserEmail,
@@ -6801,6 +6806,8 @@ async function executeSalesReturn(payload = {}, options = {}) {
     id: candidateIdInput,
     client_tx_id: clientTxIdInput
   } = payload;
+
+  const invoiceNo = String(rawInvoiceNo || rawInvoiceNoSnake || rawInvoiceId || rawInvoiceIdSnake || '').trim();
 
   if (!invoiceNo) {
     const err = new Error('Invoice number is required.');
@@ -6836,22 +6843,23 @@ async function executeSalesReturn(payload = {}, options = {}) {
   console.log(`[START] Process Sales Return: Invoice ${invoiceNo}`);
 
   const txnResult = await targetDb.transaction(async () => {
-    const sale = await targetDb.get('SELECT * FROM sales WHERE invoice_no = ?', [invoiceNo]);
+    const sale = await targetDb.get('SELECT * FROM sales WHERE invoice_no = ? OR id = ?', [invoiceNo, invoiceNo]);
     if (!sale) {
       const err = new Error(`Invoice ${invoiceNo} not found.`);
       err.status = 404;
       throw err;
     }
 
+    const resolvedInvoiceNo = sale.invoice_no || invoiceNo;
     const originalItems = typeof safeParseJson === 'function' ? safeParseJson(sale.items, []) : (typeof sale.items === 'string' ? JSON.parse(sale.items || '[]') : (sale.items || []));
-    const activeReturns = await targetDb.all('SELECT returned_items FROM sales_returns WHERE invoice_no = ? AND status = ?', [invoiceNo, 'active']);
+    const activeReturns = await targetDb.all('SELECT returned_items FROM sales_returns WHERE (invoice_no = ? OR invoice_no = ?) AND status = ?', [resolvedInvoiceNo, sale.id, 'active']);
 
     const getInvoiceLineKey = (i, defaultIdx) => {
-      if (i.lineId || i.line_id) return `${invoiceNo}_${i.lineId || i.line_id}`;
+      if (i.lineId || i.line_id) return `${resolvedInvoiceNo}_${i.lineId || i.line_id}`;
       const pId = i.productId || i.product_id || i.id || '';
       const uKey = (i.unit || '').toLowerCase().trim();
       const idxStr = i.lineIndex !== undefined ? i.lineIndex : defaultIdx;
-      return idxStr !== undefined ? `${invoiceNo}_line_${idxStr}` : `${invoiceNo}_${pId}_${uKey}`;
+      return idxStr !== undefined ? `${resolvedInvoiceNo}_line_${idxStr}` : `${resolvedInvoiceNo}_${pId}_${uKey}`;
     };
 
     const alreadyReturnedMap = {};
@@ -6951,10 +6959,14 @@ async function executeSalesReturn(payload = {}, options = {}) {
       }
     }
 
-    const finalDiffMethod = differencePaymentMethod || difference_payment_method || (isCreditCustomer ? 'Customer Credit Debt' : 'Cash');
+    const finalDiffMethod = differencePaymentMethod || difference_payment_method || settlementMode || settlement_mode || (isCreditCustomer ? 'Customer Credit Debt' : 'Cash');
     const id = candidateId || ('sr_' + timestamp + '_' + Math.random().toString(36).substring(2, 7));
     const created_at = payload.created_at || new Date().toISOString();
-    const previousInvoiceBalance = Number(rawInputPrevBalance ?? rawInputPrevBalanceSnake ?? payload.previousInvoiceBalance ?? payload.previous_invoice_balance ?? 0);
+    let calculatedPrevBal = Number(rawInputPrevBalance ?? rawInputPrevBalanceSnake ?? payload.previousInvoiceBalance ?? payload.previous_invoice_balance ?? 0);
+    if (calculatedPrevBal <= 0 && isCreditCustomer) {
+      calculatedPrevBal = Math.max(0, Number(sale.balance_due !== undefined && sale.balance_due !== null ? sale.balance_due : (Number(sale.total_amount || 0) - Number(sale.payment_received || 0))));
+    }
+    const previousInvoiceBalance = calculatedPrevBal;
 
     await targetDb.run(
       `INSERT INTO sales_returns (
@@ -6964,7 +6976,7 @@ async function executeSalesReturn(payload = {}, options = {}) {
         user_id, status, reason, created_at, is_credit, difference_payment_method, previous_invoice_balance
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        id, return_no, invoiceNo, resolvedCustName, resolvedCustPhone,
+        id, return_no, resolvedInvoiceNo, resolvedCustName, resolvedCustPhone,
         JSON.stringify(returnedItems), JSON.stringify(exchangeItems), finalReturnMethod, calcReturnAmount, calcExchangeAmount,
         balanceAmount, finalTotalRefunded, finalCustomerPaid, finalChangeGiven, finalCreditNoteNo,
         userEmail || 'system', 'active', reason || '', created_at, isCreditCustomer ? 1 : 0, finalDiffMethod, previousInvoiceBalance
@@ -7025,7 +7037,7 @@ async function executeSalesReturn(payload = {}, options = {}) {
             item.productName || item.name || origItem?.name || origItem?.productName || 'Returned Item',
             0,
             baseQtyRestock,
-            `Sale Return (Inv: ${invoiceNo}): ${reason || finalReturnMethod || 'Customer Return'}`,
+            `Sale Return (Inv: ${resolvedInvoiceNo}): ${reason || finalReturnMethod || 'Customer Return'}`,
             'Sale Return Restock',
             userEmail || 'system',
             new Date().toISOString()
@@ -7075,7 +7087,7 @@ async function executeSalesReturn(payload = {}, options = {}) {
               prod.name,
               Number(prod.stock || 0),
               Math.max(0, Number(prod.stock || 0) - baseQtyDeduction),
-              `Exchange Outflow (Inv: ${invoiceNo}): Replaced with ${exItem.qty} pcs`,
+              `Exchange Outflow (Inv: ${resolvedInvoiceNo}): Replaced with ${exItem.qty} pcs`,
               'Sale Return Exchange',
               userEmail || 'system',
               new Date().toISOString()
@@ -7095,7 +7107,7 @@ async function executeSalesReturn(payload = {}, options = {}) {
           items, amount, value, balance_remaining, status, reason, user_id, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          cnId, finalCreditNoteNo, finalCreditNoteNo, invoiceNo, sale.customer_id || '', resolvedCustName, resolvedCustPhone,
+          cnId, finalCreditNoteNo, finalCreditNoteNo, resolvedInvoiceNo, sale.customer_id || '', resolvedCustName, resolvedCustPhone,
           JSON.stringify(returnedItems), calcReturnAmount, calcReturnAmount, calcReturnAmount, 'Active', reason || 'Sales Return Credit Note', userEmail || 'system', created_at
         ]
       );
@@ -7107,7 +7119,7 @@ async function executeSalesReturn(payload = {}, options = {}) {
         const txId = 't_' + Date.now();
         await targetDb.run(
           'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [txId, 'contra_revenue', 'Sales Return (Credit Adjustment)', `Credit Return Revenue Adjustment for ${invoiceNo}`, calcReturnAmount, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+          [txId, 'contra_revenue', 'Sales Return (Credit Adjustment)', `Credit Return Revenue Adjustment for ${resolvedInvoiceNo}`, calcReturnAmount, new Date(created_at).toLocaleDateString('sv-SE'), resolvedInvoiceNo, userEmail || 'system']
         );
         await enqueueSync(targetDb, 'transactions', txId, 'INSERT');
         await enqueueSync(targetDb, 'cash_book', txId, 'INSERT');
@@ -7116,7 +7128,7 @@ async function executeSalesReturn(payload = {}, options = {}) {
         const txId = 't_' + Date.now() + '_ex';
         await targetDb.run(
           'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [txId, 'income', 'Exchange Payment', `Exchange Balance Payment for ${invoiceNo}`, finalCustomerPaid - finalChangeGiven, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+          [txId, 'income', 'Exchange Payment', `Exchange Balance Payment for ${resolvedInvoiceNo}`, finalCustomerPaid - finalChangeGiven, new Date(created_at).toLocaleDateString('sv-SE'), resolvedInvoiceNo, userEmail || 'system']
         );
         await enqueueSync(targetDb, 'transactions', txId, 'INSERT');
         await enqueueSync(targetDb, 'cash_book', txId, 'INSERT');
@@ -7125,10 +7137,10 @@ async function executeSalesReturn(payload = {}, options = {}) {
       if (calcReturnAmount > 0) {
         const txId = 't_' + Date.now();
         const retCategory = finalReturnMethod === 'Exchange' ? 'Sales Return' : (finalReturnMethod === 'Credit Note' ? 'Sales Return (Credit Note)' : 'Sales Return');
-        const retDesc = finalReturnMethod === 'Exchange' ? `Exchange Return for ${invoiceNo}` : `Sales Return Refund for ${invoiceNo}`;
+        const retDesc = finalReturnMethod === 'Exchange' ? `Exchange Return for ${resolvedInvoiceNo}` : `Sales Return Refund for ${resolvedInvoiceNo}`;
         await targetDb.run(
           'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [txId, 'contra_revenue', retCategory, retDesc, calcReturnAmount, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+          [txId, 'contra_revenue', retCategory, retDesc, calcReturnAmount, new Date(created_at).toLocaleDateString('sv-SE'), resolvedInvoiceNo, userEmail || 'system']
         );
         await enqueueSync(targetDb, 'transactions', txId, 'INSERT');
         await enqueueSync(targetDb, 'cash_book', txId, 'INSERT');
@@ -7137,7 +7149,7 @@ async function executeSalesReturn(payload = {}, options = {}) {
         const txId = 't_' + Date.now() + '_ex';
         await targetDb.run(
           'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [txId, 'income', 'Exchange Payment', `Exchange Balance Payment for ${invoiceNo}`, finalCustomerPaid - finalChangeGiven, new Date(created_at).toLocaleDateString('sv-SE'), invoiceNo, userEmail || 'system']
+          [txId, 'income', 'Exchange Payment', `Exchange Balance Payment for ${resolvedInvoiceNo}`, finalCustomerPaid - finalChangeGiven, new Date(created_at).toLocaleDateString('sv-SE'), resolvedInvoiceNo, userEmail || 'system']
         );
         await enqueueSync(targetDb, 'transactions', txId, 'INSERT');
         await enqueueSync(targetDb, 'cash_book', txId, 'INSERT');
@@ -7159,7 +7171,7 @@ async function executeSalesReturn(payload = {}, options = {}) {
       if (finalReturnMethod === 'Exchange' && exchangeCashRefund > 0 && isCashSettlement) {
         const refTxId = 't_' + Date.now() + '_ex_ref';
         const refundAmt = -Math.abs(exchangeCashRefund);
-        const refundDesc = `Exchange Cash Refund for Return #${return_no} (Invoice #${invoiceNo})`;
+        const refundDesc = `Exchange Cash Refund for Return #${return_no} (Invoice #${resolvedInvoiceNo})`;
         const txDate = new Date(created_at).toLocaleDateString('sv-SE');
         await targetDb.run(
           `INSERT INTO transactions (
@@ -7173,7 +7185,7 @@ async function executeSalesReturn(payload = {}, options = {}) {
             refundDesc,
             refundAmt,
             txDate,
-            return_no || invoiceNo,
+            return_no || resolvedInvoiceNo,
             userEmail || 'system',
             'CASH',
             'ACTIVE',
@@ -7185,7 +7197,7 @@ async function executeSalesReturn(payload = {}, options = {}) {
       }
     }
 
-    const updatedActiveReturns = await targetDb.all('SELECT returned_items FROM sales_returns WHERE invoice_no = ? AND status = ?', [invoiceNo, 'active']);
+    const updatedActiveReturns = await targetDb.all('SELECT returned_items FROM sales_returns WHERE (invoice_no = ? OR invoice_no = ?) AND status = ?', [resolvedInvoiceNo, sale.id, 'active']);
     let totalReturnedQty = 0;
     let totalOriginalQty = 0;
     originalItems.forEach(i => { totalOriginalQty += Number(i.qty || 0); });
@@ -7203,14 +7215,14 @@ async function executeSalesReturn(payload = {}, options = {}) {
     await targetDb.run('UPDATE sales SET status = ? WHERE id = ?', [newStatus, sale.id]);
     await enqueueSync(targetDb, 'sales', sale.id, 'UPDATE');
 
-    await logAudit(userEmail || 'system', 'SALES_RETURN', `Processed ${finalReturnMethod} (Return No: ${return_no}) for Invoice ${invoiceNo} (Amount: Rs. ${calcReturnAmount})`);
+    await logAudit(userEmail || 'system', 'SALES_RETURN', `Processed ${finalReturnMethod} (Return No: ${return_no}) for Invoice ${resolvedInvoiceNo} (Amount: Rs. ${calcReturnAmount})`);
 
     return {
       success: true,
       id,
       returnNo: return_no,
       return_no,
-      invoice_no: invoiceNo,
+      invoice_no: resolvedInvoiceNo,
       totalRefunded: finalTotalRefunded,
       creditNoteNo: finalCreditNoteNo,
       previousInvoiceBalance,
