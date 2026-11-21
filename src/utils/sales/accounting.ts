@@ -161,8 +161,10 @@ export function calculateSaleAccounting(
 
 export interface ReturnCreditSummary {
   isCreditDebtSettlement: boolean;
+  isExchange: boolean;
   previousInvoiceBalance: number;
   returnCreditAmount: number;
+  exchangeExtraPayable: number;
   remainingBalanceDue: number;
 }
 
@@ -170,19 +172,33 @@ export function getReturnCreditSummary(params: {
   settlementMode?: string;
   previousInvoiceBalance?: number;
   returnCreditAmount: number;
+  isExchange?: boolean;
+  exchangeTotal?: number;
+  isCashOrPaidInvoice?: boolean;
 }): ReturnCreditSummary {
   const mode = (params.settlementMode || "").trim().toLowerCase();
   const isCreditDebtSettlement =
     mode === "customer credit debt" || mode === "credit debt" || mode === "credit";
 
-  const prevBalance = Math.max(0, Number(params.previousInvoiceBalance ?? 0));
+  const isExchange = Boolean(params.isExchange);
+  const isCashOrPaid = Boolean(params.isCashOrPaidInvoice);
+
+  // 1. A paid CASH invoice always has Rs. 0.00 previous unpaid balance
+  const prevBalance = isCashOrPaid ? 0 : Math.max(0, Number(params.previousInvoiceBalance ?? 0));
   const creditAmt = Math.max(0, Number(params.returnCreditAmount ?? 0));
-  const remainingBalanceDue = Math.max(0, Number((prevBalance - creditAmt).toFixed(2)));
+  const exchangeTotal = Math.max(0, Number(params.exchangeTotal ?? 0));
+  const extraPayable = Math.max(0, Number((exchangeTotal - creditAmt).toFixed(2)));
+
+  const remainingBalanceDue = isExchange
+    ? Number((prevBalance + (isCreditDebtSettlement ? extraPayable : 0)).toFixed(2))
+    : Math.max(0, Number((prevBalance - creditAmt).toFixed(2)));
 
   return {
     isCreditDebtSettlement,
+    isExchange,
     previousInvoiceBalance: prevBalance,
     returnCreditAmount: creditAmt,
+    exchangeExtraPayable: extraPayable,
     remainingBalanceDue,
   };
 }
@@ -204,12 +220,22 @@ export function appendCreditBalanceToPdf(
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
-  doc.text("Previous Invoice Balance:", labelX, y);
-  doc.text(`Rs. ${creditSummary.previousInvoiceBalance.toFixed(2)}`, rightX, y, { align: "right" });
 
-  y += 6;
-  doc.text("Less Return Credit:", labelX, y);
-  doc.text(`-Rs. ${creditSummary.returnCreditAmount.toFixed(2)}`, rightX, y, { align: "right" });
+  if (creditSummary.isExchange) {
+    doc.text("Previous Unpaid Balance:", labelX, y);
+    doc.text(`Rs. ${creditSummary.previousInvoiceBalance.toFixed(2)}`, rightX, y, { align: "right" });
+
+    y += 6;
+    doc.text("Exchange Extra Payable:", labelX, y);
+    doc.text(`+Rs. ${creditSummary.exchangeExtraPayable.toFixed(2)}`, rightX, y, { align: "right" });
+  } else {
+    doc.text("Previous Invoice Balance:", labelX, y);
+    doc.text(`Rs. ${creditSummary.previousInvoiceBalance.toFixed(2)}`, rightX, y, { align: "right" });
+
+    y += 6;
+    doc.text("Less Return Credit:", labelX, y);
+    doc.text(`-Rs. ${creditSummary.returnCreditAmount.toFixed(2)}`, rightX, y, { align: "right" });
+  }
 
   y += 7;
   doc.setFont("helvetica", "bold");

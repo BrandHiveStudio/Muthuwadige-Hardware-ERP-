@@ -6994,8 +6994,13 @@ async function executeSalesReturn(payload = {}, options = {}) {
     const finalDiffMethod = differencePaymentMethod || difference_payment_method || settlementMode || settlement_mode || (isCreditCustomer ? 'Customer Credit Debt' : 'Cash');
     const id = candidateId || ('sr_' + timestamp + '_' + Math.random().toString(36).substring(2, 7));
     const created_at = payload.created_at || new Date().toISOString();
-    let calculatedPrevBal = Number(rawInputPrevBalance ?? rawInputPrevBalanceSnake ?? payload.previousInvoiceBalance ?? payload.previous_invoice_balance ?? 0);
-    if (calculatedPrevBal <= 0 && isCreditCustomer) {
+    const isCashOrPaidSale =
+      String(sale.payment_method || '').toUpperCase() === 'CASH' ||
+      String(sale.status || '').toUpperCase() === 'PAID';
+    let calculatedPrevBal = isCashOrPaidSale
+      ? 0
+      : Number(rawInputPrevBalance ?? rawInputPrevBalanceSnake ?? payload.previousInvoiceBalance ?? payload.previous_invoice_balance ?? 0);
+    if (!isCashOrPaidSale && calculatedPrevBal <= 0 && isCreditCustomer) {
       calculatedPrevBal = Math.max(0, Number(sale.balance_due !== undefined && sale.balance_due !== null ? sale.balance_due : (Number(sale.total_amount || 0) - Number(sale.payment_received || 0))));
     }
     const previousInvoiceBalance = calculatedPrevBal;
@@ -7258,8 +7263,21 @@ async function executeSalesReturn(payload = {}, options = {}) {
       newStatus = 'Partially Returned';
     }
 
-    const prevSaleBal = Number(previousInvoiceBalance > 0 ? previousInvoiceBalance : (sale.balance_due !== undefined && sale.balance_due !== null ? sale.balance_due : (Number(sale.total_amount || sale.total || 0) - Number(sale.payment_received || 0))));
-    const newBalanceDue = Math.max(0, Number((prevSaleBal - calcReturnAmount).toFixed(2)));
+    let newBalanceDue = 0;
+    if (isCashOrPaidSale) {
+      if (finalReturnMethod === 'Exchange' && (finalDiffMethod === 'Customer Credit Debt' || finalDiffMethod === 'Credit') && calcExchangeAmount > calcReturnAmount) {
+        newBalanceDue = Number((calcExchangeAmount - calcReturnAmount).toFixed(2));
+      } else {
+        newBalanceDue = 0;
+      }
+    } else {
+      const prevSaleBal = Number(previousInvoiceBalance > 0 ? previousInvoiceBalance : (sale.balance_due !== undefined && sale.balance_due !== null ? sale.balance_due : (Number(sale.total_amount || sale.total || 0) - Number(sale.payment_received || 0))));
+      if (finalReturnMethod === 'Exchange' && (finalDiffMethod === 'Customer Credit Debt' || finalDiffMethod === 'Credit') && calcExchangeAmount > calcReturnAmount) {
+        newBalanceDue = Number((prevSaleBal + (calcExchangeAmount - calcReturnAmount)).toFixed(2));
+      } else {
+        newBalanceDue = Math.max(0, Number((prevSaleBal - calcReturnAmount).toFixed(2)));
+      }
+    }
 
     try {
       await targetDb.run('UPDATE sales SET status = ?, balance_due = ? WHERE id = ?', [newStatus, newBalanceDue, sale.id]);

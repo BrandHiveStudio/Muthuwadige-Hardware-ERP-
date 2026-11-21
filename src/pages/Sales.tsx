@@ -461,10 +461,18 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
             ? (returnRecord as any).previousBalance
             : undefined));
 
+  const isExchange = (Number(returnRecord.exchangeAmount || 0) > 0) || (exchangeItemsList && exchangeItemsList.length > 0) || returnRecord.returnMethod === 'Exchange';
+  const isCashOrPaid =
+    String((returnRecord as any).invoicePaymentMethod ?? (returnRecord as any).paymentMethod ?? (returnRecord as any).payment_method ?? "").toUpperCase() === "CASH" ||
+    String((returnRecord as any).invoiceStatus ?? (returnRecord as any).status ?? "").toUpperCase() === "PAID";
+
   const creditSummary = getReturnCreditSummary({
     settlementMode,
     previousInvoiceBalance: rawPrevBal,
-    returnCreditAmount: returnCreditValue
+    returnCreditAmount: returnCreditValue,
+    isExchange,
+    exchangeTotal,
+    isCashOrPaidInvoice: isCashOrPaid
   });
 
   return (
@@ -660,14 +668,29 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
 
           {creditSummary.isCreditDebtSettlement && (
             <div className="credit-balance-box font-mono text-xs space-y-1" style={{ marginTop: 8, borderTop: "1px dashed #333", paddingTop: 6 }}>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span>{isSinhala ? 'පෙර ඉන්වොයිස් හිඟ ශේෂය:' : 'Previous Invoice Balance:'}</span>
-                <span>{symbol} {creditSummary.previousInvoiceBalance.toFixed(2)}</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span>{isSinhala ? 'ආපසු අඩුකළ ණය මුදල:' : 'Less Return Credit:'}</span>
-                <span>-{symbol} {creditSummary.returnCreditAmount.toFixed(2)}</span>
-              </div>
+              {creditSummary.isExchange ? (
+                <>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span>{isSinhala ? 'පෙර හිඟ ශේෂය:' : 'Previous Unpaid Balance:'}</span>
+                    <span>{symbol} {creditSummary.previousInvoiceBalance.toFixed(2)}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span>{isSinhala ? 'මාරුකිරීමේ අමතර ගෙවීම:' : 'Exchange Extra Payable:'}</span>
+                    <span>+{symbol} {creditSummary.exchangeExtraPayable.toFixed(2)}</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span>{isSinhala ? 'පෙර ඉන්වොයිස් හිඟ ශේෂය:' : 'Previous Invoice Balance:'}</span>
+                    <span>{symbol} {creditSummary.previousInvoiceBalance.toFixed(2)}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span>{isSinhala ? 'ආපසු අඩුකළ ණය මුදල:' : 'Less Return Credit:'}</span>
+                    <span>-{symbol} {creditSummary.returnCreditAmount.toFixed(2)}</span>
+                  </div>
+                </>
+              )}
               <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700 }}>
                 <span>{isSinhala ? 'ගෙවිය යුතු ඉතිරි ශේෂය:' : 'Remaining Balance Due:'}</span>
                 <span>{symbol} {creditSummary.remainingBalanceDue.toFixed(2)}</span>
@@ -6936,7 +6959,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
                 const invoiceAccountingBeforeReturn = calculateSaleAccounting(targetReturnInvoice, salesReturnsList);
                 const fallbackBalance = Math.max(0, Number((targetReturnInvoice as any).balance_due ?? (targetReturnInvoice as any).balance ?? (Number(targetReturnInvoice.total_amount ?? targetReturnInvoice.total ?? 0) - Number(targetReturnInvoice.payment_received ?? 0))));
-                const previousInvoiceBalance = Number(invoiceAccountingBeforeReturn?.netOutstanding ?? fallbackBalance ?? 0);
+                const isCashOrPaidInvoice =
+                  String(targetReturnInvoice.payment_method || targetReturnInvoice.paymentMethod || '').toUpperCase() === 'CASH' ||
+                  String(targetReturnInvoice.status || '').toUpperCase() === 'PAID';
+                const previousInvoiceBalance = isCashOrPaidInvoice
+                  ? 0
+                  : Number(invoiceAccountingBeforeReturn?.netOutstanding ?? fallbackBalance ?? 0);
 
                 try {
                   setIsProcessingReturn(true);
@@ -6983,6 +7011,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     settlement_mode: effectiveDifferencePaymentMethod,
                     differencePaymentMethod: effectiveDifferencePaymentMethod,
                     difference_payment_method: effectiveDifferencePaymentMethod,
+                    invoicePaymentMethod: targetReturnInvoice.payment_method || targetReturnInvoice.paymentMethod,
+                    invoiceStatus: targetReturnInvoice.status,
                     previousInvoiceBalance,
                     previous_invoice_balance: previousInvoiceBalance,
                     userEmail: activeUserEmail,
@@ -7014,6 +7044,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     if (!fallbackRes || (fallbackRes as any).success === false) {
                       throw new Error((fallbackRes as any)?.message || apiErr?.message || 'Return could not be processed.');
                     }
+                    const isExchangeReturn = effectiveReturnMethod === 'Exchange';
+                    const isCreditDebt = effectiveDifferencePaymentMethod === 'Customer Credit Debt' || effectiveDifferencePaymentMethod === 'Credit';
+                    const extraPayable = Math.max(0, exchangeTotalValue - returnTotalValue);
+                    const calcRemainingBalDue = isExchangeReturn
+                      ? (previousInvoiceBalance + (isCreditDebt ? extraPayable : 0))
+                      : Math.max(0, previousInvoiceBalance - returnTotalValue);
+
                     result = {
                       id: fallbackRes.return_no || `sr_${Date.now()}`,
                       returnNo: fallbackRes.return_no,
@@ -7021,7 +7058,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       invoice_no: resolvedInvoiceNo,
                       totalRefunded: calculatedRefund,
                       creditNoteNo: '',
-                      remainingBalanceDue: Math.max(0, previousInvoiceBalance - returnTotalValue)
+                      remainingBalanceDue: calcRemainingBalDue
                     };
                   }
 
@@ -7046,6 +7083,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     differencePaymentMethod: effectiveDifferencePaymentMethod,
                     previousInvoiceBalance,
                     previous_invoice_balance: previousInvoiceBalance,
+                    invoicePaymentMethod: targetReturnInvoice.payment_method || targetReturnInvoice.paymentMethod,
+                    invoiceStatus: targetReturnInvoice.status,
+                    remainingBalanceDue: result.remainingBalanceDue !== undefined
+                      ? result.remainingBalanceDue
+                      : (effectiveReturnMethod === 'Exchange'
+                          ? (previousInvoiceBalance + (effectiveDifferencePaymentMethod === 'Customer Credit Debt' ? Math.max(0, exchangeTotalValue - returnTotalValue) : 0))
+                          : Math.max(0, previousInvoiceBalance - returnTotalValue)),
                     creditNoteNo: result.creditNoteNo,
                     status: 'active',
                     reason: returnReason,

@@ -353,8 +353,29 @@ export async function processSalesReturn(returnPayload: SalesReturnPayload) {
     }
 
     // 4. Mark invoice return status and update balance_due WITHOUT mutating original total
-    const prevBal = Number(returnPayload.previousInvoiceBalance || returnPayload.previous_invoice_balance || 0);
-    const newBalDue = Math.max(0, Number((prevBal - retAmount).toFixed(2)));
+    const isCashOrPaidSale =
+      String((returnPayload as any)?.invoicePaymentMethod || (returnPayload as any)?.payment_method || '').toUpperCase() === 'CASH' ||
+      String((returnPayload as any)?.invoiceStatus || (returnPayload as any)?.status || '').toUpperCase() === 'PAID';
+    const finalDiffMethod = returnPayload.differencePaymentMethod || returnPayload.difference_payment_method || (returnPayload as any).settlementMode || (returnPayload as any).settlement_mode || '';
+    const finalReturnMethod = returnPayload.refund_method || (returnPayload as any).returnMethod || (returnPayload as any).return_method || '';
+    const calcExchangeAmount = Number((returnPayload as any).exchangeAmount || (returnPayload as any).exchange_amount || 0);
+    const calcReturnAmount = Number(retAmount || 0);
+
+    let newBalDue = 0;
+    if (isCashOrPaidSale) {
+      if (finalReturnMethod === 'Exchange' && (finalDiffMethod === 'Customer Credit Debt' || finalDiffMethod === 'Credit') && calcExchangeAmount > calcReturnAmount) {
+        newBalDue = Number((calcExchangeAmount - calcReturnAmount).toFixed(2));
+      } else {
+        newBalDue = 0;
+      }
+    } else {
+      const prevBal = Number(returnPayload.previousInvoiceBalance || returnPayload.previous_invoice_balance || 0);
+      if (finalReturnMethod === 'Exchange' && (finalDiffMethod === 'Customer Credit Debt' || finalDiffMethod === 'Credit') && calcExchangeAmount > calcReturnAmount) {
+        newBalDue = Number((prevBal + (calcExchangeAmount - calcReturnAmount)).toFixed(2));
+      } else {
+        newBalDue = Math.max(0, Number((prevBal - calcReturnAmount).toFixed(2)));
+      }
+    }
     try {
       await supabase
         .from('sales')

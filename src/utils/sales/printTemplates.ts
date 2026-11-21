@@ -2287,10 +2287,18 @@ const generateReturnPrintHTML = (
             ? (sr as any).previousBalance
             : undefined));
 
+  const isExchange = (Number(sr.exchangeAmount || 0) > 0) || (exchangeItems && exchangeItems.length > 0) || (sr.returnMethod || (sr as any).return_method) === 'Exchange';
+  const isCashOrPaid =
+    String((sr as any).invoicePaymentMethod ?? (sr as any).paymentMethod ?? (sr as any).payment_method ?? "").toUpperCase() === "CASH" ||
+    String((sr as any).invoiceStatus ?? (sr as any).status ?? "").toUpperCase() === "PAID";
+
   const creditSummary = getReturnCreditSummary({
     settlementMode,
     previousInvoiceBalance: rawPrevBal,
-    returnCreditAmount: returnCreditValue
+    returnCreditAmount: returnCreditValue,
+    isExchange,
+    exchangeTotal,
+    isCashOrPaidInvoice: isCashOrPaid
   });
 
   const retRows = returnedItems.map((i: any) => {
@@ -2467,14 +2475,25 @@ const generateReturnPrintHTML = (
 
             ${creditSummary.isCreditDebtSettlement ? `
               <div class="credit-balance-box" style="margin-top: 8px; border-top: 1px dashed #333; padding-top: 6px;">
-                <div style="display: flex; justify-content: space-between;">
-                  <span>${isSi ? 'පෙර ඉන්වොයිස් හිඟ ශේෂය:' : 'Previous Invoice Balance:'}</span>
-                  <span>${symbolStr} ${creditSummary.previousInvoiceBalance.toFixed(2)}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between;">
-                  <span>${isSi ? 'ආපසු අඩුකළ ණය මුදල:' : 'Less Return Credit:'}</span>
-                  <span>-${symbolStr} ${creditSummary.returnCreditAmount.toFixed(2)}</span>
-                </div>
+                ${creditSummary.isExchange ? `
+                  <div style="display: flex; justify-content: space-between;">
+                    <span>${isSi ? 'පෙර හිඟ ශේෂය:' : 'Previous Unpaid Balance:'}</span>
+                    <span>${symbolStr} ${creditSummary.previousInvoiceBalance.toFixed(2)}</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between;">
+                    <span>${isSi ? 'මාරුකිරීමේ අමතර ගෙවීම:' : 'Exchange Extra Payable:'}</span>
+                    <span>+${symbolStr} ${creditSummary.exchangeExtraPayable.toFixed(2)}</span>
+                  </div>
+                ` : `
+                  <div style="display: flex; justify-content: space-between;">
+                    <span>${isSi ? 'පෙර ඉන්වොයිස් හිඟ ශේෂය:' : 'Previous Invoice Balance:'}</span>
+                    <span>${symbolStr} ${creditSummary.previousInvoiceBalance.toFixed(2)}</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between;">
+                    <span>${isSi ? 'ආපසු අඩුකළ ණය මුදල:' : 'Less Return Credit:'}</span>
+                    <span>-${symbolStr} ${creditSummary.returnCreditAmount.toFixed(2)}</span>
+                  </div>
+                `}
                 <div style="display: flex; justify-content: space-between; font-weight: 700;">
                   <span>${isSi ? 'ගෙවිය යුතු ඉතිරි ශේෂය:' : 'Remaining Balance Due:'}</span>
                   <span>${symbolStr} ${creditSummary.remainingBalanceDue.toFixed(2)}</span>
