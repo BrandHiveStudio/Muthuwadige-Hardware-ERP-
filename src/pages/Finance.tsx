@@ -19,6 +19,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import XLSX from 'xlsx-js-style';
 import { calculateNetSalesRevenue, getTodaySriLankaDate, getCurrentSriLankaMonth, toSriLankaDateStr } from '../utils/accounting';
+import { splitReturnSettlements, isCreditDebtSettlementMode } from '../services/returnService';
 import { ChequeRegistry } from '../components/accounting/ChequeRegistry';
 import { getCachedData, setCachedData } from '../services/dataCache';
 import type { User } from '../types';
@@ -60,6 +61,7 @@ export function Finance({ currentUser }: FinanceProps = {}) {
 
   const [activeTab, setActiveTab] = useState<'cash_book' | 'cheques'>('cash_book');
   const [transactions, setTransactions] = useState<Transaction[]>(cachedTx || []);
+  const [salesReturns, setSalesReturns] = useState<any[]>(getCachedData<any[]>('sales_returns') || []);
   const [pendingChequesCount, setPendingChequesCount] = useState(0);
   const [shopSettings, setShopSettings] = useState<any>(cachedSettings || null);
   const [isLoading, setIsLoading] = useState(!cachedTx);
@@ -97,6 +99,17 @@ export function Finance({ currentUser }: FinanceProps = {}) {
       if (data) {
         setTransactions(data);
         setCachedData('transactions', data);
+      }
+
+      // Fetch sales returns for authoritative refund / credit separation
+      try {
+        const { data: retData } = await supabase.from('sales_returns').select('*');
+        if (retData) {
+          setSalesReturns(retData);
+          setCachedData('sales_returns', retData);
+        }
+      } catch (retErr) {
+        console.warn("Sales returns fetch notice:", retErr);
       }
 
       // Fetch pending cheques count for tab badge
@@ -284,8 +297,36 @@ export function Finance({ currentUser }: FinanceProps = {}) {
   const totalSalesReturns = filtered.filter(t => isSalesReturnTrans(t)).reduce((sum, t) => sum + Math.abs(Number(t.amount || 0)), 0);
   const netSalesIncome = calculateNetSalesRevenue(totalIncome, 0, totalSalesReturns, 0);
 
-  // Net Cash In strictly reflects customer sales income and debt settlements ONLY (supplier refunds excluded)
-  const netCashIn = netSalesIncome;
+  // Filter sales returns matching the active period
+  const periodSalesReturns = (salesReturns || []).filter((r: any) => {
+    if (!r) return false;
+    if (r.status === 'cancelled' || r.status === 'voided' || r.status === 'Voided') return false;
+    const rDateStr = toSriLankaDateStr(r.created_at || r.return_date || r.date);
+    if (filterPeriodType === 'day') return rDateStr === filterDate;
+    if (filterPeriodType === 'month') return rDateStr.startsWith(filterMonth);
+    return true;
+  });
+
+  // Separate cash/bank refunds from non-cash credit-debt adjustments
+  let { cashBankRefundOutflow, creditDebtAdjustment } = splitReturnSettlements(periodSalesReturns);
+
+  // Fallback to transaction-level analysis if sales_returns records are not directly available
+  if (periodSalesReturns.length === 0 && totalSalesReturns > 0) {
+    filtered.filter(t => isSalesReturnTrans(t)).forEach(t => {
+      const amt = Math.abs(Number(t.amount || 0));
+      const method = String(t.payment_method || t.flow_type || t.category || '');
+      if (isCreditAdjustmentTrans(t) || isCreditDebtSettlementMode(method)) {
+        creditDebtAdjustment = Number((creditDebtAdjustment + amt).toFixed(2));
+      } else {
+        cashBankRefundOutflow = Number((cashBankRefundOutflow + amt).toFixed(2));
+      }
+    });
+  }
+
+  // Net Cash In strictly reflects gross cash & bank inflows minus actual cash/bank refunds given back
+  // Non-cash credit debt adjustments reduce accounts receivable / gross revenue, NOT cash-in
+  const grossInflow = Number(totalIncome.toFixed(2));
+  const netCashIn = Math.max(0, Number((grossInflow - cashBankRefundOutflow).toFixed(2)));
 
   // Outflow (Expenses) - Strictly excludes sales returns and supplier refunds
   const grossTotalExpense = filtered.filter(t => (t.type?.toLowerCase() === 'expense' || t.flow_type?.toLowerCase() === 'expense') && !isSalesReturnTrans(t) && !isPurchaseReturnTrans(t)).reduce((sum, t) => sum + (t.amount || 0), 0);
@@ -712,7 +753,10 @@ export function Finance({ currentUser }: FinanceProps = {}) {
                 </div>
               </div>
               <div className="mt-3 flex items-center gap-1.5 text-[11px] font-bold text-white/95">
-                <span>Gross Inflow: {symbol} {convert(totalIncome).toLocaleString(undefined, { minimumFractionDigits: 2 })} | Refunds: -{symbol} {convert(totalSalesReturns).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                <span>
+                  Gross Inflow: {symbol} {convert(grossInflow).toLocaleString(undefined, { minimumFractionDigits: 2 })} | Cash Refunds: -{symbol} {convert(cashBankRefundOutflow).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  {creditDebtAdjustment > 0 && ` | Credit Adj: -${symbol} ${convert(creditDebtAdjustment).toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                </span>
               </div>
             </div>
 

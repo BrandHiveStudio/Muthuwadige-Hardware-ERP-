@@ -13869,9 +13869,15 @@ app.get(['/api/shifts/current', '/api/shifts/summary'], async (req, res) => {
         AND created_at > ?
     `, [lastClosedAt]);
 
-    // Cash returns strictly created AFTER the most recent shift closure
+    // Cash returns strictly created AFTER the most recent shift closure (excluding non-cash customer credit debt adjustments)
     const returnsRow = await db.get(`
-      SELECT COALESCE(SUM(COALESCE(total_refunded, return_amount, 0)), 0) AS total_cash_returns
+      SELECT COALESCE(SUM(
+        CASE
+          WHEN LOWER(COALESCE(settlement_mode, refund_method, return_method, '')) IN ('customer credit debt', 'credit debt', 'credit')
+          THEN 0
+          ELSE COALESCE(total_refunded, refund_amount, return_amount, 0)
+        END
+      ), 0) AS total_cash_returns
       FROM sales_returns
       WHERE (status IS NULL OR (UPPER(status) != 'VOIDED' AND UPPER(status) != 'VOID'))
         AND created_at > ?

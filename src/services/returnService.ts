@@ -54,6 +54,78 @@ export interface ExchangeTransactionPayload {
   userEmail?: string;
 }
 
+export interface ReturnSettlementBreakdown {
+  cashBankRefundOutflow: number;
+  creditDebtAdjustment: number;
+}
+
+export function isCreditDebtSettlementMode(mode?: string): boolean {
+  const normalized = (mode || "").trim().toLowerCase();
+  return (
+    normalized === "customer credit debt" ||
+    normalized === "credit debt" ||
+    normalized === "credit"
+  );
+}
+
+export function splitReturnSettlements(
+  returns: Array<{
+    amount?: number;
+    returnAmount?: number;
+    refundAmount?: number;
+    creditAmount?: number;
+    total_refunded?: number;
+    settlementMode?: string;
+    settlement_mode?: string;
+    returnMethod?: string;
+    return_method?: string;
+    refundMethod?: string;
+    refund_method?: string;
+    differencePaymentMethod?: string;
+    difference_payment_method?: string;
+    flow_type?: string;
+    type?: string;
+    payment_method?: string;
+    category?: string;
+  }>
+): ReturnSettlementBreakdown {
+  let cashBankRefundOutflow = 0;
+  let creditDebtAdjustment = 0;
+
+  for (const ret of returns || []) {
+    const rawAmt = Number(
+      ret.creditAmount ?? ret.refundAmount ?? ret.returnAmount ?? ret.amount ?? 0
+    );
+    const amt = Math.max(0, Number.isFinite(rawAmt) ? rawAmt : 0);
+    if (amt === 0) continue;
+
+    const mode =
+      ret.settlementMode ??
+      ret.settlement_mode ??
+      ret.refundMethod ??
+      ret.refund_method ??
+      ret.returnMethod ??
+      ret.return_method ??
+      ret.differencePaymentMethod ??
+      ret.difference_payment_method ??
+      ret.payment_method ??
+      ret.flow_type ??
+      ret.category ??
+      "";
+
+    if (isCreditDebtSettlementMode(mode) || String(ret.flow_type).toUpperCase() === 'CREDIT_ADJUSTMENT' || String(ret.category).toUpperCase().includes('CREDIT')) {
+      creditDebtAdjustment = Number((creditDebtAdjustment + amt).toFixed(2));
+    } else {
+      cashBankRefundOutflow = Number((cashBankRefundOutflow + amt).toFixed(2));
+    }
+  }
+
+  return {
+    cashBankRefundOutflow,
+    creditDebtAdjustment,
+  };
+}
+
 /**
  * Processes a sales return while preserving the immutability of original invoices.
  * 1. Inserts distinct return record (contra-revenue)
@@ -384,5 +456,7 @@ export async function processReturnAndExchange(payload: ExchangeTransactionPaylo
 
 export default {
   processSalesReturn,
-  processReturnAndExchange
+  processReturnAndExchange,
+  splitReturnSettlements,
+  isCreditDebtSettlementMode
 };
