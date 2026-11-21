@@ -328,6 +328,8 @@ export interface SalesReturn {
   is_credit?: boolean | number;
   differencePaymentMethod?: string;
   difference_payment_method?: string;
+  previousInvoiceBalance?: number;
+  previous_invoice_balance?: number;
 }
 
 export interface CreditNote {

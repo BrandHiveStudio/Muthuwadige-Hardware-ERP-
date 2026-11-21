@@ -43,7 +43,7 @@ import { api, API_URL, BASE_URL, fetchWithTimeout } from '../lib/api';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { SaleOrder, SaleItem, Customer, Product, Quotation, DeliveryNote, SalesReturn, CreditNote, CreditNoteUsage, ChequeType } from '../types';
-import { calculateSaleAccounting, calculateEffectiveUnitPricePaid } from '../utils/sales/accounting';
+import { calculateSaleAccounting, calculateEffectiveUnitPricePaid, getReturnCreditSummary, ReturnCreditSummary, appendCreditBalanceToPdf } from '../utils/sales/accounting';
 import { formatStock } from '../utils/formatters';
 import { sinhalaFontBase64 } from '../utils/sinhalaFontBase64';
 import {
@@ -445,6 +445,20 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
   const priceDifference = exchangeTotal - returnCreditValue;
   const settlementMode = returnRecord.differencePaymentMethod || (returnRecord as any).difference_payment_method || (returnRecord as any).paymentMethod || (isCreditBill ? 'Customer Credit Debt' : 'Cash');
 
+  const rawPrevBal = returnRecord.previousInvoiceBalance !== undefined
+    ? returnRecord.previousInvoiceBalance
+    : ((returnRecord as any).previous_invoice_balance !== undefined
+        ? (returnRecord as any).previous_invoice_balance
+        : ((returnRecord as any).previousBalance !== undefined
+            ? (returnRecord as any).previousBalance
+            : undefined));
+
+  const creditSummary = getReturnCreditSummary({
+    settlementMode,
+    previousInvoiceBalance: rawPrevBal,
+    returnCreditAmount: returnCreditValue
+  });
+
   return (
     <div id="return-receipt-preview" className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-inner text-left max-w-2xl mx-auto my-4 font-sans leading-relaxed">
       <div className="bg-[#464646] p-6 text-white relative flex justify-between items-center h-[110px] overflow-visible">
@@ -633,6 +647,23 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
             <div className="flex justify-between items-center py-2 px-3 bg-slate-100 rounded-lg text-xs font-black text-slate-800 mt-2 border border-slate-200">
               <span>{isCreditBill ? (isSinhala ? 'ණය සැකසුම:' : 'Credit Adjustment:') : (isSinhala ? 'මුළු ආපසු මුදල:' : 'Total Refunded:')}</span>
               <span className="text-sm font-black text-emerald-700">{symbol} {formatNum(returnCreditValue)}</span>
+            </div>
+          )}
+
+          {creditSummary.isCreditDebtSettlement && (
+            <div className="credit-balance-box font-mono text-xs space-y-1" style={{ marginTop: 8, borderTop: "1px dashed #333", paddingTop: 6 }}>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span>{isSinhala ? 'පෙර ඉන්වොයිස් හිඟ ශේෂය:' : 'Previous Invoice Balance:'}</span>
+                <span>{symbol} {creditSummary.previousInvoiceBalance.toFixed(2)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span>{isSinhala ? 'ආපසු අඩුකළ ණය මුදල:' : 'Less Return Credit:'}</span>
+                <span>-{symbol} {creditSummary.returnCreditAmount.toFixed(2)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700 }}>
+                <span>{isSinhala ? 'ගෙවිය යුතු ඉතිරි ශේෂය:' : 'Remaining Balance Due:'}</span>
+                <span>{symbol} {creditSummary.remainingBalanceDue.toFixed(2)}</span>
+              </div>
             </div>
           )}
         </div>
@@ -6849,6 +6880,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       ? (exchangeDifferencePaymentMethod || 'Cash')
                       : (effectiveReturnMethod === 'Credit Note' ? 'Credit Note' : 'Cash'));
 
+                const invoiceAccountingBeforeReturn = calculateSaleAccounting(targetReturnInvoice, salesReturnsList, creditPaymentsList);
+                const previousInvoiceBalance = invoiceAccountingBeforeReturn.netOutstanding;
+
                 try {
                   setIsLoading(true);
                   const activeCashierName = resolveCurrentCashierName();
@@ -6870,6 +6904,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       customerPaid: calculatedPaid,
                       changeGiven: calculatedChange,
                       differencePaymentMethod: effectiveDifferencePaymentMethod,
+                      previousInvoiceBalance,
+                      previous_invoice_balance: previousInvoiceBalance,
                       customerName: targetReturnInvoice.customerName,
                       customerPhone: targetReturnInvoice.customerPhone,
                       userEmail: activeUserEmail,
@@ -6901,6 +6937,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     customerPaid: calculatedPaid,
                     changeGiven: calculatedChange,
                     differencePaymentMethod: effectiveDifferencePaymentMethod,
+                    previousInvoiceBalance,
+                    previous_invoice_balance: previousInvoiceBalance,
                     creditNoteNo: result.creditNoteNo,
                     status: 'active',
                     reason: returnReason,

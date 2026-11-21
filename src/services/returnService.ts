@@ -73,6 +73,8 @@ export async function processSalesReturn(returnPayload: SalesReturnPayload) {
           totalRefunded: returnPayload.refund_amount || 0,
           differencePaymentMethod: returnPayload.differencePaymentMethod || returnPayload.difference_payment_method || 'Cash',
           difference_payment_method: returnPayload.differencePaymentMethod || returnPayload.difference_payment_method || 'Cash',
+          previousInvoiceBalance: returnPayload.previousInvoiceBalance || returnPayload.previous_invoice_balance || 0,
+          previous_invoice_balance: returnPayload.previousInvoiceBalance || returnPayload.previous_invoice_balance || 0,
           reason: returnPayload.reason || 'Sales Return',
           userEmail: returnPayload.userEmail || 'system'
         })
@@ -108,6 +110,7 @@ export async function processSalesReturn(returnPayload: SalesReturnPayload) {
       total_refunded: retAmount,
       refund_method: returnPayload.refund_method || 'Cash Refund',
       difference_payment_method: returnPayload.differencePaymentMethod || returnPayload.difference_payment_method || 'Cash',
+      previous_invoice_balance: returnPayload.previousInvoiceBalance || returnPayload.previous_invoice_balance || 0,
       status: 'active',
       reason: returnPayload.reason || 'Sales Return',
       created_at: timestamp

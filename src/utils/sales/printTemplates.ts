@@ -12,6 +12,7 @@
 
 import type { SaleOrder, SalesReturn, CreditNote } from '../../types';
 import { calculateSaleAccounting, calculateLineGrossTotal, calculateEffectiveUnitPricePaid, calculateTotalRefund } from '../accounting';
+import { getReturnCreditSummary } from './accounting';
 
 /**
  * Utility helper for safe JSON parsing
@@ -2278,6 +2279,20 @@ const generateReturnPrintHTML = (
   const priceDifference = exchangeTotal - returnCreditValue;
   const settlementMode = sr.differencePaymentMethod || (sr as any).difference_payment_method || (sr as any).paymentMethod || (isCreditBill ? 'Customer Credit Debt' : 'Cash');
 
+  const rawPrevBal = sr.previousInvoiceBalance !== undefined
+    ? sr.previousInvoiceBalance
+    : ((sr as any).previous_invoice_balance !== undefined
+        ? (sr as any).previous_invoice_balance
+        : ((sr as any).previousBalance !== undefined
+            ? (sr as any).previousBalance
+            : undefined));
+
+  const creditSummary = getReturnCreditSummary({
+    settlementMode,
+    previousInvoiceBalance: rawPrevBal,
+    returnCreditAmount: returnCreditValue
+  });
+
   const retRows = returnedItems.map((i: any) => {
     const origPrice = Number(i.originalStickerPrice || i.originalUnitPrice || i.price || 0);
     const { effectivePrice, unitDiscount } = calculateEffectiveUnitPricePaid(i, sr);
@@ -2449,6 +2464,23 @@ const generateReturnPrintHTML = (
                 </div>
               ` : ''}
             `}
+
+            ${creditSummary.isCreditDebtSettlement ? `
+              <div class="credit-balance-box" style="margin-top: 8px; border-top: 1px dashed #333; padding-top: 6px;">
+                <div style="display: flex; justify-content: space-between;">
+                  <span>${isSi ? 'පෙර ඉන්වොයිස් හිඟ ශේෂය:' : 'Previous Invoice Balance:'}</span>
+                  <span>${symbolStr} ${creditSummary.previousInvoiceBalance.toFixed(2)}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                  <span>${isSi ? 'ආපසු අඩුකළ ණය මුදල:' : 'Less Return Credit:'}</span>
+                  <span>-${symbolStr} ${creditSummary.returnCreditAmount.toFixed(2)}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-weight: 700;">
+                  <span>${isSi ? 'ගෙවිය යුතු ඉතිරි ශේෂය:' : 'Remaining Balance Due:'}</span>
+                  <span>${symbolStr} ${creditSummary.remainingBalanceDue.toFixed(2)}</span>
+                </div>
+              </div>
+            ` : ''}
           </div>
 
           <div style="text-align: center; margin-top: 14px; font-size: 10px; color: #6b7280; border-top: 1px dashed #d1d5db; padding-top: 6px;">

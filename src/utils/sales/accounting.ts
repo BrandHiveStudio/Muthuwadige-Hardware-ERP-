@@ -3,6 +3,8 @@
  * Muthuwadige Hardware ERP - Unified Remediation Engine
  */
 
+import type jsPDF from 'jspdf';
+
 export { calculateEffectiveUnitPricePaid } from '../accounting';
 
 export interface SaleAccountingSummary {
@@ -155,4 +157,66 @@ export function calculateSaleAccounting(
     isFullySettled,
     isCreditSale: isCredit
   };
+}
+
+export interface ReturnCreditSummary {
+  isCreditDebtSettlement: boolean;
+  previousInvoiceBalance: number;
+  returnCreditAmount: number;
+  remainingBalanceDue: number;
+}
+
+export function getReturnCreditSummary(params: {
+  settlementMode?: string;
+  previousInvoiceBalance?: number;
+  returnCreditAmount: number;
+}): ReturnCreditSummary {
+  const mode = (params.settlementMode || "").trim().toLowerCase();
+  const isCreditDebtSettlement =
+    mode === "customer credit debt" || mode === "credit debt" || mode === "credit";
+
+  const prevBalance = Math.max(0, Number(params.previousInvoiceBalance ?? 0));
+  const creditAmt = Math.max(0, Number(params.returnCreditAmount ?? 0));
+  const remainingBalanceDue = Math.max(0, Number((prevBalance - creditAmt).toFixed(2)));
+
+  return {
+    isCreditDebtSettlement,
+    previousInvoiceBalance: prevBalance,
+    returnCreditAmount: creditAmt,
+    remainingBalanceDue,
+  };
+}
+
+export function appendCreditBalanceToPdf(
+  doc: jsPDF,
+  yStart: number,
+  rightX: number,
+  labelX: number,
+  creditSummary: ReturnCreditSummary
+): number {
+  if (!creditSummary.isCreditDebtSettlement) {
+    return yStart;
+  }
+
+  let y = yStart + 6;
+  doc.setDrawColor(210, 210, 210);
+  doc.line(labelX, y - 3, rightX, y - 3);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.text("Previous Invoice Balance:", labelX, y);
+  doc.text(`Rs. ${creditSummary.previousInvoiceBalance.toFixed(2)}`, rightX, y, { align: "right" });
+
+  y += 6;
+  doc.text("Less Return Credit:", labelX, y);
+  doc.text(`-Rs. ${creditSummary.returnCreditAmount.toFixed(2)}`, rightX, y, { align: "right" });
+
+  y += 7;
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(185, 28, 28);
+  doc.text("Remaining Balance Due:", labelX, y);
+  doc.text(`Rs. ${creditSummary.remainingBalanceDue.toFixed(2)}`, rightX, y, { align: "right" });
+
+  doc.setTextColor(0, 0, 0);
+  return y + 6;
 }

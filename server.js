@@ -2119,6 +2119,7 @@ export async function initializeDatabase() {
   // the downstream pull for this entity ("no column named cashier"). Additive only.
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN is_credit INTEGER DEFAULT 0"); } catch (e) { }
   try { await db.exec("ALTER TABLE sales_returns ADD COLUMN cashier TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales_returns ADD COLUMN previous_invoice_balance REAL DEFAULT 0"); } catch (e) { }
 
   // 17.5 Create Sales Return Items Table
   await db.exec(`
@@ -6793,6 +6794,8 @@ async function executeSalesReturn(payload = {}, options = {}) {
     customerPhone = '',
     differencePaymentMethod,
     difference_payment_method,
+    previousInvoiceBalance: rawInputPrevBalance,
+    previous_invoice_balance: rawInputPrevBalanceSnake,
     userEmail: payloadUserEmail,
     reason = '',
     id: candidateIdInput,
@@ -6951,19 +6954,20 @@ async function executeSalesReturn(payload = {}, options = {}) {
     const finalDiffMethod = differencePaymentMethod || difference_payment_method || (isCreditCustomer ? 'Customer Credit Debt' : 'Cash');
     const id = candidateId || ('sr_' + timestamp + '_' + Math.random().toString(36).substring(2, 7));
     const created_at = payload.created_at || new Date().toISOString();
+    const previousInvoiceBalance = Number(rawInputPrevBalance ?? rawInputPrevBalanceSnake ?? payload.previousInvoiceBalance ?? payload.previous_invoice_balance ?? 0);
 
     await targetDb.run(
       `INSERT INTO sales_returns (
         id, return_no, invoice_no, customer_name, customer_phone,
         returned_items, exchange_items, return_method, return_amount, exchange_amount,
         balance_amount, total_refunded, customer_paid, change_given, credit_note_no,
-        user_id, status, reason, created_at, is_credit, difference_payment_method
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        user_id, status, reason, created_at, is_credit, difference_payment_method, previous_invoice_balance
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id, return_no, invoiceNo, resolvedCustName, resolvedCustPhone,
         JSON.stringify(returnedItems), JSON.stringify(exchangeItems), finalReturnMethod, calcReturnAmount, calcExchangeAmount,
         balanceAmount, finalTotalRefunded, finalCustomerPaid, finalChangeGiven, finalCreditNoteNo,
-        userEmail || 'system', 'active', reason || '', created_at, isCreditCustomer ? 1 : 0, finalDiffMethod
+        userEmail || 'system', 'active', reason || '', created_at, isCreditCustomer ? 1 : 0, finalDiffMethod, previousInvoiceBalance
       ]
     );
     await enqueueSync(targetDb, 'sales_returns', id, 'INSERT');
@@ -7208,7 +7212,9 @@ async function executeSalesReturn(payload = {}, options = {}) {
       return_no,
       invoice_no: invoiceNo,
       totalRefunded: finalTotalRefunded,
-      creditNoteNo: finalCreditNoteNo
+      creditNoteNo: finalCreditNoteNo,
+      previousInvoiceBalance,
+      previous_invoice_balance: previousInvoiceBalance
     };
   });
 
