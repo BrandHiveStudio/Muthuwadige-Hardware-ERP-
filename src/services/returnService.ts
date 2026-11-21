@@ -21,6 +21,8 @@ export interface SalesReturnPayload {
   return_no?: string;
   differencePaymentMethod?: string;
   difference_payment_method?: string;
+  previousInvoiceBalance?: number;
+  previous_invoice_balance?: number;
 }
 
 export interface ExchangeTransactionPayload {
