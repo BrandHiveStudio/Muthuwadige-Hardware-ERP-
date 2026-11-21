@@ -119,6 +119,33 @@ export async function processSalesReturn(returnPayload: SalesReturnPayload) {
     };
 
     await supabase.from('sales_returns').insert([returnRecord]);
+
+    // Insert line item breakdown into sales_return_items
+    const itemsList = returnPayload.items || returnPayload.returned_items || [];
+    if (Array.isArray(itemsList) && itemsList.length > 0) {
+      const sriRows = itemsList.map((it: any, idx: number) => {
+        const pId = it.productId || it.product_id || it.id || '';
+        const qty = Number(it.qty || 1);
+        const price = Number(it.price || 0);
+        const cost = Number(it.cost_price || it.costPrice || 0);
+        return {
+          id: `sri_${returnRecord.id}_${pId || idx}_${idx}`,
+          return_id: returnRecord.id,
+          product_id: pId,
+          product_name: it.productName || it.name || '',
+          quantity: qty,
+          unit_price: price,
+          cost_price: cost,
+          total: qty * price,
+          created_at: timestamp
+        };
+      });
+      try {
+        await supabase.from('sales_return_items').insert(sriRows);
+      } catch (sriErr) {
+        console.warn('sales_return_items insert notice:', sriErr);
+      }
+    }
  
     // Post Contra-Revenue Entry when an Exchange results in cash refunded to customer
     const exItems = returnPayload.exchange_items || [];
@@ -172,15 +199,48 @@ export async function processSalesReturn(returnPayload: SalesReturnPayload) {
       }
     }
 
-    // 3. Mark invoice return status WITHOUT mutating original total or balance columns
-    await supabase
-      .from('sales')
-      .update({
-        return_status: 'PARTIALLY_RETURNED',
-        status: 'Partially Returned'
-        // CRITICAL: DO NOT mutate total_amount or outstanding_balance of original invoice row
-      })
-      .eq('id', invoiceId);
+    // 3. Reduce customer credit balance if applicable
+    if (returnPayload.customer_id && retAmount > 0) {
+      try {
+        const { data: custData } = await supabase
+          .from('customers')
+          .select('id, credit_balance, current_credit')
+          .eq('id', returnPayload.customer_id)
+          .single();
+        if (custData) {
+          const newCreditBal = Math.max(0, Number(custData.credit_balance || 0) - retAmount);
+          const newCurrCredit = Math.max(0, Number(custData.current_credit || 0) - retAmount);
+          await supabase
+            .from('customers')
+            .update({ credit_balance: newCreditBal, current_credit: newCurrCredit })
+            .eq('id', custData.id);
+        }
+      } catch (custErr) {
+        console.warn('Customer credit update error:', custErr);
+      }
+    }
+
+    // 4. Mark invoice return status and update balance_due WITHOUT mutating original total
+    const prevBal = Number(returnPayload.previousInvoiceBalance || returnPayload.previous_invoice_balance || 0);
+    const newBalDue = Math.max(0, Number((prevBal - retAmount).toFixed(2)));
+    try {
+      await supabase
+        .from('sales')
+        .update({
+          return_status: 'PARTIALLY_RETURNED',
+          status: 'Partially Returned',
+          balance_due: newBalDue
+        })
+        .eq('id', invoiceId);
+    } catch (_) {
+      await supabase
+        .from('sales')
+        .update({
+          return_status: 'PARTIALLY_RETURNED',
+          status: 'Partially Returned'
+        })
+        .eq('id', invoiceId);
+    }
 
     return {
       success: true,

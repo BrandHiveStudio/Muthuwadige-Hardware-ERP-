@@ -1493,6 +1493,7 @@ export async function initializeDatabase() {
       due_date TEXT,
       credit_period_days INTEGER DEFAULT 0,
       payment_received REAL DEFAULT 0,
+      balance_due REAL,
       client_tx_id TEXT UNIQUE
     )
   `);
@@ -2049,6 +2050,7 @@ export async function initializeDatabase() {
   try { await db.exec("ALTER TABLE sales ADD COLUMN customer_phone TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE sales ADD COLUMN customer_address TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE sales ADD COLUMN client_tx_id TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE sales ADD COLUMN balance_due REAL"); } catch (e) { }
   try { await db.exec("CREATE INDEX IF NOT EXISTS idx_sales_client_tx_id ON sales(client_tx_id)"); } catch (e) { }
 
   await db.exec(`
@@ -6723,7 +6725,8 @@ app.post('/api/sales/:id/void', requireVoidPasskey, async (req, res) => {
 });
 
 // SALES RETURNS API
-app.get('/api/sales/returns', async (req, res) => {
+const salesReturnsListRoutes = ['/api/sales/returns', '/api/sales_returns', '/api/sales-returns', '/sales/returns', '/sales_returns', '/sales-returns'];
+app.get(salesReturnsListRoutes, async (req, res) => {
   try {
     // Schema for this table (including is_credit) is created and migrated in initializeDatabase().
     // It used to be defined here as well, which meant a fresh database only gained the is_credit
@@ -6763,7 +6766,7 @@ app.get('/api/sales/returns', async (req, res) => {
   }
 });
 
-app.post('/api/sales/returns', async (req, res) => {
+app.post(salesReturnsListRoutes, async (req, res) => {
   try {
     const result = await executeSalesReturn(req.body, { req, db });
     res.json(result);
@@ -6843,7 +6846,33 @@ async function executeSalesReturn(payload = {}, options = {}) {
   console.log(`[START] Process Sales Return: Invoice ${invoiceNo}`);
 
   const txnResult = await targetDb.transaction(async () => {
-    const sale = await targetDb.get('SELECT * FROM sales WHERE invoice_no = ? OR id = ?', [invoiceNo, invoiceNo]);
+    let sale = await targetDb.get('SELECT * FROM sales WHERE invoice_no = ? OR id = ?', [invoiceNo, invoiceNo]);
+    if (!sale) {
+      // Fallback: check Turso Cloud if targetDb does not have it yet
+      try {
+        const tursoClient = typeof getTursoClient === 'function' ? getTursoClient() : null;
+        if (tursoClient) {
+          const res = await tursoClient.execute({
+            sql: 'SELECT * FROM sales WHERE invoice_no = ? OR id = ? LIMIT 1',
+            args: [invoiceNo, invoiceNo]
+          });
+          if (res.rows && res.rows.length > 0) {
+            sale = res.rows[0];
+            try {
+              const cols = Object.keys(sale);
+              const placeholders = cols.map(() => '?').join(', ');
+              const values = cols.map(c => sale[c]);
+              await targetDb.run(
+                `INSERT OR REPLACE INTO sales (${cols.join(', ')}) VALUES (${placeholders})`,
+                values
+              );
+            } catch (_) {}
+          }
+        }
+      } catch (tursoErr) {
+        console.warn('[executeSalesReturn] Turso cloud fallback lookup warning:', tursoErr.message);
+      }
+    }
     if (!sale) {
       const err = new Error(`Invoice ${invoiceNo} not found.`);
       err.status = 404;
@@ -6855,7 +6884,10 @@ async function executeSalesReturn(payload = {}, options = {}) {
     const activeReturns = await targetDb.all('SELECT returned_items FROM sales_returns WHERE (invoice_no = ? OR invoice_no = ?) AND status = ?', [resolvedInvoiceNo, sale.id, 'active']);
 
     const getInvoiceLineKey = (i, defaultIdx) => {
-      if (i.lineId || i.line_id) return `${resolvedInvoiceNo}_${i.lineId || i.line_id}`;
+      const rawLineId = i.lineId || i.line_id;
+      if (rawLineId) {
+        return rawLineId.startsWith(`${resolvedInvoiceNo}_`) ? rawLineId : `${resolvedInvoiceNo}_${rawLineId}`;
+      }
       const pId = i.productId || i.product_id || i.id || '';
       const uKey = (i.unit || '').toLowerCase().trim();
       const idxStr = i.lineIndex !== undefined ? i.lineIndex : defaultIdx;
@@ -7118,20 +7150,33 @@ async function executeSalesReturn(payload = {}, options = {}) {
       if (calcReturnAmount > 0) {
         const txId = 't_' + Date.now();
         await targetDb.run(
-          'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [txId, 'contra_revenue', 'Sales Return (Credit Adjustment)', `Credit Return Revenue Adjustment for ${resolvedInvoiceNo}`, calcReturnAmount, new Date(created_at).toLocaleDateString('sv-SE'), resolvedInvoiceNo, userEmail || 'system']
+          'INSERT INTO transactions (id, type, flow_type, category, description, amount, date, reference, user_id, payment_method, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [txId, 'contra_revenue', 'CREDIT_ADJUSTMENT', 'Sales Return (Credit Adjustment)', `Credit Return Revenue Adjustment for ${resolvedInvoiceNo}`, -Math.abs(calcReturnAmount), new Date(created_at).toLocaleDateString('sv-SE'), resolvedInvoiceNo, userEmail || 'system', 'CREDIT', 'ACTIVE', created_at]
         );
         await enqueueSync(targetDb, 'transactions', txId, 'INSERT');
-        await enqueueSync(targetDb, 'cash_book', txId, 'INSERT');
+        // CRITICAL: Credit debt adjustment does NOT move physical cash. Do NOT enqueue to cash_book!
       }
       if (finalCustomerPaid > 0) {
         const txId = 't_' + Date.now() + '_ex';
         await targetDb.run(
-          'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-          [txId, 'income', 'Exchange Payment', `Exchange Balance Payment for ${resolvedInvoiceNo}`, finalCustomerPaid - finalChangeGiven, new Date(created_at).toLocaleDateString('sv-SE'), resolvedInvoiceNo, userEmail || 'system']
+          'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, payment_method, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [txId, 'income', 'Exchange Payment', `Exchange Balance Payment for ${resolvedInvoiceNo}`, finalCustomerPaid - finalChangeGiven, new Date(created_at).toLocaleDateString('sv-SE'), resolvedInvoiceNo, userEmail || 'system', 'CASH', 'ACTIVE', created_at]
         );
         await enqueueSync(targetDb, 'transactions', txId, 'INSERT');
         await enqueueSync(targetDb, 'cash_book', txId, 'INSERT');
+      }
+
+      // Reduce customer's outstanding credit balance
+      if (sale.customer_id && calcReturnAmount > 0) {
+        try {
+          await targetDb.run(
+            'UPDATE customers SET credit_balance = MAX(0, COALESCE(credit_balance, 0) - ?), current_credit = MAX(0, COALESCE(current_credit, 0) - ?) WHERE id = ?',
+            [calcReturnAmount, calcReturnAmount, sale.customer_id]
+          );
+          await enqueueSync(targetDb, 'customers', sale.customer_id, 'UPDATE');
+        } catch (custErr) {
+          console.warn('[executeSalesReturn] Customer credit balance reduction notice:', custErr.message);
+        }
       }
     } else {
       if (calcReturnAmount > 0) {
@@ -7212,7 +7257,15 @@ async function executeSalesReturn(payload = {}, options = {}) {
     } else if (totalReturnedQty > 0) {
       newStatus = 'Partially Returned';
     }
-    await targetDb.run('UPDATE sales SET status = ? WHERE id = ?', [newStatus, sale.id]);
+
+    const prevSaleBal = Number(previousInvoiceBalance > 0 ? previousInvoiceBalance : (sale.balance_due !== undefined && sale.balance_due !== null ? sale.balance_due : (Number(sale.total_amount || sale.total || 0) - Number(sale.payment_received || 0))));
+    const newBalanceDue = Math.max(0, Number((prevSaleBal - calcReturnAmount).toFixed(2)));
+
+    try {
+      await targetDb.run('UPDATE sales SET status = ?, balance_due = ? WHERE id = ?', [newStatus, newBalanceDue, sale.id]);
+    } catch (_) {
+      await targetDb.run('UPDATE sales SET status = ? WHERE id = ?', [newStatus, sale.id]);
+    }
     await enqueueSync(targetDb, 'sales', sale.id, 'UPDATE');
 
     await logAudit(userEmail || 'system', 'SALES_RETURN', `Processed ${finalReturnMethod} (Return No: ${return_no}) for Invoice ${resolvedInvoiceNo} (Amount: Rs. ${calcReturnAmount})`);
@@ -7226,7 +7279,9 @@ async function executeSalesReturn(payload = {}, options = {}) {
       totalRefunded: finalTotalRefunded,
       creditNoteNo: finalCreditNoteNo,
       previousInvoiceBalance,
-      previous_invoice_balance: previousInvoiceBalance
+      previous_invoice_balance: previousInvoiceBalance,
+      remainingBalanceDue: newBalanceDue,
+      balance_due: newBalanceDue
     };
   });
 
@@ -7404,7 +7459,8 @@ async function executeVoidSalesReturn(id, payload = {}, options = {}) {
   return txnResult;
 }
 
-app.post('/api/sales/returns/:id/void', requireVoidPasskey, async (req, res) => {
+const salesReturnsVoidRoutes = ['/api/sales/returns/:id/void', '/api/sales_returns/:id/void', '/api/sales-returns/:id/void', '/sales/returns/:id/void', '/sales_returns/:id/void', '/sales-returns/:id/void'];
+app.post(salesReturnsVoidRoutes, requireVoidPasskey, async (req, res) => {
   const { id } = req.params;
   try {
     const result = await executeVoidSalesReturn(id, req.body, { req, db });
@@ -7414,7 +7470,8 @@ app.post('/api/sales/returns/:id/void', requireVoidPasskey, async (req, res) => 
   }
 });
 
-app.delete('/api/sales/returns/:id', async (req, res) => {
+const salesReturnsIdRoutes = ['/api/sales/returns/:id', '/api/sales_returns/:id', '/api/sales-returns/:id', '/sales/returns/:id', '/sales_returns/:id', '/sales-returns/:id'];
+app.delete(salesReturnsIdRoutes, async (req, res) => {
   const { id } = req.params;
   const { userEmail, user_email, passkey } = req.body || {};
   const user = userEmail || user_email || req.authUser?.email || req.authUser?.name || 'system';

@@ -56,6 +56,14 @@ import {
 } from '../utils/sales/printTemplates';
 import { hasPermission } from '../utils/permissions';
 import { getCompactLaserBarcode } from './BarcodePrint';
+import { processSalesReturn } from '../services/returnService';
+
+const toast = {
+  error: (msg: string, title = 'Error') => notify(msg, title, 'error'),
+  success: (msg: string, title = 'Success') => notify(msg, title, 'success'),
+  warning: (msg: string, title = 'Warning') => notify(msg, title, 'warning'),
+  info: (msg: string, title = 'Info') => notify(msg, title, 'info')
+};
 
 export const SRI_LANKAN_BANKS = [
   'Bank of Ceylon',
@@ -6905,7 +6913,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
               const handleConfirmProcessReturn = async () => {
                 if (itemsToReturn.length === 0) {
                   const msg = t('Please select at least 1 product quantity to return.', 'කරුණාකර ආපසු බාරදීමට අවම වශයෙන් එක් භාණ්ඩයකවත් ප්‍රමාණයක් ඇතුළත් කරන්න.');
-                  notify(msg, 'Sales Return', 'warning');
+                  toast.warning(msg, 'Sales Return');
                   return alert(msg);
                 }
 
@@ -6967,20 +6975,51 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     is_credit: isCreditCustomer ? 1 : 0
                   };
 
-                  const res = await fetchWithTimeout(`${API_URL}/sales/returns`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(returnPayload)
-                  }, 15000);
+                  let result: any = null;
+                  try {
+                    const res = await fetchWithTimeout(`${API_URL}/sales/returns`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(returnPayload)
+                    }, 15000);
 
-                  const result = await res.json().catch(() => ({}));
-                  if (!res.ok) {
-                    const errorMsg = result.error || result.message || `Server returned status ${res.status}`;
-                    notify(errorMsg, 'Sales Return Error', 'error');
-                    throw new Error(errorMsg);
+                    const resBody = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                      const errorMsg = resBody.error || resBody.message || `Server returned status ${res.status}`;
+                      console.warn('API /sales/returns returned error, falling back:', errorMsg);
+                      throw new Error(errorMsg);
+                    }
+                    result = resBody;
+                  } catch (apiErr: any) {
+                    console.warn('Backend API unavailable or failed, invoking client returnService fallback:', apiErr?.message);
+                    const fallbackRes = await processSalesReturn({
+                      invoice_id: resolvedInvoiceId,
+                      invoice_no: resolvedInvoiceNo,
+                      customer_id: targetReturnInvoice.customer_id || (targetReturnInvoice as any).customerId,
+                      customer_name: targetReturnInvoice.customerName || (targetReturnInvoice as any).customer_name,
+                      returned_items: itemsToReturn,
+                      items: itemsToReturn,
+                      exchange_items: exchangeCartItems,
+                      refund_method: effectiveReturnMethod,
+                      refund_amount: calculatedRefund,
+                      return_amount: returnTotalValue,
+                      differencePaymentMethod: effectiveDifferencePaymentMethod,
+                      previousInvoiceBalance: previousInvoiceBalance,
+                      reason: returnReason || 'Customer Return',
+                      userEmail: activeUserEmail
+                    });
+                    result = {
+                      id: fallbackRes.return_no || `sr_${Date.now()}`,
+                      returnNo: fallbackRes.return_no,
+                      return_no: fallbackRes.return_no,
+                      invoice_no: resolvedInvoiceNo,
+                      totalRefunded: calculatedRefund,
+                      creditNoteNo: '',
+                      remainingBalanceDue: Math.max(0, previousInvoiceBalance - returnTotalValue)
+                    };
                   }
 
-                  notify(t('Sales Return processed successfully!', 'විකුණුම් ආපසු භාරගැනීම සාර්ථකයි!'), 'Sales Return', 'success');
+                  toast.success(t('Sales Return processed successfully!', 'විකුණුම් ආපසු භාරගැනීම සාර්ථකයි!'), 'Sales Return');
                   alert(t('Sales Return processed successfully!', 'විකුණුම් ආපසු භාරගැනීම සාර්ථකයි!'));
                   
                   const newReturnRecord: SalesReturn = {
@@ -7029,7 +7068,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   window.dispatchEvent(new Event('refresh-reports'));
                 } catch (err: any) {
                   const errorMsg = err?.message || 'Failed to process sales return';
-                  notify(errorMsg, 'Return Failed', 'error');
+                  toast.error(errorMsg, 'Return Failed');
                   alert(t('Failed to process return: ', 'ආපසු භාරගැනීම අසමත් විය: ') + errorMsg);
                 } finally {
                   setIsProcessingReturn(false);
@@ -7163,11 +7202,26 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                             </span>
                           </div>
 
-                          {/* 8. Applicable Refund */}
-                          <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-200 shadow-sm flex flex-col justify-between">
-                            <span className="text-[9px] font-black text-amber-800 uppercase tracking-widest block">{t('Applicable Refund', 'අදාළ ආපසු ගෙවීම')}</span>
-                            <span className="font-black text-amber-700 text-sm mt-1">{symbol} {convert(returnTotalValue).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                          </div>
+                          {/* 8. Applicable Refund / Credit Reduction */}
+                          {(() => {
+                            const isDebtReductionOnly = isCreditBill && (origPaidAmount === 0 || returnTotalValue <= origOutstanding);
+                            return (
+                              <div className={`p-2.5 rounded-xl border shadow-sm flex flex-col justify-between ${
+                                isDebtReductionOnly ? 'bg-indigo-50 border-indigo-200' : 'bg-amber-50 border-amber-200'
+                              }`}>
+                                <span className={`text-[9px] font-black uppercase tracking-widest block ${
+                                  isDebtReductionOnly ? 'text-indigo-800' : 'text-amber-800'
+                                }`}>
+                                  {isDebtReductionOnly ? t('Credit Reduction', 'ණය අඩු කිරීම') : t('Applicable Refund', 'අදාළ ආපසු ගෙවීම')}
+                                </span>
+                                <span className={`font-black text-sm mt-1 ${
+                                  isDebtReductionOnly ? 'text-indigo-700' : 'text-amber-700'
+                                }`}>
+                                  {symbol} {convert(returnTotalValue).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                </span>
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
                     );
