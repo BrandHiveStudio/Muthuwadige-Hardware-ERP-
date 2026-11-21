@@ -2,27 +2,45 @@ import { supabase } from '../lib/supabaseClient';
 import { api, API_URL, fetchWithTimeout } from '../lib/api';
 
 export interface SalesReturnPayload {
-  invoice_id: string;
+  invoice_id?: string;
+  invoiceId?: string;
   invoice_no?: string;
+  invoiceNo?: string;
+  invoiceNumber?: string;
   customer_id?: string;
+  customerId?: string;
   customer_name?: string;
+  customerName?: string;
   sku?: string;
   productId?: string;
   quantity?: number;
   refund_amount?: number;
+  refundAmount?: number;
   return_amount?: number;
   returnAmount?: number;
+  returnCreditAmount?: number;
   refund_method?: string;
+  returnMethod?: string;
+  return_method?: string;
   items?: any[];
   returned_items?: any[];
+  returnedItems?: any[];
+  selectedReturnItems?: any[];
   exchange_items?: any[];
+  exchangeItems?: any[];
   reason?: string;
   userEmail?: string;
+  user_email?: string;
   return_no?: string;
+  returnNo?: string;
   differencePaymentMethod?: string;
   difference_payment_method?: string;
+  settlementMode?: string;
+  settlement_mode?: string;
   previousInvoiceBalance?: number;
   previous_invoice_balance?: number;
+  isCredit?: boolean;
+  is_credit?: boolean | number;
 }
 
 export interface ExchangeTransactionPayload {
@@ -43,9 +61,33 @@ export interface ExchangeTransactionPayload {
  * 3. Marks invoice return status WITHOUT mutating original total or balance columns
  */
 export async function processSalesReturn(returnPayload: SalesReturnPayload) {
-  const invoiceId = returnPayload.invoice_id;
-  const returnNo = returnPayload.return_no || `RET-${Date.now().toString().slice(-6)}`;
+  const invoiceId = returnPayload.invoice_id || (returnPayload as any).invoiceId || (returnPayload as any).invoiceNumber || (returnPayload as any).invoiceNo || '';
+  const invoiceNo = returnPayload.invoice_no || (returnPayload as any).invoiceNo || (returnPayload as any).invoiceNumber || invoiceId;
+  const customerId = returnPayload.customer_id || (returnPayload as any).customerId || null;
+  const customerName = returnPayload.customer_name || (returnPayload as any).customerName || 'Guest Customer';
+  const returnMethod = returnPayload.refund_method || (returnPayload as any).returnMethod || (returnPayload as any).return_method || 'Cash Refund';
+  const settlementMode = returnPayload.differencePaymentMethod || returnPayload.difference_payment_method || (returnPayload as any).settlementMode || (returnPayload as any).settlement_mode || 'Cash';
+  const returnNo = returnPayload.return_no || (returnPayload as any).returnNo || `RET-${Date.now().toString().slice(-6)}`;
   const timestamp = new Date().toISOString();
+
+  const itemsList = returnPayload.items || returnPayload.returned_items || (returnPayload as any).returnedItems || (returnPayload as any).selectedReturnItems || (returnPayload.productId ? [{
+    productId: returnPayload.productId,
+    sku: returnPayload.sku,
+    qty: returnPayload.quantity || 1,
+    price: returnPayload.refund_amount || (returnPayload as any).returnAmount || 0
+  }] : []);
+
+  const retAmount = Number(
+    returnPayload.refund_amount !== undefined && returnPayload.refund_amount !== null
+      ? returnPayload.refund_amount
+      : (returnPayload.returnAmount !== undefined
+          ? returnPayload.returnAmount
+          : ((returnPayload as any).returnCreditAmount !== undefined
+              ? (returnPayload as any).returnCreditAmount
+              : (returnPayload.return_amount || 0)))
+  );
+
+  const prevInvoiceBal = Number(returnPayload.previousInvoiceBalance || returnPayload.previous_invoice_balance || 0);
 
   try {
     // 1. Try sending to backend SQLite API if running
@@ -57,28 +99,31 @@ export async function processSalesReturn(returnPayload: SalesReturnPayload) {
           id: `sr_${Date.now()}`,
           returnNo: returnNo,
           return_no: returnNo,
-          invoiceNo: returnPayload.invoice_no || invoiceId,
-          invoice_no: returnPayload.invoice_no || invoiceId,
-          customerId: returnPayload.customer_id,
-          customerName: returnPayload.customer_name,
-          returnedItems: returnPayload.items || returnPayload.returned_items || [
-            {
-              productId: returnPayload.productId,
-              sku: returnPayload.sku,
-              qty: returnPayload.quantity || 1,
-              price: returnPayload.refund_amount || 0
-            }
-          ],
-          exchangeItems: returnPayload.exchange_items || [],
-          returnMethod: returnPayload.refund_method || 'Cash Refund',
-          returnAmount: returnPayload.refund_amount || 0,
-          totalRefunded: returnPayload.refund_amount || 0,
-          differencePaymentMethod: returnPayload.differencePaymentMethod || returnPayload.difference_payment_method || 'Cash',
-          difference_payment_method: returnPayload.differencePaymentMethod || returnPayload.difference_payment_method || 'Cash',
-          previousInvoiceBalance: returnPayload.previousInvoiceBalance || returnPayload.previous_invoice_balance || 0,
-          previous_invoice_balance: returnPayload.previousInvoiceBalance || returnPayload.previous_invoice_balance || 0,
+          invoiceNo: invoiceNo,
+          invoice_no: invoiceNo,
+          invoiceId: invoiceId,
+          invoice_id: invoiceId,
+          customerId: customerId,
+          customer_id: customerId,
+          customerName: customerName,
+          customer_name: customerName,
+          returnedItems: itemsList,
+          items: itemsList,
+          exchangeItems: returnPayload.exchange_items || (returnPayload as any).exchangeItems || [],
+          returnMethod: returnMethod,
+          return_method: returnMethod,
+          returnAmount: retAmount,
+          return_amount: retAmount,
+          returnCreditAmount: retAmount,
+          totalRefunded: (settlementMode === 'Customer Credit Debt' || returnMethod === 'Return') ? 0 : retAmount,
+          differencePaymentMethod: settlementMode,
+          difference_payment_method: settlementMode,
+          settlementMode: settlementMode,
+          settlement_mode: settlementMode,
+          previousInvoiceBalance: prevInvoiceBal,
+          previous_invoice_balance: prevInvoiceBal,
           reason: returnPayload.reason || 'Sales Return',
-          userEmail: returnPayload.userEmail || 'system'
+          userEmail: returnPayload.userEmail || (returnPayload as any).user_email || 'system'
         })
       }, 10000);
 
@@ -90,29 +135,23 @@ export async function processSalesReturn(returnPayload: SalesReturnPayload) {
     }
 
     // 1. Insert distinct return record (contra-revenue)
-    const retAmount = Number(
-      returnPayload.refund_amount !== undefined && returnPayload.refund_amount !== null
-        ? returnPayload.refund_amount
-        : (returnPayload.returnAmount !== undefined ? returnPayload.returnAmount : (returnPayload.return_amount || 0))
-    );
-
     const returnRecord = {
       id: `sr_${Date.now()}`,
       return_no: returnNo,
       invoice_id: invoiceId,
-      invoice_no: returnPayload.invoice_no || invoiceId,
-      customer_id: returnPayload.customer_id || null,
-      customer_name: returnPayload.customer_name || 'Guest Customer',
+      invoice_no: invoiceNo,
+      customer_id: customerId,
+      customer_name: customerName,
       sku: returnPayload.sku || '',
-      qty_returned: returnPayload.quantity || (returnPayload.items ? returnPayload.items.reduce((s, i) => s + Number(i.qty || 1), 0) : 1),
-      returned_items: JSON.stringify(returnPayload.items || returnPayload.returned_items || []),
-      exchange_items: JSON.stringify(returnPayload.exchange_items || []),
+      qty_returned: returnPayload.quantity || (itemsList.length > 0 ? itemsList.reduce((s: number, i: any) => s + Number(i.qty || 1), 0) : 1),
+      returned_items: JSON.stringify(itemsList),
+      exchange_items: JSON.stringify(returnPayload.exchange_items || (returnPayload as any).exchangeItems || []),
       return_amount: retAmount,
       refund_amount: retAmount,
-      total_refunded: retAmount,
-      refund_method: returnPayload.refund_method || 'Cash Refund',
-      difference_payment_method: returnPayload.differencePaymentMethod || returnPayload.difference_payment_method || 'Cash',
-      previous_invoice_balance: returnPayload.previousInvoiceBalance || returnPayload.previous_invoice_balance || 0,
+      total_refunded: (settlementMode === 'Customer Credit Debt' || returnMethod === 'Return') ? 0 : retAmount,
+      refund_method: returnMethod,
+      difference_payment_method: settlementMode,
+      previous_invoice_balance: prevInvoiceBal,
       status: 'active',
       reason: returnPayload.reason || 'Sales Return',
       created_at: timestamp
@@ -121,7 +160,6 @@ export async function processSalesReturn(returnPayload: SalesReturnPayload) {
     await supabase.from('sales_returns').insert([returnRecord]);
 
     // Insert line item breakdown into sales_return_items
-    const itemsList = returnPayload.items || returnPayload.returned_items || [];
     if (Array.isArray(itemsList) && itemsList.length > 0) {
       const sriRows = itemsList.map((it: any, idx: number) => {
         const pId = it.productId || it.product_id || it.id || '';

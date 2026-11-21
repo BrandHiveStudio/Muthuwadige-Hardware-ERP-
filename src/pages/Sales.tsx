@@ -6808,7 +6808,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
               const currentInvNo = (targetReturnInvoice.invoiceNo || targetReturnInvoice.invoice_no || (targetReturnInvoice as any).id || '').toString().trim();
               // Helper to generate a unique invoice line item key (using lineId or invoiceNo + lineIndex)
               const getItemLineKey = (item: any, idx?: number) => {
-                if (item.lineId || item.line_id) return `${currentInvNo}_${item.lineId || item.line_id}`;
+                const rawLineId = item.lineId || item.line_id;
+                if (rawLineId) {
+                  return rawLineId.startsWith(`${currentInvNo}_`) ? rawLineId : `${currentInvNo}_${rawLineId}`;
+                }
                 const pId = item.productId || item.product_id || '';
                 const uKey = (item.unit || '').toLowerCase().trim();
                 const lineIdx = item.lineIndex !== undefined ? item.lineIndex : idx;
@@ -6841,14 +6844,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
               const targetItems = Array.isArray(targetReturnInvoice.items) ? targetReturnInvoice.items : safeParseJson(targetReturnInvoice.items, []);
 
               const itemsToReturn = targetItems
-                .filter((item: any, idx: number) => {
-                  const lKey = getItemLineKey(item, idx);
-                  const pKey = item.productId || item.product_id || '';
-                  const qtyVal = returnQtys[lKey] !== undefined ? returnQtys[lKey] : (pKey && returnQtys[pKey] !== undefined ? returnQtys[pKey] : 0);
-                  return qtyVal > 0;
-                })
-                .map((item: any, idx: number) => {
-                  const lKey = getItemLineKey(item, idx);
+                .map((item: any, origIdx: number) => {
+                  const lKey = getItemLineKey(item, origIdx);
                   const pKey = item.productId || item.product_id || '';
                   const qtyVal = returnQtys[lKey] !== undefined ? returnQtys[lKey] : (pKey && returnQtys[pKey] !== undefined ? returnQtys[pKey] : 0);
                   const { effectivePrice, unitDiscount } = calculateEffectiveUnitPricePaid(item, targetReturnInvoice);
@@ -6856,7 +6853,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   return {
                     ...item,
                     lineId: lKey,
-                    lineIndex: idx,
+                    lineIndex: origIdx,
                     qty: qtyVal,
                     return_qty: qtyVal,
                     quantity: qtyVal,
@@ -6870,7 +6867,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     netUnitPrice: lineUnitPrice,
                     net_unit_price: lineUnitPrice
                   };
-                });
+                })
+                .filter((i: any) => i.qty > 0);
 
               const origSubtotal = Number(targetReturnInvoice.subtotal !== undefined ? targetReturnInvoice.subtotal : ((targetReturnInvoice as any).subTotal || 0)) || 1;
               const origDiscount = Number(targetReturnInvoice.discount || 0);
@@ -6911,6 +6909,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 : returnMethod;
 
               const handleConfirmProcessReturn = async () => {
+                if (isProcessingReturn) return;
                 if (itemsToReturn.length === 0) {
                   const msg = t('Please select at least 1 product quantity to return.', 'කරුණාකර ආපසු බාරදීමට අවම වශයෙන් එක් භාණ්ඩයකවත් ප්‍රමාණයක් ඇතුළත් කරන්න.');
                   toast.warning(msg, 'Sales Return');
@@ -6935,8 +6934,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       ? (exchangeDifferencePaymentMethod || 'Cash')
                       : (effectiveReturnMethod === 'Credit Note' ? 'Credit Note' : 'Cash'));
 
-                const invoiceAccountingBeforeReturn = calculateSaleAccounting(targetReturnInvoice, salesReturnsList, creditPaymentsList);
-                const fallbackBalance = Math.max(0, Number(targetReturnInvoice.balance_due ?? (targetReturnInvoice as any).balance ?? (Number(targetReturnInvoice.total_amount ?? targetReturnInvoice.total ?? 0) - Number(targetReturnInvoice.payment_received ?? 0))));
+                const invoiceAccountingBeforeReturn = calculateSaleAccounting(targetReturnInvoice, salesReturnsList);
+                const fallbackBalance = Math.max(0, Number((targetReturnInvoice as any).balance_due ?? (targetReturnInvoice as any).balance ?? (Number(targetReturnInvoice.total_amount ?? targetReturnInvoice.total ?? 0) - Number(targetReturnInvoice.payment_received ?? 0))));
                 const previousInvoiceBalance = Number(invoiceAccountingBeforeReturn?.netOutstanding ?? fallbackBalance ?? 0);
 
                 try {
@@ -6947,30 +6946,49 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   const returnPayload = {
                     invoiceNo: resolvedInvoiceNo,
                     invoice_no: resolvedInvoiceNo,
+                    invoiceNumber: resolvedInvoiceNo,
                     invoiceId: resolvedInvoiceId,
                     invoice_id: resolvedInvoiceId,
+                    customerId: targetReturnInvoice.customer_id || (targetReturnInvoice as any).customerId || '',
+                    customer_id: targetReturnInvoice.customer_id || (targetReturnInvoice as any).customerId || '',
+                    customerName: targetReturnInvoice.customerName || (targetReturnInvoice as any).customer_name || 'Guest Customer',
+                    customer_name: targetReturnInvoice.customerName || (targetReturnInvoice as any).customer_name || 'Guest Customer',
+                    customerPhone: targetReturnInvoice.customerPhone || (targetReturnInvoice as any).customer_phone || '',
+                    customer_phone: targetReturnInvoice.customerPhone || (targetReturnInvoice as any).customer_phone || '',
                     returnedItems: itemsToReturn,
+                    items: itemsToReturn,
+                    selectedReturnItems: itemsToReturn,
                     exchangeItems: exchangeCartItems,
+                    exchange_items: exchangeCartItems,
                     returnMethod: effectiveReturnMethod,
+                    return_method: effectiveReturnMethod,
                     returnAmount: returnTotalValue,
+                    return_amount: returnTotalValue,
+                    returnCreditAmount: returnTotalValue,
+                    refundAmount: calculatedRefund,
+                    refund_amount: calculatedRefund,
                     exchangeAmount: exchangeTotalValue,
+                    exchange_amount: exchangeTotalValue,
                     balanceAmount: netExchangeBalance,
+                    balance_amount: netExchangeBalance,
                     totalRefunded: calculatedRefund,
+                    total_refunded: calculatedRefund,
                     store_refund: calculatedRefund,
                     storeRefund: calculatedRefund,
                     customerPaid: calculatedPaid,
+                    customer_paid: calculatedPaid,
                     changeGiven: calculatedChange,
+                    change_given: calculatedChange,
                     settlementMode: effectiveDifferencePaymentMethod,
                     settlement_mode: effectiveDifferencePaymentMethod,
                     differencePaymentMethod: effectiveDifferencePaymentMethod,
                     difference_payment_method: effectiveDifferencePaymentMethod,
                     previousInvoiceBalance,
                     previous_invoice_balance: previousInvoiceBalance,
-                    customerName: targetReturnInvoice.customerName || (targetReturnInvoice as any).customer_name || 'Guest Customer',
-                    customerPhone: targetReturnInvoice.customerPhone || (targetReturnInvoice as any).customer_phone || '',
                     userEmail: activeUserEmail,
+                    user_email: activeUserEmail,
                     cashier: activeCashierName,
-                    reason: returnReason || 'Customer Return',
+                    reason: (returnReason || '').trim() || (isCreditCustomer ? 'Credit Sale Return' : 'Customer Return'),
                     isCredit: isCreditCustomer,
                     is_credit: isCreditCustomer ? 1 : 0
                   };
@@ -6992,22 +7010,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     result = resBody;
                   } catch (apiErr: any) {
                     console.warn('Backend API unavailable or failed, invoking client returnService fallback:', apiErr?.message);
-                    const fallbackRes = await processSalesReturn({
-                      invoice_id: resolvedInvoiceId,
-                      invoice_no: resolvedInvoiceNo,
-                      customer_id: targetReturnInvoice.customer_id || (targetReturnInvoice as any).customerId,
-                      customer_name: targetReturnInvoice.customerName || (targetReturnInvoice as any).customer_name,
-                      returned_items: itemsToReturn,
-                      items: itemsToReturn,
-                      exchange_items: exchangeCartItems,
-                      refund_method: effectiveReturnMethod,
-                      refund_amount: calculatedRefund,
-                      return_amount: returnTotalValue,
-                      differencePaymentMethod: effectiveDifferencePaymentMethod,
-                      previousInvoiceBalance: previousInvoiceBalance,
-                      reason: returnReason || 'Customer Return',
-                      userEmail: activeUserEmail
-                    });
+                    const fallbackRes = await processSalesReturn(returnPayload);
+                    if (!fallbackRes || (fallbackRes as any).success === false) {
+                      throw new Error((fallbackRes as any)?.message || apiErr?.message || 'Return could not be processed.');
+                    }
                     result = {
                       id: fallbackRes.return_no || `sr_${Date.now()}`,
                       returnNo: fallbackRes.return_no,
@@ -7067,6 +7073,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   window.dispatchEvent(new Event('refresh-finance'));
                   window.dispatchEvent(new Event('refresh-reports'));
                 } catch (err: any) {
+                  console.error('Failed to confirm & process return:', err);
                   const errorMsg = err?.message || 'Failed to process sales return';
                   toast.error(errorMsg, 'Return Failed');
                   alert(t('Failed to process return: ', 'ආපසු භාරගැනීම අසමත් විය: ') + errorMsg);
