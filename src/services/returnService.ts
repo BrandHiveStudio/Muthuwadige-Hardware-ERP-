@@ -64,7 +64,10 @@ export function isCreditDebtSettlementMode(mode?: string): boolean {
   return (
     normalized === "customer credit debt" ||
     normalized === "credit debt" ||
-    normalized === "credit"
+    normalized === "credit" ||
+    normalized === "return" ||
+    normalized === "credit adjustment" ||
+    normalized === "credit note"
   );
 }
 
@@ -72,9 +75,13 @@ export function splitReturnSettlements(
   returns: Array<{
     amount?: number;
     returnAmount?: number;
+    return_amount?: number;
     refundAmount?: number;
+    refund_amount?: number;
     creditAmount?: number;
+    credit_amount?: number;
     total_refunded?: number;
+    totalRefunded?: number;
     settlementMode?: string;
     settlement_mode?: string;
     returnMethod?: string;
@@ -87,6 +94,9 @@ export function splitReturnSettlements(
     type?: string;
     payment_method?: string;
     category?: string;
+    description?: string;
+    is_credit?: boolean | number;
+    isCredit?: boolean | number;
   }>
 ): ReturnSettlementBreakdown {
   let cashBankRefundOutflow = 0;
@@ -94,26 +104,38 @@ export function splitReturnSettlements(
 
   for (const ret of returns || []) {
     const rawAmt = Number(
-      ret.creditAmount ?? ret.refundAmount ?? ret.returnAmount ?? ret.amount ?? 0
+      ret.creditAmount ??
+      ret.credit_amount ??
+      ret.refundAmount ??
+      ret.refund_amount ??
+      ret.returnAmount ??
+      ret.return_amount ??
+      ret.totalRefunded ??
+      ret.total_refunded ??
+      ret.amount ??
+      0
     );
-    const amt = Math.max(0, Number.isFinite(rawAmt) ? rawAmt : 0);
+    const amt = Math.max(0, Number.isFinite(rawAmt) ? Math.abs(rawAmt) : 0);
     if (amt === 0) continue;
 
-    const mode =
-      ret.settlementMode ??
-      ret.settlement_mode ??
-      ret.refundMethod ??
-      ret.refund_method ??
-      ret.returnMethod ??
-      ret.return_method ??
-      ret.differencePaymentMethod ??
-      ret.difference_payment_method ??
-      ret.payment_method ??
-      ret.flow_type ??
-      ret.category ??
-      "";
+    const isCreditFlag = ret.is_credit === 1 || ret.is_credit === true || ret.isCredit === 1 || ret.isCredit === true;
+    const diffMode = (ret.differencePaymentMethod ?? ret.difference_payment_method ?? ret.settlementMode ?? ret.settlement_mode ?? "").trim();
+    const retMethod = (ret.returnMethod ?? ret.return_method ?? ret.refundMethod ?? ret.refund_method ?? "").trim();
+    const payMethod = (ret.payment_method ?? "").trim();
+    const flowType = (ret.flow_type ?? "").trim();
+    const cat = (ret.category ?? "").trim();
+    const desc = (ret.description ?? "").trim();
 
-    if (isCreditDebtSettlementMode(mode) || String(ret.flow_type).toUpperCase() === 'CREDIT_ADJUSTMENT' || String(ret.category).toUpperCase().includes('CREDIT')) {
+    const isCreditAdj =
+      isCreditFlag ||
+      isCreditDebtSettlementMode(diffMode) ||
+      isCreditDebtSettlementMode(payMethod) ||
+      isCreditDebtSettlementMode(retMethod) ||
+      flowType.toUpperCase() === "CREDIT_ADJUSTMENT" ||
+      cat.toUpperCase().includes("CREDIT") ||
+      desc.toUpperCase().includes("CREDIT");
+
+    if (isCreditAdj) {
       creditDebtAdjustment = Number((creditDebtAdjustment + amt).toFixed(2));
     } else {
       cashBankRefundOutflow = Number((cashBankRefundOutflow + amt).toFixed(2));

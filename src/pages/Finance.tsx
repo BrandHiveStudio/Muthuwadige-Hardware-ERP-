@@ -203,9 +203,17 @@ export function Finance({ currentUser }: FinanceProps = {}) {
   });
 
   const isCreditAdjustmentTrans = (t: any) => {
+    if (!t) return false;
     const cat = (t.category || '').toLowerCase();
     const desc = (t.description || '').toLowerCase();
-    return cat.includes('credit adjustment') || desc.includes('credit return') || desc.includes('credit adjustment');
+    const method = (t.payment_method || '').toLowerCase();
+    const flow = (t.flow_type || '').toLowerCase();
+    return cat.includes('credit adjustment') || 
+           desc.includes('credit return') || 
+           desc.includes('credit adjustment') ||
+           method === 'credit' ||
+           flow === 'credit_adjustment' ||
+           flow.includes('credit');
   };
 
   const isPurchaseReturnTrans = (t: any) => {
@@ -297,33 +305,18 @@ export function Finance({ currentUser }: FinanceProps = {}) {
   const totalSalesReturns = filtered.filter(t => isSalesReturnTrans(t)).reduce((sum, t) => sum + Math.abs(Number(t.amount || 0)), 0);
   const netSalesIncome = calculateNetSalesRevenue(totalIncome, 0, totalSalesReturns, 0);
 
-  // Filter sales returns matching the active period
-  const periodSalesReturns = (salesReturns || []).filter((r: any) => {
-    if (!r) return false;
-    if (r.status === 'cancelled' || r.status === 'voided' || r.status === 'Voided') return false;
-    const rDateStr = toSriLankaDateStr(r.created_at || r.return_date || r.date);
-    if (filterPeriodType === 'day') return rDateStr === filterDate;
-    if (filterPeriodType === 'month') return rDateStr.startsWith(filterMonth);
-    return true;
-  });
+  // Authoritative separation of returns in General Ledger (strictly mirrors netCashRefunds used by Cash Book Balance):
+  // Actual cash/bank refund outflows given back to customer
+  const cashBankRefundOutflow = filtered
+    .filter(t => isSalesReturnTrans(t) && !isCreditAdjustmentTrans(t))
+    .reduce((sum, t) => sum + Math.abs(Number(t.amount || 0)), 0);
 
-  // Separate cash/bank refunds from non-cash credit-debt adjustments
-  let { cashBankRefundOutflow, creditDebtAdjustment } = splitReturnSettlements(periodSalesReturns);
+  // Non-cash credit debt adjustments reducing accounts receivable
+  const creditDebtAdjustment = filtered
+    .filter(t => isSalesReturnTrans(t) && isCreditAdjustmentTrans(t))
+    .reduce((sum, t) => sum + Math.abs(Number(t.amount || 0)), 0);
 
-  // Fallback to transaction-level analysis if sales_returns records are not directly available
-  if (periodSalesReturns.length === 0 && totalSalesReturns > 0) {
-    filtered.filter(t => isSalesReturnTrans(t)).forEach(t => {
-      const amt = Math.abs(Number(t.amount || 0));
-      const method = String(t.payment_method || t.flow_type || t.category || '');
-      if (isCreditAdjustmentTrans(t) || isCreditDebtSettlementMode(method)) {
-        creditDebtAdjustment = Number((creditDebtAdjustment + amt).toFixed(2));
-      } else {
-        cashBankRefundOutflow = Number((cashBankRefundOutflow + amt).toFixed(2));
-      }
-    });
-  }
-
-  // Net Cash In strictly reflects gross cash & bank inflows minus actual cash/bank refunds given back
+  // Net Cash In strictly reflects gross cash & operating inflows minus actual cash/bank refunds
   // Non-cash credit debt adjustments reduce accounts receivable / gross revenue, NOT cash-in
   const grossInflow = Number(totalIncome.toFixed(2));
   const netCashIn = Math.max(0, Number((grossInflow - cashBankRefundOutflow).toFixed(2)));
