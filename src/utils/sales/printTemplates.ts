@@ -2291,6 +2291,11 @@ const generateReturnPrintHTML = (
   const isCashOrPaid =
     String((sr as any).invoicePaymentMethod ?? (sr as any).paymentMethod ?? (sr as any).payment_method ?? "").toUpperCase() === "CASH" ||
     String((sr as any).invoiceStatus ?? (sr as any).status ?? "").toUpperCase() === "PAID";
+  const isCashRefund = !isExchange && (sr.returnMethod === 'Cash Refund' || (!isCreditBill && (settlementMode.toLowerCase().includes('cash') || sr.returnMethod !== 'Credit Note')));
+
+  const rawInvoiceTotal = (sr as any).originalInvoiceTotal ?? (sr as any).original_invoice_total ?? (sr as any).invoiceTotal ?? (sr as any).invoice_total ?? (sr as any).totalAmount ?? (sr as any).total_amount;
+  const originalInvoiceTotal = rawInvoiceTotal !== undefined && rawInvoiceTotal !== null ? Number(rawInvoiceTotal) : null;
+  const cashRefunded = Number(sr.totalRefunded || returnCreditValue || sr.returnAmount || 0);
 
   const creditSummary = getReturnCreditSummary({
     settlementMode,
@@ -2407,99 +2412,107 @@ const generateReturnPrintHTML = (
           ` : ''}
 
           <div class="font-mono" style="margin-top: 10px; border-top: 2px dashed #374151; padding-top: 6px; font-size: 11px; line-height: 1.5;">
-            <div style="display: flex; justify-content: space-between;">
-              <span>${isSi ? 'ආපසු වටිනාකම (ශුද්ධ):' : 'Return Credit (Net):'}</span>
-              <span style="font-weight: bold;">${symbolStr} ${formatNum(returnCreditValue)}</span>
-            </div>
-
-            ${exchangeItems.length > 0 ? `
-              <div style="display: flex; justify-content: space-between;">
-                <span>${isSi ? 'නව හුවමාරු මුළු එකතුව:' : 'Exchange New Total:'}</span>
-                <span style="font-weight: bold; color: #059669;">${symbolStr} ${formatNum(exchangeTotal)}</span>
+            ${isCashRefund ? `
+              ${originalInvoiceTotal !== null ? `
+                <div class="receipt-row" style="display: flex; justify-content: space-between;">
+                  <span>${isSi ? 'මුල් ඉන්වොයිසියේ එකතුව:' : 'Original Invoice Total:'}</span>
+                  <span style="font-weight: bold;">${symbolStr} ${formatNum(originalInvoiceTotal)}</span>
+                </div>
+              ` : ''}
+              <div class="receipt-row refund-highlight" style="display: flex; justify-content: space-between; margin-top: 4px; color: #dc2626; font-weight: bold; font-size: 12px; background: #fef2f2; padding: 4px 6px; border-radius: 4px; border: 1px solid #fee2e2;">
+                <span>${isSi ? 'ආපසු ගෙවූ මුදල:' : 'Cash Refunded:'}</span>
+                <span>${symbolStr} ${formatNum(cashRefunded)}</span>
               </div>
-              
-              <div style="border-top: 1px solid #9ca3af; margin: 4px 0;"></div>
+            ` : `
+              <div style="display: flex; justify-content: space-between;">
+                <span>${isSi ? 'ආපසු වටිනාකම (ශුද්ධ):' : 'Return Credit (Net):'}</span>
+                <span style="font-weight: bold;">${symbolStr} ${formatNum(returnCreditValue)}</span>
+              </div>
 
-              ${priceDifference > 0 ? `
-                <div style="display: flex; justify-content: space-between; font-weight: 900; font-size: 12px; background: #f3f4f6; padding: 4px 6px; border-radius: 4px; color: #111827; border: 1px solid #e5e7eb;">
-                  <span>${isSi ? 'පාරිභෝගිකයා අමතරව ගෙවිය යුතු මුදල:' : 'CUSTOMER EXTRA PAYABLE:'}</span>
-                  <span style="color: #b45309;">${symbolStr} ${formatNum(priceDifference)}</span>
+              ${exchangeItems.length > 0 ? `
+                <div style="display: flex; justify-content: space-between;">
+                  <span>${isSi ? 'නව හුවමාරු මුළු එකතුව:' : 'Exchange New Total:'}</span>
+                  <span style="font-weight: bold; color: #059669;">${symbolStr} ${formatNum(exchangeTotal)}</span>
                 </div>
-              ` : priceDifference < 0 ? `
-                <div style="display: flex; justify-content: space-between; font-weight: 900; font-size: 12px; background: #f3f4f6; padding: 4px 6px; border-radius: 4px; color: #111827; border: 1px solid #e5e7eb;">
-                  <span>${isCreditBill ? (isSi ? 'ණය ගිණුමෙන් අඩුකළ මුදල:' : 'CREDIT REDUCTION:') : (isSi ? 'පාරිභෝගිකයාට ආපසු ගෙවිය යුතු මුදල:' : 'STORE REFUND TO CUSTOMER:')}</span>
-                  <span style="color: #059669;">${symbolStr} ${formatNum(Math.abs(priceDifference))}</span>
+                
+                <div style="border-top: 1px solid #9ca3af; margin: 4px 0;"></div>
+
+                ${priceDifference > 0 ? `
+                  <div style="display: flex; justify-content: space-between; font-weight: 900; font-size: 12px; background: #f3f4f6; padding: 4px 6px; border-radius: 4px; color: #111827; border: 1px solid #e5e7eb;">
+                    <span>${isSi ? 'පාරිභෝගිකයා අමතරව ගෙවිය යුතු මුදල:' : 'CUSTOMER EXTRA PAYABLE:'}</span>
+                    <span style="color: #b45309;">${symbolStr} ${formatNum(priceDifference)}</span>
+                  </div>
+                ` : priceDifference < 0 ? `
+                  <div style="display: flex; justify-content: space-between; font-weight: 900; font-size: 12px; background: #f3f4f6; padding: 4px 6px; border-radius: 4px; color: #111827; border: 1px solid #e5e7eb;">
+                    <span>${isCreditBill ? (isSi ? 'ණය ගිණුමෙන් අඩුකළ මුදල:' : 'CREDIT REDUCTION:') : (isSi ? 'පාරිභෝගිකයාට ආපසු ගෙවිය යුතු මුදල:' : 'STORE REFUND TO CUSTOMER:')}</span>
+                    <span style="color: #059669;">${symbolStr} ${formatNum(Math.abs(priceDifference))}</span>
+                  </div>
+                ` : `
+                  <div style="display: flex; justify-content: space-between; font-weight: 900; font-size: 12px; background: #f3f4f6; padding: 4px 6px; border-radius: 4px; color: #111827; border: 1px solid #e5e7eb;">
+                    <span>${isSi ? 'ශුද්ධ ශේෂය:' : 'NET BALANCE:'}</span>
+                    <span>${symbolStr} 0.00 (${isSi ? 'සම ශේෂ හුවමාරුව' : 'Even Exchange'})</span>
+                  </div>
+                `}
+
+                <div style="display: flex; justify-content: space-between; font-size: 10px; color: #4b5563; font-style: italic; margin-top: 4px;">
+                  <span>${isSi ? 'පියවීමේ ක්‍රමය:' : 'Settlement Mode:'}</span>
+                  <span style="font-weight: bold; color: #111827;">${settlementMode}</span>
                 </div>
+
+                ${Number(sr.customerPaid || 0) > 0 ? `
+                  <div style="display: flex; justify-content: space-between; font-size: 11px; margin-top: 2px;">
+                    <span>${isSi ? 'පාරිභෝගිකයා ගෙවූ මුදල:' : 'Customer Paid:'}</span>
+                    <span style="font-weight: bold;">${symbolStr} ${formatNum(Number(sr.customerPaid))}</span>
+                  </div>
+                ` : ''}
+                ${Number(sr.changeGiven || 0) > 0 ? `
+                  <div style="display: flex; justify-content: space-between; font-size: 11px; margin-top: 2px;">
+                    <span>${isSi ? 'ඉතිරි මුදල:' : 'Change Given:'}</span>
+                    <span style="font-weight: bold;">${symbolStr} ${formatNum(Number(sr.changeGiven))}</span>
+                  </div>
+                ` : ''}
               ` : `
-                <div style="display: flex; justify-content: space-between; font-weight: 900; font-size: 12px; background: #f3f4f6; padding: 4px 6px; border-radius: 4px; color: #111827; border: 1px solid #e5e7eb;">
-                  <span>${isSi ? 'ශුද්ධ ශේෂය:' : 'NET BALANCE:'}</span>
-                  <span>${symbolStr} 0.00 (${isSi ? 'සම ශේෂ හුවමාරුව' : 'Even Exchange'})</span>
-                </div>
+                ${sr.returnMethod === 'Credit Note' ? `
+                  <div style="display: flex; justify-content: space-between; margin-top: 4px; color: #d97706; font-weight: bold;">
+                    <span>${isSi ? 'නිකුත් කළ ණය සටහන:' : 'Credit Note Issued:'}</span>
+                    <span>${sr.creditNoteNo || 'CN-ISSUED'}</span>
+                  </div>
+                ` : isCreditBill ? `
+                  <div style="display: flex; justify-content: space-between; margin-top: 4px; color: #0284c7; font-weight: bold;">
+                    <span>${isSi ? 'ණය සැකසුම:' : 'Credit Adjustment:'}</span>
+                    <span>${symbolStr} ${formatNum(sr.totalRefunded || returnCreditValue)}</span>
+                  </div>
+                ` : ''}
               `}
 
-              <div style="display: flex; justify-content: space-between; font-size: 10px; color: #4b5563; font-style: italic; margin-top: 4px;">
-                <span>${isSi ? 'පියවීමේ ක්‍රමය:' : 'Settlement Mode:'}</span>
-                <span style="font-weight: bold; color: #111827;">${settlementMode}</span>
-              </div>
-
-              ${Number(sr.customerPaid || 0) > 0 ? `
-                <div style="display: flex; justify-content: space-between; font-size: 11px; margin-top: 2px;">
-                  <span>${isSi ? 'පාරිභෝගිකයා ගෙවූ මුදල:' : 'Customer Paid:'}</span>
-                  <span style="font-weight: bold;">${symbolStr} ${formatNum(Number(sr.customerPaid))}</span>
-                </div>
-              ` : ''}
-              ${Number(sr.changeGiven || 0) > 0 ? `
-                <div style="display: flex; justify-content: space-between; font-size: 11px; margin-top: 2px;">
-                  <span>${isSi ? 'ඉතිරි මුදල:' : 'Change Given:'}</span>
-                  <span style="font-weight: bold;">${symbolStr} ${formatNum(Number(sr.changeGiven))}</span>
-                </div>
-              ` : ''}
-            ` : `
-              ${sr.returnMethod === 'Credit Note' ? `
-                <div style="display: flex; justify-content: space-between; margin-top: 4px; color: #d97706; font-weight: bold;">
-                  <span>${isSi ? 'නිකුත් කළ ණය සටහන:' : 'Credit Note Issued:'}</span>
-                  <span>${sr.creditNoteNo || 'CN-ISSUED'}</span>
-                </div>
-              ` : sr.returnMethod === 'Cash Refund' && !isCreditBill ? `
-                <div style="display: flex; justify-content: space-between; margin-top: 4px; color: #dc2626; font-weight: bold;">
-                  <span>${isSi ? 'ආපසු ගෙවූ මුදල:' : 'Cash Refunded:'}</span>
-                  <span>${symbolStr} ${formatNum(sr.totalRefunded || returnCreditValue)}</span>
-                </div>
-              ` : isCreditBill ? `
-                <div style="display: flex; justify-content: space-between; margin-top: 4px; color: #0284c7; font-weight: bold;">
-                  <span>${isSi ? 'ණය සැකසුම:' : 'Credit Adjustment:'}</span>
-                  <span>${symbolStr} ${formatNum(sr.totalRefunded || returnCreditValue)}</span>
+              ${creditSummary.isCreditDebtSettlement ? `
+                <div class="credit-balance-box" style="margin-top: 8px; border-top: 1px dashed #333; padding-top: 6px;">
+                  ${creditSummary.isExchange ? `
+                    <div style="display: flex; justify-content: space-between;">
+                      <span>${isSi ? 'පෙර හිඟ ශේෂය:' : 'Previous Unpaid Balance:'}</span>
+                      <span>${symbolStr} ${creditSummary.previousInvoiceBalance.toFixed(2)}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                      <span>${isSi ? 'මාරුකිරීමේ අමතර ගෙවීම:' : 'Exchange Extra Payable:'}</span>
+                      <span>+${symbolStr} ${creditSummary.exchangeExtraPayable.toFixed(2)}</span>
+                    </div>
+                  ` : `
+                    <div style="display: flex; justify-content: space-between;">
+                      <span>${isSi ? 'පෙර ඉන්වොයිස් හිඟ ශේෂය:' : 'Previous Invoice Balance:'}</span>
+                      <span>${symbolStr} ${creditSummary.previousInvoiceBalance.toFixed(2)}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                      <span>${isSi ? 'ආපසු අඩුකළ ණය මුදල:' : 'Less Return Credit:'}</span>
+                      <span>-${symbolStr} ${creditSummary.returnCreditAmount.toFixed(2)}</span>
+                    </div>
+                  `}
+                  <div style="display: flex; justify-content: space-between; font-weight: 700;">
+                    <span>${isSi ? 'ගෙවිය යුතු ඉතිරි ශේෂය:' : 'Remaining Balance Due:'}</span>
+                    <span>${symbolStr} ${creditSummary.remainingBalanceDue.toFixed(2)}</span>
+                  </div>
                 </div>
               ` : ''}
             `}
-
-            ${creditSummary.isCreditDebtSettlement ? `
-              <div class="credit-balance-box" style="margin-top: 8px; border-top: 1px dashed #333; padding-top: 6px;">
-                ${creditSummary.isExchange ? `
-                  <div style="display: flex; justify-content: space-between;">
-                    <span>${isSi ? 'පෙර හිඟ ශේෂය:' : 'Previous Unpaid Balance:'}</span>
-                    <span>${symbolStr} ${creditSummary.previousInvoiceBalance.toFixed(2)}</span>
-                  </div>
-                  <div style="display: flex; justify-content: space-between;">
-                    <span>${isSi ? 'මාරුකිරීමේ අමතර ගෙවීම:' : 'Exchange Extra Payable:'}</span>
-                    <span>+${symbolStr} ${creditSummary.exchangeExtraPayable.toFixed(2)}</span>
-                  </div>
-                ` : `
-                  <div style="display: flex; justify-content: space-between;">
-                    <span>${isSi ? 'පෙර ඉන්වොයිස් හිඟ ශේෂය:' : 'Previous Invoice Balance:'}</span>
-                    <span>${symbolStr} ${creditSummary.previousInvoiceBalance.toFixed(2)}</span>
-                  </div>
-                  <div style="display: flex; justify-content: space-between;">
-                    <span>${isSi ? 'ආපසු අඩුකළ ණය මුදල:' : 'Less Return Credit:'}</span>
-                    <span>-${symbolStr} ${creditSummary.returnCreditAmount.toFixed(2)}</span>
-                  </div>
-                `}
-                <div style="display: flex; justify-content: space-between; font-weight: 700;">
-                  <span>${isSi ? 'ගෙවිය යුතු ඉතිරි ශේෂය:' : 'Remaining Balance Due:'}</span>
-                  <span>${symbolStr} ${creditSummary.remainingBalanceDue.toFixed(2)}</span>
-                </div>
-              </div>
-            ` : ''}
           </div>
 
           <div style="text-align: center; margin-top: 14px; font-size: 10px; color: #6b7280; border-top: 1px dashed #d1d5db; padding-top: 6px;">

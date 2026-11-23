@@ -330,6 +330,8 @@ export interface SalesReturn {
   difference_payment_method?: string;
   previousInvoiceBalance?: number;
   previous_invoice_balance?: number;
+  originalInvoiceTotal?: number;
+  original_invoice_total?: number;
 }
 
 export interface CreditNote {

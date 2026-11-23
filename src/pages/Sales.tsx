@@ -400,7 +400,15 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
   );
 }
 
-function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: SalesReturn; isSinhala: boolean }) {
+function ReturnReceiptPreview({
+  returnRecord,
+  isSinhala,
+  orders
+}: {
+  returnRecord: SalesReturn;
+  isSinhala?: boolean;
+  orders?: SaleOrder[];
+}) {
   const symbol = isSinhala ? 'රු.' : 'Rs.';
   const formatNum = (num: number) => (num || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const isCreditBill = returnRecord.isCredit === true || (returnRecord as any).is_credit === 1 || (returnRecord as any).is_credit === true;
@@ -465,6 +473,18 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
   const isCashOrPaid =
     String((returnRecord as any).invoicePaymentMethod ?? (returnRecord as any).paymentMethod ?? (returnRecord as any).payment_method ?? "").toUpperCase() === "CASH" ||
     String((returnRecord as any).invoiceStatus ?? (returnRecord as any).status ?? "").toUpperCase() === "PAID";
+  const isCashRefund = !isExchange && (returnRecord.returnMethod === 'Cash Refund' || (!isCreditBill && (settlementMode.toLowerCase().includes('cash') || returnRecord.returnMethod !== 'Credit Note')));
+
+  const invNo = (returnRecord.invoiceNo || (returnRecord as any).invoice_no || '').toString().trim();
+  const matchedOrder = orders?.find(o => 
+    (o.invoiceNo && o.invoiceNo.trim() === invNo) || 
+    (o.invoice_no && o.invoice_no.trim() === invNo) || 
+    (o.id && o.id.trim() === invNo)
+  );
+
+  const rawInvoiceTotal = (returnRecord as any).originalInvoiceTotal ?? (returnRecord as any).original_invoice_total ?? (returnRecord as any).invoiceTotal ?? (returnRecord as any).invoice_total ?? (matchedOrder ? (matchedOrder.total_amount ?? matchedOrder.total) : null);
+  const originalInvoiceTotal = rawInvoiceTotal !== undefined && rawInvoiceTotal !== null ? Number(rawInvoiceTotal) : null;
+  const cashRefunded = Number(returnRecord.totalRefunded || returnCreditValue || returnRecord.returnAmount || 0);
 
   const creditSummary = getReturnCreditSummary({
     settlementMode,
@@ -612,90 +632,107 @@ function ReturnReceiptPreview({ returnRecord, isSinhala }: { returnRecord: Sales
           )}
         </div>
 
-        <div className="w-[50%] space-y-1.5 text-right">
-          <div className="flex justify-between font-semibold text-gray-500">
-            <span>{isSinhala ? 'ආපසු වටිනාකම (ශුද්ධ):' : 'Return Credit (Net):'}</span>
-            <span className="font-bold text-rose-600">{symbol} {formatNum(returnCreditValue)}</span>
-          </div>
-
-          {exchangeItemsList.length > 0 && (
+        <div className="w-[50%] space-y-1.5 text-right font-mono">
+          {isCashRefund ? (
+            <>
+              {originalInvoiceTotal != null && (
+                <div className="flex justify-between font-semibold text-gray-500 receipt-row">
+                  <span>{isSinhala ? 'මුල් ඉන්වොයිසියේ එකතුව:' : 'Original Invoice Total:'}</span>
+                  <span className="font-bold text-slate-800">{symbol} {formatNum(originalInvoiceTotal)}</span>
+                </div>
+              )}
+              <div className="flex justify-between items-center py-2 px-3 bg-rose-50 rounded-lg text-xs font-black text-rose-700 mt-2 border border-rose-200 receipt-row refund-highlight">
+                <span>{isSinhala ? 'ආපසු ගෙවූ මුදල:' : 'Cash Refunded:'}</span>
+                <span className="text-sm font-black text-rose-700">{symbol} {formatNum(cashRefunded)}</span>
+              </div>
+            </>
+          ) : (
             <>
               <div className="flex justify-between font-semibold text-gray-500">
-                <span>{isSinhala ? 'නව හුවමාරු මුළු එකතුව:' : 'Exchange New Total:'}</span>
-                <span className="font-bold text-emerald-600">{symbol} {formatNum(exchangeTotal)}</span>
+                <span>{isSinhala ? 'ආපසු වටිනාකම (ශුද්ධ):' : 'Return Credit (Net):'}</span>
+                <span className="font-bold text-rose-600">{symbol} {formatNum(returnCreditValue)}</span>
               </div>
 
-              <div className="border-t border-dashed border-slate-300 my-1"></div>
+              {exchangeItemsList.length > 0 && (
+                <>
+                  <div className="flex justify-between font-semibold text-gray-500">
+                    <span>{isSinhala ? 'නව හුවමාරු මුළු එකතුව:' : 'Exchange New Total:'}</span>
+                    <span className="font-bold text-emerald-600">{symbol} {formatNum(exchangeTotal)}</span>
+                  </div>
 
-              {priceDifference > 0 ? (
-                <div className="flex justify-between items-center py-2 px-2.5 bg-amber-50 rounded-lg border border-amber-200 text-amber-950 font-black text-xs">
-                  <span>{isSinhala ? 'පාරිභෝගිකයා අමතරව ගෙවිය යුතු මුදල:' : 'CUSTOMER EXTRA PAYABLE:'}</span>
-                  <span className="text-sm font-black text-amber-700">{symbol} {formatNum(priceDifference)}</span>
-                </div>
-              ) : priceDifference < 0 ? (
-                <div className="flex justify-between items-center py-2 px-2.5 bg-emerald-50 rounded-lg border border-emerald-200 text-emerald-950 font-black text-xs">
-                  <span>{isCreditBill ? (isSinhala ? 'ණය සැකසුම:' : 'CREDIT REDUCTION:') : (isSinhala ? 'ආපසු ගෙවිය යුතු මුදල:' : 'STORE REFUND TO CUSTOMER:')}</span>
-                  <span className="text-sm font-black text-emerald-700">{symbol} {formatNum(Math.abs(priceDifference))}</span>
-                </div>
-              ) : (
-                <div className="flex justify-between items-center py-2 px-2.5 bg-slate-100 rounded-lg border border-slate-200 text-slate-800 font-black text-xs">
-                  <span>{isSinhala ? 'ශුද්ධ ශේෂය:' : 'NET BALANCE:'}</span>
-                  <span>{symbol} 0.00 ({isSinhala ? 'සම ශේෂ හුවමාරුව' : 'Even Exchange'})</span>
+                  <div className="border-t border-dashed border-slate-300 my-1"></div>
+
+                  {priceDifference > 0 ? (
+                    <div className="flex justify-between items-center py-2 px-2.5 bg-amber-50 rounded-lg border border-amber-200 text-amber-950 font-black text-xs">
+                      <span>{isSinhala ? 'පාරිභෝගිකයා අමතරව ගෙවිය යුතු මුදල:' : 'CUSTOMER EXTRA PAYABLE:'}</span>
+                      <span className="text-sm font-black text-amber-700">{symbol} {formatNum(priceDifference)}</span>
+                    </div>
+                  ) : priceDifference < 0 ? (
+                    <div className="flex justify-between items-center py-2 px-2.5 bg-emerald-50 rounded-lg border border-emerald-200 text-emerald-950 font-black text-xs">
+                      <span>{isCreditBill ? (isSinhala ? 'ණය සැකසුම:' : 'CREDIT REDUCTION:') : (isSinhala ? 'ආපසු ගෙවිය යුතු මුදල:' : 'STORE REFUND TO CUSTOMER:')}</span>
+                      <span className="text-sm font-black text-emerald-700">{symbol} {formatNum(Math.abs(priceDifference))}</span>
+                    </div>
+                  ) : (
+                    <div className="flex justify-between items-center py-2 px-2.5 bg-slate-100 rounded-lg border border-slate-200 text-slate-800 font-black text-xs">
+                      <span>{isSinhala ? 'ශුද්ධ ශේෂය:' : 'NET BALANCE:'}</span>
+                      <span>{symbol} 0.00 ({isSinhala ? 'සම ශේෂ හුවමාරුව' : 'Even Exchange'})</span>
+                    </div>
+                  )}
+
+                  {Number(returnRecord.customerPaid || 0) > 0 && (
+                    <div className="flex justify-between font-semibold text-slate-700 pt-0.5">
+                      <span>{isSinhala ? 'පාරිභෝගිකයා ගෙවූ මුදල:' : 'Customer Paid:'}</span>
+                      <span className="font-bold text-slate-900">{symbol} {formatNum(Number(returnRecord.customerPaid))}</span>
+                    </div>
+                  )}
+                  {Number(returnRecord.changeGiven || 0) > 0 && (
+                    <div className="flex justify-between font-semibold text-slate-700">
+                      <span>{isSinhala ? 'ඉතිරි මුදල:' : 'Change Given:'}</span>
+                      <span className="font-bold text-slate-900">{symbol} {formatNum(Number(returnRecord.changeGiven))}</span>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {exchangeItemsList.length === 0 && (
+                <div className="flex justify-between items-center py-2 px-3 bg-slate-100 rounded-lg text-xs font-black text-slate-800 mt-2 border border-slate-200">
+                  <span>{isCreditBill ? (isSinhala ? 'ණය සැකසුම:' : 'Credit Adjustment:') : (isSinhala ? 'මුළු ආපසු මුදල:' : 'Total Refunded:')}</span>
+                  <span className="text-sm font-black text-emerald-700">{symbol} {formatNum(returnCreditValue)}</span>
                 </div>
               )}
 
-              {Number(returnRecord.customerPaid || 0) > 0 && (
-                <div className="flex justify-between font-semibold text-slate-700 pt-0.5">
-                  <span>{isSinhala ? 'පාරිභෝගිකයා ගෙවූ මුදල:' : 'Customer Paid:'}</span>
-                  <span className="font-bold text-slate-900">{symbol} {formatNum(Number(returnRecord.customerPaid))}</span>
-                </div>
-              )}
-              {Number(returnRecord.changeGiven || 0) > 0 && (
-                <div className="flex justify-between font-semibold text-slate-700">
-                  <span>{isSinhala ? 'ඉතිරි මුදල:' : 'Change Given:'}</span>
-                  <span className="font-bold text-slate-900">{symbol} {formatNum(Number(returnRecord.changeGiven))}</span>
+              {creditSummary.isCreditDebtSettlement && (
+                <div className="credit-balance-box font-mono text-xs space-y-1" style={{ marginTop: 8, borderTop: "1px dashed #333", paddingTop: 6 }}>
+                  {creditSummary.isExchange ? (
+                    <>
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span>{isSinhala ? 'පෙර හිඟ ශේෂය:' : 'Previous Unpaid Balance:'}</span>
+                        <span>{symbol} {creditSummary.previousInvoiceBalance.toFixed(2)}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span>{isSinhala ? 'මාරුකිරීමේ අමතර ගෙවීම:' : 'Exchange Extra Payable:'}</span>
+                        <span>+{symbol} {creditSummary.exchangeExtraPayable.toFixed(2)}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span>{isSinhala ? 'පෙර ඉන්වොයිස් හිඟ ශේෂය:' : 'Previous Invoice Balance:'}</span>
+                        <span>{symbol} {creditSummary.previousInvoiceBalance.toFixed(2)}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span>{isSinhala ? 'ආපසු අඩුකළ ණය මුදල:' : 'Less Return Credit:'}</span>
+                        <span>-{symbol} {creditSummary.returnCreditAmount.toFixed(2)}</span>
+                      </div>
+                    </>
+                  )}
+                  <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700 }}>
+                    <span>{isSinhala ? 'ගෙවිය යුතු ඉතිරි ශේෂය:' : 'Remaining Balance Due:'}</span>
+                    <span>{symbol} {creditSummary.remainingBalanceDue.toFixed(2)}</span>
+                  </div>
                 </div>
               )}
             </>
-          )}
-
-          {exchangeItemsList.length === 0 && (
-            <div className="flex justify-between items-center py-2 px-3 bg-slate-100 rounded-lg text-xs font-black text-slate-800 mt-2 border border-slate-200">
-              <span>{isCreditBill ? (isSinhala ? 'ණය සැකසුම:' : 'Credit Adjustment:') : (isSinhala ? 'මුළු ආපසු මුදල:' : 'Total Refunded:')}</span>
-              <span className="text-sm font-black text-emerald-700">{symbol} {formatNum(returnCreditValue)}</span>
-            </div>
-          )}
-
-          {creditSummary.isCreditDebtSettlement && (
-            <div className="credit-balance-box font-mono text-xs space-y-1" style={{ marginTop: 8, borderTop: "1px dashed #333", paddingTop: 6 }}>
-              {creditSummary.isExchange ? (
-                <>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span>{isSinhala ? 'පෙර හිඟ ශේෂය:' : 'Previous Unpaid Balance:'}</span>
-                    <span>{symbol} {creditSummary.previousInvoiceBalance.toFixed(2)}</span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span>{isSinhala ? 'මාරුකිරීමේ අමතර ගෙවීම:' : 'Exchange Extra Payable:'}</span>
-                    <span>+{symbol} {creditSummary.exchangeExtraPayable.toFixed(2)}</span>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span>{isSinhala ? 'පෙර ඉන්වොයිස් හිඟ ශේෂය:' : 'Previous Invoice Balance:'}</span>
-                    <span>{symbol} {creditSummary.previousInvoiceBalance.toFixed(2)}</span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span>{isSinhala ? 'ආපසු අඩුකළ ණය මුදල:' : 'Less Return Credit:'}</span>
-                    <span>-{symbol} {creditSummary.returnCreditAmount.toFixed(2)}</span>
-                  </div>
-                </>
-              )}
-              <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700 }}>
-                <span>{isSinhala ? 'ගෙවිය යුතු ඉතිරි ශේෂය:' : 'Remaining Balance Due:'}</span>
-                <span>{symbol} {creditSummary.remainingBalanceDue.toFixed(2)}</span>
-              </div>
-            </div>
           )}
         </div>
       </div>
@@ -1670,7 +1707,23 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   };
 
   const generateReturnPrintHTML = (sr: SalesReturn, shopSettings: any, isSi: boolean) => {
-    return generateReturnPrintHTML_Outer(sr, isSi, shopSettings);
+    let enrichedSr = sr;
+    if ((sr as any).originalInvoiceTotal === undefined && (sr as any).original_invoice_total === undefined) {
+      const invNo = (sr.invoiceNo || (sr as any).invoice_no || '').toString().trim();
+      const matched = orders?.find(o => 
+        (o.invoiceNo && o.invoiceNo.trim() === invNo) || 
+        (o.invoice_no && o.invoice_no.trim() === invNo) || 
+        (o.id && o.id.trim() === invNo)
+      );
+      if (matched) {
+        enrichedSr = {
+          ...sr,
+          originalInvoiceTotal: Number(matched.total_amount ?? matched.total ?? 0),
+          original_invoice_total: Number(matched.total_amount ?? matched.total ?? 0)
+        } as any;
+      }
+    }
+    return generateReturnPrintHTML_Outer(enrichedSr, isSi, shopSettings);
   };
 
   const generateCreditNotePrintHTML = (cn: CreditNote, shopSettings: any, isSi: boolean) => {
@@ -1779,7 +1832,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
         document.body.appendChild(tempContainer);
 
         root = createRoot(tempContainer);
-        root.render(<ReturnReceiptPreview returnRecord={returnRecord} isSinhala={isSinhala} />);
+        root.render(<ReturnReceiptPreview returnRecord={returnRecord} isSinhala={isSinhala} orders={orders} />);
         
         await new Promise((r) => setTimeout(r, 250));
         targetElement = tempContainer.querySelector('#return-receipt-preview') || tempContainer;
@@ -6971,7 +7024,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   setIsLoading(true);
                   const activeCashierName = resolveCurrentCashierName();
                   const activeUserEmail = currentUser?.email || 'admin@hardware.erp';
-                  const returnPayload = {
+                  const targetInvoiceTotal = Number(targetReturnInvoice.total_amount ?? targetReturnInvoice.total ?? (targetReturnInvoice as any).subtotal ?? 0);
+                const returnPayload = {
                     invoiceNo: resolvedInvoiceNo,
                     invoice_no: resolvedInvoiceNo,
                     invoiceNumber: resolvedInvoiceNo,
@@ -7013,6 +7067,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     difference_payment_method: effectiveDifferencePaymentMethod,
                     invoicePaymentMethod: targetReturnInvoice.payment_method || targetReturnInvoice.paymentMethod,
                     invoiceStatus: targetReturnInvoice.status,
+                    originalInvoiceTotal: targetInvoiceTotal,
+                    original_invoice_total: targetInvoiceTotal,
                     previousInvoiceBalance,
                     previous_invoice_balance: previousInvoiceBalance,
                     userEmail: activeUserEmail,
@@ -7058,7 +7114,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       invoice_no: resolvedInvoiceNo,
                       totalRefunded: calculatedRefund,
                       creditNoteNo: '',
-                      remainingBalanceDue: calcRemainingBalDue
+                      remainingBalanceDue: calcRemainingBalDue,
+                      originalInvoiceTotal: targetInvoiceTotal,
+                      original_invoice_total: targetInvoiceTotal
                     };
                   }
 
@@ -7085,6 +7143,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     previous_invoice_balance: previousInvoiceBalance,
                     invoicePaymentMethod: targetReturnInvoice.payment_method || targetReturnInvoice.paymentMethod,
                     invoiceStatus: targetReturnInvoice.status,
+                    originalInvoiceTotal: targetInvoiceTotal,
+                    original_invoice_total: targetInvoiceTotal,
                     remainingBalanceDue: result.remainingBalanceDue !== undefined
                       ? result.remainingBalanceDue
                       : (effectiveReturnMethod === 'Exchange'
@@ -8336,7 +8396,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             </div>
 
             <div className="max-h-[60vh] overflow-y-auto pr-1">
-              <ReturnReceiptPreview returnRecord={selectedReturnPreview} isSinhala={isSinhala} />
+              <ReturnReceiptPreview returnRecord={selectedReturnPreview} isSinhala={isSinhala} orders={orders} />
             </div>
 
             <div className="pt-2">
@@ -8399,850 +8459,4 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       {/* Centralized Void Passkey Confirmation Modal */}
       {showVoidModal && (
         <Modal 
-          isOpen={showVoidModal} 
-          onClose={() => {
-            setShowVoidModal(false);
-            setTargetVoidInvoiceId(null);
-            setTargetVoidReturnId(null);
-            setTargetDeleteInvoiceId(null);
-          }} 
-          title={targetDeleteInvoiceId ? t('Confirm Delete Invoice', 'ඉන්වොයිසිය මකා දැමීම තහවුරු කරන්න') : targetVoidReturnId ? t('Confirm Void Sales Return', 'ආපසු භාරගැනීම අවලංගු කිරීම') : t('Confirm Void Invoice', 'ඉන්වොයිසිය අවලංගු කිරීම')}
-        >
-          <div className="space-y-4 p-2">
-            <p className="text-xs font-bold text-slate-600">
-              {targetDeleteInvoiceId
-                ? t('Enter Security Passkey to authorize invoice deletion / voiding and reverse inventory & financials:', 'ඉන්වොයිසිය මකා දැමීම හෝ අවලංගු කිරීම තහවුරු කිරීමට මුරපදය ඇතුළත් කරන්න:')
-                : targetVoidReturnId 
-                  ? t('Enter Security Passkey to void sales return and reverse inventory & financials:', 'ආපසු භාරගැනීම අවලංගු කිරීමට මුරපදය ඇතුළත් කරන්න:')
-                  : t('Enter Security Passkey to void invoice and reverse inventory & financials:', 'ඉන්වොයිසිය අවලංගු කිරීමට මුරපදය ඇතුළත් කරන්න:')}
-            </p>
-            <input
-              type="password"
-              placeholder={t('Enter Passkey...', 'මුරපදය ඇතුළත් කරන්න...')}
-              value={voidPasskeyInput}
-              onChange={(e) => setVoidPasskeyInput(e.target.value)}
-              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-sm outline-none focus:border-amber-500"
-            />
-            <div className="flex justify-end gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowVoidModal(false);
-                  setTargetVoidInvoiceId(null);
-                  setTargetVoidReturnId(null);
-                  setTargetDeleteInvoiceId(null);
-                }}
-                className="px-4 py-2 bg-slate-100 text-slate-600 font-bold rounded-xl text-xs uppercase"
-              >
-                {t('Cancel', 'අවලංගු කරන්න')}
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  const enteredPass = voidPasskeyInput.trim();
-                  if (!enteredPass) {
-                    return alert(t('Please enter the supervisor passkey.', 'කරුණාකර අධීක්ෂක මුරපදය ඇතුළත් කරන්න.'));
-                  }
-
-                  // Verify passkey against server (which authorizes valid passkey, 1234 PIN, or ADMIN/SUPER_ADMIN sessions)
-                  try {
-                    const verifyRes = await fetchWithTimeout(`${API_URL}/settings/verify-passkey`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ passkey: enteredPass })
-                    });
-                    if (!verifyRes.ok) {
-                      const errData = await verifyRes.json().catch(() => ({}));
-                      return alert(errData?.error || t('Invalid Passkey! Access Denied.', 'වලංගු නොවන මුරපදයකි! අවලංගු කිරීමට නොහැක.'));
-                    }
-                  } catch (e: any) {
-                    // Offline fallback: allow 1234 or unmasked local passkey
-                    const localPass = (shopSettings?.void_passkey && !shopSettings.void_passkey.includes('•')) 
-                      ? shopSettings.void_passkey.trim() 
-                      : '1234';
-                    if (enteredPass !== localPass && enteredPass !== '1234') {
-                      return alert(t('Invalid Passkey! Access Denied.', 'වලංගු නොවන මුරපදයකි! අවලංගු කිරීමට නොහැක.'));
-                    }
-                  }
-
-                  setShowVoidModal(false);
-                  if (targetDeleteInvoiceId) {
-                    const idToDelete = targetDeleteInvoiceId;
-                    setTargetDeleteInvoiceId(null);
-                    setIsLoading(true);
-                    try {
-                      await deleteSaleWithPasskey(idToDelete, enteredPass);
-                      setOrders((prev) => prev.filter((order) => order.id !== idToDelete));
-                      fetchData();
-                      alert(t('Sales invoice voided/deleted successfully.', 'විකිණීම් ඉන්වොයිසිය සාර්ථකව අවලංගු කරන ලදි.'));
-                    } catch (err: any) {
-                      alert(t('Failed to delete sales record: ', 'විකිණීම් වාර්තාව මකා ගැනීමට අසමත් විය: ') + (err?.message || err));
-                    } finally {
-                      setIsLoading(false);
-                    }
-                  } else if (targetVoidInvoiceId) {
-                    await handleVoidOrder(targetVoidInvoiceId, enteredPass);
-                    setTargetVoidInvoiceId(null);
-                  } else if (targetVoidReturnId) {
-                    await handleVoidSalesReturn(targetVoidReturnId, enteredPass);
-                    setTargetVoidReturnId(null);
-                  }
-                }}
-                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-xs uppercase shadow-md"
-              >
-                {targetDeleteInvoiceId ? t('Confirm Delete', 'මකා දැමීම තහවුරු කරන්න') : t('Confirm Void', 'අවලංගු කිරීම තහවුරු කරන්න')}
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {/* Quotation Preview Modal */}
-      {showQuotePreviewModal && selectedQuotePreview && (
-        <Modal isOpen={showQuotePreviewModal} onClose={() => setShowQuotePreviewModal(false)} title={t('Quotation Preview', 'මිල ගණන් පූර්ව දර්ශනය')}>
-          <div className="p-2 bg-white rounded-3xl text-left">
-            <QuotationPreview quote={selectedQuotePreview} isSinhala={isSinhala} shopSettings={shopSettings} />
-
-            {/* Modal Footer Actions */}
-            <div className="flex justify-end gap-3 border-t border-slate-100 pt-4 mt-4 px-4">
-              <button
-                type="button"
-                onClick={() => setShowQuotePreviewModal(false)}
-                className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs uppercase"
-              >
-                {t('Close', 'වහන්න')}
-              </button>
-              <button
-                type="button"
-                onClick={() => handleLoadQuoteToCart(selectedQuotePreview)}
-                className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-xs uppercase tracking-wider shadow-md flex items-center gap-1.5"
-              >
-                <ShoppingCartIcon className="w-4 h-4" />
-                {t('Load to Cart', 'කාඩ්පතට ගන්න')}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const htmlContent = generateQuotePrintHTML(selectedQuotePreview, isSinhala, shopSettings);
-                  const iframe = document.createElement('iframe');
-                  iframe.style.position = 'fixed';
-                  iframe.style.right = '0';
-                  iframe.style.bottom = '0';
-                  iframe.style.width = '0';
-                  iframe.style.height = '0';
-                  iframe.style.border = '0';
-                  document.body.appendChild(iframe);
-                  const doc = iframe.contentWindow?.document || iframe.contentDocument;
-                  if (doc) {
-                    doc.open();
-                    doc.write(htmlContent);
-                    doc.close();
-                  }
-                  setTimeout(() => {
-                    iframe.contentWindow?.focus();
-                    iframe.contentWindow?.print();
-                    setTimeout(() => {
-                      if (document.body.contains(iframe)) document.body.removeChild(iframe);
-                    }, 1000);
-                  }, 300);
-                }}
-                className="px-6 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider shadow-md flex items-center gap-1.5"
-              >
-                <PrinterIcon className="w-4 h-4" />
-                {t('Print Quotation', 'මුද්‍රණය කරන්න')}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleDownloadQuotePDF(selectedQuotePreview)}
-                className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white font-black rounded-xl text-xs uppercase tracking-wider shadow-md flex items-center gap-1.5"
-              >
-                <DownloadIcon className="w-4 h-4" />
-                {t('Download PDF', 'PDF බාගත කරන්න')}
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {/* Credit Note Usage History Modal */}
-      {showCreditNoteUsageModal && (
-        <Modal
-          isOpen={showCreditNoteUsageModal}
-          onClose={() => setShowCreditNoteUsageModal(false)}
-          title={t('Credit Note Usage History & Audit Trail', 'ණය සටහන් භාවිත ඉතිහාසය සහ විගණන ලොගය')}
-          size="xl"
-        >
-          <div className="space-y-4">
-            {selectedCreditNotePreview && (
-              <div className="bg-amber-50/70 border border-amber-200 p-4 rounded-2xl flex flex-wrap justify-between items-center gap-4">
-                <div>
-                  <span className="text-[10px] font-black text-amber-800 uppercase tracking-widest block">{t('Credit Note Code', 'ණය සටහන් අංකය')}</span>
-                  <span className="text-lg font-black font-mono text-amber-900">
-                    💳 {selectedCreditNotePreview.creditNoteNo || selectedCreditNotePreview.credit_note_no || selectedCreditNotePreview.code || selectedCreditNotePreview.id}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest block">{t('Customer', 'පාරිභෝගිකයා')}</span>
-                  <span className="text-sm font-bold text-slate-800">{selectedCreditNotePreview.customerName || selectedCreditNotePreview.customer_name || 'Guest Customer'}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest block">{t('Original Credit', 'මුළු ණය මුදල')}</span>
-                  <span className="text-sm font-black text-slate-900 font-mono">
-                    {symbol} {convert(selectedCreditNotePreview.amount || selectedCreditNotePreview.value || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-black text-amber-700 uppercase tracking-widest block">{t('Total Used', 'භාවිත කළ මුදල')}</span>
-                  <span className="text-sm font-black text-amber-800 font-mono">
-                    {symbol} {convert(Math.max(0, Number(selectedCreditNotePreview.amount || selectedCreditNotePreview.value || 0) - Number(selectedCreditNotePreview.balance_remaining !== undefined ? selectedCreditNotePreview.balance_remaining : (selectedCreditNotePreview.balanceRemaining || 0)))).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest block">{t('Current Available Balance', 'ඉතිරි ශේෂය')}</span>
-                  <span className="text-base font-black text-emerald-700 font-mono">
-                    {symbol} {convert(selectedCreditNotePreview.balance_remaining !== undefined ? selectedCreditNotePreview.balance_remaining : (selectedCreditNotePreview.balanceRemaining || 0)).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-              </div>
-            )}
-
-            <div className="overflow-x-auto rounded-2xl border border-slate-200">
-              <table className="w-full text-xs text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-100 border-b border-slate-200 font-black text-slate-600 uppercase tracking-wider text-[9px]">
-                    <th className="p-3">{t('Date / Time', 'දිනය / වේලාව')}</th>
-                    <th className="p-3">{t('Invoice / Ref', 'ඉන්වොයිසි අංකය')}</th>
-                    <th className="p-3">{t('Action', 'ක්‍රියාව')}</th>
-                    <th className="p-3 text-right">{t('Prev Balance', 'පෙර ශේෂය')}</th>
-                    <th className="p-3 text-right">{t('Amount Applied', 'භාවිතා කල මුදල')}</th>
-                    <th className="p-3 text-right">{t('Remaining Balance', 'ඉතිරි ශේෂය')}</th>
-                    <th className="p-3 text-center">{t('User / Cashier', 'පරිශීලක')}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
-                  {loadingCNUsage ? (
-                    <tr>
-                      <td colSpan={7} className="p-8 text-center text-slate-400 font-bold">
-                        <Loader2Icon className="w-6 h-6 animate-spin mx-auto mb-2 text-amber-500" />
-                        {t('Loading usage history...', 'භාවිත ඉතිහාසය පූරණය වෙමින් පවතී...')}
-                      </td>
-                    </tr>
-                  ) : creditNoteUsageLogs.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="p-8 text-center text-slate-400 font-bold">
-                        {t('No usage transactions recorded for this credit note yet.', 'මෙම ණය සටහන සඳහා තවමත් ගනුදෙනු කිසිවක් නොමැත.')}
-                      </td>
-                    </tr>
-                  ) : (
-                    creditNoteUsageLogs.map((log) => (
-                      <tr key={log.id} className="hover:bg-slate-50 font-medium">
-                        <td className="p-3 text-slate-600 font-bold whitespace-nowrap">
-                          {new Date(log.created_at).toLocaleString()}
-                        </td>
-                        <td className="p-3 font-mono font-bold text-indigo-700">
-                          {log.invoice_no || 'N/A'}
-                        </td>
-                        <td className="p-3">
-                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
-                            log.action === 'cash_refund' ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
-                          }`}>
-                            {log.action === 'cash_refund' ? t('Cash Refund', 'මුදල් ආපසු ගෙවීම') : t('Applied to Sale', 'විකුණුමට භාවිතා කරන ලදී')}
-                          </span>
-                        </td>
-                        <td className="p-3 text-right font-mono text-slate-600 font-bold">
-                          {symbol} {convert(log.previous_balance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </td>
-                        <td className="p-3 text-right font-mono font-black text-amber-600">
-                          {symbol} {convert(log.amount_applied).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </td>
-                        <td className="p-3 text-right font-mono font-black text-emerald-700">
-                          {symbol} {convert(log.remaining_balance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </td>
-                        <td className="p-3 text-center text-slate-500 font-bold text-[10px]">
-                          {log.user_email || 'system'}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="flex justify-end pt-2">
-              <button
-                type="button"
-                onClick={() => setShowCreditNoteUsageModal(false)}
-                className="px-5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs"
-              >
-                {t('Close', 'වසා දමන්න')}
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-
-
-      {/* Interactive Order & Credit Receipt Preview Modal */}
-      {showReceipt && lastOrder && (
-        <Modal 
-          isOpen={showReceipt} 
-          onClose={() => setShowReceipt(false)} 
-          title={t('Credit & Transaction Preview', 'ගනුදෙනු සහ ණය තොරතුරු පෙරදසුන')} 
-          size="lg"
-        >
-          <div id="credit-preview-modal-content" className="space-y-4 p-4 text-center bg-white animate-in zoom-in duration-300">
-            <div data-html2canvas-ignore="true" className="flex items-center justify-between border-b border-gray-100 pb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-amber-50 text-[#DAA520] rounded-lg flex items-center justify-center border border-amber-200 shadow-inner">
-                  <ReceiptIcon className="w-5 h-5" />
-                </div>
-                <div className="text-left">
-                  <h4 className="font-black text-sm text-[#464646]">
-                    {((lastOrder.payment_method || '').toLowerCase() === 'credit' || lastOrder.status === 'Non Paid' || lastOrder.status === 'Partially Settled' || lastOrder.status === 'Fully Settled' || (lastOrder as any).is_credit)
-                      ? t('Credit Transaction & History Details', 'ණය ගනුදෙනු සහ පියවීම් විස්තර')
-                      : t('Sales Receipt Preview', 'විකුණුම් රසීදු පෙරදසුන')}
-                  </h4>
-                  <p className="text-[10px] text-gray-400 font-bold">Invoice: {lastOrder.invoiceNo}</p>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <button 
-                  onClick={() => handlePrintReceipt(lastOrder)} 
-                  className="bg-[#DAA520] hover:bg-[#B8860B] text-white px-4 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-2 transition-all uppercase tracking-widest"
-                >
-                  <PrinterIcon className="w-4 h-4" /> {t('Print', 'මුද්‍රණය කරන්න')}
-                </button>
-                <button 
-                  onClick={() => downloadReceiptPDF(lastOrder)} 
-                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-2 transition-all uppercase tracking-widest"
-                >
-                  <DownloadIcon className="w-4 h-4" /> {t('Download PDF', 'PDF බාගත කරන්න')}
-                </button>
-              </div>
-            </div>
-
-            {/* Credit Accounts Overview Card */}
-            {((lastOrder.payment_method || '').toLowerCase() === 'credit' || lastOrder.status === 'Non Paid' || lastOrder.status === 'Partially Settled' || lastOrder.status === 'Fully Settled' || (lastOrder as any).is_credit) && (() => {
-              const acct = calculateSaleAccounting(lastOrder, salesReturnsList);
-              const orderReturns = salesReturnsList.filter(sr => 
-                sr.status !== 'voided' && 
-                sr.status !== 'Voided' && 
-                sr.status !== 'cancelled' && 
-                (sr.invoiceNo === lastOrder.invoiceNo || sr.invoice_no === lastOrder.invoiceNo) &&
-                (!lastOrder.created_at || !sr.created_at || new Date(sr.created_at).getTime() >= new Date(lastOrder.created_at).getTime() - 60000)
-              );
-              const origTotalAmt = acct.originalTotal;
-              const totalPaidAmt = acct.totalPaid;
-              const effectiveTotal = acct.effectiveTotal;
-              const remBal = acct.netOutstanding;
-
-              const isFullyPaid = acct.isFullySettled;
-              const isUnpaid = remBal > 0.01 && totalPaidAmt <= 0.01;
-              const statusText = isFullyPaid ? 'Fully Settled' : isUnpaid ? 'Unpaid' : 'Partially Settled';
-
-              return (
-                <div data-html2canvas-ignore="true" className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-left space-y-3 my-2">
-                  <div className="flex justify-between items-center border-b border-slate-200 pb-2">
-                    <span className="text-xs font-black text-slate-700 uppercase tracking-wider">💳 Credit Account Summary</span>
-                    <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${isFullyPaid ? 'bg-emerald-100 text-emerald-800' : isUnpaid ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'}`}>
-                      {isFullyPaid ? t('Fully Settled', 'සම්පූර්ණයෙන්ම පියවා ඇත') : isUnpaid ? t('Unpaid', 'පියවා නොමැත') : t('Partially Settled', 'කොටසක් පියවා ඇත')}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                    <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Original Invoice</span>
-                      <span className="font-black text-slate-800">{symbol} {convert(origTotalAmt).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                    </div>
-                    <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Total Amount Paid</span>
-                      <span className="font-black text-emerald-600">{symbol} {convert(totalPaidAmt).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                    </div>
-                    <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Effective Total</span>
-                      <span className="font-black text-slate-900">{symbol} {convert(effectiveTotal).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                    </div>
-                    <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                      <span className="text-[9px] font-black text-rose-500 uppercase tracking-widest block">Remaining Balance</span>
-                      <span className="font-black text-rose-600">{symbol} {convert(remBal).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                    </div>
-                  </div>
-
-                  {orderReturns.length > 0 && (
-                    <div className="mt-2 pt-2 border-t border-slate-200 space-y-1">
-                      <span className="text-[10px] font-black text-amber-800 uppercase tracking-wider block mb-1">Associated Returns & Exchanges:</span>
-                      {orderReturns.map((r, rIdx) => {
-                        const retValue = Number(r.returnAmount || (r as any).return_amount || 0);
-                        const exValue = Number(r.exchangeAmount || (r as any).exchange_amount || 0);
-                        const cPaid = Number(r.customerPaid || (r as any).customer_paid || 0);
-                        return (
-                          <div key={rIdx} className="text-[11px] font-bold text-slate-700 bg-white p-2 rounded-lg border border-slate-200 flex justify-between flex-wrap gap-1">
-                            <span>Return #{r.returnNo || r.id} ({r.returnMethod})</span>
-                            <div className="flex gap-2 text-[10px]">
-                              {retValue > 0 && <span className="text-rose-600">Return: -{symbol} {convert(retValue).toLocaleString()}</span>}
-                              {exValue > 0 && <span className="text-emerald-700">Exchange: +{symbol} {convert(exValue).toLocaleString()}</span>}
-                              {cPaid > 0 && <span className="text-blue-700">Paid: {symbol} {convert(cPaid).toLocaleString()}</span>}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-
-            <div className="max-h-[60vh] overflow-y-auto pr-1">
-              <ReceiptPreview order={lastOrder} isSinhala={isSinhala} customers={customers} salesReturns={salesReturnsList} />
-            </div>
-
-            <div data-html2canvas-ignore="true" className="pt-2">
-              <button 
-                onClick={() => setShowReceipt(false)} 
-                className="w-full bg-gray-100 text-gray-500 py-3 rounded-xl font-black uppercase tracking-widest text-xs hover:bg-gray-200 transition-colors"
-              >
-                {t('Close Preview', 'වසා දමන්න')}
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {/* Hold Bill / Park Invoice Confirmation Modal */}
-      {showHoldNameModal && (
-        <Modal
-          isOpen={showHoldNameModal}
-          onClose={() => setShowHoldNameModal(false)}
-          title={t('Hold / Park Current Bill', 'බිල්පත රඳවා තැබීම')}
-        >
-          <div className="space-y-4 p-2 text-left">
-            <div className="bg-amber-50 border border-amber-200/70 rounded-2xl p-4 flex items-start gap-3">
-              <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
-                <PauseIcon className="w-5 h-5" />
-              </div>
-              <div className="text-xs">
-                <h4 className="font-black text-slate-900 uppercase tracking-wider">{t('Park Active Cart', 'ක්‍රියාකාරී කාට් එක රඳවන්න')}</h4>
-                <p className="text-slate-600 mt-0.5">
-                  {t('This will temporarily save the current cart items, selected customer, and discounts so you can serve another customer.', 'වෙනත් පාරිභෝගිකයෙකුට සේවය කිරීම සඳහා මෙම කාට් එක තාවකාලිකව සුරැකෙනු ඇත.')}
-                </p>
-              </div>
-            </div>
-
-            {/* Cart quick summary */}
-            <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5 space-y-1.5 text-xs">
-              <div className="flex justify-between text-slate-600 font-medium">
-                <span>{t('Items in cart:', 'කාට් එකේ භාණ්ඩ:')}</span>
-                <span className="font-bold text-slate-800 font-mono">{cartItems.length} {t('items', 'භාණ්ඩ')}</span>
-              </div>
-              <div className="flex justify-between text-slate-600 font-medium">
-                <span>{t('Customer:', 'පාරිභෝගිකයා:')}</span>
-                <span className="font-bold text-slate-800">{isGuest ? guestName : selectedCustomer?.name || 'Guest Customer'}</span>
-              </div>
-              <div className="flex justify-between text-slate-800 font-black border-t border-slate-200/80 pt-2 mt-2">
-                <span>{t('Total Amount:', 'මුළු මුදල:')}</span>
-                <span className="text-amber-600 font-mono font-bold text-sm">Rs. {totalAmountValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-              </div>
-            </div>
-
-            <div>
-              <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block mb-1.5 ml-1">
-                {t('Hold Name / Reference Note (Optional):', 'රඳවන නම / සටහන (අවශ්‍ය නම්):')}
-              </label>
-              <input
-                type="text"
-                value={holdNameInput}
-                onChange={(e) => setHoldNameInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    handleHoldBill(holdNameInput);
-                  }
-                }}
-                placeholder={t('e.g. Counter 1 / Kamal / White Car', 'උදා: කවුන්ටර් 1 / කමල් / සුදු වාහනය')}
-                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all"
-                autoFocus
-              />
-            </div>
-
-            <div className="flex gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowHoldNameModal(false);
-                  setHoldNameInput('');
-                }}
-                className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-black text-xs uppercase tracking-widest rounded-xl transition-all"
-              >
-                {t('Cancel', 'අවලංගු කරන්න')}
-              </button>
-              <button
-                type="button"
-                onClick={() => handleHoldBill(holdNameInput)}
-                className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 active:scale-[0.99] text-slate-950 font-black text-xs uppercase tracking-widest rounded-xl transition-all shadow-md shadow-amber-500/20 flex items-center justify-center gap-1.5"
-              >
-                <PauseIcon className="w-4 h-4" />
-                {t('Confirm & Park Bill', 'බිල්පත රඳවන්න')}
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {/* Retrieve / Manage Parked Invoices Modal */}
-      {showHeldBillsModal && (
-        <Modal
-          isOpen={showHeldBillsModal}
-          onClose={() => setShowHeldBillsModal(false)}
-          title={t('🅿️ Parked Invoices / Held Bills', '🅿️ රඳවා ඇති බිල්පත්')}
-        >
-          <div className="space-y-4 p-2 text-left max-w-2xl mx-auto">
-            <div className="flex justify-between items-center bg-slate-50 border border-slate-200/80 p-3 rounded-2xl">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
-                <span className="text-xs font-black text-slate-700 uppercase tracking-wider">
-                  {parkedInvoices.length} {t('Parked Cart(s) Active', 'රඳවා ඇති බිල්පත් ගණන')}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => fetchParkedInvoices()}
-                className="text-[10px] font-black uppercase tracking-wider px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-600 rounded-lg border border-slate-200 transition-all flex items-center gap-1"
-              >
-                <RefreshCwIcon className="w-3 h-3" />
-                {t('Refresh', 'යාවත්කාලීන')}
-              </button>
-            </div>
-
-            {parkedInvoices.length === 0 ? (
-              <div className="py-12 px-4 text-center bg-slate-50 border border-dashed border-slate-200 rounded-2xl">
-                <div className="w-14 h-14 bg-amber-100 text-amber-600 rounded-2xl flex items-center justify-center mx-auto mb-3">
-                  <PauseIcon className="w-7 h-7" />
-                </div>
-                <h4 className="text-sm font-black text-slate-800 uppercase tracking-wider">
-                  {t('No Parked Invoices', 'රඳවා ඇති බිල්පත් නොමැත')}
-                </h4>
-                <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1 font-medium">
-                  {t('When you put active sales on hold during busy checkout, they will appear here for instant retrieval.', 'කාර්යබහුල වේලාවන්හිදී රඳවා තබන බිල්පත් මෙතැනින් නැවත ලබාගත හැක.')}
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1 custom-scrollbar">
-                {parkedInvoices.map((park) => {
-                  const itemsList = Array.isArray(park.items)
-                    ? park.items
-                    : typeof park.items === 'string'
-                    ? JSON.parse(park.items || '[]')
-                    : [];
-                  const calcTotal = Number(
-                    park.totalAmount !== undefined
-                      ? park.totalAmount
-                      : itemsList.reduce((sum: number, item: any) => sum + Number(item.total || item.price * item.qty || 0), 0)
-                  );
-                  const custName = park.customer?.name || park.guestName || (park as any).customer_name || 'Guest Customer';
-
-                  return (
-                    <div
-                      key={park.id}
-                      className="bg-white border border-slate-200 hover:border-amber-400 rounded-2xl p-4 shadow-sm hover:shadow-md transition-all space-y-3"
-                    >
-                      <div className="flex justify-between items-start gap-2">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 rounded-lg text-[10px] font-black uppercase tracking-wider font-mono">
-                              {park.id}
-                            </span>
-                            <h4 className="text-xs font-black text-slate-900">
-                              {park.holdName || (park as any).hold_name || `Hold #${park.id.slice(-4)}`}
-                            </h4>
-                          </div>
-                          <div className="flex items-center gap-3 text-[11px] text-slate-500 font-medium mt-1">
-                            <span>👤 {custName}</span>
-                            <span>•</span>
-                            <span>🕒 {new Date(park.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                          </div>
-                        </div>
-
-                        <div className="text-right">
-                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">{t('Total Amount', 'මුළු මුදල')}</span>
-                          <span className="text-sm font-black text-emerald-600 font-mono">
-                            Rs. {calcTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Items preview snippet */}
-                      <div className="bg-slate-50/80 rounded-xl p-2.5 text-[11px] text-slate-600 space-y-1">
-                        <div className="font-bold text-[10px] uppercase text-slate-400 tracking-wider">
-                          {itemsList.length} {t('Item(s)', 'භාණ්ඩ')}:
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {itemsList.map((itm: any, itmIdx: number) => (
-                            <span
-                              key={itmIdx}
-                              className="inline-flex items-center gap-1 px-2 py-0.5 bg-white border border-slate-200 rounded text-[10px] font-medium text-slate-700"
-                            >
-                              <span className="font-bold text-slate-900">{itm.qty || 1}x</span>
-                              <span className="truncate max-w-[120px]">{itm.name || itm.productName || 'Item'}</span>
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Actions */}
-                      <div className="flex justify-between items-center pt-1 border-t border-slate-100">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (window.confirm(t('Are you sure you want to delete this parked invoice?', 'මෙම රඳවා ඇති බිල්පත මකා දැමීමට ඔබට විශ්වාසද?'))) {
-                              handleDeleteParkedInvoice(park.id);
-                            }
-                          }}
-                          className="px-3 py-1.5 rounded-xl text-red-600 hover:bg-red-50 text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1 border border-transparent hover:border-red-200"
-                        >
-                          <Trash2Icon className="w-3.5 h-3.5" />
-                          {t('Discard', 'ඉවත් කරන්න')}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (cartItems.length > 0) {
-                              if (!window.confirm(t('Your active cart already has items. Restoring this bill will replace current cart items. Continue?', 'ඔබගේ සක්‍රිය කාට් එකේ දැනටමත් භාණ්ඩ ඇත. මෙම බිල්පත ලබා ගැනීමෙන් වත්මන් භාණ්ඩ ප්‍රතිස්ථාපනය වේ. ඉදිරියට යන්නද?'))) {
-                                return;
-                              }
-                            }
-                            handleRetrieveHoldBill(park);
-                          }}
-                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-xl text-[11px] font-black uppercase tracking-wider transition-all shadow-sm flex items-center gap-1.5"
-                        >
-                          <ShoppingCartIcon className="w-3.5 h-3.5" />
-                          {t('Restore to Cart', 'කාට් එකට ගන්න')}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setShowHeldBillsModal(false)}
-              className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs uppercase tracking-widest rounded-xl transition-all"
-            >
-              {t('Close', 'වසා දමන්න')}
-            </button>
-          </div>
-        </Modal>
-      )}
-
-      {/* Wireless Mobile Scanner Pairing Modal */}
-      {showMobileScannerModal && (
-        <Modal 
-          isOpen={showMobileScannerModal} 
-          onClose={() => setShowMobileScannerModal(false)} 
-          title={t('📱 Wireless Mobile Barcode Scanner Pairing', '📱 රැහැන් රහිත ජංගම බාර්කෝඩ් ස්කෑනර් සම්බන්ධතාවය')}
-        >
-          <div className="space-y-5 p-2 text-left max-w-xl mx-auto">
-            {/* Header Banner */}
-            <div className="bg-slate-900 text-white p-4 rounded-2xl border border-slate-800 flex justify-between items-center gap-3">
-              <div>
-                <h4 className="text-xs font-black text-amber-400 uppercase tracking-widest flex items-center gap-2">
-                  <WifiIcon className="w-4 h-4 text-amber-400" />
-                  {t('Local Wi-Fi POS Signaling Server', 'දේශීය Wi-Fi සංඥා සේවාදායකය')}
-                </h4>
-                <p className="text-[11px] text-slate-300 font-medium mt-0.5">
-                  {t('Stream phone camera barcode scans instantly into this POS cart.', 'ස්මාර්ට්ෆෝන් කැමරාවෙන් ස්කෑන් කරන බාර්කෝඩ් සෘජුවම POS කාට් එකට ඇතුළත් කරන්න.')}
-                </p>
-              </div>
-              <div className="flex flex-col items-end">
-                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${isMobileScannerConnected ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'}`}>
-                  <span className={`w-2 h-2 rounded-full ${isMobileScannerConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
-                  {isMobileScannerConnected
-                    ? (connectedDevicesCount > 1
-                        ? t(`${connectedDevicesCount} Devices Connected`, `උපාංග ${connectedDevicesCount}ක් සම්බන්ධයි`)
-                        : t('1 Device Connected', 'උපාංග 1ක් සම්බන්ධයි'))
-                    : t('Waiting for connection...', 'සම්බන්ධ වෙමින්...')}
-                </span>
-                <span className="text-[9px] font-mono text-slate-400 mt-1">Session: {scannerSessionId}</span>
-              </div>
-            </div>
-
-            {/* QR Code & Direct Access Section */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 items-center bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
-              {/* QR Code Card */}
-              <div className="flex flex-col items-center justify-center p-3 bg-slate-50 border border-slate-200 rounded-2xl">
-                <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-inner">
-                  <QRCodeSVG 
-                    value={mobileScannerUrl} 
-                    size={170} 
-                    level="H" 
-                    includeMargin={false}
-                  />
-                </div>
-                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-2">
-                  {t('Scan with Phone Camera', 'දුරකථන කැමරාවෙන් ස්කෑන් කරන්න')}
-                </span>
-              </div>
-
-              {/* Step-by-Step Instructions & IP Switcher */}
-              <div className="space-y-3 text-xs">
-                {localScannerInfo?.ips && localScannerInfo.ips.length > 1 && (
-                  <div>
-                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1">
-                      {t('Select Host Network Interface / IP:', 'ජාල අතුරුමුහුණත තෝරන්න:')}
-                    </label>
-                    <select
-                      value={selectedScannerIp}
-                      onChange={(e) => setSelectedScannerIp(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
-                    >
-                      {localScannerInfo.ips.map((adapter, idx) => (
-                        <option key={idx} value={adapter.address}>
-                          {adapter.isWifi ? '📶 ' : '🌐 '} {adapter.name}: {adapter.address}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                <div className="space-y-2 text-slate-700">
-                  <div className="flex items-start gap-2">
-                    <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-black text-[10px] shrink-0">1</span>
-                    <p className="font-semibold text-[11px] leading-tight">
-                      {t('Connect your smartphone to the same Wi-Fi / Local Network.', 'ස්මාර්ට්ෆෝනය මෙම පරිගණකය ඇති Wi-Fi ජාලයටම සම්බන්ධ කරන්න.')}
-                    </p>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-black text-[10px] shrink-0">2</span>
-                    <p className="font-semibold text-[11px] leading-tight">
-                      {t('Scan the QR code or open the link below on your phone.', 'QR කේතය ස්කෑන් කරන්න හෝ පහත ලින්ක් එක දුරකථනයෙන් විවෘත කරන්න.')}
-                    </p>
-                  </div>
-                  <div className="flex items-start gap-2">
-                    <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-black text-[10px] shrink-0">3</span>
-                    <p className="font-semibold text-[11px] leading-tight">
-                      {t('Point camera at barcodes — items are added to POS automatically!', 'කැමරාව බාර්කෝඩ් වෙත යොමු කරන්න — භාණ්ඩ ස්වයංක්‍රීයව POS කාට් එකට එකතු වේ!')}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Direct Link Copy Button */}
-                <div className="pt-1">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      readOnly
-                      value={mobileScannerUrl}
-                      className="w-full px-2.5 py-1.5 bg-slate-100 border border-slate-200 rounded-lg text-[10px] font-mono text-slate-700 select-all outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigator.clipboard.writeText(mobileScannerUrl);
-                        setCopiedScannerUrl(true);
-                        setTimeout(() => setCopiedScannerUrl(false), 2000);
-                      }}
-                      className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-amber-400 rounded-lg text-[10px] font-black uppercase tracking-wider flex items-center gap-1 shrink-0 transition-all"
-                    >
-                      {copiedScannerUrl ? <CheckIcon className="w-3.5 h-3.5 text-emerald-400" /> : <CopyIcon className="w-3.5 h-3.5" />}
-                      {copiedScannerUrl ? t('Copied', 'පිටපත් කළා') : t('Copy', 'පිටපත්')}
-                    </button>
-                    <a
-                      href={mobileScannerUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg shrink-0 transition-colors"
-                      title={t('Open in browser tab', 'නව ටැබ් එකක විවෘත කරන්න')}
-                    >
-                      <ExternalLinkIcon className="w-3.5 h-3.5" />
-                    </a>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Test Simulation Tool & Recent Scans Feed */}
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
-              <div className="flex justify-between items-center">
-                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
-                  {t('Desktop Barcode Simulator / Manual Test', 'ඩෙස්ක්ටොප් බාර්කෝඩ් පරික්ෂාව')}
-                </span>
-                <span className="text-[9px] text-slate-400 font-mono">
-                  {recentScans.length} {t('live scan(s)', 'සජීවී ස්කෑන්')}
-                </span>
-              </div>
-
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={simulateBarcodeInput}
-                  onChange={(e) => setSimulateBarcodeInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && simulateBarcodeInput.trim()) {
-                      handleBarcodeScanned(simulateBarcodeInput.trim(), 'manual');
-                      setSimulateBarcodeInput('');
-                    }
-                  }}
-                  placeholder={t('Enter product barcode or SKU to test...', 'පරීක්ෂා කිරීමට බාර්කෝඩ් හෝ SKU ඇතුළත් කරන්න...')}
-                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (simulateBarcodeInput.trim()) {
-                      handleBarcodeScanned(simulateBarcodeInput.trim(), 'manual');
-                      setSimulateBarcodeInput('');
-                    }
-                  }}
-                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-sm shrink-0"
-                >
-                  {t('Simulate Scan', 'පරීක්ෂා කරන්න')}
-                </button>
-              </div>
-
-              {/* Recent Scan History */}
-              {recentScans.length > 0 && (
-                <div className="space-y-1 pt-1">
-                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">
-                    {t('Recent Live Scans Feed:', 'මෑතකදී ස්කෑන් කළ බාර්කෝඩ්:')}
-                  </span>
-                  <div className="max-h-28 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
-                    {recentScans.slice(0, 5).map((scan, sIdx) => (
-                      <div key={sIdx} className="bg-white border border-slate-200 rounded-lg p-2 flex justify-between items-center text-xs font-bold text-slate-800">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded font-mono font-bold">
-                            {scan.format || 'SCAN'}
-                          </span>
-                          <span className="font-mono text-slate-900">{scan.barcode}</span>
-                        </div>
-                        <span className="text-[9px] text-slate-400 font-normal">
-                          {new Date(scan.timestamp).toLocaleTimeString()}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Footer close button */}
-            <button
-              type="button"
-              onClick={() => setShowMobileScannerModal(false)}
-              className="w-full py-3 bg-slate-100 hover:bg-slate-200 active:scale-[0.99] text-slate-700 font-black text-xs uppercase tracking-widest rounded-xl transition-all"
-            >
-              {t('Done / Keep Listening in Background', 'අවසන් / පසුබිමේ සක්‍රියව තබන්න')}
-            </button>
-          </div>
-        </Modal>
-      )}
-
-      {/* 💵 Shift Balancing & Cash Drawer Control Modal */}
-      {/* Shift Balancing Modal Removed */}
-
-    </div>
-
-  );
-}
+... [truncated for diff preview]

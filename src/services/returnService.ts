@@ -39,6 +39,8 @@ export interface SalesReturnPayload {
   settlement_mode?: string;
   previousInvoiceBalance?: number;
   previous_invoice_balance?: number;
+  originalInvoiceTotal?: number;
+  original_invoice_total?: number;
   isCredit?: boolean;
   is_credit?: boolean | number;
 }

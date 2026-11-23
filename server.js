@@ -7299,7 +7299,9 @@ async function executeSalesReturn(payload = {}, options = {}) {
       previousInvoiceBalance,
       previous_invoice_balance: previousInvoiceBalance,
       remainingBalanceDue: newBalanceDue,
-      balance_due: newBalanceDue
+      balance_due: newBalanceDue,
+      originalInvoiceTotal: Number(sale.total_amount || sale.total || 0),
+      original_invoice_total: Number(sale.total_amount || sale.total || 0)
     };
   });
 
