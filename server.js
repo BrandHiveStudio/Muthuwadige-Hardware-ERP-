@@ -3251,15 +3251,39 @@ app.get(['/api/health', '/health'], async (req, res) => {
   }
 });
 
-// TRIGGER MANUAL BACKUP API
+// Helper: Format any date/timestamp into YYYY-MM-DD in Asia/Colombo
+function toSriLankaDateString(dateVal) {
+  if (!dateVal && dateVal !== 0) return '';
+  if (typeof dateVal === 'string') {
+    const trimmed = dateVal.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  }
+  const d = new Date(dateVal);
+  if (isNaN(d.getTime())) return '';
+  try {
+    return d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Colombo' });
+  } catch (_) {
+    return d.toISOString().slice(0, 10);
+  }
+}
+
+// TRIGGER MANUAL BACKUP API (POST)
 app.post('/api/settings/trigger-backup', async (req, res) => {
   try {
     const { fromDate, toDate, targetEmail } = req.body || {};
+    const normalizedFrom = fromDate ? toSriLankaDateString(fromDate) : null;
+    const normalizedTo = toDate ? toSriLankaDateString(toDate) : null;
+
     const settings = await getRuntimeSettingsSnapshot();
-    let cleanTarget = (targetEmail || settings.smtp_destination || settings.backup_email || 'sanojhardware@gmail.com').toString().trim().toLowerCase();
-      if (cleanTarget.includes('sanojhaerdware') || !cleanTarget || cleanTarget === 'undefined') cleanTarget = 'sanojhardware@gmail.com';
-      const email = cleanTarget;
-    const result = await performBackup(email, 'Manual', fromDate, toDate);
+    let cleanTarget = (targetEmail || settings.smtp_destination || settings.backup_email || 'sanojhardware@gmail.com')
+      .toString()
+      .trim()
+      .toLowerCase();
+    if (cleanTarget.includes('sanojhaerdware') || !cleanTarget || cleanTarget === 'undefined') {
+      cleanTarget = 'sanojhardware@gmail.com';
+    }
+
+    const result = await performBackup(cleanTarget, 'Manual', normalizedFrom, normalizedTo);
     if (result.success) {
       res.json(result);
     } else {
@@ -3275,15 +3299,23 @@ app.post('/api/settings/trigger-backup', async (req, res) => {
   }
 });
 
+// TRIGGER MANUAL BACKUP API (GET)
 app.get('/api/trigger-backup', async (req, res) => {
-  // Legacy GET support for backward compatibility with Settings.tsx fetch call
   try {
     const { fromDate, toDate, targetEmail } = req.query || {};
+    const normalizedFrom = fromDate ? toSriLankaDateString(fromDate) : null;
+    const normalizedTo = toDate ? toSriLankaDateString(toDate) : null;
+
     const settings = await getRuntimeSettingsSnapshot();
-    let cleanTarget = (targetEmail || settings.smtp_destination || settings.backup_email || 'sanojhardware@gmail.com').toString().trim().toLowerCase();
-      if (cleanTarget.includes('sanojhaerdware') || !cleanTarget || cleanTarget === 'undefined') cleanTarget = 'sanojhardware@gmail.com';
-      const email = cleanTarget;
-    const result = await performBackup(email, 'Manual', fromDate, toDate);
+    let cleanTarget = (targetEmail || settings.smtp_destination || settings.backup_email || 'sanojhardware@gmail.com')
+      .toString()
+      .trim()
+      .toLowerCase();
+    if (cleanTarget.includes('sanojhaerdware') || !cleanTarget || cleanTarget === 'undefined') {
+      cleanTarget = 'sanojhardware@gmail.com';
+    }
+
+    const result = await performBackup(cleanTarget, 'Manual', normalizedFrom, normalizedTo);
     if (result.success) {
       res.json(result);
     } else {
@@ -4303,6 +4335,41 @@ app.post('/api/admin/execute-factory-reset', async (req, res) => {
     console.log('🚨 [FACTORY RESET] Authorization verified. Executing nuclear system reset...');
 
     const wipeTimestamp = Math.floor(Date.now() / 1000).toString();
+    const PRESERVED_EMAILS_SQL = "('sanojhardware@gmail.com', 'krishleo439@gmail.com')";
+
+    const resetStatements = [
+      'DELETE FROM sales;',
+      'DELETE FROM sale_items;',
+      'DELETE FROM sales_returns;',
+      'DELETE FROM sales_return_items;',
+      'DELETE FROM transactions;',
+      'DELETE FROM credit_payments;',
+      'DELETE FROM credit_notes;',
+      'DELETE FROM credit_note_usage;',
+      'DELETE FROM cheque_registry;',
+      'DELETE FROM purchase_orders;',
+      'DELETE FROM purchase_order_items;',
+      'DELETE FROM purchase_returns;',
+      'DELETE FROM purchase_return_items;',
+      'DELETE FROM debit_notes;',
+      'DELETE FROM quotations;',
+      'DELETE FROM quotation_items;',
+      'DELETE FROM delivery_notes;',
+      'DELETE FROM stock_adjustments;',
+      'DELETE FROM shift_logs;',
+      'DELETE FROM audit_logs;',
+      'DELETE FROM expenses;',
+      'DELETE FROM customers;',
+      'DELETE FROM suppliers;',
+      'DELETE FROM products;',
+      'DELETE FROM categories;',
+      'DELETE FROM deleted_records;',
+      `DELETE FROM users WHERE LOWER(email) NOT IN ${PRESERVED_EMAILS_SQL};`,
+      `DELETE FROM profiles WHERE LOWER(email) NOT IN ${PRESERVED_EMAILS_SQL};`,
+      `DELETE FROM custom_permissions WHERE user_id IS NOT NULL AND user_id NOT IN (SELECT id FROM users WHERE LOWER(email) IN ${PRESERVED_EMAILS_SQL});`,
+      'DELETE FROM sync_queue;',
+      `INSERT OR REPLACE INTO system_settings (id, key, value, system_wipe_timestamp) VALUES ('SYSTEM_WIPE_TIMESTAMP', 'SYSTEM_WIPE_TIMESTAMP', '${wipeTimestamp}', '${wipeTimestamp}');`
+    ];
 
     // 3. Action on Turso Cloud
     const tursoClient = getTursoClient();
@@ -4314,27 +4381,19 @@ app.post('/api/admin/execute-factory-reset', async (req, res) => {
         try { await tursoClient.execute('ALTER TABLE system_settings ADD COLUMN value TEXT;'); } catch (_) { }
         try { await tursoClient.execute('ALTER TABLE system_settings ADD COLUMN system_wipe_timestamp TEXT;'); } catch (_) { }
 
-        await tursoClient.batch([
-          'DELETE FROM sales;',
-          'DELETE FROM sale_items;',
-          'DELETE FROM sales_returns;',
-          'DELETE FROM sales_return_items;',
-          'DELETE FROM transactions;',
-          'DELETE FROM credit_payments;',
-          'DELETE FROM cheque_registry;',
-          'DELETE FROM purchase_orders;',
-          'DELETE FROM purchase_order_items;',
-          'DELETE FROM quotations;',
-          'DELETE FROM quotation_items;',
-          'DELETE FROM customers;',
-          'DELETE FROM suppliers;',
-          'DELETE FROM products;',
-          'DELETE FROM categories;',
-          "DELETE FROM users WHERE LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com');",
-          "DELETE FROM profiles WHERE LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com');",
-          "DELETE FROM custom_permissions WHERE user_id NOT IN (SELECT id FROM users WHERE LOWER(email) IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com'));",
-          `INSERT OR REPLACE INTO system_settings (id, key, value, system_wipe_timestamp) VALUES ('SYSTEM_WIPE_TIMESTAMP', 'SYSTEM_WIPE_TIMESTAMP', '${wipeTimestamp}', '${wipeTimestamp}');`
-        ], 'write');
+        const cloudStatements = resetStatements.filter(s => !s.includes('sync_queue'));
+        try {
+          await tursoClient.batch(cloudStatements, 'write');
+        } catch (batchErr) {
+          console.warn('⚠️ [FACTORY RESET] Turso batch notice, falling back to individual statement execution:', batchErr.message);
+          for (const sql of cloudStatements) {
+            try {
+              await tursoClient.execute(sql);
+            } catch (singleErr) {
+              console.warn(`[FACTORY RESET] Turso Cloud notice (${sql.slice(0, 30)}...):`, singleErr.message);
+            }
+          }
+        }
         cloudWiped = true;
         console.log('✅ [FACTORY RESET] Turso Cloud nuclear reset statements successfully executed.');
       } catch (cloudErr) {
@@ -4343,30 +4402,7 @@ app.post('/api/admin/execute-factory-reset', async (req, res) => {
     }
 
     // 4. Action on Local SQLite
-    const localStatements = [
-      'DELETE FROM sales;',
-      'DELETE FROM sale_items;',
-      'DELETE FROM sales_returns;',
-      'DELETE FROM sales_return_items;',
-      'DELETE FROM transactions;',
-      'DELETE FROM credit_payments;',
-      'DELETE FROM cheque_registry;',
-      'DELETE FROM purchase_orders;',
-      'DELETE FROM purchase_order_items;',
-      'DELETE FROM quotations;',
-      'DELETE FROM quotation_items;',
-      'DELETE FROM customers;',
-      'DELETE FROM suppliers;',
-      'DELETE FROM products;',
-      'DELETE FROM categories;',
-      "DELETE FROM users WHERE LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com');",
-      "DELETE FROM profiles WHERE LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com');",
-      "DELETE FROM custom_permissions WHERE user_id NOT IN (SELECT id FROM users WHERE LOWER(email) IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com'));",
-      'DELETE FROM sync_queue;',
-      `INSERT OR REPLACE INTO system_settings (id, key, value, system_wipe_timestamp) VALUES ('SYSTEM_WIPE_TIMESTAMP', 'SYSTEM_WIPE_TIMESTAMP', '${wipeTimestamp}', '${wipeTimestamp}');`
-    ];
-
-    for (const sql of localStatements) {
+    for (const sql of resetStatements) {
       try {
         await db.run(sql);
       } catch (sqlErr) {

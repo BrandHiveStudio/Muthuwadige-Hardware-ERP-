@@ -1366,7 +1366,9 @@ export async function pullDownstreamChanges(localDb: any, tursoClient: Client | 
     // 9. Quotations & Quotation Items
     syncAndPruneEntity('quotations', 'SELECT * FROM quotations ORDER BY created_at DESC LIMIT 1000'),
     syncAndPruneEntity('quotation_items', 'SELECT * FROM quotation_items'),
-    // 10. Sales Returns & Sales Return Items
+    // 10. Sales (orders, items, billing)
+    syncAndPruneEntity('sales', 'SELECT * FROM sales ORDER BY created_at DESC LIMIT 1000', '', 'id', true),
+    // 10b. Sales Returns & Sales Return Items
     syncAndPruneEntity('sales_returns', 'SELECT * FROM sales_returns ORDER BY created_at DESC LIMIT 1000'),
     syncAndPruneEntity('sales_return_items', 'SELECT * FROM sales_return_items'),
     // 11. Cheque Registry

@@ -220,7 +220,7 @@ export function computeFinancialSummary(params: {
     const exAmt = Number(r.exchange_amount !== undefined ? r.exchange_amount : (r.exchangeAmount || 0));
     exchangeSellingRevenue += exAmt;
 
-    const exItems = parseItemsArray(r.exchangeItems || r.exchange_items);
+    const exItems = parseItemsArray(r.exchangeItems || r.exchange_items || r.replacementItems || r.replacement_items);
     exItems.forEach((it: any) => {
       const qty = Number(it.qty || it.quantity || 0);
       const product = products.find((p: any) => p.id === it.productId || p.id === it.product_id || p.id === it.id);

@@ -43,12 +43,10 @@ import {
   getTodaySriLankaDate,
   getCurrentSriLankaMonth,
   isWithinDateRange,
-  computeFinancialSummary,
-  computePaymentBreakdown,
   calculateSaleAccounting,
   isCreditSaleRecord,
   getItemUnitCost,
-  getReturnSellingSubtotal
+  computeUnifiedMetrics
 } from '../utils/accounting';
 import { useCurrency } from '../context/CurrencyContext';
 import { formatStock } from '../utils/formatters';
@@ -332,13 +330,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     return true;
   });
 
-  const getSaleSellingSubtotal = (s: any) => {
-    const tot = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
-    const tax = Number(s.tax || 0);
-    const trans = Number(s.transportation_fee || s.delivery_fee || s.delivery_charges || s.transportationFee || 0);
-    return Math.max(0, tot - tax - trans);
-  };
-
   const getReturnSellingSubtotal = (r: any) => {
     const retAmt = Number(r.return_amount !== undefined && r.return_amount !== null
       ? r.return_amount
@@ -370,25 +361,22 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     return 0;
   };
 
-  // --- SALES CALCULATIONS ---
-  const rawCashCollected = filteredSales.reduce((sum, s) => {
-    const statusLower = (s.status || '').toString().toLowerCase().trim();
-    if (statusLower === 'cancelled' || statusLower === 'voided') return sum;
+  // --- AUTHORITATIVE UNIFIED METRICS ---
+  const unifiedMetrics = computeUnifiedMetrics({
+    sales: filteredSales,
+    salesReturns: filteredSalesReturns,
+    creditPayments: filteredCreditPayments,
+    transactions: filteredTransactions,
+    products,
+    cheques,
+    fromDate: effectiveFromDate,
+    toDate: effectiveToDate
+  });
 
-    const method = (s.payment_method || s.paymentMethod || '').toString().toLowerCase().trim();
-    const isCredit = method === 'credit' || method === 'credit sale' || (s as any).is_credit === true;
-
-    if (isCredit) {
-      // FIX: Rely entirely on the credit_payments table for credit revenue. 
-      // Adding payment_received here causes double-counting!
-      return sum;
-    } else {
-      const paid = s.payment_received !== undefined && s.payment_received !== null && Number(s.payment_received) > 0
-        ? Number(s.payment_received)
-        : Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
-      return sum + paid;
-    }
-  }, 0);
+  const totalCashCollected = unifiedMetrics.totalRevenueCollected;
+  const totalSalesRevenue = unifiedMetrics.netSalesRevenue;
+  const totalOrders = unifiedMetrics.totalOrders;
+  const paidOrders = unifiedMetrics.paidOrders;
 
   const getExchangeRefundAmount = (r: any) => {
     const totRef = Number(r.total_refunded !== undefined && r.total_refunded !== null ? r.total_refunded : (r.totalRefunded || 0));
@@ -408,113 +396,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
 
     return 0;
   };
-
-  const cashRefundsTotal = filteredSalesReturns.reduce((sum, r) => {
-    const statusLower = (r.status || '').toString().toLowerCase().trim();
-    if (statusLower === 'voided' || statusLower === 'cancelled') return sum;
-    const isCredit = r.isCredit === true || (r as any).is_credit === 1 || (r as any).is_credit === true;
-    if (isCredit) return sum;
-
-    const type = (r.return_type || r.returnType || r.returnMethod || r.return_method || r.type || '').toString().toLowerCase().trim();
-    if (type === 'return' && Number(r.total_refunded || r.totalRefunded || 0) === 0) return sum;
-
-    if (type === 'cash refund' || type === 'cash' || type === 'cash_refund') {
-      const refundAmt = Number(r.refund_amount !== undefined && r.refund_amount !== null && Number(r.refund_amount) > 0
-        ? r.refund_amount
-        : (r.total_refunded !== undefined && r.total_refunded !== null && Number(r.total_refunded) > 0
-          ? r.total_refunded
-          : (r.return_amount !== undefined ? r.return_amount : (r.returnAmount || 0))));
-      return sum + refundAmt;
-    }
-
-    if (type === 'exchange') {
-      return sum + getExchangeRefundAmount(r);
-    }
-
-    return sum;
-  }, 0);
-
-  const exchangeCashInflowsTotal = filteredSalesReturns.reduce((sum, r) => {
-    const statusLower = (r.status || '').toString().toLowerCase().trim();
-    if (statusLower === 'voided' || statusLower === 'cancelled') return sum;
-    const type = (r.return_type || r.returnType || r.returnMethod || r.return_method || r.type || '').toString().toLowerCase().trim();
-
-    if (type === 'exchange') {
-      const paidAmt = Number(r.customer_paid !== undefined ? r.customer_paid : (r.customerPaid !== undefined ? r.customerPaid : 0));
-      const changeGiven = Number(r.change_given !== undefined ? r.change_given : (r.changeGiven !== undefined ? r.changeGiven : 0));
-      const netPaid = Math.max(0, paidAmt - changeGiven);
-      return sum + netPaid;
-    }
-    return sum;
-  }, 0);
-
-  const totalCreditSettlementsCollected = filteredCreditPayments.reduce((sum, cp) => {
-    const cpStatus = (cp.status || '').toLowerCase();
-    if (cpStatus === 'voided' || cpStatus === 'cancelled') return sum;
-    return sum + Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0));
-  }, 0);
-
-  const totalCashCollected = Math.max(0, rawCashCollected + totalCreditSettlementsCollected + exchangeCashInflowsTotal - cashRefundsTotal);
-
-  const grossSalesSellingRevenue = filteredSales.reduce((sum, s) => {
-    const statusLower = (s.status || '').toString().toLowerCase().trim();
-    if (statusLower === 'cancelled' || statusLower === 'voided') return sum;
-    return sum + getSaleSellingSubtotal(s);
-  }, 0);
-
-  const returnsSellingRevenue = filteredSalesReturns.reduce((sum, r) => {
-    if (r.status === 'voided' || r.status === 'Voided' || r.status === 'cancelled') return sum;
-    return sum + getReturnSellingSubtotal(r);
-  }, 0);
-
-  const exchangeSellingRevenue = filteredSalesReturns.reduce((sum, r) => {
-    if (r.status === 'voided' || r.status === 'Voided' || r.status === 'cancelled') return sum;
-    const exAmt = Number(r.exchange_amount !== undefined ? r.exchange_amount : (r.exchangeAmount || 0));
-    return sum + exAmt;
-  }, 0);
-
-  const totalSalesRevenue = Math.max(0, grossSalesSellingRevenue - returnsSellingRevenue);
-  
-  const totalSalesOrders = filteredSales.filter(s => {
-    const statusLower = (s.status || '').toString().toLowerCase().trim();
-    return statusLower !== 'cancelled' && statusLower !== 'voided';
-  }).length;
-
-  const totalOrders = totalSalesOrders;
-
-  const paidOrders = filteredSales.filter((o) => {
-    if (!o) return false;
-    const status = String(o.status || (o as any).paymentStatus || (o as any).payment_status || '').toUpperCase().trim();
-    const method = String(o.paymentMethod || o.payment_method || '').toUpperCase().trim();
-    const isCredit = method === 'CREDIT' || method === 'CREDIT SALE' || (o as any).is_credit === true || (o as any).is_credit === 1;
-
-    const acct = calculateSaleAccounting(o, filteredSalesReturns, filteredCreditPayments);
-    const explicitBalance = (o as any).remainingBalance ?? (o as any).remaining_balance ?? o.balanceDue ?? (o as any).balance_due ?? (o as any).balanceAmount ?? (o as any).balance_amount ?? o.balance;
-    const balanceDue = explicitBalance !== undefined && explicitBalance !== null
-      ? Math.min(Number(explicitBalance), acct.netOutstanding)
-      : (acct ? acct.netOutstanding : (isCredit ? 1 : 0));
-
-    const isFullyReturned = status === 'RETURNED' || status === 'FULLY RETURNED' || status === 'CANCELLED' || status === 'VOIDED';
-    if (isFullyReturned) return false;
-
-    if (isCredit) {
-      return balanceDue <= 0.01 || Boolean(acct?.isFullySettled);
-    }
-
-    return (
-      status === 'PAID' ||
-      status === 'COMPLETED' ||
-      status === 'SETTLED' ||
-      status === 'FULLY SETTLED' ||
-      status === 'PARTIALLY RETURNED' ||
-      status === 'PARTIAL' ||
-      status === 'PARTIALLY_RETURNED' ||
-      status === 'PARTIALLY_REFUNDED' ||
-      status === 'PARTIALLY REFUNDED' ||
-      status === 'PARTIAL REFUND' ||
-      balanceDue <= 0.01
-    );
-  }).length;
 
   const dailySalesData = (() => {
     const map: Record<string, number> = {};
@@ -782,32 +663,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
   // Accounting Rule (Task 2): TOTAL CASH OUT (EXPENSES) = Total Outflow - Cash Purchase Returns
   const totalExpenses = Math.max(0, grossExpenses - totalPurchaseReturns);
 
-  const financialSummaryMetrics = (() => {
-    const summary = computeFinancialSummary({
-      sales: filteredSales,
-      salesReturns: filteredSalesReturns,
-      products
-    });
-
-    const deliveryFees = filteredSales.reduce((sum, sale) => {
-      const statusLower = (sale.status || '').toString().toLowerCase().trim();
-      if (statusLower === 'cancelled' || statusLower === 'voided') return sum;
-      return sum + Number(sale.transportation_fee || sale.delivery_fee || sale.delivery_charges || sale.transportationFee || 0);
-    }, 0);
-
-    return {
-      grossStickerSales: summary.grossStickerSales,
-      customerDiscounts: summary.customerDiscounts,
-      salesReturnsRefunds: summary.returnsSellingRevenue,
-      transportFees: deliveryFees > 0 ? deliveryFees : summary.transportFees,
-      grossSalesRevenue: summary.grossStickerSales + summary.exchangeSellingRevenue,
-      netSalesRevenue: summary.netSalesRevenue,
-      cogs: summary.netCOGS,
-      grossProfit: summary.grossProfit,
-      grossMarginPct: summary.grossMarginPct
-    };
-  })();
-
+  const financialSummaryMetrics = unifiedMetrics;
   const totalSalesProfit = financialSummaryMetrics.grossProfit;
 
   // Accounts Receivable is a cumulative balance sheet metric (up to selected date)
@@ -875,59 +731,6 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     return true;
   });
 
-  let calcCash = 0;
-  let calcCard = 0;
-  let calcCredit = 0;
-  let calcBank = 0;
-
-  todaySales.forEach(s => {
-    const method = (s.payment_method || s.paymentMethod || 'Cash').toString().toLowerCase().trim();
-    const totalAmt = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
-
-    const isCreditSale = isCreditSaleRecord(s);
-
-    if (isCreditSale) {
-      const acct = calculateSaleAccounting(s, filteredSalesReturns, filteredCreditPayments);
-      calcCredit += (acct.netOutstanding > 0.001 ? acct.netOutstanding : 0);
-    } else {
-      if (Array.isArray(s.split_payments) && s.split_payments.length > 0) {
-        for (const sp of s.split_payments) {
-          const spMethod = (sp.method || sp.payment_method || '').toString().toLowerCase().trim();
-          const spAmt = Number(sp.amount || 0);
-          if (spMethod === 'card' || spMethod === 'credit card') calcCard += spAmt;
-          else if (spMethod === 'bank' || spMethod === 'bank transfer' || spMethod === 'online') calcBank += spAmt;
-          else if (spMethod === 'cheque' || spMethod.includes('cheque')) { /* uncashed cheque in hand */ }
-          else calcCash += spAmt;
-        }
-      } else if (s.cash_amount !== undefined && s.cheque_amount !== undefined && Number(s.cheque_amount) > 0) {
-        calcCash += Number(s.cash_amount || 0);
-      } else if (method === 'card' || method === 'credit card') {
-        calcCard += totalAmt;
-      } else if (method === 'bank' || method === 'bank transfer' || method === 'online') {
-        calcBank += totalAmt;
-      } else if (method === 'cheque' || method.includes('cheque')) {
-        // Method B: Uncashed / pending cheques do NOT add to physical cash drawer
-      } else {
-        calcCash += totalAmt;
-      }
-    }
-  });
-
-  periodCreditPayments.forEach(cp => {
-    const payAmt = Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0));
-    const payMethod = (cp.payment_method || cp.paymentMethod || 'Cash').toString().toLowerCase().trim();
-
-    if (payMethod === 'card' || payMethod === 'credit card') {
-      calcCard += payAmt;
-    } else if (payMethod === 'bank' || payMethod === 'bank transfer' || payMethod === 'online') {
-      calcBank += payAmt;
-    } else if (payMethod === 'cheque' || payMethod.includes('cheque')) {
-      // Method B: Cheque settlements remain in Cheque Registry until encashed/cleared
-    } else {
-      calcCash += payAmt;
-    }
-  });
-
   const periodTransactions = filteredTransactions.filter(t => {
     if (!fromDate && !toDate && rangeType === 'custom') {
       const todayStr = getLocalDateString();
@@ -937,42 +740,17 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     return true;
   });
 
-  const periodCashPurchaseReturns = periodTransactions
-    .filter(t => (t.flow_type?.toLowerCase() === 'income' || t.type?.toLowerCase() === 'income') && isCashPurchaseReturnTrans(t))
-    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-
-  // Calculate Cash Expenses paid out of the drawer for the period (Purchases, Supplier settlements, etc.)
-  const rawPeriodCashExpenses = periodTransactions
-    .filter(t => {
-      const type = (t.flow_type || t.type || '').toString().toUpperCase().trim();
-      return type === 'EXPENSE' && isCashTrans(t) && !isSalesReturnTrans(t);
-    })
-    .reduce((sum, t) => sum + Number(t.amount || 0), 0);
-
-  // Cash purchase returns reduce total operational cash outflow/expenses (Task 2)
-  const periodCashExpenses = Math.max(0, rawPeriodCashExpenses - periodCashPurchaseReturns);
-
   // Task 3: Query BANK_TRANSFER purchase returns for the period and display under Bank Breakdown
   const periodBankPurchaseReturns = periodTransactions
     .filter(t => (t.flow_type?.toLowerCase() === 'income' || t.type?.toLowerCase() === 'income') && isBankPurchaseReturnTrans(t))
     .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
-  // Net Cash in Drawer for Today's Payment Breakdown (Inflows - Expenses)
-  // POS Net Cash sales income remains completely untouched
-  const todayCash = Math.max(0, calcCash - periodCashExpenses);
-  const todayCard = calcCard;
-  const todayCredit = calcCredit;
-  const todayBank = calcBank + periodBankPurchaseReturns;
-
-  // Pending Inward Cheques in Hand for Today's Period
-  const periodPendingCheques = cheques.filter(c => {
-    const cDate = safeGetDateString(c.cheque_date || c.created_at);
-    if (effectiveFromDate && cDate < effectiveFromDate) return false;
-    if (effectiveToDate && cDate > effectiveToDate) return false;
-    const isToday = !fromDate && !toDate && rangeType === 'custom' ? cDate === getLocalDateString() : true;
-    return isToday && c.direction === 'INWARD' && (c.status === 'PENDING' || c.status === 'IN_HAND' || c.status === 'DEPOSITED');
-  });
-  const todayPendingChequesAmount = periodPendingCheques.reduce((sum, c) => sum + Number(c.amount || 0), 0);
+  // Authoritative Payment Breakdown from Unified Metrics
+  const todayCash = unifiedMetrics.cashCollected;
+  const todayCard = unifiedMetrics.cardCollected;
+  const todayCredit = unifiedMetrics.creditOutstanding;
+  const todayBank = Math.round((unifiedMetrics.bankCollected + periodBankPurchaseReturns) * 100) / 100;
+  const todayPendingChequesAmount = unifiedMetrics.pendingChequesAmount;
 
   const resolveCashierDisplayName = (rawName?: string, email?: string, userId?: string): string => {
     const rawVal = (rawName || '').trim();

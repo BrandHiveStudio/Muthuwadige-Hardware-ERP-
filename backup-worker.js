@@ -189,28 +189,62 @@ const setRowHeights = (ws) => {
   ws['!rows'] = rows;
 };
 
+const SRI_LANKA_TIMEZONE = 'Asia/Colombo';
+
+const parseToDate = (dateInput) => {
+  if (!dateInput && dateInput !== 0) return null;
+  if (dateInput instanceof Date) return isNaN(dateInput.getTime()) ? null : dateInput;
+  if (typeof dateInput === 'number') {
+    const d = new Date(dateInput);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof dateInput === 'string') {
+    const trimmed = dateInput.trim();
+    if (!trimmed || trimmed === '---' || trimmed === 'null' || trimmed === 'undefined') return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      const d = new Date(`${trimmed}T12:00:00Z`);
+      return isNaN(d.getTime()) ? null : d;
+    }
+    if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(trimmed)) {
+      const isoFormat = trimmed.replace(' ', 'T') + 'Z';
+      const d = new Date(isoFormat);
+      return isNaN(d.getTime()) ? null : d;
+    }
+    const d = new Date(trimmed);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+};
+
+const getSriLankaDateStr = (dateInput) => {
+  if (!dateInput && dateInput !== 0) return '';
+  if (typeof dateInput === 'string') {
+    const trimmed = dateInput.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  }
+  const d = parseToDate(dateInput);
+  if (!d) {
+    if (typeof dateInput === 'string' && dateInput.length >= 10) {
+      return dateInput.substring(0, 10);
+    }
+    return '';
+  }
+  try {
+    return d.toLocaleDateString('sv-SE', { timeZone: SRI_LANKA_TIMEZONE });
+  } catch (_) {
+    return d.toISOString().substring(0, 10);
+  }
+};
+
 const getExcelDecimalDate = (dateVal) => {
   if (!dateVal || dateVal === '---') return null;
-  let cleanStr = '';
-  if (typeof dateVal === 'string') {
-    cleanStr = dateVal.substring(0, 10);
-  } else if (dateVal instanceof Date) {
-    cleanStr = dateVal.toISOString().substring(0, 10);
-  } else {
-    cleanStr = String(dateVal).substring(0, 10);
-  }
-
-  if (!cleanStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
-    const parsed = new Date(dateVal);
-    if (isNaN(parsed.getTime())) return null;
-    cleanStr = parsed.toISOString().substring(0, 10);
-  }
+  const cleanStr = getSriLankaDateStr(dateVal);
+  if (!cleanStr || !cleanStr.match(/^\d{4}-\d{2}-\d{2}$/)) return null;
 
   const [year, month, day] = cleanStr.split('-').map(Number);
   const date = new Date(Date.UTC(year, month - 1, day));
   const epoch = new Date(Date.UTC(1899, 11, 30));
-  const diff = date.getTime() - epoch.getTime();
-  return diff / (24 * 60 * 60 * 1000);
+  return (date.getTime() - epoch.getTime()) / (24 * 60 * 60 * 1000);
 };
 
 const createWorksheet = (structuredData, headers) => {
@@ -598,53 +632,6 @@ export async function executeBackupTask({
       attendance: e.attendance !== undefined ? e.attendance : 100
     }));
 
-    const SRI_LANKA_TIMEZONE = 'Asia/Colombo';
-
-    const parseToDate = (dateInput) => {
-      if (!dateInput && dateInput !== 0) return null;
-      if (dateInput instanceof Date) return isNaN(dateInput.getTime()) ? null : dateInput;
-      if (typeof dateInput === 'number') {
-        const d = new Date(dateInput);
-        return isNaN(d.getTime()) ? null : d;
-      }
-      if (typeof dateInput === 'string') {
-        const trimmed = dateInput.trim();
-        if (!trimmed || trimmed === '---' || trimmed === 'null' || trimmed === 'undefined') return null;
-        if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-          const d = new Date(`${trimmed}T12:00:00Z`);
-          return isNaN(d.getTime()) ? null : d;
-        }
-        if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(trimmed)) {
-          const isoFormat = trimmed.replace(' ', 'T') + 'Z';
-          const d = new Date(isoFormat);
-          return isNaN(d.getTime()) ? null : d;
-        }
-        const d = new Date(trimmed);
-        return isNaN(d.getTime()) ? null : d;
-      }
-      return null;
-    };
-
-    const getSriLankaDateStr = (dateInput) => {
-      if (!dateInput && dateInput !== 0) return '';
-      if (typeof dateInput === 'string') {
-        const trimmed = dateInput.trim();
-        if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
-      }
-      const d = parseToDate(dateInput);
-      if (!d) {
-        if (typeof dateInput === 'string' && dateInput.length >= 10) {
-          return dateInput.substring(0, 10);
-        }
-        return '';
-      }
-      try {
-        return d.toLocaleDateString('sv-SE', { timeZone: SRI_LANKA_TIMEZONE });
-      } catch (e) {
-        return d.toISOString().substring(0, 10);
-      }
-    };
-
     const isWithinDateRange = (dateVal) => {
       if (!fromDate && !toDate) return true;
       if (!dateVal && dateVal !== 0) return false;
@@ -690,14 +677,9 @@ export async function executeBackupTask({
     cheques.forEach(c => checkDate(c.cheque_date || c.created_at));
     purchaseReturns.forEach(pr => checkDate(pr.created_at || pr.return_date));
 
-    const currentMonthStart = new Date();
-    currentMonthStart.setDate(1);
-    const dateStartStr = currentMonthStart.toISOString().split('T')[0];
-
-    const currentMonthEnd = new Date();
-    currentMonthEnd.setMonth(currentMonthEnd.getMonth() + 1);
-    currentMonthEnd.setDate(0);
-    const dateEndStr = currentMonthEnd.toISOString().split('T')[0];
+    const todaySlStr = getSriLankaDateStr(new Date());
+    const dateStartStr = `${todaySlStr.slice(0, 7)}-01`;
+    const dateEndStr = todaySlStr;
 
     const finalStart = fromDate || minDate || dateStartStr;
     const finalEnd = toDate || maxDate || dateEndStr;
@@ -1013,14 +995,28 @@ export async function executeBackupTask({
     });
     const pendingChequesAmount = pendingInwardCheques.reduce((sum, c) => sum + Number(c.amount || 0), 0);
 
-    const cashAmount = Math.max(0, directCash + settledCash + exchangeCashInflowsTotal - cashRefundsTotal);
-    const cardAmount = directCard + settledCard;
-    const bankTransferAmount = directBank + settledBank;
-    const chequeAmount = directCheque + settledCheque;
-    const creditAmount = totalCreditOutstanding;
+    const cashExpensesOutflow = transactions
+      .filter((t) => {
+        const st = String(t.status || 'ACTIVE').toUpperCase().trim();
+        if (st === 'VOIDED' || st === 'CANCELLED') return false;
+        const flow = String(t.flow_type || t.type || '').toUpperCase().trim();
+        const method = String(t.payment_method || t.paymentMethod || t.method || 'CASH').toUpperCase().trim();
+        const isCash = method === 'CASH' || method === 'CASH_BEARER';
+        return flow === 'EXPENSE' && isCash;
+      })
+      .reduce((sum, t) => sum + Math.abs(Number(t.amount || 0)), 0);
+
+    const cashAmount = Math.max(
+      0,
+      Number((directCash + settledCash + exchangeCashInflowsTotal - cashRefundsTotal - cashExpensesOutflow).toFixed(2))
+    );
+    const cardAmount = Number((directCard + settledCard).toFixed(2));
+    const bankTransferAmount = Number((directBank + settledBank).toFixed(2));
+    const chequeAmount = Number((directCheque + settledCheque).toFixed(2));
+    const creditAmount = Number(totalCreditOutstanding.toFixed(2));
 
     const valB8 = totalCreditOutstanding;
-    const valB7 = cashAmount + cardAmount + bankTransferAmount + chequeAmount;
+    const valB7 = Number((cashAmount + cardAmount + bankTransferAmount + chequeAmount).toFixed(2));
     const valB9 = purchaseOrders.filter(po => {
       const st = (po.status || '').toUpperCase().trim();
       return st !== 'CANCELLED' && st !== 'VOIDED';
@@ -1030,7 +1026,7 @@ export async function executeBackupTask({
 
     const totalSalesRevenue = valB6;
     const totalSalesProfit = valB11;
-    const paymentTotal = cashAmount + cardAmount + creditAmount + bankTransferAmount + chequeAmount;
+    const paymentTotal = Number((cashAmount + cardAmount + creditAmount + bankTransferAmount + chequeAmount).toFixed(2));
 
     // Overview Dashboard Sheet
     const overviewRows = [
@@ -1596,9 +1592,9 @@ export async function executeBackupTask({
     if (targetEmail) {
       try {
         const nowSriLanka = new Date();
-        const todayDateStr = nowSriLanka.toISOString().split('T')[0];
+        const todayDateStr = getSriLankaDateStr(nowSriLanka);
         const in48h = new Date(nowSriLanka.getTime() + 48 * 3600 * 1000);
-        const in48hStr = in48h.toISOString().split('T')[0];
+        const in48hStr = getSriLankaDateStr(in48h);
 
         const maturingCheques = (cheques || []).filter(c => 
           c.direction === 'INWARD' &&

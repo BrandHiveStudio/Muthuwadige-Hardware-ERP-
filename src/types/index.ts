@@ -332,6 +332,12 @@ export interface SalesReturn {
   previous_invoice_balance?: number;
   originalInvoiceTotal?: number;
   original_invoice_total?: number;
+  invoicePaymentMethod?: string;
+  invoice_payment_method?: string;
+  invoiceStatus?: string;
+  invoice_status?: string;
+  remainingBalanceDue?: number;
+  remaining_balance_due?: number;
 }
 
 export interface CreditNote {

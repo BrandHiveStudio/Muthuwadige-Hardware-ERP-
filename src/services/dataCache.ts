@@ -1,8 +1,3 @@
-/**
- * In-Memory Stale-While-Revalidate (SWR) Data Cache
- * Eliminates blocking page spinners and enables instant 0ms tab navigation across the ERP.
- */
-
 export interface CacheStore {
   customers: any[] | null;
   suppliers: any[] | null;
@@ -10,6 +5,7 @@ export interface CacheStore {
   categories: any[] | null;
   sales: any[] | null;
   returns: any[] | null;
+  sales_returns: any[] | null;
   settings: any | null;
   transactions: any[] | null;
   cheques: any[] | null;
@@ -26,6 +22,7 @@ const memoryCache: CacheStore = {
   categories: null,
   sales: null,
   returns: null,
+  sales_returns: null,
   settings: null,
   transactions: null,
   cheques: null,
@@ -57,6 +54,7 @@ export function invalidateCache(key?: CacheKey): void {
     memoryCache.categories = null;
     memoryCache.sales = null;
     memoryCache.returns = null;
+    memoryCache.sales_returns = null;
     memoryCache.settings = null;
     memoryCache.transactions = null;
     memoryCache.cheques = null;
@@ -67,9 +65,6 @@ export function invalidateCache(key?: CacheKey): void {
   }
 }
 
-/**
- * Full factory/boot cache reset: clears all memory cache, session storage, and stale local caches.
- */
 export function resetAllCaches(): void {
   invalidateCache();
   try {
@@ -83,7 +78,7 @@ export function resetAllCaches(): void {
         'hardware_erp_finance_tab',
         'hardware_erp_reports_filter'
       ];
-      keysToClear.forEach(k => {
+      keysToClear.forEach((k) => {
         try {
           sessionStorage.removeItem(k);
           localStorage.removeItem(k);

@@ -6,6 +6,7 @@
 export * from './sales/accounting';
 export * from './dateTime';
 export * from './financialEngine';
+export * from './unifiedMetrics';
 
 /**
  * Calculates Gross Line Total (Qty * Unit Price) before line discounts

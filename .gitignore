@@ -1,4 +1,4 @@
-# Logs
+# Logs & Caches
 logs
 *.log
 npm-debug.log*
@@ -6,51 +6,42 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
+.vite/
+.vercel/
+.claude/
 *.local
+
+# Dependencies & Build Outputs
+node_modules/
+dist/
+dist-ssr/
+release-dist/
+release-archive/
+backups/
+*.asar
+*.exe
+*.zip
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
 .DS_Store
-.claude/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
 
-# Sensitive / Local files
+# Sensitive / Local & Database Snapshots
 .env
-hardware.db
-hardware_erp.db
-*.db
-*.db-wal
-*.db-shm
-scratch/
+.env*
+jwt.secret
+certs/
 build/*
 !build/icon.ico
-release-dist/
-backups/
-
-*.exe
-*.zip
+*.db
+*.db-*
 *.bak
-dist/
-
-release-archive/
-*.asar
-*.exe
-
-
-release-archive/
-*.asar
-*.exe
-release-dist/
-
-.vercel
-.env*
+turso_cloud_backup*.json
+scratch/

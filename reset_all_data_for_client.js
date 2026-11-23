@@ -39,7 +39,9 @@ const TABLES_TO_PURGE = [
   'backup_logs',
   'categories',
   'discounts',
-  'promotions'
+  'promotions',
+  'deleted_records',
+  'expenses'
 ];
 
 async function purgeSqliteDb(filePath, label) {
@@ -86,13 +88,17 @@ async function purgeSqliteDb(filePath, label) {
     await db.run(
       "DELETE FROM users WHERE LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com')"
     );
-    console.log(`  ✓ Preserved store owner and admin credentials in profiles and users`);
+    await db.run(
+      "DELETE FROM custom_permissions WHERE user_id IS NOT NULL AND user_id NOT IN (SELECT id FROM users WHERE LOWER(email) IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com'))"
+    );
+    console.log(`  ✓ Preserved store owner and admin credentials in profiles, users, and custom_permissions`);
   } catch (err) {
-    console.warn('  ! Notice pruning profiles/users:', err.message);
+    console.warn('  ! Notice pruning profiles/users/permissions:', err.message);
   }
 
   // 4. Reset sequence and sync metadata in system_settings while preserving store branding
   try {
+    const wipeTs = Math.floor(Date.now() / 1000).toString();
     await db.run(`
       UPDATE system_settings 
       SET next_invoice_number = 'POS1-INV-00001',
@@ -101,7 +107,8 @@ async function purgeSqliteDb(filePath, label) {
           last_sync_timestamp = NULL
       WHERE id = 'global' OR 1=1
     `);
-    console.log(`  ✓ Reset next_invoice_number to POS1-INV-00001 and cleared sync timestamps`);
+    await db.run(`INSERT OR REPLACE INTO system_settings (id, key, value, system_wipe_timestamp) VALUES ('SYSTEM_WIPE_TIMESTAMP', 'SYSTEM_WIPE_TIMESTAMP', '${wipeTs}', '${wipeTs}')`);
+    console.log(`  ✓ Reset next_invoice_number to POS1-INV-00001 and set SYSTEM_WIPE_TIMESTAMP`);
   } catch (err) {
     console.warn('  ! Notice updating system_settings:', err.message);
   }
@@ -166,13 +173,17 @@ async function purgeTursoCloud() {
     await turso.execute(
       "DELETE FROM users WHERE LOWER(email) NOT IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com')"
     );
+    await turso.execute(
+      "DELETE FROM custom_permissions WHERE user_id IS NOT NULL AND user_id NOT IN (SELECT id FROM users WHERE LOWER(email) IN ('sanojhardware@gmail.com', 'krishleo439@gmail.com'))"
+    );
     console.log(`  ✓ Preserved store owner and admin accounts on Turso Cloud`);
   } catch (err) {
-    console.warn('  ! Notice pruning remote profiles/users:', err.message);
+    console.warn('  ! Notice pruning remote profiles/users/permissions:', err.message);
   }
 
   // 4. Reset sequence and sync metadata in system_settings on Turso Cloud
   try {
+    const wipeTs = Math.floor(Date.now() / 1000).toString();
     await turso.execute(`
       UPDATE system_settings 
       SET next_invoice_number = 'POS1-INV-00001',
@@ -181,7 +192,8 @@ async function purgeTursoCloud() {
           last_sync_timestamp = NULL
       WHERE id = 'global' OR 1=1
     `);
-    console.log(`  ✓ Reset remote next_invoice_number to POS1-INV-00001`);
+    await turso.execute(`INSERT OR REPLACE INTO system_settings (id, key, value, system_wipe_timestamp) VALUES ('SYSTEM_WIPE_TIMESTAMP', 'SYSTEM_WIPE_TIMESTAMP', '${wipeTs}', '${wipeTs}')`);
+    console.log(`  ✓ Reset remote next_invoice_number to POS1-INV-00001 and set SYSTEM_WIPE_TIMESTAMP`);
   } catch (err) {
     console.warn('  ! Notice updating remote system_settings:', err.message);
   }

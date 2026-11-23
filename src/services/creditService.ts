@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabaseClient';
+import { toSriLankaDateStr } from '../utils/dateTime';
 
 export interface CreditSettlementPayload {
   id?: string;
@@ -22,38 +23,37 @@ export interface CreditSettlementPayload {
 export interface CurrentUserSession {
   id?: string;
   name?: string;
+  fullName?: string;
   username?: string;
   email?: string;
   role?: string;
 }
 
-/**
- * Resolves the display/author name from the active session user.
- * When operating under the baseline Super Admin account, attributes to 'Muthuwadige Hardware'.
- * When a dedicated secondary staff account is logged in, attributes to that staff member's name.
- */
 export function resolveAuthorName(currentUser?: CurrentUserSession | null): string {
-  const active = currentUser || (() => {
-    try {
-      if (typeof window !== 'undefined') {
-        const stored =
-          localStorage.getItem('erp_user') ||
-          localStorage.getItem('hardware_erp_user') ||
-          sessionStorage.getItem('erp_user') ||
-          sessionStorage.getItem('hardware_erp_user');
-        if (stored) return JSON.parse(stored);
-      }
-    } catch (_) {}
-    return null;
-  })();
+  const active =
+    currentUser ||
+    (() => {
+      try {
+        if (typeof window !== 'undefined') {
+          const stored =
+            localStorage.getItem('erp_user') ||
+            localStorage.getItem('hardware_erp_user') ||
+            sessionStorage.getItem('erp_user') ||
+            sessionStorage.getItem('hardware_erp_user');
+          if (stored) return JSON.parse(stored);
+        }
+      } catch (_) {}
+      return null;
+    })();
 
-  const isSuperAdmin = !active || 
-    active.email === 'admin@hardware.com' || 
+  const isSuperAdmin =
+    !active ||
+    active.email === 'admin@hardware.com' ||
     active.email === 'sanojhardware@gmail.com' ||
-    (active.role || '').toLowerCase() === 'super_admin' || 
+    (active.role || '').toLowerCase() === 'super_admin' ||
     (active.role || '').toLowerCase() === 'super admin' ||
-    active.id === 'u1' || 
-    active.id === 'u2' || 
+    active.id === 'u1' ||
+    active.id === 'u2' ||
     active.id === 'admin_super';
 
   if (isSuperAdmin) {
@@ -66,16 +66,10 @@ export function resolveAuthorName(currentUser?: CurrentUserSession | null): stri
   return 'Muthuwadige Hardware';
 }
 
-/**
- * Records a credit settlement payment in the database, ensuring both
- * the settlement record (credit_payments / credit_settlements) and
- * the financial cash flow log (transactions) use the active session author.
- */
 export async function recordCreditSettlement(
   payload: CreditSettlementPayload,
   currentUser?: CurrentUserSession | null
 ) {
-  // Replace fallback string with active session username
   const authorName = resolveAuthorName(currentUser);
 
   const amount = Number(
@@ -90,11 +84,10 @@ export async function recordCreditSettlement(
   const paymentMethod = payload.payment_method || 'Cash';
   const paymentDate = payload.payment_date || new Date().toISOString();
   const createdAt = payload.created_at || new Date().toISOString();
-  const dateOnly = (paymentDate || createdAt).substring(0, 10);
-  const isPartial = (payload.remaining_balance || 0) > 0.01;
+  const slDate = toSriLankaDateStr(paymentDate || createdAt);
 
   const settlementRecord = {
-    id: payload.id || 'cp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+    id: payload.id || `cp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     sale_id: saleId,
     invoice_no: invNo,
     customer_id: payload.customer_id || null,
@@ -103,6 +96,7 @@ export async function recordCreditSettlement(
     remaining_balance: Number(payload.remaining_balance || 0),
     payment_method: paymentMethod,
     payment_date: paymentDate,
+    date: slDate,
     recorded_by: authorName,
     created_by: authorName,
     cashier: authorName,
@@ -110,7 +104,6 @@ export async function recordCreditSettlement(
     notes: payload.notes || `Credit settlement for invoice ${invNo}`
   };
 
-  // 1. Insert into credit_payments (which automatically and atomically records the ledger transaction in server.js)
   const cpRes = await supabase.from('credit_payments').insert([settlementRecord]);
 
   return {

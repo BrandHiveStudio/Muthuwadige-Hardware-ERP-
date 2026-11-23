@@ -6,12 +6,8 @@ import { openExternalUrl, formatWhatsAppUrl } from '../utils/openExternalUrl';
 import {
   toSriLankaDateStr,
   getTodaySriLankaDate,
-  computeFinancialSummary,
-  computePaymentBreakdown,
-  calculateSaleAccounting,
-  getItemUnitCost
+  computeUnifiedMetrics
 } from '../utils/accounting';
-import { splitReturnSettlements } from '../services/returnService';
 import {
   ShoppingCartIcon,
   AlertTriangleIcon,
@@ -412,118 +408,20 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         setSalesByCategory(dynamicCategories);
       }
 
-      // 1. Authoritative Financial Performance Summary for Today
-      const todayFinancialSummary = computeFinancialSummary({
+      // Authoritative Unified Performance Metrics for Today
+      const todayMetrics = computeUnifiedMetrics({
         sales: allSales || [],
         salesReturns: allReturns || [],
-        products: products || [],
-        fromDate: today,
-        toDate: today
-      });
-
-      // 2. Authoritative Payment Method & Cash Collections Breakdown for Today
-      const todayPaymentBreakdown = computePaymentBreakdown({
-        sales: allSales || [],
         creditPayments: allCreditPayments || [],
-        salesReturns: allReturns || [],
+        transactions: allTransactions || [],
+        products: products || [],
         cheques: allCheques || [],
         fromDate: today,
         toDate: today
       });
 
-      const todayTransactions = (allTransactions || []).filter((t: any) => {
-        if (!t) return false;
-        if (t.status && t.status.toUpperCase() === 'VOIDED') return false;
-        const tDate = toSriLankaDateStr(t.date || t.created_at);
-        return tDate === today;
-      });
-
-      // Cash Purchase Returns (Suppliers refunding us cash)
-      const todayCashPurchaseReturns = todayTransactions
-        .filter((t: any) => {
-          const cat = String(t.category || '').toUpperCase();
-          const desc = String(t.description || '').toUpperCase();
-          const ref = String(t.reference || '').toUpperCase();
-          const method = String(t.payment_method || t.paymentMethod || t.method || '').trim().toUpperCase();
-          
-          const isPR = cat.includes('PURCHASE RETURN') || cat.includes('SUPPLIER REFUND') || cat.includes('PURCHASE REFUND') || desc.includes('PURCHASE RETURN') || desc.includes('SUPPLIER REFUND') || ref.startsWith('PR-');
-          const isCash = !['BANK', 'BANK TRANSFER', 'BANK_TRANSFER', 'TRANSFER', 'CREDIT', 'CARD'].includes(method) && !desc.includes('BANK TRANSFER') && !cat.includes('CREDIT');
-          return (t.flow_type?.toLowerCase() === 'income' || t.type?.toLowerCase() === 'income') && isPR && isCash;
-        })
-        .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
-
-      // Cash Drawer Expenses Today (Drawer Petty Outflows)
-      const rawTodayCashExpenses = todayTransactions
-        .filter((t: any) => {
-          const type = (t.flow_type || t.type || '').toString().toUpperCase().trim();
-          const method = (t.payment_method || t.paymentMethod || 'CASH').toString().toUpperCase().trim();
-          const isCash = method === 'CASH' || method === 'CASH_BEARER';
-          const cat = String(t.category || '').toUpperCase();
-          const desc = String(t.description || '').toUpperCase();
-          const isSalesRet = type === 'CONTRA_REVENUE' || type === 'CONTRA-REVENUE' || type === 'SALES_RETURN' || cat.includes('SALES RETURN') || desc.includes('SALES RETURN') || cat.includes('EXCHANGE REFUND') || desc.includes('EXCHANGE CASH REFUND');
-          return type === 'EXPENSE' && isCash && !isSalesRet;
-        })
-        .reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
-
-      const todayCashExpenses = Math.max(0, rawTodayCashExpenses - todayCashPurchaseReturns);
-
-      // FIX: Dynamically pull in Encashed Cheques & Manual Ledger Inflows to fix the Mobile Blindspot
-      const todayManualCashInflows = todayTransactions.filter((t: any) => {
-        const cat = String(t.category || '').toUpperCase();
-        const desc = String(t.description || '').toUpperCase();
-        const method = String(t.payment_method || t.paymentMethod || t.method || '').toUpperCase();
-        const isIncome = t.flow_type?.toLowerCase() === 'income' || t.type?.toLowerCase() === 'income';
-        
-        const isEncashed = cat.includes('ENCASHED') || cat.includes('POS CHEQUE REALIZATION') || desc.includes('ENCASHED CHEQUE');
-        const isManualCash = method === 'CASH' && !cat.includes('SALES') && !desc.includes('POS SALE');
-        
-        return isIncome && (isEncashed || isManualCash);
-      }).reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
-
-      // FIX: Accurately isolate actual cash refunds from non-cash credit debt adjustments
-      const todaySalesReturns = (allReturns || []).filter((r: any) => {
-        if (!r) return false;
-        if (r.status === 'cancelled' || r.status === 'voided' || r.status === 'Voided') return false;
-        const rDateStr = toSriLankaDateStr(r.created_at || r.return_date || r.date);
-        return rDateStr === today;
-      });
-
-      // Split return settlements from sales_returns
-      const { cashBankRefundOutflow } = splitReturnSettlements(
-        todaySalesReturns.filter((r: any) => {
-          const method = (r.refundMethod ?? r.refund_method ?? r.settlementMode ?? r.settlement_mode ?? r.returnMethod ?? r.return_method ?? "")
-            .trim()
-            .toLowerCase();
-          return method === 'cash' || method === 'cash refund' || method === 'cash_refund';
-        })
-      );
-
-      // Fallback: check todayTransactions for explicit cash refunds, strictly ignoring credit adjustments
-      const txCashRefunds = todayTransactions.filter((t: any) => {
-        const type = String(t.flow_type || t.type || '').toUpperCase();
-        const cat = String(t.category || '').toUpperCase();
-        const desc = String(t.description || '').toUpperCase();
-        const method = String(t.payment_method || t.paymentMethod || t.method || '').trim().toUpperCase();
-        
-        const isContraRev = type === 'CONTRA_REVENUE' || type === 'CONTRA-REVENUE' || type === 'SALES_RETURN' || cat.includes('SALES RETURN') || cat.includes('EXCHANGE') || desc.includes('EXCHANGE') || desc.includes('REFUND');
-        const isCreditAdj = type === 'CREDIT_ADJUSTMENT' || cat.includes('CREDIT') || desc.includes('CREDIT') || method === 'CREDIT';
-        const isExplicitCash = method === 'CASH' || desc.includes('CASH REFUND') || cat.includes('CASH REFUND');
-        
-        return isContraRev && !isCreditAdj && isExplicitCash;
-      }).reduce((sum: number, t: any) => sum + Math.abs(Number(t.amount || 0)), 0);
-
-      const cashRefundsOutflow = cashBankRefundOutflow > 0 ? cashBankRefundOutflow : txCashRefunds;
-
-      // Formula: Cash Drawable Balance = Cash Book Inflows (Cash Sales + Settled Cash + Manual Cash Inflows) - Actual Cash Refunds - Petty Cash Expenses
-      // Non-cash credit debt adjustments do not reduce physical cash in register
-      const cashBookBalance = (todayPaymentBreakdown.directCash || 0) + (todayPaymentBreakdown.settledCash || 0) + todayManualCashInflows;
-      const cashDrawableBalance = Math.max(
-        0,
-        Number((cashBookBalance - cashRefundsOutflow - todayCashExpenses).toFixed(2))
-      );
-
-      setTodayProfit(todayFinancialSummary.grossProfit);
-      setCashBalance(cashDrawableBalance);
+      setTodayProfit(todayMetrics.grossProfit);
+      setCashBalance(todayMetrics.cashDrawableBalance);
 
       // Fetch pending Purchase Orders for supplier alerts
       const { data: poData } = await supabase.from('purchase_orders').select('*');
@@ -531,12 +429,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       setPendingPOs(pendingCount);
 
       const calculatedStats = {
-        revenue: todayFinancialSummary.grossStickerSales + todayFinancialSummary.exchangeSellingRevenue,
-        grossSales: todayFinancialSummary.grossStickerSales + todayFinancialSummary.exchangeSellingRevenue,
-        netSales: todayFinancialSummary.netSalesRevenue,
-        cogs: todayFinancialSummary.netCOGS,
-        profit: todayFinancialSummary.grossProfit,
-        orders: todayOrders,
+        revenue: todayMetrics.grossSalesRevenue,
+        grossSales: todayMetrics.grossSalesRevenue,
+        netSales: todayMetrics.netSalesRevenue,
+        cogs: todayMetrics.cogs,
+        profit: todayMetrics.grossProfit,
+        orders: todayMetrics.totalOrders,
         customers: customerCount,
         lowStock: lowStock.length
       };
@@ -555,8 +453,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         salesTrend: dynamicTrend,
         growthPercent: computedGrowth,
         salesByCategory: dynamicCategories.length > 0 ? dynamicCategories : categorySalesData,
-        todayProfit: todayFinancialSummary.grossProfit,
-        cashBalance: cashDrawableBalance,
+        todayProfit: todayMetrics.grossProfit,
+        cashBalance: todayMetrics.cashDrawableBalance,
         pendingPOs: pendingCount
       };
     } catch (error) {

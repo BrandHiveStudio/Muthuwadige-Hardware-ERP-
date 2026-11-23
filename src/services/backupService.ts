@@ -1,4 +1,5 @@
-import { api, API_URL, fetchWithTimeout, getAuthHeaders } from '../lib/api';
+import { API_URL, fetchWithTimeout, getAuthHeaders } from '../lib/api';
+import { toSriLankaDateStr } from '../utils/dateTime';
 
 export interface BackupTriggerOptions {
   email?: string;
@@ -8,15 +9,26 @@ export interface BackupTriggerOptions {
 }
 
 export async function triggerDatabaseBackup(options: BackupTriggerOptions = {}) {
+  const normalizedPayload = {
+    email: options.email,
+    type: options.type || 'Manual',
+    fromDate: options.fromDate ? toSriLankaDateStr(options.fromDate) : null,
+    toDate: options.toDate ? toSriLankaDateStr(options.toDate) : null
+  };
+
   try {
-    const res = await fetchWithTimeout(`${API_URL}/settings/trigger-backup`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...getAuthHeaders()
+    const res = await fetchWithTimeout(
+      `${API_URL}/settings/trigger-backup`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders()
+        },
+        body: JSON.stringify(normalizedPayload)
       },
-      body: JSON.stringify(options)
-    }, 15000);
+      15000
+    );
 
     if (res.ok) {
       return await res.json();

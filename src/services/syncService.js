@@ -75,19 +75,6 @@ export async function pingTurso(tursoClient) {
     await Promise.race([pingPromise, timeoutPromise]);
     return true;
   } catch (err) {
-    // Cloud web endpoint fallback ping
-    try {
-      const controller = new AbortController();
-      const t = setTimeout(() => controller.abort(), 3000);
-      const res = await fetch('https://erp.mhardware.lk/api/sync/status', {
-        signal: controller.signal,
-        headers: { 'Accept': 'application/json' }
-      }).catch(() => null);
-      clearTimeout(t);
-      if (res && res.ok) {
-        return true;
-      }
-    } catch (_) {}
     return false;
   }
 }
