@@ -488,10 +488,12 @@ export function Reports({ currentUser }: ReportsProps = {}) {
 
   const totalOrders = totalSalesOrders + totalExchangeOrders;
 
-  const paidSalesOrders = filteredSales.filter(o => {
+  const paidSalesOrders = filteredSales.filter((o) => {
     if (!o) return false;
-    const statusLower = (o.status || '').toString().toLowerCase().trim();
-    if (statusLower === 'cancelled' || statusLower === 'voided') return false;
+    const status = String(o.status || (o as any).paymentStatus || (o as any).payment_status || '').toUpperCase().trim();
+    const method = String(o.paymentMethod || o.payment_method || '').toUpperCase().trim();
+    const isCredit = method === 'CREDIT' || method === 'CREDIT SALE' || (o as any).is_credit === true || (o as any).is_credit === 1;
+
     const balanceDue = o.balance_due !== undefined && o.balance_due !== null
       ? Number(o.balance_due)
       : (o.balance_amount !== undefined && o.balance_amount !== null
@@ -500,10 +502,22 @@ export function Reports({ currentUser }: ReportsProps = {}) {
           ? Number(o.balance)
           : Math.max(0, Number(o.total_amount !== undefined ? o.total_amount : (o.total || 0)) - Number(o.payment_received || 0))));
 
-    if (['paid', 'completed', 'fully settled', 'partially_refunded', 'partially refunded', 'partial refund'].includes(statusLower)) {
-      return true;
-    }
-    return balanceDue <= 0.01;
+    const isCreditSettled = isCredit && (status === 'PAID' || status === 'COMPLETED' || balanceDue <= 0.01);
+    const isUnpaidCredit = isCredit && !isCreditSettled;
+    const isFullyReturned = status === 'RETURNED' || status === 'FULLY RETURNED' || status === 'CANCELLED' || status === 'VOIDED';
+    const isSettledStatus =
+      status === 'PAID' ||
+      status === 'COMPLETED' ||
+      status === 'PARTIALLY RETURNED' ||
+      status === 'PARTIAL' ||
+      status === 'PARTIALLY_RETURNED' ||
+      status === 'PARTIALLY_REFUNDED' ||
+      status === 'PARTIALLY REFUNDED' ||
+      status === 'PARTIAL REFUND' ||
+      status === 'FULLY SETTLED' ||
+      (!isCredit && balanceDue <= 0.01);
+
+    return !isUnpaidCredit && !isFullyReturned && (isSettledStatus || isCreditSettled);
   }).length;
 
   const paidOrders = paidSalesOrders + totalExchangeOrders;
