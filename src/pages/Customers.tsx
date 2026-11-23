@@ -397,7 +397,7 @@ export function Customers({ currentUser }: CustomersProps = {}) {
         const origPaid = sale ? Number(sale.payment_received || 0) : 0;
         const newPaymentReceived = origPaid + paidThisTime;
 
-        await supabase.from('sales').update({ status: 'Fully Settled', payment_received: newPaymentReceived }).eq('id', id);
+        await supabase.from('sales').update({ status: 'Fully Settled', payment_received: newPaymentReceived, balance_due: 0 }).eq('id', id);
 
         // Record credit settlement & cash flow transactions log using unified session user
         await recordCreditSettlement({
@@ -425,7 +425,7 @@ export function Customers({ currentUser }: CustomersProps = {}) {
           // Fully covers it
           const paidThisTime = remainingOnNext;
           const newPaid = origPaid + paidThisTime;
-          await supabase.from('sales').update({ status: 'Fully Settled', payment_received: newPaid }).eq('id', nextInvoice.id);
+          await supabase.from('sales').update({ status: 'Fully Settled', payment_received: newPaid, balance_due: 0 }).eq('id', nextInvoice.id);
           settledInvoicesInfo.push({ invoiceNo: invNo, amount: paidThisTime });
           invoicesFullySettled.push(nextInvoice.id);
 
@@ -445,10 +445,9 @@ export function Customers({ currentUser }: CustomersProps = {}) {
           // Partial payment on this invoice
           const paidThisTime = remainingToPay;
           const newPaid = origPaid + paidThisTime;
-          await supabase.from('sales').update({ status: 'Partially Settled', payment_received: newPaid }).eq('id', nextInvoice.id);
-          settledInvoicesInfo.push({ invoiceNo: invNo, amount: paidThisTime });
-
           const remainingBal = remainingOnNext - paidThisTime;  // Remaining after this partial payment
+          await supabase.from('sales').update({ status: 'Partially Settled', payment_received: newPaid, balance_due: remainingBal }).eq('id', nextInvoice.id);
+          settledInvoicesInfo.push({ invoiceNo: invNo, amount: paidThisTime });
 
           await recordCreditSettlement({
             sale_id: nextInvoice.id,
@@ -904,7 +903,7 @@ export function Customers({ currentUser }: CustomersProps = {}) {
         const origPaid = sale ? Number(sale.payment_received || 0) : 0;
         const newPaymentReceived = origPaid + paidThisTime;
 
-        await supabase.from('sales').update({ status: 'Fully Settled', payment_received: newPaymentReceived }).eq('id', id);
+        await supabase.from('sales').update({ status: 'Fully Settled', payment_received: newPaymentReceived, balance_due: 0 }).eq('id', id);
 
         // Record credit settlement & cash flow transactions log using unified session user
         await recordCreditSettlement({

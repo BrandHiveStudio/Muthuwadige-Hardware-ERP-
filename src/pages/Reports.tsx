@@ -494,30 +494,43 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     const method = String(o.paymentMethod || o.payment_method || '').toUpperCase().trim();
     const isCredit = method === 'CREDIT' || method === 'CREDIT SALE' || (o as any).is_credit === true || (o as any).is_credit === 1;
 
-    const balanceDue = o.balance_due !== undefined && o.balance_due !== null
-      ? Number(o.balance_due)
-      : (o.balance_amount !== undefined && o.balance_amount !== null
-        ? Number(o.balance_amount)
-        : (o.balance !== undefined && o.balance !== null
-          ? Number(o.balance)
-          : Math.max(0, Number(o.total_amount !== undefined ? o.total_amount : (o.total || 0)) - Number(o.payment_received || 0))));
+    // Authoritative sale accounting dynamically factoring in returns and credit payments ledger
+    const acct = calculateSaleAccounting(o, filteredSalesReturns, filteredCreditPayments);
 
-    const isCreditSettled = isCredit && (status === 'PAID' || status === 'COMPLETED' || balanceDue <= 0.01);
-    const isUnpaidCredit = isCredit && !isCreditSettled;
+    // Direct balance fallbacks
+    const explicitBalance = (o as any).remainingBalance ?? (o as any).remaining_balance ?? o.balanceDue ?? (o as any).balance_due ?? (o as any).balanceAmount ?? (o as any).balance_amount ?? o.balance;
+    const balanceDue = explicitBalance !== undefined && explicitBalance !== null
+      ? Math.min(Number(explicitBalance), acct.netOutstanding)
+      : (acct ? acct.netOutstanding : (isCredit ? 1 : 0));
+
     const isFullyReturned = status === 'RETURNED' || status === 'FULLY RETURNED' || status === 'CANCELLED' || status === 'VOIDED';
+
+    const isCreditSettled = isCredit && (
+      status === 'PAID' ||
+      status === 'COMPLETED' ||
+      status === 'SETTLED' ||
+      status === 'FULLY SETTLED' ||
+      balanceDue <= 0.01 ||
+      acct.isFullySettled
+    );
+
     const isSettledStatus =
       status === 'PAID' ||
       status === 'COMPLETED' ||
+      status === 'SETTLED' ||
+      status === 'FULLY SETTLED' ||
       status === 'PARTIALLY RETURNED' ||
       status === 'PARTIAL' ||
       status === 'PARTIALLY_RETURNED' ||
       status === 'PARTIALLY_REFUNDED' ||
       status === 'PARTIALLY REFUNDED' ||
       status === 'PARTIAL REFUND' ||
-      status === 'FULLY SETTLED' ||
+      ((status === 'PARTIALLY SETTLED' || status === 'PARTIALLY PAID') && (balanceDue <= 0.01 || acct.isFullySettled)) ||
       (!isCredit && balanceDue <= 0.01);
 
-    return !isUnpaidCredit && !isFullyReturned && (isSettledStatus || isCreditSettled);
+    const isUnpaidCredit = isCredit && !isCreditSettled;
+
+    return !isFullyReturned && !isUnpaidCredit && (isSettledStatus || isCreditSettled || (isCredit && balanceDue <= 0.01));
   }).length;
 
   const paidOrders = paidSalesOrders + totalExchangeOrders;
