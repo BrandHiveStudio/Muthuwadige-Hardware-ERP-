@@ -480,41 +480,28 @@ export function Reports({ currentUser }: ReportsProps = {}) {
     return statusLower !== 'cancelled' && statusLower !== 'voided';
   }).length;
 
-  const totalExchangeOrders = filteredSalesReturns.filter(r => {
-    const statusLower = (r.status || '').toString().toLowerCase().trim();
-    const type = (r.return_type || r.returnType || r.returnMethod || r.type || '').toString().toLowerCase().trim();
-    return statusLower !== 'cancelled' && statusLower !== 'voided' && type === 'exchange';
-  }).length;
+  const totalOrders = totalSalesOrders;
 
-  const totalOrders = totalSalesOrders + totalExchangeOrders;
-
-  const paidSalesOrders = filteredSales.filter((o) => {
+  const paidOrders = filteredSales.filter((o) => {
     if (!o) return false;
     const status = String(o.status || (o as any).paymentStatus || (o as any).payment_status || '').toUpperCase().trim();
     const method = String(o.paymentMethod || o.payment_method || '').toUpperCase().trim();
     const isCredit = method === 'CREDIT' || method === 'CREDIT SALE' || (o as any).is_credit === true || (o as any).is_credit === 1;
 
-    // Authoritative sale accounting dynamically factoring in returns and credit payments ledger
     const acct = calculateSaleAccounting(o, filteredSalesReturns, filteredCreditPayments);
-
-    // Direct balance fallbacks
     const explicitBalance = (o as any).remainingBalance ?? (o as any).remaining_balance ?? o.balanceDue ?? (o as any).balance_due ?? (o as any).balanceAmount ?? (o as any).balance_amount ?? o.balance;
     const balanceDue = explicitBalance !== undefined && explicitBalance !== null
       ? Math.min(Number(explicitBalance), acct.netOutstanding)
       : (acct ? acct.netOutstanding : (isCredit ? 1 : 0));
 
     const isFullyReturned = status === 'RETURNED' || status === 'FULLY RETURNED' || status === 'CANCELLED' || status === 'VOIDED';
+    if (isFullyReturned) return false;
 
-    const isCreditSettled = isCredit && (
-      status === 'PAID' ||
-      status === 'COMPLETED' ||
-      status === 'SETTLED' ||
-      status === 'FULLY SETTLED' ||
-      balanceDue <= 0.01 ||
-      acct.isFullySettled
-    );
+    if (isCredit) {
+      return balanceDue <= 0.01 || Boolean(acct?.isFullySettled);
+    }
 
-    const isSettledStatus =
+    return (
       status === 'PAID' ||
       status === 'COMPLETED' ||
       status === 'SETTLED' ||
@@ -525,15 +512,9 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       status === 'PARTIALLY_REFUNDED' ||
       status === 'PARTIALLY REFUNDED' ||
       status === 'PARTIAL REFUND' ||
-      ((status === 'PARTIALLY SETTLED' || status === 'PARTIALLY PAID') && (balanceDue <= 0.01 || acct.isFullySettled)) ||
-      (!isCredit && balanceDue <= 0.01);
-
-    const isUnpaidCredit = isCredit && !isCreditSettled;
-
-    return !isFullyReturned && !isUnpaidCredit && (isSettledStatus || isCreditSettled || (isCredit && balanceDue <= 0.01));
+      balanceDue <= 0.01
+    );
   }).length;
-
-  const paidOrders = paidSalesOrders + totalExchangeOrders;
 
   const dailySalesData = (() => {
     const map: Record<string, number> = {};
@@ -819,7 +800,7 @@ export function Reports({ currentUser }: ReportsProps = {}) {
       customerDiscounts: summary.customerDiscounts,
       salesReturnsRefunds: summary.returnsSellingRevenue,
       transportFees: deliveryFees > 0 ? deliveryFees : summary.transportFees,
-      grossSalesRevenue: summary.grossStickerSales,
+      grossSalesRevenue: summary.grossStickerSales + summary.exchangeSellingRevenue,
       netSalesRevenue: summary.netSalesRevenue,
       cogs: summary.netCOGS,
       grossProfit: summary.grossProfit,
@@ -1553,8 +1534,8 @@ export function Reports({ currentUser }: ReportsProps = {}) {
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
               <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-150 text-left">
-                <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block mb-1">1. {t("Gross Sales Revenue (Sticker Value)", "එකතුව")}</span>
-                <span className="text-base font-black text-slate-800">{formatCurrency(financialSummaryMetrics.grossStickerSales)}</span>
+                <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest block mb-1">1. {t("Gross Sales Revenue", "මුළු විකුණුම් ආදායම")}</span>
+                <span className="text-base font-black text-slate-800">{formatCurrency(financialSummaryMetrics.grossSalesRevenue)}</span>
               </div>
               <div className="bg-amber-50/40 p-3.5 rounded-2xl border border-amber-100 text-left">
                 <span className="text-[9px] font-extrabold text-amber-600 uppercase tracking-widest block mb-1">2. {t("Less: Customer Discounts", "වට්ටම්")}</span>

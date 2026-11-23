@@ -263,14 +263,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         return saleDateStr === today && s.status !== 'cancelled' && s.status !== 'Voided' && s.status !== 'voided';
       }) : [];
 
-      const returnsToday = allReturns ? allReturns.filter((r: any) => {
-        if (!r) return false;
-        const rDateStr = toSriLankaDateStr(r.created_at || r.return_date || r.date);
-        const type = (r.return_type || r.returnType || r.returnMethod || r.type || '').toString().toLowerCase().trim();
-        return rDateStr === today && r.status !== 'cancelled' && r.status !== 'voided' && type === 'exchange';
-      }) : [];
-
-      const todayOrders = salesToday.length + returnsToday.length;
+      const todayOrders = salesToday.length;
 
       // 2. Fetch Customers & Suppliers
       const { data: custData } = await supabase.from('customers').select('*');
@@ -563,7 +556,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         growthPercent: computedGrowth,
         salesByCategory: dynamicCategories.length > 0 ? dynamicCategories : categorySalesData,
         todayProfit: todayFinancialSummary.grossProfit,
-        cashBalance: dynamicCashInHand,
+        cashBalance: cashDrawableBalance,
         pendingPOs: pendingCount
       };
     } catch (error) {
