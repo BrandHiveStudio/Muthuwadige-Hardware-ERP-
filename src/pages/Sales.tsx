@@ -39,7 +39,7 @@ import { supabase } from '../lib/supabaseClient';
 import { useCurrency } from '../context/CurrencyContext';
 import { useScanner } from '../context/ScannerContext';
 import { useSettings } from '../context/SettingsContext';
-import { api, API_URL, BASE_URL, fetchWithTimeout } from '../lib/api';
+import { api, API_URL, BASE_URL, fetchWithTimeout } from '../lib/api'; 
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { SaleOrder, SaleItem, Customer, Product, Quotation, DeliveryNote, SalesReturn, CreditNote, CreditNoteUsage, ChequeType } from '../types';
@@ -113,9 +113,9 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
   const symbol = isSinhala ? 'රු.' : (settings.currency || 'Rs.');
   const formatNum = (num: number) => (num || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const items = Array.isArray(order.items) ? order.items : safeParseJson(order.items, []);
-
-  const matchedCust = customers.find(c =>
-    (order.customer_id && c.id === order.customer_id) ||
+  
+  const matchedCust = customers.find(c => 
+    (order.customer_id && c.id === order.customer_id) || 
     (order.customerName && c.name && c.name.toLowerCase() === order.customerName.toLowerCase()) ||
     (order.customer_name && c.name && c.name.toLowerCase() === order.customer_name.toLowerCase())
   );
@@ -123,8 +123,8 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
   const validOrderCustName = (order.customerName && order.customerName.trim() && order.customerName !== 'Guest Customer' && order.customerName !== 'Guest')
     ? order.customerName.trim()
     : ((order.customer_name && order.customer_name.trim() && order.customer_name !== 'Guest Customer' && order.customer_name !== 'Guest')
-      ? order.customer_name.trim()
-      : null);
+        ? order.customer_name.trim()
+        : null);
 
   const customerName = validOrderCustName || matchedCust?.name || (isSinhala ? 'පාරිභෝගිකයා (Guest)' : 'Guest Customer');
   const custPhone = order.customerPhone || order.customer_phone || matchedCust?.phone || '';
@@ -161,15 +161,15 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
           </p>
         </div>
         <div className="absolute right-8 top-0 bg-black border border-gray-900 border-t-0 rounded-b-lg w-[170px] h-[138px] flex items-center justify-center shadow-md z-10 p-0 overflow-hidden">
-          <img
-            src={settings.logoUrl || settings.logo_path || "./images/logo.png"}
-            alt="Logo"
-            className="w-full h-full object-contain scale-115 transition-transform"
-            onError={(e) => { e.currentTarget.style.display = 'none'; }}
+          <img 
+            src={settings.logoUrl || settings.logo_path || "./images/logo.png"} 
+            alt="Logo" 
+            className="w-full h-full object-contain scale-115 transition-transform" 
+            onError={(e) => { e.currentTarget.style.display = 'none'; }} 
           />
         </div>
       </div>
-
+      
       <div className="mt-8 text-center flex flex-col items-center justify-center">
         {(order.payment_method === 'Credit' || order.status === 'Non Paid') ? (
           <div className="bg-slate-900 border-2 border-amber-500 px-8 py-2.5 rounded-2xl shadow-lg shadow-slate-900/15 inline-block">
@@ -183,7 +183,7 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
           </h2>
         )}
       </div>
-
+      
       <div className="mx-6 my-4 flex justify-between items-start text-xs gap-4">
         <div>
           <h3 className="text-[#595959] text-[9px] font-black uppercase tracking-wider mb-1">{isSinhala ? 'පාරිභෝගිකයා:' : 'BILL TO:'}</h3>
@@ -208,7 +208,7 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
           )}
         </div>
       </div>
-
+      
       <div className="mx-6 my-4 overflow-hidden border border-gray-100 rounded-lg">
         <table className="w-full text-xs border-collapse">
           <thead>
@@ -289,14 +289,14 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
           })}
         </div>
       )}
-
+      
       <div className="mx-6 mt-12 mb-4 flex justify-between items-start flex-wrap gap-4 text-xs">
         <div className="w-[45%]">
           <h3 className="text-[#d29d2b] text-[9px] font-black uppercase tracking-wider mb-1">{isSinhala ? 'සටහන්' : 'NOTES'}</h3>
           <p className="text-gray-400 font-semibold mb-1 text-[10px]">{isSinhala ? 'කිසියම් ප්‍රශ්නයක් ඇත්නම් කරුණාකර අප හා සම්බන්ධ වන්න.' : 'Please feel free to contact us in case of any questions.'}</p>
           <p className="text-[#4b5563] font-bold text-[10px]">{isSinhala ? 'ඔබගේ ව්‍යාපාරයට ස්තූතියි!' : 'Thank you for your business!'}</p>
         </div>
-
+        
         <div className="w-[48%] space-y-2 text-right pr-3">
           <div className="flex justify-between font-semibold text-gray-500">
             <span>{isSinhala ? 'උප එකතුව:' : 'Sub Total:'}</span>
@@ -328,7 +328,7 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
             const method = (order.payment_method || (order as any).paymentMethod || '').toString().toLowerCase().trim();
             const status = (order.status || '').toString().toLowerCase().trim();
             const isCredit = method === 'credit' || method === 'credit sale' || (order as any).is_credit === true || status === 'non paid' || status === 'non-paid' || status === 'partially paid' || status === 'partially settled' || status === 'fully settled';
-
+            
             if (!isCredit) return null;
 
             const totalAmt = Number(order.total_amount !== undefined ? order.total_amount : order.total);
@@ -336,12 +336,12 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
               const val = (r as any).return_amount !== undefined && (r as any).return_amount !== null
                 ? Number((r as any).return_amount)
                 : (r as any).returnAmount !== undefined && (r as any).returnAmount !== null
-                  ? Number((r as any).returnAmount)
-                  : (r as any).refund_amount !== undefined && (r as any).refund_amount !== null
-                    ? Number((r as any).refund_amount)
-                    : (r as any).refundAmount !== undefined && (r as any).refundAmount !== null
-                      ? Number((r as any).refundAmount)
-                      : 0;
+                ? Number((r as any).returnAmount)
+                : (r as any).refund_amount !== undefined && (r as any).refund_amount !== null
+                ? Number((r as any).refund_amount)
+                : (r as any).refundAmount !== undefined && (r as any).refundAmount !== null
+                ? Number((r as any).refundAmount)
+                : 0;
               return sum + (isNaN(val) ? 0 : val);
             }, 0);
             const totalExchangeForInvoice = activeOrderReturns.reduce((sum, r) => sum + Number((r as any).exchange_amount !== undefined ? (r as any).exchange_amount : ((r as any).exchangeAmount || 0)), 0);
@@ -390,7 +390,7 @@ function ReceiptPreview({ order, isSinhala, customers = [], salesReturns = [] }:
           })()}
         </div>
       </div>
-
+      
       <div className="mx-6 mt-16 mb-6 text-right">
         <div className="inline-block border-t border-gray-300 pt-1.5 w-40 text-center text-[10px] italic text-gray-400 font-semibold">
           {isSinhala ? 'බලයලත් අත්සන' : 'Authorized Signee'}
@@ -438,8 +438,8 @@ function ReturnReceiptPreview({
       ?? (Number(item.returned_quantity) > 0 ? Number(item.returned_quantity) : undefined)
       ?? 1;
     const { effectivePrice } = calculateEffectiveUnitPricePaid(item, returnRecord);
-    const netUnitPrice = item.net_unit_price !== undefined
-      ? Number(item.net_unit_price)
+    const netUnitPrice = item.net_unit_price !== undefined 
+      ? Number(item.net_unit_price) 
       : (item.netUnitPrice !== undefined ? Number(item.netUnitPrice) : (effectivePrice || Number(item.originalUnitPrice || item.price || 0)));
     return sum + (displayQty * netUnitPrice);
   }, 0);
@@ -447,16 +447,16 @@ function ReturnReceiptPreview({
   const returnCreditValue = (Number(returnRecord.returnAmount) > 0)
     ? Number(returnRecord.returnAmount)
     : (totalReturnCredit > 0
-      ? totalReturnCredit
-      : Number(returnRecord.totalRefunded || 0));
+        ? totalReturnCredit
+        : Number(returnRecord.totalRefunded || 0));
 
   const exchangeTotal = (Number(returnRecord.exchangeAmount) > 0)
     ? Number(returnRecord.exchangeAmount)
     : exchangeItemsList.reduce((sum: number, i: any) => {
-      const q = Number(i.quantity ?? i.qty ?? 1);
-      const p = Number(i.price || i.unitPrice || 0);
-      return sum + (q * p);
-    }, 0);
+        const q = Number(i.quantity ?? i.qty ?? 1);
+        const p = Number(i.price || i.unitPrice || 0);
+        return sum + (q * p);
+      }, 0);
 
   const priceDifference = exchangeTotal - returnCreditValue;
   const settlementMode = returnRecord.differencePaymentMethod || (returnRecord as any).difference_payment_method || (returnRecord as any).paymentMethod || (isCreditBill ? 'Customer Credit Debt' : 'Cash');
@@ -464,10 +464,10 @@ function ReturnReceiptPreview({
   const rawPrevBal = returnRecord.previousInvoiceBalance !== undefined
     ? returnRecord.previousInvoiceBalance
     : ((returnRecord as any).previous_invoice_balance !== undefined
-      ? (returnRecord as any).previous_invoice_balance
-      : ((returnRecord as any).previousBalance !== undefined
-        ? (returnRecord as any).previousBalance
-        : undefined));
+        ? (returnRecord as any).previous_invoice_balance
+        : ((returnRecord as any).previousBalance !== undefined
+            ? (returnRecord as any).previousBalance
+            : undefined));
 
   const isExchange = (Number(returnRecord.exchangeAmount || 0) > 0) || (exchangeItemsList && exchangeItemsList.length > 0) || returnRecord.returnMethod === 'Exchange';
   const isCashOrPaid =
@@ -476,9 +476,9 @@ function ReturnReceiptPreview({
   const isCashRefund = !isExchange && (returnRecord.returnMethod === 'Cash Refund' || (!isCreditBill && (settlementMode.toLowerCase().includes('cash') || returnRecord.returnMethod !== 'Credit Note')));
 
   const invNo = (returnRecord.invoiceNo || (returnRecord as any).invoice_no || '').toString().trim();
-  const matchedOrder = orders?.find(o =>
-    (o.invoiceNo && o.invoiceNo.trim() === invNo) ||
-    (o.invoice_no && o.invoice_no.trim() === invNo) ||
+  const matchedOrder = orders?.find(o => 
+    (o.invoiceNo && o.invoiceNo.trim() === invNo) || 
+    (o.invoice_no && o.invoice_no.trim() === invNo) || 
     (o.id && o.id.trim() === invNo)
   );
 
@@ -550,8 +550,8 @@ function ReturnReceiptPreview({
               {returnedItemsList.map((item: any, idx: number) => {
                 const origPrice = Number(item.originalStickerPrice || item.originalUnitPrice || item.price || 0);
                 const { effectivePrice, unitDiscount } = calculateEffectiveUnitPricePaid(item, returnRecord);
-                const effectiveUnitPrice = item.net_unit_price !== undefined
-                  ? Number(item.net_unit_price)
+                const effectiveUnitPrice = item.net_unit_price !== undefined 
+                  ? Number(item.net_unit_price) 
                   : (item.netUnitPrice !== undefined ? Number(item.netUnitPrice) : (effectivePrice || origPrice));
                 const unitDisc = item.unitDiscount !== undefined ? Number(item.unitDiscount) : unitDiscount;
                 const displayQty = (Number(item.return_qty) > 0 ? Number(item.return_qty) : undefined)
@@ -773,11 +773,11 @@ function CreditNoteReceiptPreview({ creditNoteRecord, isSinhala }: { creditNoteR
           </p>
         </div>
         <div className="absolute right-8 top-0 bg-black border border-gray-900 border-t-0 rounded-b-lg w-[170px] h-[138px] flex items-center justify-center shadow-md z-10 p-0 overflow-hidden">
-          <img
-            src={settings.logoUrl || settings.logo_path || "./images/logo.png"}
-            alt="Logo"
-            className="w-full h-full object-contain scale-115 transition-transform"
-            onError={(e) => { e.currentTarget.style.display = 'none'; }}
+          <img 
+            src={settings.logoUrl || settings.logo_path || "./images/logo.png"} 
+            alt="Logo" 
+            className="w-full h-full object-contain scale-115 transition-transform" 
+            onError={(e) => { e.currentTarget.style.display = 'none'; }} 
           />
         </div>
       </div>
@@ -938,7 +938,7 @@ function QuotationPreview({ quote, isSinhala, shopSettings }: { quote: any; isSi
               const isPct = discType === 'PERCENT' || discType === 'PERCENTAGE' || discType === '%';
               const discAmt = isPct ? (gross * (discVal / 100)) : (qty * discVal);
               const lineTotal = Math.max(0, gross - discAmt);
-              const discDisplay = discAmt > 0
+              const discDisplay = discAmt > 0 
                 ? (isPct ? `-${discVal}%` : `-${symbol} ${convert(discAmt).toLocaleString()}`)
                 : '-';
 
@@ -1060,7 +1060,7 @@ const getUnitOptions = (product: Product | undefined): UnitOption[] => {
       extraConversions.forEach((c) => {
         if (!c.unit || c.unit.toLowerCase() === product.unit.toLowerCase()) return;
         const rawVal = Number(c.kgVal) || 1;
-
+        
         let convRate = rawVal;
         if (product.unit.toLowerCase() === 'cube' && rawVal > 0 && rawVal < 1) {
           convRate = 1 / rawVal;
@@ -1140,7 +1140,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
           const stored = sessionStorage.getItem('hardware_erp_user') || sessionStorage.getItem('erp_user') || localStorage.getItem('erp_user') || localStorage.getItem('hardware_erp_user');
           if (stored) return JSON.parse(stored);
         }
-      } catch (_) { }
+      } catch (_) {}
       return null;
     })();
 
@@ -1188,13 +1188,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   const [orders, setOrders] = useState<SaleOrder[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
-
+  
   const [isGuest, setIsGuest] = useState(false);
   const [guestName, setGuestName] = useState('Guest Customer');
   const [guestPhone, setGuestPhone] = useState('');
   const [guestAddress, setGuestAddress] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-
+  
   const [cartItems, setCartItems] = useState<SaleItem[]>([]);
   const updateDiscount = (idOrIndex: string | number, val: number | string, type: 'percent' | 'amount' | 'fixed') => {
     const numVal = typeof val === 'number' ? val : parseFloat(val) || 0;
@@ -1213,10 +1213,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   };
   const [productSearch, setProductSearch] = useState('');
   const [discount, setDiscount] = useState(0);
-  const [taxRate, setTaxRate] = useState(0);
+  const [taxRate, setTaxRate] = useState(0); 
   const [applyTax, setApplyTax] = useState(false);
   const [isSinhala, setIsSinhala] = useState(false);
-
+  
   const [showReceipt, setShowReceipt] = useState(false);
   const [lastOrder, setLastOrder] = useState<SaleOrder | null>(null);
   const [historySearch, setHistorySearch] = useState('');
@@ -1232,7 +1232,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   const [creditSearchQuery, setCreditSearchQuery] = useState('');
   const [creditSubView, setCreditSubView] = useState<'unpaid' | 'overdue' | 'paid' | 'all'>('unpaid');
   const [isLoading, setIsLoading] = useState(false);
-
+  
   // Held and Payment Methods States
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'Card' | 'Bank Transfer' | 'Credit' | 'Cheque'>('Cash');
   const [chequeNumber, setChequeNumber] = useState<string>('');
@@ -1278,7 +1278,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
   const t = (en: string, si: string) => isSinhala ? si : en;
   const symbol = isSinhala ? 'රු.' : 'Rs.';
-  const convert = (val: number) => val;
+  const convert = (val: number) => val; 
 
   const [creditCustomerType, setCreditCustomerType] = useState<'registered' | 'guest'>('registered');
   const [selectedCreditCustomer, setSelectedCreditCustomer] = useState<Customer | null>(null);
@@ -1288,7 +1288,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   const [creditConversionRate, setCreditConversionRate] = useState<number>(1);
   const [creditQty, setCreditQty] = useState(1);
   const [isCreditLoading, setIsCreditLoading] = useState(false);
-  const [creditCartItems, setCreditCartItems] = useState<SaleItem[]>([]);
+    const [creditCartItems, setCreditCartItems] = useState<SaleItem[]>([]);
   const [creditTransportationFee, setCreditTransportationFee] = useState<number>(0);
   const [creditProductSearch, setCreditProductSearch] = useState('');
 
@@ -1511,8 +1511,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     return orders
       .filter(o => {
         const isToday = o.created_at?.startsWith(today);
-        const isAfterClose = lastShiftClosedAt && lastShiftClosedAt !== '1970-01-01 00:00:00'
-          ? Boolean(o.created_at && o.created_at > lastShiftClosedAt)
+        const isAfterClose = lastShiftClosedAt && lastShiftClosedAt !== '1970-01-01 00:00:00' 
+          ? Boolean(o.created_at && o.created_at > lastShiftClosedAt) 
           : Boolean(isToday);
         const statusUpper = (o.status || '').toUpperCase();
         const isNotCancelled = statusUpper !== 'CANCELLED' && statusUpper !== 'VOIDED' && statusUpper !== 'VOID';
@@ -1528,8 +1528,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     return salesReturnsList
       .filter(r => {
         const isToday = r.created_at?.startsWith(today);
-        const isAfterClose = lastShiftClosedAt && lastShiftClosedAt !== '1970-01-01 00:00:00'
-          ? Boolean(r.created_at && r.created_at > lastShiftClosedAt)
+        const isAfterClose = lastShiftClosedAt && lastShiftClosedAt !== '1970-01-01 00:00:00' 
+          ? Boolean(r.created_at && r.created_at > lastShiftClosedAt) 
           : Boolean(isToday);
         const statusUpper = (r.status || '').toUpperCase();
         const isNotVoided = statusUpper !== 'VOIDED' && statusUpper !== 'VOID';
@@ -1559,7 +1559,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     const numOpeningFloat = Math.max(0, Number(openingFloat) || 0);
     const numPettyExpenses = Math.max(0, Number(drawerPettyExpenses) || 0);
     const numActual = typeof actualCountedCash === 'number' ? actualCountedCash : parseFloat(actualCountedCash) || 0;
-
+    
     const expectedCash = shiftExpectedCash;
     const discrepancy = Math.round((numActual - expectedCash) * 100) / 100;
     const discrepancyStatus = Math.abs(discrepancy) < 0.01 ? 'Balanced' : (discrepancy > 0 ? 'Overage' : 'Shortage');
@@ -1710,9 +1710,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     let enrichedSr = sr;
     if ((sr as any).originalInvoiceTotal === undefined && (sr as any).original_invoice_total === undefined) {
       const invNo = (sr.invoiceNo || (sr as any).invoice_no || '').toString().trim();
-      const matched = orders?.find(o =>
-        (o.invoiceNo && o.invoiceNo.trim() === invNo) ||
-        (o.invoice_no && o.invoice_no.trim() === invNo) ||
+      const matched = orders?.find(o => 
+        (o.invoiceNo && o.invoiceNo.trim() === invNo) || 
+        (o.invoice_no && o.invoice_no.trim() === invNo) || 
         (o.id && o.id.trim() === invNo)
       );
       if (matched) {
@@ -1833,7 +1833,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
         root = createRoot(tempContainer);
         root.render(<ReturnReceiptPreview returnRecord={returnRecord} isSinhala={isSinhala} orders={orders} />);
-
+        
         await new Promise((r) => setTimeout(r, 250));
         targetElement = tempContainer.querySelector('#return-receipt-preview') || tempContainer;
       }
@@ -2006,7 +2006,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       return;
     }
     const stockAvailable = Number(selectedCreditProduct.stock) || 0;
-
+    
     // Check if item already in creditCartItems
     const existing = creditCartItems.find(item => item.productId === selectedCreditProduct.id);
     const existingBaseQty = existing ? existing.qty / (existing.conversionRate || 1) : 0;
@@ -2021,7 +2021,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       ));
       return;
     }
-
+    
     const catalogOptions = getUnitOptions(selectedCreditProduct);
     const selectedOpt = catalogOptions.find(o => o.unit === (creditSelectedUnit || selectedCreditProduct.unit));
     const adjustedPrice = (selectedOpt && selectedOpt.price !== undefined)
@@ -2029,16 +2029,16 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       : (selectedCreditProduct.price / creditConversionRate);
 
     if (existing) {
-      setCreditCartItems(creditCartItems.map(item =>
-        item.productId === selectedCreditProduct.id
-          ? {
-            ...item,
-            qty: item.qty + creditQty,
-            price: adjustedPrice,
-            total: (item.qty + creditQty) * adjustedPrice,
-            unit: creditSelectedUnit || selectedCreditProduct.unit,
-            conversionRate: creditConversionRate
-          }
+      setCreditCartItems(creditCartItems.map(item => 
+        item.productId === selectedCreditProduct.id 
+          ? { 
+              ...item, 
+              qty: item.qty + creditQty, 
+              price: adjustedPrice, 
+              total: (item.qty + creditQty) * adjustedPrice,
+              unit: creditSelectedUnit || selectedCreditProduct.unit,
+              conversionRate: creditConversionRate
+            }
           : item
       ));
     } else {
@@ -2053,7 +2053,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
         conversionRate: creditConversionRate
       }]);
     }
-
+    
     setSelectedCreditProduct(null);
     setCreditSelectedUnit('');
     setCreditConversionRate(1);
@@ -2107,7 +2107,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       const { data: { user } } = await supabase.auth.getUser();
 
       let customerId = selectedCreditCustomer?.id || null;
-      let finalCustomerName = creditCustomerType === 'registered'
+      let finalCustomerName = creditCustomerType === 'registered' 
         ? (selectedCreditCustomer?.name || creditCustomerName.trim() || 'Guest Customer')
         : (creditCustomerName.trim() || 'Guest Customer');
       const finalCustomerPhone = creditCustomerPhone.trim() || selectedCreditCustomer?.phone || '';
@@ -2218,7 +2218,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
       setLastOrder(completedOrder);
       setShowReceipt(true);
-
+      
       setCreditCartItems([]);
       setSelectedCreditProduct(null);
       setCreditQty(1);
@@ -2287,17 +2287,17 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
         .from('sales')
         .select('*')
         .order('created_at', { ascending: false });
-
+      
       if (salesData) {
         const mappedOrders = salesData.map((s: any) => {
-          const matchedCust = (s.customer_id ? custIdMap.get(s.customer_id) : null) ||
+          const matchedCust = (s.customer_id ? custIdMap.get(s.customer_id) : null) || 
             (s.customer_name ? custNameMap.get(s.customer_name.toLowerCase().trim()) : null);
 
           const validName = (s.customerName && s.customerName.trim() && s.customerName !== 'Guest Customer' && s.customerName !== 'Guest')
             ? s.customerName.trim()
             : ((s.customer_name && s.customer_name.trim() && s.customer_name !== 'Guest Customer' && s.customer_name !== 'Guest')
-              ? s.customer_name.trim()
-              : null);
+                ? s.customer_name.trim()
+                : null);
 
           const finalName = validName || matchedCust?.name || s.customerName || s.customer_name || 'Guest Customer';
 
@@ -2316,7 +2316,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
               const dd = String(d.getDate()).padStart(2, '0');
               return `${yyyy}-${mm}-${dd}`;
             })(),
-            total: s.total_amount
+            total: s.total_amount 
           };
         });
         setOrders(mappedOrders);
@@ -2381,11 +2381,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     const res = await fetchWithTimeout(`${API_URL}/sales/${orderId}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: JSON.stringify({ 
         void_passkey: passkey,
         passkey: passkey,
         confirm_permanent_delete: true,
-        confirmed: true
+        confirmed: true 
       })
     });
     if (!res.ok) {
@@ -2405,8 +2405,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     handleDeleteOrder(orderId);
   };
 
-  useEffect(() => {
-    fetchData();
+  useEffect(() => { 
+    fetchData(); 
   }, [tab]);
 
   useEffect(() => {
@@ -2443,7 +2443,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
         root = createRoot(tempContainer);
         root.render(<ReceiptPreview order={order} isSinhala={isSinhala} customers={customers} salesReturns={salesReturnsList} />);
-
+        
         await new Promise((r) => setTimeout(r, 250));
         targetElement = tempContainer.querySelector('#receipt-preview') || tempContainer;
       }
@@ -2568,7 +2568,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
         root = createRoot(tempContainer);
         root.render(<QuotationPreview quote={quote} isSinhala={isSinhala} shopSettings={shopSettings} />);
-
+        
         await new Promise((r) => setTimeout(r, 250));
         targetElement = tempContainer.querySelector('#quotation-preview-container') || tempContainer;
       }
@@ -2629,7 +2629,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     if (!q) return [];
     return products.filter(
       (p) =>
-        p.name.toLowerCase().includes(q) ||
+        p.name.toLowerCase().includes(q) || 
         (p.sku && p.sku.toLowerCase().includes(q)) ||
         (p.barcode && p.barcode.toLowerCase().includes(q))
     );
@@ -2640,7 +2640,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     if (!q) return [];
     return products.filter(
       (p) =>
-        p.name.toLowerCase().includes(q) ||
+        p.name.toLowerCase().includes(q) || 
         (p.sku && p.sku.toLowerCase().includes(q)) ||
         (p.barcode && p.barcode.toLowerCase().includes(q))
     );
@@ -2730,7 +2730,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   const matchingQuoteSelectables = useMemo(() => {
     const qStr = quoteSearch.trim().toLowerCase();
     if (!qStr) return allCatalogSelectables;
-    return allCatalogSelectables.filter(item =>
+    return allCatalogSelectables.filter(item => 
       (item.barcode && item.barcode.trim().toLowerCase().includes(qStr)) ||
       item.mainProductName.toLowerCase().includes(qStr) ||
       item.displayName.toLowerCase().includes(qStr) ||
@@ -2784,22 +2784,22 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             `Cannot add more. Only ${stockAvailableInSelectedUnit.toFixed(2)} ${existing.unit || product.unit}(s) available in stock!`,
             `වැඩිපුර එකතු කළ නොහැක. තොගයේ ඇත්තේ ${stockAvailableInSelectedUnit.toFixed(2)} ${existing.unit || product.unit} ක් පමණි!`
           ));
-          return prev;
+          return prev; 
         }
 
         return prev.map((i) =>
           i.productId === product.id ? { ...i, qty: i.qty + 1, total: (i.qty + 1) * i.price } : i
         );
       }
-
+      
       const initialQty = 1;
 
       return [...prev, {
-        productId: product.id,
-        productName: product.name,
-        qty: initialQty,
-        price: product.price,
-        taxRate: applyTax ? taxRate : 0,
+        productId: product.id, 
+        productName: product.name, 
+        qty: initialQty, 
+        price: product.price, 
+        taxRate: applyTax ? taxRate : 0, 
         total: initialQty * product.price,
         serialNo: product.serialNo || '',
         batchCode: product.batchCode || '',
@@ -2819,7 +2819,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     const conversionRate = item?.conversionRate || 1;
     const baseStock = Number(product.stock) || 0;
     const stockAvailableInSelectedUnit = Math.round((baseStock * conversionRate) * 100000) / 100000;
-
+    
     let targetQty = newQty;
 
     if (forceValidate) {
@@ -2866,7 +2866,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     // 1. If active tab is 'new' (POS Checkout)
     if (tab === 'new') {
       // Find matching product in catalog by barcode, SKU, ID, or compact laser barcode
-      const matchedProduct = products.find(p =>
+      const matchedProduct = products.find(p => 
         (p.barcode && p.barcode.trim().toLowerCase() === code.toLowerCase()) ||
         (p.sku && p.sku.trim().toLowerCase() === code.toLowerCase()) ||
         p.id === code ||
@@ -2898,7 +2898,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
     // 2. If active tab is 'credit'
     if (tab === 'credit') {
-      const matchedProduct = products.find(p =>
+      const matchedProduct = products.find(p => 
         (p.barcode && p.barcode.trim().toLowerCase() === code.toLowerCase()) ||
         (p.sku && p.sku.trim().toLowerCase() === code.toLowerCase()) ||
         p.id === code ||
@@ -2917,7 +2917,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
     // 3. If active tab is 'quotes'
     if (tab === 'quotes') {
-      const matchedSelectable = allCatalogSelectables.find(item =>
+      const matchedSelectable = allCatalogSelectables.find(item => 
         (item.barcode && item.barcode.trim().toLowerCase() === code.toLowerCase()) ||
         (item.sku && item.sku.trim().toLowerCase() === code.toLowerCase()) ||
         item.productId === code
@@ -3101,11 +3101,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     if (isLoading) return;
 
     if ((!isGuest && !selectedCustomer) || cartItems.length === 0) {
-      return alert(t("Please select a customer or use Guest Checkout", "කරුණාකර පාරිභෝගිකයෙකු තෝරන්න හෝ අමුත්තන්ගේ පරීක්ෂාව භාවිතා කරන්න"));
+        return alert(t("Please select a customer or use Guest Checkout", "කරුණාකර පාරිභෝගිකයෙකු තෝරන්න හෝ අමුත්තන්ගේ පරීක්ෂාව භාවිතා කරන්න"));
     }
 
     if (cartItems.some(i => i.qty <= 0)) {
-      return alert(t("Please enter a valid quantity greater than 0 for all items.", "කරුණාකර සියලුම භාණ්ඩ සඳහා 0 ට වැඩි වලංගු ප්‍රමාණයක් ඇතුළත් කරන්න."));
+        return alert(t("Please enter a valid quantity greater than 0 for all items.", "කරුණාකර සියලුම භාණ්ඩ සඳහා 0 ට වැඩි වලංගු ප්‍රමාණයක් ඇතුළත් කරන්න."));
     }
 
     // Strict Credit Note Validation
@@ -3167,7 +3167,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     try {
       const { data: { user } } = await supabase.auth.getUser();
 
-      const finalCustomerName = isGuest
+      const finalCustomerName = isGuest 
         ? (guestName.trim() && guestName.trim() !== 'Guest Customer' ? guestName.trim() : 'Guest Customer')
         : (selectedCustomer?.name || (guestName.trim() && guestName.trim() !== 'Guest Customer' ? guestName.trim() : 'Guest Customer'));
       const finalCustomerPhone = isGuest ? guestPhone.trim() : (selectedCustomer?.phone || '');
@@ -3182,7 +3182,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
       const newOrderData = {
         invoice_no: `INV-${Date.now()}`,
-        customer_id: isGuest ? null : selectedCustomer?.id,
+        customer_id: isGuest ? null : selectedCustomer?.id, 
         customer_name: finalCustomerName,
         customer_phone: finalCustomerPhone,
         customer_address: finalCustomerAddress,
@@ -3190,7 +3190,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
         subtotal,
         discount: discountAmt,
         tax: taxAmt,
-        tax_rate: applyTax ? taxRate : 0,
+        tax_rate: applyTax ? taxRate : 0, 
         total_amount: totalAmountValue,
         status: paymentMethod === 'Credit' ? 'Non Paid' : 'paid',
         payment_method: paymentMethod,
@@ -3297,7 +3297,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       setLastOrder(completedOrder);
       setShowReceipt(true);
       resetNewSale();
-      fetchData();
+      fetchData(); 
       fetchCreditNotes();
     } catch (error: any) {
       alert("Sale failed: " + error.message);
@@ -3354,9 +3354,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
   // Unsaved Cart Warning (Web Browser Only - Disabled in Electron to prevent reload lockup)
   useEffect(() => {
-    const isElectron = !!(window as any).electron ||
-      !!(window as any).electronAPI ||
-      navigator.userAgent.toLowerCase().includes('electron');
+    const isElectron = !!(window as any).electron || 
+                       !!(window as any).electronAPI || 
+                       navigator.userAgent.toLowerCase().includes('electron');
     if (isElectron) return; // Allow unobstructed native desktop reloads
 
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -3377,12 +3377,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     if (cartItems.some(i => i.qty <= 0)) {
       return alert(t("Please enter a valid quantity greater than 0 for all items.", "කරුණාකර සියලුම භාණ්ඩ සඳහා 0 ට වැඩි වලංගු ප්‍රමාණයක් ඇතුළත් කරන්න."));
     }
-
+    
     const nameToUse = (typeof customHoldName === 'string' && customHoldName.trim())
       ? customHoldName.trim()
       : holdNameInput.trim()
-        ? holdNameInput.trim()
-        : `Hold #${Date.now().toString().slice(-4)}`;
+      ? holdNameInput.trim()
+      : `Hold #${Date.now().toString().slice(-4)}`;
 
     handleParkInvoice({
       holdName: nameToUse,
@@ -3414,8 +3414,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       const items = Array.isArray(target.items)
         ? target.items
         : typeof target.items === 'string'
-          ? JSON.parse(target.items)
-          : [];
+        ? JSON.parse(target.items)
+        : [];
 
       setCartItems(items);
 
@@ -3464,8 +3464,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       const items = Array.isArray(rawItems)
         ? rawItems
         : typeof rawItems === 'string'
-          ? JSON.parse(rawItems)
-          : [];
+        ? JSON.parse(rawItems)
+        : [];
 
       if (!items || items.length === 0) {
         notify(t('This quotation contains no items to load.', 'මෙම මිල ගණන් ලැයිස්තුවේ භාණ්ඩ නොමැත.'));
@@ -3553,13 +3553,13 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       const res = await fetchWithTimeout(`${API_URL}/sales/${orderId}/void`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_email: userEmail,
+        body: JSON.stringify({ 
+          user_email: userEmail, 
           void_passkey: voidPasskey,
           supervisor_name: currentUser?.name || currentUser?.full_name || 'Supervisor'
         })
       });
-
+      
       if (res.ok) {
         alert(t("Invoice voided successfully!", "ඉන්වොයිසිය සාර්ථකව අවලංගු කරන ලදී!"));
         fetchData();
@@ -3634,22 +3634,22 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
   };
 
   const normalizeStatus = (status?: string) => (status || '').toLowerCase();
-
+  
   const filteredOrders = useMemo(() => {
     const search = historySearch.toLowerCase().trim();
     const targetStatus = statusFilter.toLowerCase();
     return orders.filter((o) => {
-      const matchSearch = !search ||
-        (o.invoiceNo || '').toLowerCase().includes(search) ||
-        (o.customerName || '').toLowerCase().includes(search);
+      const matchSearch = !search || 
+                          (o.invoiceNo || '').toLowerCase().includes(search) || 
+                          (o.customerName || '').toLowerCase().includes(search);
       const matchStatus = statusFilter === 'all' || normalizeStatus(o.status) === targetStatus;
-
+      
       const sDate = o.created_at ? o.created_at.slice(0, 10) : (o.date || '').slice(0, 10);
-      const matchDate = (!salesHistoryFromDate || sDate >= salesHistoryFromDate) &&
-        (!salesHistoryToDate || sDate <= salesHistoryToDate);
+      const matchDate = (!salesHistoryFromDate || sDate >= salesHistoryFromDate) && 
+                        (!salesHistoryToDate || sDate <= salesHistoryToDate);
 
       const method = (o.payment_method || (o as any).paymentMethod || '').toString().toLowerCase().trim();
-      const matchPaymentMethod =
+      const matchPaymentMethod = 
         historyPaymentMethodFilter === 'all' ||
         (historyPaymentMethodFilter === 'cash' && (method === 'cash' || !method)) ||
         (historyPaymentMethodFilter === 'card' && method.includes('card')) ||
@@ -3659,14 +3659,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     });
   }, [orders, historySearch, statusFilter, salesHistoryFromDate, salesHistoryToDate, historyPaymentMethodFilter]);
 
-  const isCreditOrder = (o: SaleOrder) =>
-    o.payment_method === 'Credit' ||
-    (o as any).is_credit === true ||
+  const isCreditOrder = (o: SaleOrder) => 
+    o.payment_method === 'Credit' || 
+    (o as any).is_credit === true || 
     (o.status === 'Non Paid' && o.payment_method !== 'Cash' && o.payment_method !== 'Card' && o.payment_method !== 'Bank Transfer');
 
   const creditOrders = useMemo(() => orders.filter((o) => isCreditOrder(o)), [orders]);
 
-
+  
 
 
 
@@ -3674,16 +3674,16 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
     const query = creditSearchQuery.toLowerCase().trim();
     return orders.filter(o => {
       if (!isCreditOrder(o)) return false;
-
+      
       const sDate = o.created_at ? o.created_at.slice(0, 10) : (o.date || '').slice(0, 10);
-      const matchDate = (!creditHistoryFromDate || sDate >= creditHistoryFromDate) &&
-        (!creditHistoryToDate || sDate <= creditHistoryToDate);
-
-      const matchSearch = !query ||
-        (o.invoiceNo || '').toLowerCase().includes(query) ||
-        (o.customerName || '').toLowerCase().includes(query) ||
+      const matchDate = (!creditHistoryFromDate || sDate >= creditHistoryFromDate) && 
+                        (!creditHistoryToDate || sDate <= creditHistoryToDate);
+      
+      const matchSearch = !query || 
+        (o.invoiceNo || '').toLowerCase().includes(query) || 
+        (o.customerName || '').toLowerCase().includes(query) || 
         (o.items && o.items.some((it: any) => (it.productName || it.name || '').toLowerCase().includes(query)));
-
+      
       return matchDate && matchSearch;
     });
   }, [orders, creditHistoryFromDate, creditHistoryToDate, creditSearchQuery]);
@@ -3842,11 +3842,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       <div className="flex justify-between items-center flex-wrap gap-4 bg-white/95 backdrop-blur-sm p-4 rounded-3xl border border-slate-200/80 shadow-xl shadow-slate-100/30 animate-in fade-in duration-500">
         <div className="flex gap-1.5 bg-slate-100/60 p-1.5 rounded-2xl w-fit border border-slate-200/40 overflow-x-auto max-w-full custom-scrollbar">
           {canAccessNew && (
-            <button
+            <button 
               onClick={() => {
                 resetNewSale();
                 setTab('new');
-              }}
+              }} 
               className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'new' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
             >
               <ShoppingCartIcon className="w-4 h-4" />
@@ -3854,20 +3854,21 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             </button>
           )}
           {canAccessHistory && (
-            <button
-              onClick={() => setTab('history')}
-              className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'history'
-                ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800'
-                : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'
-                }`}
+            <button 
+              onClick={() => setTab('history')} 
+              className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${
+                tab === 'history' 
+                  ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' 
+                  : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'
+              }`}
             >
               <ReceiptIcon className="w-4 h-4" />
               {t('Sales History', 'විකිණුම් ඉතිහාසය')}
             </button>
           )}
           {canAccessCredit && (
-            <button
-              onClick={() => setTab('credit')}
+            <button 
+              onClick={() => setTab('credit')} 
               className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'credit' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
             >
               <DollarSignIcon className="w-4 h-4" />
@@ -3875,8 +3876,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             </button>
           )}
           {canAccessCreditHistory && (
-            <button
-              onClick={() => setTab('credit_history')}
+            <button 
+              onClick={() => setTab('credit_history')} 
               className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'credit_history' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
             >
               <HistoryIcon className="w-4 h-4" />
@@ -3884,8 +3885,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             </button>
           )}
           {canAccessQuotes && (
-            <button
-              onClick={() => setTab('quotes')}
+            <button 
+              onClick={() => setTab('quotes')} 
               className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'quotes' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
             >
               <CheckSquareIcon className="w-4 h-4" />
@@ -3893,8 +3894,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             </button>
           )}
           {canAccessReturns && (
-            <button
-              onClick={() => { setTab('returns'); fetchSalesReturns(); }}
+            <button 
+              onClick={() => { setTab('returns'); fetchSalesReturns(); }} 
               className={`px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 ${tab === 'returns' ? 'bg-slate-900 text-amber-400 shadow-lg shadow-slate-900/25 border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
             >
               <ArrowRightIcon className="w-4 h-4 rotate-180 text-amber-500" />
@@ -3911,10 +3912,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
               fetchConnectedClients();
               setShowMobileScannerModal(true);
             }}
-            className={`px-3.5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 border shadow-sm ${isMobileScannerConnected
-              ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
-              : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
-              }`}
+            className={`px-3.5 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 border shadow-sm ${
+              isMobileScannerConnected
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+            }`}
             title={t('Wireless Mobile Scanner Status / Quick QR Pairing', 'රැහැන් රහිත ජංගම ස්කෑනර් තත්ත්වය / QR කේතය')}
           >
             <SmartphoneIcon className={`w-4 h-4 ${isMobileScannerConnected ? 'text-emerald-600' : 'text-slate-600'}`} />
@@ -3922,17 +3924,17 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             <span className={`w-2 h-2 rounded-full ${isMobileScannerConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`}></span>
           </button>
 
-          {/* Shift/Drawer button removed */}
+            {/* Shift/Drawer button removed */}
 
           <div className="flex gap-1 bg-slate-100/60 p-1.5 rounded-2xl w-fit border border-slate-200/40">
-            <button
-              onClick={() => setIsSinhala(false)}
+            <button 
+              onClick={() => setIsSinhala(false)} 
               className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 ${!isSinhala ? 'bg-slate-900 text-amber-400 shadow-md border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
             >
               🇺🇸 English
             </button>
-            <button
-              onClick={() => setIsSinhala(true)}
+            <button 
+              onClick={() => setIsSinhala(true)} 
               className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 ${isSinhala ? 'bg-slate-900 text-amber-400 shadow-md border border-slate-800' : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/40'}`}
             >
               🇱🇰 සිංහල
@@ -3944,7 +3946,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       {tab === 'new' && (
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 animate-in fade-in duration-300">
           <div className="xl:col-span-2 space-y-5">
-
+            
             {/* Customer Details Block */}
             <div className="bg-white rounded-2xl border-l-4 border-l-amber-500 border-y border-r border-slate-100 shadow-xl shadow-slate-100/40 p-6 text-left hover:shadow-2xl hover:shadow-slate-200/40 transition-all duration-300 transform hover:-translate-y-0.5">
               <div className="flex justify-between items-center mb-5 flex-wrap gap-3">
@@ -3954,7 +3956,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   </div>
                   {t('Customer Details', 'පාරිභෝගික විස්තර')}
                 </h3>
-
+                
                 {/* Modern Segmented pill toggle control */}
                 <div className="flex bg-slate-100/80 p-1.5 rounded-2xl border border-slate-200/30 shadow-inner">
                   <button
@@ -3982,9 +3984,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
               {!isGuest ? (
                 <div className="relative">
-                  <select
-                    value={selectedCustomer?.id || ''}
-                    onChange={(e) => setSelectedCustomer(customers.find((c) => c.id === e.target.value) || null)}
+                  <select 
+                    value={selectedCustomer?.id || ''} 
+                    onChange={(e) => setSelectedCustomer(customers.find((c) => c.id === e.target.value) || null)} 
                     className="w-full px-4 py-3.5 bg-slate-50/50 hover:bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 cursor-pointer transition-all duration-200 appearance-none shadow-sm"
                   >
                     <option value="">{t('Select a registered customer...', 'ලියාපදිංචි පාරිභෝගිකයෙකු තෝරන්න...')}</option>
@@ -4004,8 +4006,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 animate-in slide-in-from-top-2 duration-300">
                   <div>
                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1 block">{t('Guest Name (Optional)', 'අමුත්තාගේ නම (විකල්ප)')}</label>
-                    <input
-                      type="text"
+                    <input 
+                      type="text" 
                       value={guestName === 'Guest Customer' ? '' : guestName}
                       onChange={(e) => setGuestName(e.target.value)}
                       placeholder={t('Enter Guest Name...', 'අමුත්තාගේ නම ඇතුළත් කරන්න...')}
@@ -4014,8 +4016,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   </div>
                   <div>
                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1 block">{t('Phone Number (Optional)', 'දුරකථන අංකය (විකල්ප)')}</label>
-                    <input
-                      type="text"
+                    <input 
+                      type="text" 
                       value={guestPhone}
                       onChange={(e) => setGuestPhone(e.target.value)}
                       placeholder={t('Enter Phone Number...', 'දුරකථන අංකය ඇතුළත් කරන්න...')}
@@ -4024,8 +4026,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   </div>
                   <div>
                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1 ml-1 block">{t('Address (Optional)', 'ලිපිනය (විකල්ප)')}</label>
-                    <input
-                      type="text"
+                    <input 
+                      type="text" 
                       value={guestAddress}
                       onChange={(e) => setGuestAddress(e.target.value)}
                       placeholder={t('Enter Address...', 'ලිපිනය ඇතුළත් කරන්න...')}
@@ -4056,15 +4058,15 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   </button>
                 )}
               </div>
-
+              
               <div className="relative z-30">
                 <div className="flex items-center gap-3 bg-slate-50/50 hover:bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus-within:border-amber-500 focus-within:ring-1 focus-within:ring-amber-500 transition-all duration-200 shadow-inner">
                   <SearchIcon className="w-5 h-5 text-slate-400" />
-                  <input
+                  <input 
                     ref={posSearchInputRef}
-                    type="text"
-                    placeholder={t('Search hardware by name, SKU or barcode...', 'නම, SKU හෝ බාර්කෝඩ් මඟින් සොයන්න...')}
-                    value={productSearch}
+                    type="text" 
+                    placeholder={t('Search hardware by name, SKU or barcode...', 'නම, SKU හෝ බාර්කෝඩ් මඟින් සොයන්න...')} 
+                    value={productSearch} 
                     onChange={(e) => {
                       const val = e.target.value;
                       setProductSearch(val);
@@ -4077,7 +4079,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                           setProductSearch('');
                         }
                       }
-                    }}
+                    }} 
                     onKeyDown={(e) => {
                       if (filteredProducts.length === 0) return;
                       if (e.key === 'ArrowDown') {
@@ -4096,7 +4098,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                         }
                       }
                     }}
-                    className="bg-transparent text-sm font-bold text-slate-800 outline-none w-full placeholder-slate-400"
+                    className="bg-transparent text-sm font-bold text-slate-800 outline-none w-full placeholder-slate-400" 
                   />
                   {productSearch && (
                     <button type="button" onClick={() => setProductSearch('')} className="p-1 hover:bg-slate-200 rounded-full text-slate-400 transition-colors">
@@ -4104,14 +4106,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     </button>
                   )}
                 </div>
-
+                
                 {/* Search Results Dropdown */}
                 {filteredProducts.length > 0 && (
                   <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden max-h-72 overflow-y-auto">
                     {filteredProducts.map((item, index) => (
-                      <div
-                        key={item.id}
-                        onClick={() => { addToCart(item); setProductSearch(''); setSelectedIndex(0); }}
+                      <div 
+                        key={item.id} 
+                        onClick={() => { addToCart(item); setProductSearch(''); setSelectedIndex(0); }} 
                         className={`flex items-center justify-between p-3.5 cursor-pointer hover:bg-amber-50 dark:hover:bg-slate-800/80 border-b border-slate-100 dark:border-slate-800/60 last:border-0 transition-colors ${index === selectedIndex ? 'bg-amber-50/90 dark:bg-slate-800 border-l-4 border-amber-500' : ''}`}
                       >
                         <div>
@@ -4134,7 +4136,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   </div>
                 )}
               </div>
-
+              
               {/* Cart Items Table */}
               {cartItems.length > 0 && (
                 <div className="mt-6 overflow-hidden rounded-2xl border border-slate-100 shadow-md">
@@ -4173,29 +4175,29 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                             const selectedOpt = opts.find(o => o.unit === newUnit);
                                             if (selectedOpt && prod) {
                                               const newRate = selectedOpt.conversionRate;
-                                              const newPrice = selectedOpt.price !== undefined
-                                                ? selectedOpt.price
+                                              const newPrice = selectedOpt.price !== undefined 
+                                                ? selectedOpt.price 
                                                 : (prod.price / newRate);
-
+                                              
                                               const baseStock = Number(prod.stock) || 0;
                                               const maxStockInNewUnit = Math.round((baseStock * newRate) * 100000) / 100000;
-
+                                              
                                               let newQty = item.qty || 1;
                                               if (newQty > maxStockInNewUnit) {
                                                 alert(t(`Only ${maxStockInNewUnit} ${newUnit} available in stock!`, `තොගයේ ඇත්තේ ${maxStockInNewUnit} ${newUnit} ක් පමණි!`));
                                                 newQty = Math.max(1, maxStockInNewUnit);
                                               }
-
-                                              setCartItems(prev => prev.map(i =>
-                                                i.productId === item.productId
-                                                  ? {
-                                                    ...i,
-                                                    unit: newUnit,
-                                                    conversionRate: newRate,
-                                                    qty: newQty,
-                                                    price: newPrice,
-                                                    total: newQty * newPrice
-                                                  }
+                                              
+                                              setCartItems(prev => prev.map(i => 
+                                                i.productId === item.productId 
+                                                  ? { 
+                                                      ...i, 
+                                                      unit: newUnit, 
+                                                      conversionRate: newRate, 
+                                                      qty: newQty,
+                                                      price: newPrice, 
+                                                      total: newQty * newPrice 
+                                                    } 
                                                   : i
                                               ));
                                             }
@@ -4203,19 +4205,19 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                           className="text-[9px] bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5 font-bold text-slate-600 focus:outline-none focus:border-amber-500 cursor-pointer"
                                         >
                                           {opts.map(o => {
-                                            const primaryOption = opts[0] || { conversionRate: 1 };
-                                            const primaryRate = primaryOption.conversionRate;
-                                            const calculatedPrice = o.price !== undefined
-                                              ? o.price
-                                              : prod
-                                                ? (prod.price / primaryRate) * o.conversionRate
-                                                : 0;
-                                            return (
-                                              <option key={o.unit} value={o.unit}>
-                                                {o.unit} – {symbol} {calculatedPrice.toLocaleString()}
-                                              </option>
-                                            );
-                                          })}
+                                             const primaryOption = opts[0] || { conversionRate: 1 };
+                                             const primaryRate = primaryOption.conversionRate;
+                                             const calculatedPrice = o.price !== undefined 
+                                               ? o.price 
+                                               : prod 
+                                                 ? (prod.price / primaryRate) * o.conversionRate 
+                                                 : 0;
+                                             return (
+                                               <option key={o.unit} value={o.unit}>
+                                                 {o.unit} – {symbol} {calculatedPrice.toLocaleString()}
+                                               </option>
+                                             );
+                                           })}
                                         </select>
                                       );
                                     } else {
@@ -4238,12 +4240,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                   >
                                     -
                                   </button>
-                                  <input
-                                    type="number"
-                                    min={0}
+                                  <input 
+                                    type="number" 
+                                    min={0} 
                                     step="any"
-                                    max={maxStockInUnit}
-                                    value={item.qty === 0 ? '' : item.qty}
+                                    max={maxStockInUnit} 
+                                    value={item.qty === 0 ? '' : item.qty} 
                                     onFocus={(e) => e.target.select()}
                                     onChange={(e) => {
                                       const valStr = e.target.value;
@@ -4266,7 +4268,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                         (e.target as HTMLElement).blur();
                                       }
                                     }}
-                                    className="w-16 text-center bg-transparent border-0 font-bold text-slate-800 outline-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                    className="w-16 text-center bg-transparent border-0 font-bold text-slate-800 outline-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
                                   />
                                   <button
                                     type="button"
@@ -4280,18 +4282,18 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                               <td className="px-4 py-4 text-right font-bold text-slate-500 text-xs">{symbol} {convert(item.price).toLocaleString()}</td>
                               <td className="px-3 py-4 text-center">
                                 <div className="inline-flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-xl p-1 shadow-inner">
-                                  <input
-                                    type="number"
-                                    min={0}
+                                  <input 
+                                    type="number" 
+                                    min={0} 
                                     step="any"
-                                    placeholder="0"
-                                    value={item.discount || ''}
-                                    onChange={(e) => updateDiscount(item.productId, parseFloat(e.target.value) || 0, item.discountType || 'percent')}
-                                    className="w-12 text-center bg-transparent border-0 font-bold text-slate-800 outline-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                    placeholder="0" 
+                                    value={item.discount || ''} 
+                                    onChange={(e) => updateDiscount(item.productId, parseFloat(e.target.value) || 0, item.discountType || 'percent')} 
+                                    className="w-12 text-center bg-transparent border-0 font-bold text-slate-800 outline-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
                                   />
-                                  <button
-                                    type="button"
-                                    onClick={() => updateDiscount(item.productId, item.discount || 0, (item.discountType || 'percent') === 'percent' ? 'amount' : 'percent')}
+                                  <button 
+                                    type="button" 
+                                    onClick={() => updateDiscount(item.productId, item.discount || 0, (item.discountType || 'percent') === 'percent' ? 'amount' : 'percent')} 
                                     className="px-1.5 py-0.5 bg-white border border-slate-200 rounded-lg text-[10px] font-black text-amber-600 hover:bg-slate-100 transition-colors shadow-sm"
                                   >
                                     {(item.discountType || 'percent') === 'percent' ? '%' : symbol}
@@ -4300,8 +4302,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                               </td>
                               <td className="px-4 py-4 text-right font-black text-slate-800 text-sm">{symbol} {convert(item.total).toLocaleString()}</td>
                               <td className="px-4 py-4 text-center">
-                                <button
-                                  onClick={() => setCartItems((prev) => prev.filter((i) => i.productId !== item.productId))}
+                                <button 
+                                  onClick={() => setCartItems((prev) => prev.filter((i) => i.productId !== item.productId))} 
                                   className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all duration-200"
                                   title={t('Remove item', 'භාණ්ඩය ඉවත් කරන්න')}
                                 >
@@ -4326,8 +4328,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 <span className="w-1.5 h-4 bg-amber-500 rounded-full"></span>
                 {t('Order Summary', 'ඇණවුම් සාරාංශය')}
               </h3>
-              <button
-                type="button"
+              <button 
+                type="button" 
                 onClick={() => { fetchParkedInvoices(); setShowHeldBillsModal(true); }}
                 className="text-[9px] font-black uppercase tracking-widest px-3 py-2 bg-amber-500/10 hover:bg-amber-500 hover:text-slate-900 text-amber-600 rounded-xl transition-all border border-amber-500/10 shadow-sm flex items-center gap-1.5"
               >
@@ -4340,22 +4342,22 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 )}
               </button>
             </div>
-
+            
             <div className="space-y-4 mb-6">
-
+              
 
 
               <div className="grid grid-cols-1 gap-4 bg-slate-50/50 p-4 rounded-2xl border border-slate-100 shadow-sm">
                 <div>
                   <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1 block">{t('Transportation Fee (Rs.)', 'ප්‍රවාහන ගාස්තුව (රු.)')}</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={transportationFee || ''}
+                  <input 
+                    type="number" 
+                    min={0} 
+                    value={transportationFee || ''} 
                     onFocus={(e) => e.target.select()}
-                    onChange={(e) => setTransportationFee(parseFloat(e.target.value) || 0)}
+                    onChange={(e) => setTransportationFee(parseFloat(e.target.value) || 0)} 
                     placeholder="0.00"
-                    className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm"
+                    className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm" 
                   />
                 </div>
 
@@ -4364,9 +4366,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 <div>
                   <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1 block">{t('Payment Method', 'ගෙවීම් ක්‍රමය')}</label>
                   <div className="relative">
-                    <select
-                      value={paymentMethod}
-                      onChange={(e) => setPaymentMethod(e.target.value as any)}
+                    <select 
+                      value={paymentMethod} 
+                      onChange={(e) => setPaymentMethod(e.target.value as any)} 
                       className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 cursor-pointer appearance-none transition-all shadow-sm"
                     >
                       <option value="Cash">Cash / මුදල්</option>
@@ -4475,10 +4477,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                         <button
                           type="button"
                           onClick={() => setChequeType('CROSSED_ACCOUNT_PAYEE')}
-                          className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border text-left ${chequeType === 'CROSSED_ACCOUNT_PAYEE'
-                            ? 'bg-slate-900 text-amber-400 border-slate-900 shadow-sm'
-                            : 'bg-white text-slate-700 border-amber-200 hover:bg-amber-100/50'
-                            }`}
+                          className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border text-left ${
+                            chequeType === 'CROSSED_ACCOUNT_PAYEE'
+                              ? 'bg-slate-900 text-amber-400 border-slate-900 shadow-sm'
+                              : 'bg-white text-slate-700 border-amber-200 hover:bg-amber-100/50'
+                          }`}
                         >
                           <span className="block text-[11px] font-black">Crossed / A/C Payee</span>
                           <span className="text-[9px] opacity-80">ගිණුමට පමණි (Pending Realization)</span>
@@ -4487,10 +4490,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                         <button
                           type="button"
                           onClick={() => setChequeType('CASH_BEARER')}
-                          className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border text-left ${chequeType === 'CASH_BEARER'
-                            ? 'bg-slate-900 text-amber-400 border-slate-900 shadow-sm'
-                            : 'bg-white text-slate-700 border-amber-200 hover:bg-amber-100/50'
-                            }`}
+                          className={`py-2 px-3 rounded-xl text-xs font-bold transition-all border text-left ${
+                            chequeType === 'CASH_BEARER'
+                              ? 'bg-slate-900 text-amber-400 border-slate-900 shadow-sm'
+                              : 'bg-white text-slate-700 border-amber-200 hover:bg-amber-100/50'
+                          }`}
                         >
                           <span className="block text-[11px] font-black">Cash / Bearer Cheque</span>
                           <span className="text-[9px] opacity-80">මුදල් චෙක්පත (In Hand)</span>
@@ -4586,23 +4590,25 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     const isPartiallyUsed = !isFullyUsed && (st === 'partially used' || st === 'partially_used' || usedVal > 0);
 
                     return (
-                      <div className={`border rounded-xl p-3 space-y-2 animate-in fade-in duration-200 ${isFullyUsed ? 'bg-rose-50 border-rose-200' : isPartiallyUsed ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'
-                        }`}>
+                      <div className={`border rounded-xl p-3 space-y-2 animate-in fade-in duration-200 ${
+                        isFullyUsed ? 'bg-rose-50 border-rose-200' : isPartiallyUsed ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'
+                      }`}>
                         <div className="flex justify-between items-center text-xs font-black">
                           <span className="flex items-center gap-1 font-mono text-slate-800">
                             💳 {matchedCreditNote.credit_note_no || matchedCreditNote.code || matchedCreditNote.id}
                           </span>
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${isFullyUsed
-                            ? 'bg-rose-200 text-rose-900'
-                            : isPartiallyUsed
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
+                            isFullyUsed
+                              ? 'bg-rose-200 text-rose-900'
+                              : isPartiallyUsed
                               ? 'bg-amber-200 text-amber-900'
                               : 'bg-emerald-200 text-emerald-900'
-                            }`}>
+                          }`}>
                             {isFullyUsed
                               ? t('Fully Used', 'සම්පූර්ණයෙන්ම භාවිතා කර ඇත')
                               : isPartiallyUsed
-                                ? t('Partially Used', 'කොටසක් භාවිතා කර ඇත')
-                                : t('Active', 'සක්‍රියයි')}
+                              ? t('Partially Used', 'කොටසක් භාවිතා කර ඇත')
+                              : t('Active', 'සක්‍රියයි')}
                           </span>
                         </div>
                         <div className="grid grid-cols-3 gap-2 text-[11px] pt-1.5 border-t border-slate-200/80">
@@ -4629,25 +4635,25 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       {t('Amount to Apply (Rs.)', 'භාවිතා කරන මුදල (රු.)')}
                     </label>
                     <div className="flex gap-2">
-                      <input
-                        type="number"
-                        min={0}
+                      <input 
+                        type="number" 
+                        min={0} 
                         max={Math.min(activeCreditBalance > 0 ? activeCreditBalance : 999999, netTotalBeforeCreditNote)}
-                        value={creditNoteApplied === '' ? '' : creditNoteApplied}
+                        value={creditNoteApplied === '' ? '' : creditNoteApplied} 
                         onFocus={(e) => e.target.select()}
                         onChange={(e) => {
                           const val = e.target.value === '' ? '' : Math.max(0, parseFloat(e.target.value) || 0);
                           if (typeof val === 'number') {
-                            const maxAllow = activeCreditBalance > 0
+                            const maxAllow = activeCreditBalance > 0 
                               ? Math.min(activeCreditBalance, netTotalBeforeCreditNote)
                               : netTotalBeforeCreditNote;
                             setCreditNoteApplied(Math.min(val, maxAllow));
                           } else {
                             setCreditNoteApplied('');
                           }
-                        }}
+                        }} 
                         placeholder="0.00"
-                        className="w-full px-3 py-2 bg-white border border-amber-200 rounded-xl font-bold text-slate-800 text-xs outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm"
+                        className="w-full px-3 py-2 bg-white border border-amber-200 rounded-xl font-bold text-slate-800 text-xs outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm" 
                       />
                       {activeCreditBalance > 0 && (
                         <button
@@ -4705,18 +4711,18 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     </div>
                   </>
                 )}
-
+                
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex justify-between items-center mt-2 shadow-md">
                   <span className="uppercase tracking-widest text-xs font-black text-slate-400">{t('Payable', 'ගෙවිය යුතු මුදල')}</span>
                   <span className="text-xl font-black text-amber-400 font-mono">{symbol} {convert(totalAmountValue).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
               </div>
             </div>
-
+            
             <div className="space-y-3">
-              <button
-                onClick={processSale}
-                disabled={(!isGuest && !selectedCustomer) || cartItems.length === 0 || isLoading}
+              <button 
+                onClick={processSale} 
+                disabled={(!isGuest && !selectedCustomer) || cartItems.length === 0 || isLoading} 
                 className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:brightness-110 active:scale-[0.99] disabled:from-slate-100 disabled:to-slate-100 disabled:text-slate-300 disabled:shadow-none text-slate-950 font-black py-4 rounded-2xl shadow-lg shadow-amber-500/15 transition-all flex items-center justify-center gap-2.5 uppercase tracking-widest text-xs border border-amber-400/20"
               >
                 {isLoading ? <Loader2Icon className="animate-spin" /> : <ReceiptIcon className="w-5 h-5 text-slate-950" />}
@@ -4724,9 +4730,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
               </button>
 
               {cartItems.length > 0 && (
-                <button
+                <button 
                   type="button"
-                  onClick={() => setShowHoldNameModal(true)}
+                  onClick={() => setShowHoldNameModal(true)} 
                   className="w-full bg-white hover:bg-slate-50 active:scale-[0.99] text-slate-500 hover:text-slate-700 font-black py-3 rounded-2xl transition-all flex items-center justify-center gap-2 uppercase tracking-widest text-[9px] border border-slate-200 shadow-sm"
                 >
                   <PauseIcon className="w-3.5 h-3.5 text-slate-400" /> {t('Hold Bill (Park)', 'බිල්පත රඳවා තබන්න')}
@@ -4739,209 +4745,210 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
       {tab === 'history' && (
         <div className="space-y-4 animate-in slide-in-from-bottom duration-500">
-          {/* Sales History Header with Filters */}
-          <div className="flex flex-col gap-4 bg-white p-5 rounded-2xl border border-slate-100 shadow-xl shadow-slate-100/40 text-left">
-            <div className="flex justify-between items-center flex-wrap gap-4 border-b border-slate-100 pb-4">
-              <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
-                <span className="w-1.5 h-4 bg-amber-500 rounded-full"></span>
-                {t('Invoice Logs', 'ඉන්වොයිසි ලේඛනය')}
-                <span className="bg-slate-100 text-slate-500 px-2 py-0.5 rounded-lg text-[10px] font-mono border border-slate-200">
-                  {filteredOrders.length} {t('records', 'වාර්තා')}
+            {/* Sales History Header with Filters */}
+            <div className="flex flex-col gap-4 bg-white p-5 rounded-2xl border border-slate-100 shadow-xl shadow-slate-100/40 text-left">
+              <div className="flex justify-between items-center flex-wrap gap-4 border-b border-slate-100 pb-4">
+                <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                  <span className="w-1.5 h-4 bg-amber-500 rounded-full"></span>
+                  {t('Invoice Logs', 'ඉන්වොයිසි ලේඛනය')}
+                  <span className="bg-slate-100 text-slate-500 px-2 py-0.5 rounded-lg text-[10px] font-mono border border-slate-200">
+                    {filteredOrders.length} {t('records', 'වාර්තා')}
+                  </span>
+                </h3>
+                
+                {(historySearch || statusFilter !== 'all' || historyPaymentMethodFilter !== 'all' || salesHistoryFromDate || salesHistoryToDate) && (
+                  <button 
+                    onClick={() => {
+                      setHistorySearch('');
+                      setStatusFilter('all');
+                      setHistoryPaymentMethodFilter('all');
+                      setSalesHistoryFromDate('');
+                      setSalesHistoryToDate('');
+                    }}
+                    className="text-[10px] font-black uppercase tracking-wider text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 px-3.5 py-2 rounded-xl transition-all border border-red-200/50 shadow-sm"
+                  >
+                    {t('Clear Filters', 'පෙරහන් ඉවත් කරන්න')}
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                {/* Search query */}
+                <div className="relative bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 flex items-center gap-3 focus-within:border-amber-500 focus-within:ring-1 focus-within:ring-amber-500 transition-all duration-200 shadow-inner">
+                  <SearchIcon className="w-4 h-4 text-slate-400" />
+                  <input 
+                    type="text" 
+                    placeholder={t('Search invoice ID or Customer...', 'ඉන්වොයිස් අංකය හෝ පාරිභෝගිකයා...')} 
+                    value={historySearch} 
+                    onChange={(e) => setHistorySearch(e.target.value)} 
+                    className="w-full bg-transparent text-xs font-bold text-slate-800 outline-none placeholder-slate-400" 
+                  />
+                </div>
+
+                {/* Status Dropdown */}
+                <div className="relative bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 flex items-center gap-3 focus-within:border-amber-500 focus-within:ring-1 focus-within:ring-amber-500 transition-all duration-200 shadow-inner">
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                    className="w-full bg-transparent text-xs font-black text-slate-700 outline-none cursor-pointer appearance-none"
+                  >
+                    <option value="all">{t('All Statuses', 'සියලුම තත්ත්වයන්')}</option>
+                    <option value="paid">{t('Paid', 'ගෙවන ලද')}</option>
+                    <option value="non paid">{t('Unpaid / Credit', 'නොගෙවූ / ණය')}</option>
+                    <option value="cancelled">{t('Voided', 'අවලංගු කරන ලද')}</option>
+                  </select>
+                  <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400">
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
+                </div>
+
+                {/* From Date */}
+                <div className="relative bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 flex items-center gap-3 focus-within:border-amber-500 focus-within:ring-1 focus-within:ring-amber-500 transition-all duration-200 shadow-inner">
+                  <div className="flex flex-col w-full text-left">
+                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-wider">{t('From Date', 'සිට දිනය')}</span>
+                    <input 
+                      type="date" 
+                      value={salesHistoryFromDate} 
+                      onChange={(e) => setSalesHistoryFromDate(e.target.value)} 
+                      className="bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                    />
+                  </div>
+                </div>
+
+                {/* To Date */}
+                <div className="relative bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 flex items-center gap-3 focus-within:border-amber-500 focus-within:ring-1 focus-within:ring-amber-500 transition-all duration-200 shadow-inner">
+                  <div className="flex flex-col w-full text-left">
+                    <span className="text-[8px] font-black text-slate-400 uppercase tracking-wider">{t('To Date', 'දක්වා දිනය')}</span>
+                    <input 
+                      type="date" 
+                      value={salesHistoryToDate} 
+                      onChange={(e) => setSalesHistoryToDate(e.target.value)} 
+                      className="bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Payment Method Filter Pills */}
+              <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-slate-100">
+                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider mr-1">
+                  {t('Payment Mode:', 'ගෙවීම් ක්‍රමය:')}
                 </span>
-              </h3>
-
-              {(historySearch || statusFilter !== 'all' || historyPaymentMethodFilter !== 'all' || salesHistoryFromDate || salesHistoryToDate) && (
-                <button
-                  onClick={() => {
-                    setHistorySearch('');
-                    setStatusFilter('all');
-                    setHistoryPaymentMethodFilter('all');
-                    setSalesHistoryFromDate('');
-                    setSalesHistoryToDate('');
-                  }}
-                  className="text-[10px] font-black uppercase tracking-wider text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 px-3.5 py-2 rounded-xl transition-all border border-red-200/50 shadow-sm"
-                >
-                  {t('Clear Filters', 'පෙරහන් ඉවත් කරන්න')}
-                </button>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              {/* Search query */}
-              <div className="relative bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 flex items-center gap-3 focus-within:border-amber-500 focus-within:ring-1 focus-within:ring-amber-500 transition-all duration-200 shadow-inner">
-                <SearchIcon className="w-4 h-4 text-slate-400" />
-                <input
-                  type="text"
-                  placeholder={t('Search invoice ID or Customer...', 'ඉන්වොයිස් අංකය හෝ පාරිභෝගිකයා...')}
-                  value={historySearch}
-                  onChange={(e) => setHistorySearch(e.target.value)}
-                  className="w-full bg-transparent text-xs font-bold text-slate-800 outline-none placeholder-slate-400"
-                />
-              </div>
-
-              {/* Status Dropdown */}
-              <div className="relative bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 flex items-center gap-3 focus-within:border-amber-500 focus-within:ring-1 focus-within:ring-amber-500 transition-all duration-200 shadow-inner">
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                  className="w-full bg-transparent text-xs font-black text-slate-700 outline-none cursor-pointer appearance-none"
-                >
-                  <option value="all">{t('All Statuses', 'සියලුම තත්ත්වයන්')}</option>
-                  <option value="paid">{t('Paid', 'ගෙවන ලද')}</option>
-                  <option value="non paid">{t('Unpaid / Credit', 'නොගෙවූ / ණය')}</option>
-                  <option value="cancelled">{t('Voided', 'අවලංගු කරන ලද')}</option>
-                </select>
-                <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400">
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
-              </div>
-
-              {/* From Date */}
-              <div className="relative bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 flex items-center gap-3 focus-within:border-amber-500 focus-within:ring-1 focus-within:ring-amber-500 transition-all duration-200 shadow-inner">
-                <div className="flex flex-col w-full text-left">
-                  <span className="text-[8px] font-black text-slate-400 uppercase tracking-wider">{t('From Date', 'සිට දිනය')}</span>
-                  <input
-                    type="date"
-                    value={salesHistoryFromDate}
-                    onChange={(e) => setSalesHistoryFromDate(e.target.value)}
-                    className="bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer"
-                  />
-                </div>
-              </div>
-
-              {/* To Date */}
-              <div className="relative bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 flex items-center gap-3 focus-within:border-amber-500 focus-within:ring-1 focus-within:ring-amber-500 transition-all duration-200 shadow-inner">
-                <div className="flex flex-col w-full text-left">
-                  <span className="text-[8px] font-black text-slate-400 uppercase tracking-wider">{t('To Date', 'දක්වා දිනය')}</span>
-                  <input
-                    type="date"
-                    value={salesHistoryToDate}
-                    onChange={(e) => setSalesHistoryToDate(e.target.value)}
-                    className="bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Payment Method Filter Pills */}
-            <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-slate-100">
-              <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider mr-1">
-                {t('Payment Mode:', 'ගෙවීම් ක්‍රමය:')}
-              </span>
-              {[
-                { id: 'all', label: t('All Modes', 'සියල්ල') },
-                { id: 'cash', label: t('Cash', 'මුදල්') },
-                { id: 'card', label: t('Card', 'කාඩ්පත්') },
-                { id: 'bank transfer', label: t('Bank Transfer', 'බැංකු හුවමාරු') }
-              ].map(mode => (
-                <button
-                  key={mode.id}
-                  type="button"
-                  onClick={() => setHistoryPaymentMethodFilter(mode.id)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${historyPaymentMethodFilter === mode.id
-                    ? 'bg-slate-900 text-amber-400 shadow-sm'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                {[
+                  { id: 'all', label: t('All Modes', 'සියල්ල') },
+                  { id: 'cash', label: t('Cash', 'මුදල්') },
+                  { id: 'card', label: t('Card', 'කාඩ්පත්') },
+                  { id: 'bank transfer', label: t('Bank Transfer', 'බැංකු හුවමාරු') }
+                ].map(mode => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    onClick={() => setHistoryPaymentMethodFilter(mode.id)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                      historyPaymentMethodFilter === mode.id
+                        ? 'bg-slate-900 text-amber-400 shadow-sm'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
                     }`}
-                >
-                  {mode.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {selectedHistoryIds.length > 0 && (
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border border-slate-100 bg-slate-50 rounded-2xl animate-in slide-in-from-top-3 duration-300">
-              <p className="text-xs font-black text-slate-700">
-                {selectedHistoryIds.length} {t('invoices selected for action', 'ඉන්වොයිසි ප්‍රමාණයක් තෝරාගෙන ඇත')}
-              </p>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={handleBulkDeleteOrders}
-                  className="text-[9px] font-black uppercase tracking-widest bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl transition-all shadow-md shadow-red-500/10 flex items-center gap-1.5"
-                >
-                  <Trash2Icon className="w-3.5 h-3.5" /> {t('Delete Selected', 'තෝරාගත් මකන්න')}
-                </button>
+                  >
+                    {mode.label}
+                  </button>
+                ))}
               </div>
             </div>
-          )}
 
-          <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-100/40 overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-black text-slate-400 tracking-widest uppercase">
-                    <th className="px-6 py-4.5">
-                      <label className="inline-flex items-center">
-                        <input
-                          type="checkbox"
-                          checked={allFilteredSelected}
-                          onChange={handleToggleSelectAll}
-                          className="form-checkbox text-amber-500 rounded border-slate-300 focus:ring-amber-500 transition-colors"
-                        />
-                      </label>
-                    </th>
-                    <th className="px-6 py-4.5">{t('Invoice', 'ඉන්වොයිසිය')}</th>
-                    <th className="px-6 py-4.5">{t('Date', 'දිනය')}</th>
-                    <th className="px-6 py-4.5">{t('Customer', 'පාරිභෝගිකයා')}</th>
-                    <th className="px-6 py-4.5 text-center">{t('Sale Type', 'වර්ගය')}</th>
-                    <th className="px-6 py-4.5 text-center">{t('Items', 'භාණ්ඩ')}</th>
-                    <th className="px-6 py-4.5 text-right">{t('Total', 'එකතුව')}</th>
-                    <th className="px-6 py-4.5 text-center">{t('Status', 'තත්ත්වය')}</th>
-                    <th className="px-6 py-4.5 text-center">{t('Actions', 'ක්‍රියාකාරකම්')}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
-                  {filteredOrders.length === 0 ? (
-                    <tr>
-                      <td colSpan={9} className="text-center py-12 text-slate-400 font-bold text-sm">
-                        {t('No sales records found.', 'විකිණීම් වාර්තා කිසිවක් හමු නොවීය.')}
-                      </td>
+            {selectedHistoryIds.length > 0 && (
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border border-slate-100 bg-slate-50 rounded-2xl animate-in slide-in-from-top-3 duration-300">
+                <p className="text-xs font-black text-slate-700">
+                  {selectedHistoryIds.length} {t('invoices selected for action', 'ඉන්වොයිසි ප්‍රමාණයක් තෝරාගෙන ඇත')}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleBulkDeleteOrders}
+                    className="text-[9px] font-black uppercase tracking-widest bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl transition-all shadow-md shadow-red-500/10 flex items-center gap-1.5"
+                  >
+                    <Trash2Icon className="w-3.5 h-3.5" /> {t('Delete Selected', 'තෝරාගත් මකන්න')}
+                  </button>
+                </div>
+              </div>
+            )}
+            
+            <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-100/40 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-black text-slate-400 tracking-widest uppercase">
+                      <th className="px-6 py-4.5">
+                        <label className="inline-flex items-center">
+                          <input
+                            type="checkbox"
+                            checked={allFilteredSelected}
+                            onChange={handleToggleSelectAll}
+                            className="form-checkbox text-amber-500 rounded border-slate-300 focus:ring-amber-500 transition-colors"
+                          />
+                        </label>
+                      </th>
+                      <th className="px-6 py-4.5">{t('Invoice', 'ඉන්වොයිසිය')}</th>
+                      <th className="px-6 py-4.5">{t('Date', 'දිනය')}</th>
+                      <th className="px-6 py-4.5">{t('Customer', 'පාරිභෝගිකයා')}</th>
+                      <th className="px-6 py-4.5 text-center">{t('Sale Type', 'වර්ගය')}</th>
+                      <th className="px-6 py-4.5 text-center">{t('Items', 'භාණ්ඩ')}</th>
+                      <th className="px-6 py-4.5 text-right">{t('Total', 'එකතුව')}</th>
+                      <th className="px-6 py-4.5 text-center">{t('Status', 'තත්ත්වය')}</th>
+                      <th className="px-6 py-4.5 text-center">{t('Actions', 'ක්‍රියාකාරකම්')}</th>
                     </tr>
-                  ) : (
-                    filteredOrders.map(order => {
-                      const isCredit = isCreditOrder(order);
-                      const isVoided = (order.status || '').toUpperCase() === 'VOIDED' || (order.status || '').toUpperCase() === 'VOID' || (order.status || '').toUpperCase() === 'CANCELLED';
-                      return (
-                        <tr key={order.id} className={`transition-all duration-200 ${isCredit ? 'bg-amber-50/50 hover:bg-amber-50/90 border-l-4 border-l-amber-500' : 'hover:bg-slate-50/30'}`}>
-                          <td className="px-6 py-4">
-                            <label className="inline-flex items-center">
-                              <input
-                                type="checkbox"
-                                checked={selectedHistoryIds.includes(order.id)}
-                                onChange={() => handleToggleSelectOrder(order.id)}
-                                className="form-checkbox text-amber-500 rounded border-slate-300 focus:ring-amber-500 transition-colors"
-                              />
-                            </label>
-                          </td>
-                          <td className="px-6 py-4 font-black text-slate-800 font-mono text-sm">{order.invoiceNo}</td>
-                          <td className="px-6 py-4 text-slate-500 font-bold text-xs">{order.date}</td>
-                          <td className="px-6 py-4 text-left">
-                            <div className="font-black text-slate-800 text-sm">{order.customerName}</div>
-                            {(order.customerPhone || order.customer_phone) && (
-                              <div className="text-[10px] text-slate-400 font-bold mt-0.5 font-mono">
-                                📞 {order.customerPhone || order.customer_phone}
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 text-center">
-                            {isCredit ? (
-                              <span className="bg-amber-100 text-amber-900 border border-amber-300 font-black px-2.5 py-1 rounded-xl text-[9px] uppercase tracking-wider shadow-xs inline-flex items-center gap-1">
-                                {t('Credit', 'ණය')}
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {filteredOrders.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="text-center py-12 text-slate-400 font-bold text-sm">
+                          {t('No sales records found.', 'විකිණීම් වාර්තා කිසිවක් හමු නොවීය.')}
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredOrders.map(order => {
+                        const isCredit = isCreditOrder(order);
+                        const isVoided = (order.status || '').toUpperCase() === 'VOIDED' || (order.status || '').toUpperCase() === 'VOID' || (order.status || '').toUpperCase() === 'CANCELLED';
+                        return (
+                          <tr key={order.id} className={`transition-all duration-200 ${isCredit ? 'bg-amber-50/50 hover:bg-amber-50/90 border-l-4 border-l-amber-500' : 'hover:bg-slate-50/30'}`}>
+                            <td className="px-6 py-4">
+                              <label className="inline-flex items-center">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedHistoryIds.includes(order.id)}
+                                  onChange={() => handleToggleSelectOrder(order.id)}
+                                  className="form-checkbox text-amber-500 rounded border-slate-300 focus:ring-amber-500 transition-colors"
+                                />
+                              </label>
+                            </td>
+                            <td className="px-6 py-4 font-black text-slate-800 font-mono text-sm">{order.invoiceNo}</td>
+                            <td className="px-6 py-4 text-slate-500 font-bold text-xs">{order.date}</td>
+                            <td className="px-6 py-4 text-left">
+                              <div className="font-black text-slate-800 text-sm">{order.customerName}</div>
+                              {(order.customerPhone || order.customer_phone) && (
+                                <div className="text-[10px] text-slate-400 font-bold mt-0.5 font-mono">
+                                  📞 {order.customerPhone || order.customer_phone}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              {isCredit ? (
+                                <span className="bg-amber-100 text-amber-900 border border-amber-300 font-black px-2.5 py-1 rounded-xl text-[9px] uppercase tracking-wider shadow-xs inline-flex items-center gap-1">
+                                  {t('Credit', 'ණය')}
+                                </span>
+                              ) : (
+                                <span className="bg-slate-100 text-slate-700 font-bold px-2.5 py-1 rounded-xl text-[9px] uppercase tracking-wider border border-slate-200">
+                                  {t('Normal', 'සාමාන්‍ය')}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 text-center">
+                              <span className="bg-slate-100 text-slate-600 px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider border border-slate-200/50">
+                                {order.items?.length || 0} SKU
                               </span>
-                            ) : (
-                              <span className="bg-slate-100 text-slate-700 font-bold px-2.5 py-1 rounded-xl text-[9px] uppercase tracking-wider border border-slate-200">
-                                {t('Normal', 'සාමාන්‍ය')}
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 text-center">
-                            <span className="bg-slate-100 text-slate-600 px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider border border-slate-200/50">
-                              {order.items?.length || 0} SKU
-                            </span>
-                          </td>
+                            </td>
                           <td className="px-6 py-4 text-right font-black text-amber-500 font-mono text-sm">{symbol} {convert(order.total).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                           <td className="px-6 py-4 text-center">
                             {isVoided ? (
@@ -4950,17 +4957,17 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                               </span>
                             ) : (
                               <span className={`px-2.5 py-1 rounded-xl text-[9px] font-black uppercase tracking-wider ${statusColors[order.status] || 'bg-slate-100 text-slate-500'}`}>
-                                {(order.status as string) === 'Paid' || (order.status as string) === 'paid'
-                                  ? t('Paid', 'ගෙවන ලද')
-                                  : (order.status as string) === 'Non Paid'
-                                    ? t('Non Paid', 'නොගෙවූ')
-                                    : order.status}
+                                {(order.status as string) === 'Paid' || (order.status as string) === 'paid' 
+                                  ? t('Paid', 'ගෙවන ලද') 
+                                  : (order.status as string) === 'Non Paid' 
+                                  ? t('Non Paid', 'නොගෙවූ') 
+                                  : order.status}
                               </span>
                             )}
                           </td>
                           <td className="px-6 py-4 text-center flex items-center justify-center gap-2">
                             {(order.status as string) === 'Non Paid' && (
-                              <button
+                              <button 
                                 type="button"
                                 disabled={true}
                                 className="text-[9px] font-black uppercase tracking-widest bg-slate-100 text-slate-400 px-3 py-2 rounded-xl border border-slate-200 cursor-not-allowed"
@@ -4969,21 +4976,21 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                 {t('Pay (Disabled)', 'ගෙවන්න (අක්‍රියයි)')}
                               </button>
                             )}
-                            <button
+                            <button 
                               type="button"
                               onClick={() => {
                                 setLastOrder(order);
                                 setShowReceipt(true);
-                              }}
+                              }} 
                               className="text-[9px] font-black uppercase tracking-widest bg-amber-50 hover:bg-amber-500 text-amber-600 hover:text-slate-950 px-3 py-2 rounded-xl transition-all border border-amber-200/40 shadow-sm flex items-center gap-1"
                               title={t('Preview', 'පෙරදසුන')}
                             >
                               <ReceiptIcon className="w-3.5 h-3.5" />
                               {t('Preview', 'පෙරදසුන')}
                             </button>
-                            <button
+                            <button 
                               type="button"
-                              onClick={() => handlePrintReceipt(order)}
+                              onClick={() => handlePrintReceipt(order)} 
                               className="text-[9px] font-black uppercase tracking-widest bg-slate-900 hover:bg-slate-800 text-white px-3 py-2 rounded-xl transition-all shadow-md shadow-slate-900/10 flex items-center gap-1"
                               title={t('Print', 'මුද්‍රණය')}
                             >
@@ -5015,17 +5022,17 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       );
                     })
                   )}
-                </tbody>
-              </table>
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
         </div>
       )}
 
       {tab === 'credit' && (
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 animate-in fade-in duration-300">
           <div className="xl:col-span-2 space-y-5">
-
+            
             {/* Customer Details Block */}
             <div className="bg-white rounded-2xl border-l-4 border-l-amber-500 border-y border-r border-slate-100 shadow-xl shadow-slate-100/40 p-6 text-left hover:shadow-2xl hover:shadow-slate-200/40 transition-all duration-300 transform hover:-translate-y-0.5">
               <div className="flex justify-between items-center mb-5 flex-wrap gap-3">
@@ -5035,7 +5042,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   </div>
                   {t('Credit Customer Details', 'ණයගැති පාරිභෝගික විස්තර')}
                 </h3>
-
+                
                 {/* Modern Segmented Pill Toggle */}
                 <div className="flex bg-slate-100/80 p-1.5 rounded-2xl border border-slate-200/30 shadow-inner">
                   <button
@@ -5072,8 +5079,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
               {creditCustomerType === 'registered' ? (
                 <div className="space-y-4">
                   <div className="relative">
-                    <select
-                      value={selectedCreditCustomer?.id || ''}
+                    <select 
+                      value={selectedCreditCustomer?.id || ''} 
                       onChange={(e) => {
                         const c = customers.find((c) => c.id === e.target.value) || null;
                         setSelectedCreditCustomer(c);
@@ -5115,32 +5122,32 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 animate-in slide-in-from-top-2 duration-300">
-                  <input
-                    type="text"
-                    value={creditCustomerName}
-                    onChange={(e) => setCreditCustomerName(e.target.value)}
-                    placeholder={t('Customer Name *', 'පාරිභෝගිකයාගේ නම *')}
+                  <input 
+                    type="text" 
+                    value={creditCustomerName} 
+                    onChange={(e) => setCreditCustomerName(e.target.value)} 
+                    placeholder={t('Customer Name *', 'පාරිභෝගිකයාගේ නම *')} 
                     className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm"
                   />
-                  <input
-                    type="text"
-                    value={creditCustomerPhone}
-                    onChange={(e) => setCreditCustomerPhone(e.target.value)}
-                    placeholder={t('Phone Number', 'දුරකථන අංකය')}
+                  <input 
+                    type="text" 
+                    value={creditCustomerPhone} 
+                    onChange={(e) => setCreditCustomerPhone(e.target.value)} 
+                    placeholder={t('Phone Number', 'දුරකථන අංකය')} 
                     className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm"
                   />
-                  <input
-                    type="text"
-                    value={creditCustomerNIC}
-                    onChange={(e) => setCreditCustomerNIC(e.target.value)}
-                    placeholder={t('NIC Number', 'ජා.හැ. අංකය')}
+                  <input 
+                    type="text" 
+                    value={creditCustomerNIC} 
+                    onChange={(e) => setCreditCustomerNIC(e.target.value)} 
+                    placeholder={t('NIC Number', 'ජා.හැ. අංකය')} 
                     className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm"
                   />
-                  <input
-                    type="text"
-                    value={creditCustomerAddress}
-                    onChange={(e) => setCreditCustomerAddress(e.target.value)}
-                    placeholder={t('Address', 'ලිපිනය')}
+                  <input 
+                    type="text" 
+                    value={creditCustomerAddress} 
+                    onChange={(e) => setCreditCustomerAddress(e.target.value)} 
+                    placeholder={t('Address', 'ලිපිනය')} 
                     className="w-full px-4 py-3 bg-slate-50/50 border border-slate-200 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm"
                   />
                 </div>
@@ -5155,14 +5162,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 </div>
                 {t('Inventory Search & Items', 'තොග සෙවීම සහ භාණ්ඩ')}
               </h3>
-
+              
               <div className="relative z-30">
                 <div className="flex items-center gap-3 bg-slate-50/50 hover:bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus-within:border-amber-500 focus-within:ring-1 focus-within:ring-amber-500 transition-all duration-200 shadow-inner">
                   <SearchIcon className="w-5 h-5 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder={t('Search hardware by name, SKU or barcode...', 'නම, SKU හෝ බාර්කෝඩ් මඟින් සොයන්න...')}
-                    value={creditProductSearch}
+                  <input 
+                    type="text" 
+                    placeholder={t('Search hardware by name, SKU or barcode...', 'නම, SKU හෝ බාර්කෝඩ් මඟින් සොයන්න...')} 
+                    value={creditProductSearch} 
                     onChange={(e) => {
                       const val = e.target.value;
                       setCreditProductSearch(val);
@@ -5174,7 +5181,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                           setCreditProductSearch('');
                         }
                       }
-                    }}
+                    }} 
                     onKeyDown={(e) => {
                       if (creditFilteredProducts.length === 0) return;
                       if (e.key === 'ArrowDown') {
@@ -5193,7 +5200,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                         }
                       }
                     }}
-                    className="bg-transparent text-sm font-bold text-slate-800 outline-none w-full placeholder-slate-400"
+                    className="bg-transparent text-sm font-bold text-slate-800 outline-none w-full placeholder-slate-400" 
                   />
                   {creditProductSearch && (
                     <button type="button" onClick={() => setCreditProductSearch('')} className="p-1 hover:bg-slate-200 rounded-full text-slate-400 transition-colors">
@@ -5201,14 +5208,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     </button>
                   )}
                 </div>
-
+                
                 {/* Search Results Dropdown */}
                 {creditProductSearch && creditFilteredProducts.length > 0 && (
                   <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden max-h-72 overflow-y-auto">
                     {creditFilteredProducts.map((item, index) => (
-                      <div
-                        key={item.id}
-                        onClick={() => { addCreditCartItemDirect(item); setCreditProductSearch(''); setSelectedIndex(0); }}
+                      <div 
+                        key={item.id} 
+                        onClick={() => { addCreditCartItemDirect(item); setCreditProductSearch(''); setSelectedIndex(0); }} 
                         className={`flex items-center justify-between p-3.5 cursor-pointer hover:bg-amber-50 dark:hover:bg-slate-800/80 border-b border-slate-100 dark:border-slate-800/60 last:border-0 transition-colors ${index === selectedIndex ? 'bg-amber-50/90 dark:bg-slate-800 border-l-4 border-amber-500' : ''}`}
                       >
                         <div>
@@ -5231,7 +5238,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   </div>
                 )}
               </div>
-
+              
               {/* Cart Items Table */}
               {creditCartItems.length > 0 && (
                 <div className="mt-6 overflow-hidden rounded-2xl border border-slate-100 shadow-md">
@@ -5271,29 +5278,29 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                             const selectedOpt = opts.find(o => o.unit === newUnit);
                                             if (selectedOpt && prod) {
                                               const newRate = selectedOpt.conversionRate;
-                                              const newPrice = selectedOpt.price !== undefined
-                                                ? selectedOpt.price
+                                              const newPrice = selectedOpt.price !== undefined 
+                                                ? selectedOpt.price 
                                                 : (prod.price / newRate);
-
+                                              
                                               const baseStock = Number(prod.stock) || 0;
                                               const maxStockInNewUnit = Math.round((baseStock * newRate) * 100000) / 100000;
-
+                                              
                                               let newQty = item.qty || 1;
                                               if (newQty > maxStockInNewUnit) {
                                                 alert(t(`Only ${maxStockInNewUnit} ${newUnit} available in stock!`, `තොගයේ ඇත්තේ ${maxStockInNewUnit} ${newUnit} ක් පමණි!`));
                                                 newQty = Math.max(1, maxStockInNewUnit);
                                               }
 
-                                              setCreditCartItems(prev => prev.map(i =>
-                                                i.productId === item.productId
-                                                  ? {
-                                                    ...i,
-                                                    unit: newUnit,
-                                                    conversionRate: newRate,
-                                                    qty: newQty,
-                                                    price: newPrice,
-                                                    total: newQty * newPrice
-                                                  }
+                                              setCreditCartItems(prev => prev.map(i => 
+                                                i.productId === item.productId 
+                                                  ? { 
+                                                      ...i, 
+                                                      unit: newUnit, 
+                                                      conversionRate: newRate, 
+                                                      qty: newQty,
+                                                      price: newPrice, 
+                                                      total: newQty * newPrice 
+                                                    } 
                                                   : i
                                               ));
                                             }
@@ -5301,19 +5308,19 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                           className="text-[9px] bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5 font-bold text-slate-600 focus:outline-none focus:border-amber-500 cursor-pointer"
                                         >
                                           {opts.map(o => {
-                                            const primaryOption = opts[0] || { conversionRate: 1 };
-                                            const primaryRate = primaryOption.conversionRate;
-                                            const calculatedPrice = o.price !== undefined
-                                              ? o.price
-                                              : prod
-                                                ? (prod.price / primaryRate) * o.conversionRate
-                                                : 0;
-                                            return (
-                                              <option key={o.unit} value={o.unit}>
-                                                {o.unit} – {symbol} {calculatedPrice.toLocaleString()}
-                                              </option>
-                                            );
-                                          })}
+                                             const primaryOption = opts[0] || { conversionRate: 1 };
+                                             const primaryRate = primaryOption.conversionRate;
+                                             const calculatedPrice = o.price !== undefined 
+                                               ? o.price 
+                                               : prod 
+                                                 ? (prod.price / primaryRate) * o.conversionRate 
+                                                 : 0;
+                                             return (
+                                               <option key={o.unit} value={o.unit}>
+                                                 {o.unit} – {symbol} {calculatedPrice.toLocaleString()}
+                                               </option>
+                                             );
+                                           })}
                                         </select>
                                       );
                                     } else {
@@ -5336,12 +5343,12 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                   >
                                     -
                                   </button>
-                                  <input
-                                    type="number"
-                                    min={0}
+                                  <input 
+                                    type="number" 
+                                    min={0} 
                                     step="any"
-                                    max={maxStockInUnit}
-                                    value={item.qty === 0 ? '' : item.qty}
+                                    max={maxStockInUnit} 
+                                    value={item.qty === 0 ? '' : item.qty} 
                                     onFocus={(e) => e.target.select()}
                                     onChange={(e) => {
                                       const valStr = e.target.value;
@@ -5364,7 +5371,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                         (e.target as HTMLElement).blur();
                                       }
                                     }}
-                                    className="w-16 text-center bg-transparent border-0 font-bold text-slate-800 outline-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                    className="w-16 text-center bg-transparent border-0 font-bold text-slate-800 outline-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
                                   />
                                   <button
                                     type="button"
@@ -5378,18 +5385,18 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                               <td className="px-4 py-4 text-right font-bold text-slate-500 text-xs">{symbol} {convert(item.price).toLocaleString()}</td>
                               <td className="px-3 py-4 text-center">
                                 <div className="inline-flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-xl p-1 shadow-inner">
-                                  <input
-                                    type="number"
-                                    min={0}
+                                  <input 
+                                    type="number" 
+                                    min={0} 
                                     step="any"
-                                    placeholder=""
-                                    value={item.discount || ''}
-                                    onChange={(e) => updateCreditDiscount(itemIdx, parseFloat(e.target.value) || 0, item.discountType || 'amount')}
-                                    className="w-12 text-center bg-transparent border-0 font-bold text-slate-800 outline-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                    placeholder="" 
+                                    value={item.discount || ''} 
+                                    onChange={(e) => updateCreditDiscount(itemIdx, parseFloat(e.target.value) || 0, item.discountType || 'amount')} 
+                                    className="w-12 text-center bg-transparent border-0 font-bold text-slate-800 outline-none text-xs [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" 
                                   />
-                                  <button
-                                    type="button"
-                                    onClick={() => updateCreditDiscount(itemIdx, item.discount || 0, (item.discountType || 'amount') === 'percent' ? 'amount' : 'percent')}
+                                  <button 
+                                    type="button" 
+                                    onClick={() => updateCreditDiscount(itemIdx, item.discount || 0, (item.discountType || 'amount') === 'percent' ? 'amount' : 'percent')} 
                                     className="px-1.5 py-0.5 bg-white border border-slate-200 rounded-lg text-[10px] font-black text-amber-600 hover:bg-slate-100 transition-colors shadow-sm"
                                   >
                                     {(item.discountType || 'amount') === 'percent' ? '%' : symbol}
@@ -5398,8 +5405,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                               </td>
                               <td className="px-4 py-4 text-right font-black text-slate-800 text-sm">{symbol} {convert(rowTotal).toLocaleString()}</td>
                               <td className="px-4 py-4 text-center">
-                                <button
-                                  onClick={() => setCreditCartItems((prev) => prev.filter((i) => i.productId !== item.productId))}
+                                <button 
+                                  onClick={() => setCreditCartItems((prev) => prev.filter((i) => i.productId !== item.productId))} 
                                   className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all duration-200"
                                   title={t('Remove item', 'භාණ්ඩය ඉවත් කරන්න')}
                                 >
@@ -5425,32 +5432,32 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 {t('Credit Order Summary', 'ණය ඇණවුම් සාරාංශය')}
               </h3>
             </div>
-
+            
             <div className="space-y-4 mb-6">
-
+              
 
 
               <div className="grid grid-cols-1 gap-4 bg-slate-50/50 p-4 rounded-2xl border border-slate-100 shadow-sm">
                 <div>
                   <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1 block">{t('Payment Term (Days)', 'ණය වාර ගෙවීම් කාලය (දින)')}</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={creditTabPeriodDays}
-                    onChange={(e) => setCreditTabPeriodDays(parseInt(e.target.value) || 30)}
-                    className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm"
+                  <input 
+                    type="number" 
+                    min={1} 
+                    value={creditTabPeriodDays} 
+                    onChange={(e) => setCreditTabPeriodDays(parseInt(e.target.value) || 30)} 
+                    className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm" 
                   />
                 </div>
 
                 <div>
                   <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1.5 ml-1 block">{t('Transportation Fee (Rs.)', 'ප්‍රවාහන ගාස්තුව (රු.)')}</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={creditTransportationFee || ''}
-                    onChange={(e) => setCreditTransportationFee(parseFloat(e.target.value) || 0)}
+                  <input 
+                    type="number" 
+                    min={0} 
+                    value={creditTransportationFee || ''} 
+                    onChange={(e) => setCreditTransportationFee(parseFloat(e.target.value) || 0)} 
                     placeholder="0.00"
-                    className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm"
+                    className="w-full px-4 py-3.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all shadow-sm" 
                   />
                 </div>
 
@@ -5480,18 +5487,18 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     <span className="text-slate-700 font-mono">+{symbol} {convert(creditTransportationFee).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                   </div>
                 )}
-
+                
                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex justify-between items-center mt-2 shadow-md">
                   <span className="uppercase tracking-widest text-xs font-black text-slate-400">{t('Total Owed', 'මුළු ණය එකතුව')}</span>
                   <span className="text-xl font-black text-amber-400 font-mono">{symbol} {convert(creditTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
               </div>
             </div>
-
+            
             <div className="space-y-3">
-              <button
-                onClick={processCreditSale}
-                disabled={!creditCustomerName.trim() || creditCartItems.length === 0 || isCreditLoading}
+              <button 
+                onClick={processCreditSale} 
+                disabled={!creditCustomerName.trim() || creditCartItems.length === 0 || isCreditLoading} 
                 className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:brightness-110 active:scale-[0.99] disabled:from-slate-100 disabled:to-slate-100 disabled:text-slate-300 disabled:shadow-none text-slate-950 font-black py-4 rounded-2xl shadow-lg shadow-amber-500/15 transition-all flex items-center justify-center gap-2.5 uppercase tracking-widest text-xs border border-amber-400/20 cursor-pointer"
               >
                 {isCreditLoading ? <Loader2Icon className="animate-spin" /> : <DollarSignIcon className="w-5 h-5 text-slate-950" />}
@@ -5505,58 +5512,58 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       {tab === 'credit_history' && (
         <div className="animate-in fade-in duration-300">
           {/* Right Panel: Credit Orders Table */}
-          <div className="xl:col-span-3 space-y-4">
-            <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-sm flex flex-wrap gap-4 items-end">
-              <div className="flex-1 min-w-[150px]">
-                <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 ml-1">{t('From Date', 'සිට දිනය')}</label>
-                <input
-                  type="date"
-                  value={creditHistoryFromDate}
-                  onChange={(e) => setCreditHistoryFromDate(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold text-gray-700 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors"
-                />
-              </div>
-              <div className="flex-1 min-w-[150px]">
-                <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 ml-1">{t('To Date', 'දක්වා දිනය')}</label>
-                <input
-                  type="date"
-                  value={creditHistoryToDate}
-                  onChange={(e) => setCreditHistoryToDate(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold text-gray-700 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors"
-                />
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setCreditHistoryFromDate('');
-                  setCreditHistoryToDate('');
-                }}
-                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
-              >
-                {t('Clear Filters', 'පෙරහන් ඉවත් කරන්න')}
-              </button>
-            </div>
-            {selectedCreditIds.length > 0 && (
-              <div className="bg-red-50 border border-red-100 rounded-2xl p-4 flex flex-col sm:flex-row justify-between items-center gap-4 animate-in slide-in-from-top-5 duration-300">
-                <div className="flex items-center gap-2.5 text-red-800 font-bold text-sm">
-                  <svg className="w-5 h-5 text-red-600 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                  </svg>
-                  <span>{selectedCreditIds.length} {t("credit order(s) selected for bulk actions", "ණය ඇණවුම් ප්‍රමාණයක් තෝරාගෙන ඇත")}</span>
+            <div className="xl:col-span-3 space-y-4">
+              <div className="bg-white rounded-3xl border border-gray-100 p-4 shadow-sm flex flex-wrap gap-4 items-end">
+                <div className="flex-1 min-w-[150px]">
+                  <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 ml-1">{t('From Date', 'සිට දිනය')}</label>
+                  <input
+                    type="date"
+                    value={creditHistoryFromDate}
+                    onChange={(e) => setCreditHistoryFromDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold text-gray-700 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors"
+                  />
                 </div>
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={handleBulkDeleteCreditOrders}
-                    className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-xl text-xs font-black shadow-lg shadow-red-600/20 transition-all uppercase tracking-widest"
-                  >
-                    <Trash2Icon className="w-4 h-4" /> {t("Delete Selected", "තෝරාගත් මකන්න")}
-                  </button>
+                <div className="flex-1 min-w-[150px]">
+                  <label className="block text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5 ml-1">{t('To Date', 'දක්වා දිනය')}</label>
+                  <input
+                    type="date"
+                    value={creditHistoryToDate}
+                    onChange={(e) => setCreditHistoryToDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm font-bold text-gray-700 outline-none focus:border-[#DAA520] focus:ring-1 focus:ring-[#DAA520] transition-colors"
+                  />
                 </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreditHistoryFromDate('');
+                    setCreditHistoryToDate('');
+                  }}
+                  className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all"
+                >
+                  {t('Clear Filters', 'පෙරහන් ඉවත් කරන්න')}
+                </button>
               </div>
-            )}
-            <div className="bg-white rounded-3xl border border-gray-100 shadow-lg overflow-hidden">
-              <div className="overflow-x-auto">
+              {selectedCreditIds.length > 0 && (
+                <div className="bg-red-50 border border-red-100 rounded-2xl p-4 flex flex-col sm:flex-row justify-between items-center gap-4 animate-in slide-in-from-top-5 duration-300">
+                  <div className="flex items-center gap-2.5 text-red-800 font-bold text-sm">
+                    <svg className="w-5 h-5 text-red-600 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <span>{selectedCreditIds.length} {t("credit order(s) selected for bulk actions", "ණය ඇණවුම් ප්‍රමාණයක් තෝරාගෙන ඇත")}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleBulkDeleteCreditOrders}
+                      className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-xl text-xs font-black shadow-lg shadow-red-600/20 transition-all uppercase tracking-widest"
+                    >
+                      <Trash2Icon className="w-4 h-4" /> {t("Delete Selected", "තෝරාගත් මකන්න")}
+                    </button>
+                  </div>
+                </div>
+              )}
+              <div className="bg-white rounded-3xl border border-gray-100 shadow-lg overflow-hidden">
+                <div className="overflow-x-auto">
                 <table className="w-full text-sm text-left">
                   <thead className="bg-gray-50 border-b border-gray-100 uppercase text-[10px] font-black text-gray-400 tracking-widest">
                     <tr>
@@ -5583,14 +5590,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {orders.filter(o => {
-                      const method = (o.payment_method || (o as any).paymentMethod || '').toString().toLowerCase().trim();
-                      const status = (o.status || '').toString().toLowerCase().trim();
-                      const isCredit = method === 'credit' || method === 'credit sale' || (o as any).is_credit === true || status === 'non paid' || status === 'non-paid' || status === 'partially paid' || status === 'partially settled' || status === 'pending';
-                      if (!isCredit) return false;
-                      if (creditHistoryFromDate && new Date(o.date) < new Date(creditHistoryFromDate)) return false;
-                      if (creditHistoryToDate && new Date(o.date) > new Date(creditHistoryToDate + 'T23:59:59')) return false;
-                      return true;
-                    }).length === 0 ? (
+                        const method = (o.payment_method || (o as any).paymentMethod || '').toString().toLowerCase().trim();
+                        const status = (o.status || '').toString().toLowerCase().trim();
+                        const isCredit = method === 'credit' || method === 'credit sale' || (o as any).is_credit === true || status === 'non paid' || status === 'non-paid' || status === 'partially paid' || status === 'partially settled' || status === 'pending';
+                        if (!isCredit) return false;
+                        if (creditHistoryFromDate && new Date(o.date) < new Date(creditHistoryFromDate)) return false;
+                        if (creditHistoryToDate && new Date(o.date) > new Date(creditHistoryToDate + 'T23:59:59')) return false;
+                        return true;
+                      }).length === 0 ? (
                       <tr>
                         <td colSpan={6} className="text-center py-10 text-gray-400 font-bold">
                           {t('No credit orders found.', 'ණය ඇණවුම් කිසිවක් හමු නොවීය.')}
@@ -5609,7 +5616,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                         const productDesc = order.items && order.items.length > 0
                           ? order.items.map((it: any) => `${it.productName || it.name} (x${it.qty})`).join(', ')
                           : '—';
-
+                        
                         const isOverdue = order.status === 'Non Paid' && order.due_date && new Date(order.due_date) < new Date();
                         const daysOverdue = order.due_date ? Math.ceil((new Date().getTime() - new Date(order.due_date).getTime()) / (1000 * 3600 * 24)) : 0;
 
@@ -5632,10 +5639,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                               const invTotal = Number(order.total_amount !== undefined ? order.total_amount : order.total);
                               const origPaidAmt = Number(order.payment_received || 0);
 
-                              const orderReturns = salesReturnsList.filter(sr =>
-                                sr.status !== 'voided' &&
-                                sr.status !== 'Voided' &&
-                                sr.status !== 'cancelled' &&
+                              const orderReturns = salesReturnsList.filter(sr => 
+                                sr.status !== 'voided' && 
+                                sr.status !== 'Voided' && 
+                                sr.status !== 'cancelled' && 
                                 (sr.invoiceNo === order.invoiceNo || sr.invoice_no === order.invoiceNo) &&
                                 (!order.created_at || !sr.created_at || new Date(sr.created_at).getTime() >= new Date(order.created_at).getTime() - 60000)
                               );
@@ -5668,10 +5675,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                 const invTotal = Number(order.total_amount !== undefined ? order.total_amount : order.total);
                                 const origPaidAmt = Number(order.payment_received || 0);
 
-                                const orderReturns = salesReturnsList.filter(sr =>
-                                  sr.status !== 'voided' &&
-                                  sr.status !== 'Voided' &&
-                                  sr.status !== 'cancelled' &&
+                                const orderReturns = salesReturnsList.filter(sr => 
+                                  sr.status !== 'voided' && 
+                                  sr.status !== 'Voided' && 
+                                  sr.status !== 'cancelled' && 
                                   (sr.invoiceNo === order.invoiceNo || sr.invoice_no === order.invoiceNo) &&
                                   (!order.created_at || !sr.created_at || new Date(sr.created_at).getTime() >= new Date(order.created_at).getTime() - 60000)
                                 );
@@ -5686,8 +5693,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                 const isFullyPaid = totalPaidAmt >= effectiveTotal - 0.01 || remBal <= 0.01;
                                 const isUnpaid = totalPaidAmt <= 0.01 && remBal > 0.01;
                                 return (
-                                  <span className={`px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest ${isFullyPaid ? 'bg-emerald-100 text-emerald-700' : isUnpaid ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
-                                    }`}>
+                                  <span className={`px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest ${
+                                    isFullyPaid ? 'bg-emerald-100 text-emerald-700' : isUnpaid ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
+                                  }`}>
                                     {isFullyPaid ? t('Fully Settled', 'සම්පූර්ණයෙන්ම පියවා ඇත') : isUnpaid ? t('Unpaid', 'පියවා නොමැත') : t('Partially Settled', 'කොටසක් පියවා ඇත')}
                                   </span>
                                 );
@@ -5697,14 +5705,14 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                               <div className="flex items-center justify-center gap-1.5">
                                 {order.status === 'Non Paid' && (
                                   <>
-                                    <button
+                                    <button 
                                       disabled={true}
                                       className="text-[9px] font-black uppercase tracking-widest bg-slate-100 text-slate-400 px-3 py-1.5 rounded-lg cursor-not-allowed font-bold"
                                       title={t('Please settle through Customer Credit Settlement under Customers', 'කරුණාකර පාරිභෝගික ගිණුමෙන් පියවන්න')}
                                     >
                                       {t('Pay (Disabled)', 'ගෙවන්න (අක්‍රියයි)')}
                                     </button>
-                                    <button
+                                    <button 
                                       onClick={() => {
                                         const customerPhone = customers.find(c => c.id === order.customer_id)?.phone || '';
                                         let cleanPhone = customerPhone.replace(/[\s_.-]/g, '');
@@ -5725,23 +5733,23 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                       title={t('Send WhatsApp Reminder', 'WhatsApp මතක් කිරීම යවන්න')}
                                     >
                                       <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
-                                        <path d="M12.004 2c-5.517 0-9.996 4.478-9.996 9.995 0 1.761.459 3.473 1.332 4.985l-1.419 5.179 5.305-1.391c1.467.8 3.1 1.222 4.778 1.222 5.517 0 9.996-4.478 9.996-9.995 0-5.517-4.479-9.995-9.996-9.995zm.004 18.232c-1.564 0-3.098-.419-4.439-1.213l-.319-.189-3.298.865.88-3.212-.208-.331c-.872-1.389-1.332-3.003-1.332-4.664 0-4.524 3.679-8.203 8.204-8.203 2.228 0 4.322.868 5.895 2.443 1.574 1.575 2.442 3.669 2.442 5.896 0 4.525-3.68 8.213-8.234 8.213zm4.516-6.151c-.247-.123-1.464-.722-1.692-.805-.227-.083-.393-.123-.559.123-.166.246-.64.805-.785.97-.145.166-.29.186-.537.063-.247-.123-1.042-.383-1.986-1.225-.733-.653-1.229-1.461-1.373-1.708-.145-.246-.016-.379.108-.501.112-.11.247-.29.37-.435.123-.145.166-.246.247-.411.083-.166.042-.31-.021-.435-.063-.123-.559-1.348-.765-1.847-.2-.486-.403-.42-.559-.427-.145-.008-.31-.01-.475-.01s-.435.063-.663.31c-.227.247-.868.848-.868 2.068 0 1.221.889 2.401 1.013 2.566.124.166 1.748 2.67 4.235 3.74.592.255 1.053.407 1.413.522.595.189 1.137.162 1.565.099.477-.071 1.464-.598 1.67-.1.206-.496.206-.921.144-.997-.062-.077-.227-.123-.474-.247z" />
+                                        <path d="M12.004 2c-5.517 0-9.996 4.478-9.996 9.995 0 1.761.459 3.473 1.332 4.985l-1.419 5.179 5.305-1.391c1.467.8 3.1 1.222 4.778 1.222 5.517 0 9.996-4.478 9.996-9.995 0-5.517-4.479-9.995-9.996-9.995zm.004 18.232c-1.564 0-3.098-.419-4.439-1.213l-.319-.189-3.298.865.88-3.212-.208-.331c-.872-1.389-1.332-3.003-1.332-4.664 0-4.524 3.679-8.203 8.204-8.203 2.228 0 4.322.868 5.895 2.443 1.574 1.575 2.442 3.669 2.442 5.896 0 4.525-3.68 8.213-8.234 8.213zm4.516-6.151c-.247-.123-1.464-.722-1.692-.805-.227-.083-.393-.123-.559.123-.166.246-.64.805-.785.97-.145.166-.29.186-.537.063-.247-.123-1.042-.383-1.986-1.225-.733-.653-1.229-1.461-1.373-1.708-.145-.246-.016-.379.108-.501.112-.11.247-.29.37-.435.123-.145.166-.246.247-.411.083-.166.042-.31-.021-.435-.063-.123-.559-1.348-.765-1.847-.2-.486-.403-.42-.559-.427-.145-.008-.31-.01-.475-.01s-.435.063-.663.31c-.227.247-.868.848-.868 2.068 0 1.221.889 2.401 1.013 2.566.124.166 1.748 2.67 4.235 3.74.592.255 1.053.407 1.413.522.595.189 1.137.162 1.565.099.477-.071 1.464-.598 1.67-.1.206-.496.206-.921.144-.997-.062-.077-.227-.123-.474-.247z"/>
                                       </svg>
                                     </button>
                                   </>
                                 )}
-                                <button
+                                <button 
                                   onClick={() => {
                                     setLastOrder(order);
                                     setShowReceipt(true);
-                                  }}
+                                  }} 
                                   className="p-1.5 text-gray-400 hover:text-[#DAA520] hover:bg-gray-50 rounded-lg transition-all"
                                   title={t('Preview', 'පෙරදසුන')}
                                 >
                                   <ReceiptIcon className="w-4 h-4" />
                                 </button>
-                                <button
-                                  onClick={() => handlePrintReceipt(order)}
+                                <button 
+                                  onClick={() => handlePrintReceipt(order)} 
                                   className="p-1.5 text-gray-400 hover:text-[#464646] hover:bg-gray-50 rounded-lg transition-all"
                                   title={t('Print', 'මුද්‍රණය')}
                                 >
@@ -5904,7 +5912,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify(payload)
                 });
-
+                
                 let result = null;
                 if (res.ok) {
                   result = await res.json();
@@ -6430,7 +6438,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
               );
             }
 
-            {/* Quotations History View */ }
+            {/* Quotations History View */}
             return (
               <div className="bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-100/40 overflow-hidden">
                 <div className="overflow-x-auto">
@@ -6606,7 +6614,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       // Find all matching products & invoices
                       const matchedProdIds = new Set(
                         products
-                          .filter(p =>
+                          .filter(p => 
                             (p.barcode && p.barcode.trim().toLowerCase().includes(q)) ||
                             (p.sku && p.sku.toLowerCase().includes(q)) ||
                             (p.name && p.name.toLowerCase().includes(q))
@@ -6624,7 +6632,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                         if (o.invoiceNo.toLowerCase().includes(q)) return true;
                         if (o.customerName && o.customerName.toLowerCase().includes(q)) return true;
                         const items = Array.isArray(o.items) ? o.items : safeParseJson(o.items, []);
-                        return items.some((i: any) =>
+                        return items.some((i: any) => 
                           (i.barcode && i.barcode.trim().toLowerCase().includes(q)) ||
                           (i.productName && i.productName.toLowerCase().includes(q)) ||
                           (i.name && i.name.toLowerCase().includes(q)) ||
@@ -6646,18 +6654,18 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                         const items = Array.isArray(selected.items) ? selected.items : safeParseJson(selected.items, []);
                         const invNo = selected.invoiceNo || selected.invoice_no || selected.id || '';
                         const isSingleItem = items.length === 1;
-                        items.forEach((item: any, idx: number) => {
+                        items.forEach((item: any, idx: number) => { 
                           const isMatch = (q && (
                             (item.barcode && item.barcode.trim().toLowerCase().includes(q)) ||
                             (item.productName && item.productName.toLowerCase().includes(q)) ||
                             (item.name && item.name.toLowerCase().includes(q)) ||
                             (item.productId && matchedProdIds.has(item.productId))
                           )) || isSingleItem;
-                          const lineKey = (item.lineId || item.line_id)
+                          const lineKey = (item.lineId || item.line_id) 
                             ? `${invNo}_${item.lineId || item.line_id}`
                             : (item.lineIndex !== undefined ? `${invNo}_line_${item.lineIndex}` : `${invNo}_line_${idx}`);
                           const pKey = item.productId || item.product_id || '';
-                          initialQtys[lineKey] = isMatch ? 1 : 0;
+                          initialQtys[lineKey] = isMatch ? 1 : 0; 
                           if (pKey) initialQtys[pKey] = isMatch ? 1 : 0;
                         });
                         setReturnQtys(initialQtys);
@@ -6678,7 +6686,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
                     const matchedProdIds = new Set(
                       products
-                        .filter(p =>
+                        .filter(p => 
                           (p.barcode && p.barcode.trim().toLowerCase().includes(q)) ||
                           (p.sku && p.sku.toLowerCase().includes(q)) ||
                           (p.name && p.name.toLowerCase().includes(q))
@@ -6696,7 +6704,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       if (o.invoiceNo.toLowerCase().includes(q)) return true;
                       if (o.customerName && o.customerName.toLowerCase().includes(q)) return true;
                       const items = Array.isArray(o.items) ? o.items : safeParseJson(o.items, []);
-                      return items.some((i: any) =>
+                      return items.some((i: any) => 
                         (i.barcode && i.barcode.trim().toLowerCase().includes(q)) ||
                         (i.productName && i.productName.toLowerCase().includes(q)) ||
                         (i.name && i.name.toLowerCase().includes(q)) ||
@@ -6706,7 +6714,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     });
 
                     if (matches.length === 0) return alert(t(`No bills found containing barcode or details matching "${returnSearchQuery}"!`, `"${returnSearchQuery}" සඳහා ගැලපෙන පත් නැත!`));
-
+                    
                     if (matches.length === 1) {
                       const selected = matches[0];
                       setTargetReturnInvoice(selected);
@@ -6715,18 +6723,18 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       const items = Array.isArray(selected.items) ? selected.items : safeParseJson(selected.items, []);
                       const invNo = selected.invoiceNo || selected.invoice_no || selected.id || '';
                       const isSingleItem = items.length === 1;
-                      items.forEach((item: any, idx: number) => {
+                      items.forEach((item: any, idx: number) => { 
                         const isMatch = (q && (
                           (item.barcode && item.barcode.trim().toLowerCase().includes(q)) ||
                           (item.productName && item.productName.toLowerCase().includes(q)) ||
                           (item.name && item.name.toLowerCase().includes(q)) ||
                           (item.productId && matchedProdIds.has(item.productId))
                         )) || isSingleItem;
-                        const lineKey = (item.lineId || item.line_id)
+                        const lineKey = (item.lineId || item.line_id) 
                           ? `${invNo}_${item.lineId || item.line_id}`
                           : (item.lineIndex !== undefined ? `${invNo}_line_${item.lineIndex}` : `${invNo}_line_${idx}`);
                         const pKey = item.productId || item.product_id || '';
-                        initialQtys[lineKey] = isMatch ? 1 : 0;
+                        initialQtys[lineKey] = isMatch ? 1 : 0; 
                         if (pKey) initialQtys[pKey] = isMatch ? 1 : 0;
                       });
                       setReturnQtys(initialQtys);
@@ -6746,7 +6754,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
                 const matchedProdIds = new Set(
                   products
-                    .filter(p =>
+                    .filter(p => 
                       (p.barcode && p.barcode.trim().toLowerCase().includes(q)) ||
                       (p.sku && p.sku.toLowerCase().includes(q)) ||
                       (p.name && p.name.toLowerCase().includes(q))
@@ -6764,7 +6772,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   if (o.invoiceNo.toLowerCase().includes(q)) return true;
                   if (o.customerName && o.customerName.toLowerCase().includes(q)) return true;
                   const items = Array.isArray(o.items) ? o.items : safeParseJson(o.items, []);
-                  return items.some((i: any) =>
+                  return items.some((i: any) => 
                     (i.barcode && i.barcode.trim().toLowerCase().includes(q)) ||
                     (i.productName && i.productName.toLowerCase().includes(q)) ||
                     (i.name && i.name.toLowerCase().includes(q)) ||
@@ -6798,7 +6806,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     <div className="grid grid-cols-1 gap-2 pt-1">
                       {matchedInvoices.map((inv) => {
                         const items = Array.isArray(inv.items) ? inv.items : safeParseJson(inv.items, []);
-                        const matchedProds = items.filter((i: any) =>
+                        const matchedProds = items.filter((i: any) => 
                           (i.barcode && i.barcode.trim().toLowerCase().includes(q)) ||
                           (i.productName && i.productName.toLowerCase().includes(q)) ||
                           (i.name && i.name.toLowerCase().includes(q)) ||
@@ -6817,18 +6825,18 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                               const initialQtys: Record<string, number> = {};
                               const invNo = inv.invoiceNo || inv.invoice_no || inv.id || '';
                               const isSingleItem = items.length === 1;
-                              items.forEach((item: any, idx: number) => {
+                              items.forEach((item: any, idx: number) => { 
                                 const isMatch = (q && (
                                   (item.barcode && item.barcode.trim().toLowerCase().includes(q)) ||
                                   (item.productName && item.productName.toLowerCase().includes(q)) ||
                                   (item.name && item.name.toLowerCase().includes(q)) ||
                                   (item.productId && matchedProdIds.has(item.productId))
                                 )) || isSingleItem;
-                                const lineKey = (item.lineId || item.line_id)
+                                const lineKey = (item.lineId || item.line_id) 
                                   ? `${invNo}_${item.lineId || item.line_id}`
                                   : (item.lineIndex !== undefined ? `${invNo}_line_${item.lineIndex}` : `${invNo}_line_${idx}`);
                                 const pKey = item.productId || item.product_id || '';
-                                initialQtys[lineKey] = isMatch ? 1 : 0;
+                                initialQtys[lineKey] = isMatch ? 1 : 0; 
                                 if (pKey) initialQtys[pKey] = isMatch ? 1 : 0;
                               });
                               setReturnQtys(initialQtys);
@@ -6972,8 +6980,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 return isCreditBill || isCreditCust;
               })();
 
-              const effectiveReturnMethod = isCreditCustomer
-                ? (returnMethod === 'Exchange' || exchangeCartItems.length > 0 ? 'Exchange' : 'Return')
+              const effectiveReturnMethod = isCreditCustomer 
+                ? (returnMethod === 'Exchange' || exchangeCartItems.length > 0 ? 'Exchange' : 'Return') 
                 : returnMethod;
 
               const handleConfirmProcessReturn = async () => {
@@ -6987,10 +6995,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 const resolvedInvoiceNo = (targetReturnInvoice.invoiceNo || targetReturnInvoice.invoice_no || (targetReturnInvoice as any).id || '').toString().trim();
                 const resolvedInvoiceId = ((targetReturnInvoice as any).id || resolvedInvoiceNo).toString().trim();
 
-                const calculatedRefund = isCreditCustomer
-                  ? 0
-                  : (effectiveReturnMethod === 'Cash Refund'
-                    ? returnTotalValue
+                const calculatedRefund = isCreditCustomer 
+                  ? 0 
+                  : (effectiveReturnMethod === 'Cash Refund' 
+                    ? returnTotalValue 
                     : (effectiveReturnMethod === 'Exchange' && netRefundValue > 0 ? (exchangeRefundGiven || netRefundValue) : 0));
 
                 const calculatedPaid = (!isCreditCustomer && effectiveReturnMethod === 'Exchange' && customerBalanceDue > 0) ? (exchangeCustomerPaid || customerBalanceDue) : 0;
@@ -6999,8 +7007,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 const effectiveDifferencePaymentMethod = isCreditCustomer
                   ? 'Customer Credit Debt'
                   : (effectiveReturnMethod === 'Exchange'
-                    ? (exchangeDifferencePaymentMethod || 'Cash')
-                    : (effectiveReturnMethod === 'Credit Note' ? 'Credit Note' : 'Cash'));
+                      ? (exchangeDifferencePaymentMethod || 'Cash')
+                      : (effectiveReturnMethod === 'Credit Note' ? 'Credit Note' : 'Cash'));
 
                 const invoiceAccountingBeforeReturn = calculateSaleAccounting(targetReturnInvoice, salesReturnsList);
                 const fallbackBalance = Math.max(0, Number((targetReturnInvoice as any).balance_due ?? (targetReturnInvoice as any).balance ?? (Number(targetReturnInvoice.total_amount ?? targetReturnInvoice.total ?? 0) - Number(targetReturnInvoice.payment_received ?? 0))));
@@ -7017,7 +7025,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                   const activeCashierName = resolveCurrentCashierName();
                   const activeUserEmail = currentUser?.email || 'admin@hardware.erp';
                   const targetInvoiceTotal = Number(targetReturnInvoice.total_amount ?? targetReturnInvoice.total ?? (targetReturnInvoice as any).subtotal ?? 0);
-                  const returnPayload = {
+                const returnPayload = {
                     invoiceNo: resolvedInvoiceNo,
                     invoice_no: resolvedInvoiceNo,
                     invoiceNumber: resolvedInvoiceNo,
@@ -7114,7 +7122,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
                   toast.success(t('Sales Return processed successfully!', 'විකුණුම් ආපසු භාරගැනීම සාර්ථකයි!'), 'Sales Return');
                   alert(t('Sales Return processed successfully!', 'විකුණුම් ආපසු භාරගැනීම සාර්ථකයි!'));
-
+                  
                   const newReturnRecord: SalesReturn = {
                     id: result.id,
                     returnNo: result.returnNo || result.return_no,
@@ -7140,8 +7148,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     remainingBalanceDue: result.remainingBalanceDue !== undefined
                       ? result.remainingBalanceDue
                       : (effectiveReturnMethod === 'Exchange'
-                        ? (previousInvoiceBalance + (effectiveDifferencePaymentMethod === 'Customer Credit Debt' ? Math.max(0, exchangeTotalValue - returnTotalValue) : 0))
-                        : Math.max(0, previousInvoiceBalance - returnTotalValue)),
+                          ? (previousInvoiceBalance + (effectiveDifferencePaymentMethod === 'Customer Credit Debt' ? Math.max(0, exchangeTotalValue - returnTotalValue) : 0))
+                          : Math.max(0, previousInvoiceBalance - returnTotalValue)),
                     creditNoteNo: result.creditNoteNo,
                     status: 'active',
                     reason: returnReason,
@@ -7220,7 +7228,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                     const origTax = Number(targetReturnInvoice.tax || 0);
                     const origTransportFee = Number(targetReturnInvoice.transportation_fee !== undefined ? targetReturnInvoice.transportation_fee : (targetReturnInvoice.transportationFee || 0));
                     const origBillTotal = Number(targetReturnInvoice.total_amount !== undefined ? targetReturnInvoice.total_amount : (targetReturnInvoice.total || 0));
-
+                    
                     let origPaidAmount = 0;
                     if (isCreditBill) {
                       origPaidAmount = Number(targetReturnInvoice.payment_received || 0);
@@ -7309,14 +7317,17 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                           {(() => {
                             const isDebtReductionOnly = isCreditBill && (origPaidAmount === 0 || returnTotalValue <= origOutstanding);
                             return (
-                              <div className={`p-2.5 rounded-xl border shadow-sm flex flex-col justify-between ${isDebtReductionOnly ? 'bg-indigo-50 border-indigo-200' : 'bg-amber-50 border-amber-200'
+                              <div className={`p-2.5 rounded-xl border shadow-sm flex flex-col justify-between ${
+                                isDebtReductionOnly ? 'bg-indigo-50 border-indigo-200' : 'bg-amber-50 border-amber-200'
+                              }`}>
+                                <span className={`text-[9px] font-black uppercase tracking-widest block ${
+                                  isDebtReductionOnly ? 'text-indigo-800' : 'text-amber-800'
                                 }`}>
-                                <span className={`text-[9px] font-black uppercase tracking-widest block ${isDebtReductionOnly ? 'text-indigo-800' : 'text-amber-800'
-                                  }`}>
                                   {isDebtReductionOnly ? t('Credit Reduction', 'ණය අඩු කිරීම') : t('Applicable Refund', 'අදාළ ආපසු ගෙවීම')}
                                 </span>
-                                <span className={`font-black text-sm mt-1 ${isDebtReductionOnly ? 'text-indigo-700' : 'text-amber-700'
-                                  }`}>
+                                <span className={`font-black text-sm mt-1 ${
+                                  isDebtReductionOnly ? 'text-indigo-700' : 'text-amber-700'
+                                }`}>
                                   {symbol} {convert(returnTotalValue).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                                 </span>
                               </div>
@@ -7362,7 +7373,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                             e.preventDefault();
                             if (!returnProductSearch.trim()) return;
                             const q = returnProductSearch.trim().toLowerCase();
-                            const matched = targetItems.find((i: any) =>
+                            const matched = targetItems.find((i: any) => 
                               (i.barcode && i.barcode.trim().toLowerCase() === q) ||
                               (i.productName && i.productName.toLowerCase().includes(q))
                             );
@@ -7462,7 +7473,7 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                         <span>{t('Return Method', 'ආපසු ගෙවීමේ ක්‍රමය')}</span>
                         {isCreditCustomer && (
                           <span className="text-[9px] font-black text-amber-800 bg-amber-100 px-2 py-0.5 rounded">
-                            {effectiveReturnMethod === 'Exchange'
+                            {effectiveReturnMethod === 'Exchange' 
                               ? t('Credit Sale: Exchange', 'ණය විකුණුම්: භාණ්ඩ හුවමාරුව')
                               : t('Credit Sale: Return', 'ණය විකුණුම්: භාණ්ඩ ආපසු')
                             }
@@ -7636,10 +7647,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                         handleAddSelectableToCart(item);
                                         setExchangeProductSearch('');
                                       }}
-                                      className={`w-full text-left p-2 rounded-lg transition-colors flex justify-between items-center group ${isOutOfStock
-                                        ? 'bg-slate-100/80 opacity-50 cursor-not-allowed border border-dashed border-slate-300'
-                                        : 'hover:bg-emerald-50/70'
-                                        }`}
+                                      className={`w-full text-left p-2 rounded-lg transition-colors flex justify-between items-center group ${
+                                        isOutOfStock
+                                          ? 'bg-slate-100/80 opacity-50 cursor-not-allowed border border-dashed border-slate-300'
+                                          : 'hover:bg-emerald-50/70'
+                                      }`}
                                     >
                                       <div className="flex items-center gap-2 flex-wrap">
                                         <span className={`font-bold text-xs ${isOutOfStock ? 'text-slate-500 line-through' : 'text-slate-800 group-hover:text-emerald-700'}`}>
@@ -7663,10 +7675,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                             Stock: {item.stock}
                                           </span>
                                         </div>
-                                        <span className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase shadow-sm ${isOutOfStock
-                                          ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                                          : 'bg-emerald-600 text-white group-hover:bg-emerald-700'
-                                          }`}>
+                                        <span className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase shadow-sm ${
+                                          isOutOfStock 
+                                            ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                                            : 'bg-emerald-600 text-white group-hover:bg-emerald-700'
+                                        }`}>
                                           {isOutOfStock ? 'Empty' : '+ Add'}
                                         </span>
                                       </div>
@@ -7700,10 +7713,11 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                                       }
                                       handleAddSelectableToCart(item);
                                     }}
-                                    className={`p-2 rounded-xl text-left transition-all shadow-sm flex flex-col justify-between group border ${isOutOfStock
-                                      ? 'bg-slate-100 opacity-50 border-dashed border-slate-300 cursor-not-allowed'
-                                      : 'bg-white hover:bg-emerald-50 border-slate-200 hover:border-emerald-300'
-                                      }`}
+                                    className={`p-2 rounded-xl text-left transition-all shadow-sm flex flex-col justify-between group border ${
+                                      isOutOfStock
+                                        ? 'bg-slate-100 opacity-50 border-dashed border-slate-300 cursor-not-allowed'
+                                        : 'bg-white hover:bg-emerald-50 border-slate-200 hover:border-emerald-300'
+                                    }`}
                                   >
                                     <div>
                                       <div className={`font-bold text-xs line-clamp-1 ${isOutOfStock ? 'text-slate-500 line-through' : 'text-slate-800 group-hover:text-emerald-700'}`}>
@@ -7794,133 +7808,133 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                           </table>
                         </div>
 
-                        {/* Exchange Balance Calculation Summary */}
-                        <div className="bg-white rounded-xl border border-emerald-200 p-4 space-y-3 shadow-sm">
-                          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs font-bold border-b border-slate-100 pb-3">
-                            <div>
-                              <span className="text-slate-400 block text-[10px] uppercase font-black">{t('Returned Total Value:', 'ආපසු භාරගත් මුළු අගය:')}</span>
-                              <span className="text-rose-600 font-black text-sm">{symbol} {convert(returnTotalValue).toLocaleString()}</span>
-                            </div>
-                            <div>
-                              <span className="text-slate-400 block text-[10px] uppercase font-black">{t('Exchange Products Value:', 'නව හුවමාරු භාණ්ඩ අගය:')}</span>
-                              <span className="text-emerald-600 font-black text-sm">{symbol} {convert(exchangeTotalValue).toLocaleString()}</span>
-                            </div>
-                            <div>
-                              <span className="text-slate-400 block text-[10px] uppercase font-black">{t('Net Difference:', 'ශේෂ වෙනස:')}</span>
-                              <span className={`font-black text-sm ${netExchangeBalance > 0 ? 'text-amber-600' : netExchangeBalance < 0 ? 'text-blue-600' : 'text-slate-700'}`}>
-                                {netExchangeBalance > 0
-                                  ? `${symbol} ${convert(netExchangeBalance).toLocaleString()} (Customer Owes)`
-                                  : netExchangeBalance < 0
-                                    ? `${symbol} ${convert(Math.abs(netExchangeBalance)).toLocaleString()} ${isCreditCustomer ? '(Credit Bill Reduction)' : '(Refund Due)'}`
-                                    : 'Rs. 0 (Even Exchange)'}
-                              </span>
-                            </div>
+                      {/* Exchange Balance Calculation Summary */}
+                      <div className="bg-white rounded-xl border border-emerald-200 p-4 space-y-3 shadow-sm">
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs font-bold border-b border-slate-100 pb-3">
+                          <div>
+                            <span className="text-slate-400 block text-[10px] uppercase font-black">{t('Returned Total Value:', 'ආපසු භාරගත් මුළු අගය:')}</span>
+                            <span className="text-rose-600 font-black text-sm">{symbol} {convert(returnTotalValue).toLocaleString()}</span>
                           </div>
+                          <div>
+                            <span className="text-slate-400 block text-[10px] uppercase font-black">{t('Exchange Products Value:', 'නව හුවමාරු භාණ්ඩ අගය:')}</span>
+                            <span className="text-emerald-600 font-black text-sm">{symbol} {convert(exchangeTotalValue).toLocaleString()}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400 block text-[10px] uppercase font-black">{t('Net Difference:', 'ශේෂ වෙනස:')}</span>
+                            <span className={`font-black text-sm ${netExchangeBalance > 0 ? 'text-amber-600' : netExchangeBalance < 0 ? 'text-blue-600' : 'text-slate-700'}`}>
+                              {netExchangeBalance > 0 
+                                ? `${symbol} ${convert(netExchangeBalance).toLocaleString()} (Customer Owes)` 
+                                : netExchangeBalance < 0 
+                                  ? `${symbol} ${convert(Math.abs(netExchangeBalance)).toLocaleString()} ${isCreditCustomer ? '(Credit Bill Reduction)' : '(Refund Due)'}` 
+                                  : 'Rs. 0 (Even Exchange)'}
+                            </span>
+                          </div>
+                        </div>
 
-                          {/* Customer Pays Balance Due Scenario */}
-                          {netExchangeBalance > 0 && (
-                            <div className="bg-amber-50/70 p-3.5 rounded-xl border border-amber-200 space-y-3">
-                              <div className="flex justify-between items-center">
-                                <div>
-                                  <label className="text-[10px] font-black text-amber-900 uppercase tracking-wider block">
-                                    {t('Balance Due from Customer:', 'පාරිභෝගිකයාගෙන් අයවිය යුතු ශේෂය:')}
-                                  </label>
-                                  <div className="text-lg font-black text-amber-700">{symbol} {convert(netExchangeBalance).toLocaleString()}</div>
-                                </div>
-                                {isCreditCustomer && (
-                                  <span className="px-2.5 py-1 bg-amber-100 border border-amber-300 text-amber-950 rounded-lg font-black text-[10px] uppercase">
-                                    {t('Added to Customer Credit Debt', 'පාරිභෝගික ණය ගිණුමට එකතු කෙරේ')}
-                                  </span>
-                                )}
+                        {/* Customer Pays Balance Due Scenario */}
+                        {netExchangeBalance > 0 && (
+                          <div className="bg-amber-50/70 p-3.5 rounded-xl border border-amber-200 space-y-3">
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <label className="text-[10px] font-black text-amber-900 uppercase tracking-wider block">
+                                  {t('Balance Due from Customer:', 'පාරිභෝගිකයාගෙන් අයවිය යුතු ශේෂය:')}
+                                </label>
+                                <div className="text-lg font-black text-amber-700">{symbol} {convert(netExchangeBalance).toLocaleString()}</div>
                               </div>
-
-                              {!isCreditCustomer && (
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-amber-200/70">
-                                  <div>
-                                    <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider block mb-1">
-                                      {t('Settlement Mode:', 'පියවීමේ ක්‍රමය:')}
-                                    </label>
-                                    <select
-                                      value={exchangeDifferencePaymentMethod}
-                                      onChange={(e) => setExchangeDifferencePaymentMethod(e.target.value)}
-                                      className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
-                                    >
-                                      <option value="Cash">{t('Cash', 'මුදල් (Cash)')}</option>
-                                      <option value="Card">{t('Card', 'කාඩ්පත් (Card)')}</option>
-                                      <option value="Customer Credit Debt">{t('Customer Credit Debt', 'ණය ගිණුම (Credit Debt)')}</option>
-                                      <option value="Bank Transfer">{t('Bank Transfer', 'බැංකු හුවමාරුව (Bank Transfer)')}</option>
-                                      <option value="Cheque">{t('Cheque', 'චෙක්පත් (Cheque)')}</option>
-                                    </select>
-                                  </div>
-                                  <div>
-                                    <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider block mb-1">
-                                      {t('Customer Paid:', 'පාරිභෝගිකයා ගෙවූ මුදල:')}
-                                    </label>
-                                    <input
-                                      type="number"
-                                      value={exchangeCustomerPaid || ''}
-                                      placeholder={netExchangeBalance.toString()}
-                                      onChange={(e) => setExchangeCustomerPaid(parseFloat(e.target.value) || 0)}
-                                      className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-black text-slate-800 text-xs outline-none focus:border-amber-500"
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider block mb-1">
-                                      {t('Change Given:', 'ඉතිරි මුදල:')}
-                                    </label>
-                                    <div className="px-2.5 py-1.5 bg-slate-100 border border-slate-200 rounded-lg font-black text-slate-800 text-xs">
-                                      {symbol} {convert(Math.max(0, (exchangeCustomerPaid || netExchangeBalance) - netExchangeBalance)).toLocaleString()}
-                                    </div>
-                                  </div>
-                                </div>
+                              {isCreditCustomer && (
+                                <span className="px-2.5 py-1 bg-amber-100 border border-amber-300 text-amber-950 rounded-lg font-black text-[10px] uppercase">
+                                  {t('Added to Customer Credit Debt', 'පාරිභෝගික ණය ගිණුමට එකතු කෙරේ')}
+                                </span>
                               )}
                             </div>
-                          )}
 
-                          {/* Customer Gets Refund Due Scenario (Non-credit sales only) */}
-                          {netExchangeBalance < 0 && !isCreditCustomer && (
-                            <div className="bg-blue-50/70 p-3.5 rounded-xl border border-blue-200 space-y-3">
-                              <div className="flex justify-between items-center">
-                                <div>
-                                  <label className="text-[10px] font-black text-blue-900 uppercase tracking-wider block">
-                                    {t('Refund Due to Customer:', 'පාරිභෝගිකයාට ආපසු ගෙවිය යුතු මුදල:')}
-                                  </label>
-                                  <div className="text-lg font-black text-blue-700">{symbol} {convert(Math.abs(netExchangeBalance)).toLocaleString()}</div>
-                                </div>
-                              </div>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-blue-200/70">
+                            {!isCreditCustomer && (
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-amber-200/70">
                                 <div>
                                   <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider block mb-1">
-                                    {t('Refund Settlement Mode:', 'ආපසු ගෙවීමේ ක්‍රමය:')}
+                                    {t('Settlement Mode:', 'පියවීමේ ක්‍රමය:')}
                                   </label>
                                   <select
                                     value={exchangeDifferencePaymentMethod}
                                     onChange={(e) => setExchangeDifferencePaymentMethod(e.target.value)}
-                                    className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-bold text-slate-800 text-xs outline-none focus:border-blue-500"
+                                    className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-bold text-slate-800 text-xs outline-none focus:border-amber-500"
                                   >
-                                    <option value="Cash">{t('Cash Refund', 'මුදල් ආපසු (Cash)')}</option>
-                                    <option value="Customer Credit Debt">{t('Customer Credit Reduction', 'ණය අඩු කිරීම (Credit Reduction)')}</option>
+                                    <option value="Cash">{t('Cash', 'මුදල් (Cash)')}</option>
+                                    <option value="Card">{t('Card', 'කාඩ්පත් (Card)')}</option>
+                                    <option value="Customer Credit Debt">{t('Customer Credit Debt', 'ණය ගිණුම (Credit Debt)')}</option>
                                     <option value="Bank Transfer">{t('Bank Transfer', 'බැංකු හුවමාරුව (Bank Transfer)')}</option>
+                                    <option value="Cheque">{t('Cheque', 'චෙක්පත් (Cheque)')}</option>
                                   </select>
                                 </div>
                                 <div>
                                   <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider block mb-1">
-                                    {t('Confirm Refund Amount:', 'ආපසු ගෙවන මුදල තහවුරු කරන්න:')}
+                                    {t('Customer Paid:', 'පාරිභෝගිකයා ගෙවූ මුදල:')}
                                   </label>
                                   <input
                                     type="number"
-                                    value={exchangeRefundGiven || Math.abs(netExchangeBalance)}
-                                    onChange={(e) => setExchangeRefundGiven(parseFloat(e.target.value) || 0)}
-                                    className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-black text-slate-800 text-xs outline-none focus:border-blue-500"
+                                    value={exchangeCustomerPaid || ''}
+                                    placeholder={netExchangeBalance.toString()}
+                                    onChange={(e) => setExchangeCustomerPaid(parseFloat(e.target.value) || 0)}
+                                    className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-black text-slate-800 text-xs outline-none focus:border-amber-500"
                                   />
                                 </div>
+                                <div>
+                                  <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider block mb-1">
+                                    {t('Change Given:', 'ඉතිරි මුදල:')}
+                                  </label>
+                                  <div className="px-2.5 py-1.5 bg-slate-100 border border-slate-200 rounded-lg font-black text-slate-800 text-xs">
+                                    {symbol} {convert(Math.max(0, (exchangeCustomerPaid || netExchangeBalance) - netExchangeBalance)).toLocaleString()}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Customer Gets Refund Due Scenario (Non-credit sales only) */}
+                        {netExchangeBalance < 0 && !isCreditCustomer && (
+                          <div className="bg-blue-50/70 p-3.5 rounded-xl border border-blue-200 space-y-3">
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <label className="text-[10px] font-black text-blue-900 uppercase tracking-wider block">
+                                  {t('Refund Due to Customer:', 'පාරිභෝගිකයාට ආපසු ගෙවිය යුතු මුදල:')}
+                                </label>
+                                <div className="text-lg font-black text-blue-700">{symbol} {convert(Math.abs(netExchangeBalance)).toLocaleString()}</div>
                               </div>
                             </div>
-                          )}
-                        </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-blue-200/70">
+                              <div>
+                                <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider block mb-1">
+                                  {t('Refund Settlement Mode:', 'ආපසු ගෙවීමේ ක්‍රමය:')}
+                                </label>
+                                <select
+                                  value={exchangeDifferencePaymentMethod}
+                                  onChange={(e) => setExchangeDifferencePaymentMethod(e.target.value)}
+                                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-bold text-slate-800 text-xs outline-none focus:border-blue-500"
+                                >
+                                  <option value="Cash">{t('Cash Refund', 'මුදල් ආපසු (Cash)')}</option>
+                                  <option value="Customer Credit Debt">{t('Customer Credit Reduction', 'ණය අඩු කිරීම (Credit Reduction)')}</option>
+                                  <option value="Bank Transfer">{t('Bank Transfer', 'බැංකු හුවමාරුව (Bank Transfer)')}</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-black text-slate-700 uppercase tracking-wider block mb-1">
+                                  {t('Confirm Refund Amount:', 'ආපසු ගෙවන මුදල තහවුරු කරන්න:')}
+                                </label>
+                                <input
+                                  type="number"
+                                  value={exchangeRefundGiven || Math.abs(netExchangeBalance)}
+                                  onChange={(e) => setExchangeRefundGiven(parseFloat(e.target.value) || 0)}
+                                  className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-black text-slate-800 text-xs outline-none focus:border-blue-500"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    );
-                  })()}
+                    </div>
+                  );
+                })()}
 
                   {/* SUBMIT BUTTON */}
                   <div className="pt-2">
@@ -7938,10 +7952,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                       ) : (
                         <>
                           <CheckCircleIcon className="w-4 h-4" />
-                          {returnMethod === 'Exchange'
-                            ? t('Confirm & Process Exchange', 'භාණ්ඩ හුවමාරුව තහවුරු කරන්න')
-                            : returnMethod === 'Credit Note'
-                              ? t('Confirm & Issue Credit Note', 'ණය සටහන නිකුත් කිරීම තහවුරු කරන්න')
+                          {returnMethod === 'Exchange' 
+                            ? t('Confirm & Process Exchange', 'භාණ්ඩ හුවමාරුව තහවුරු කරන්න') 
+                            : returnMethod === 'Credit Note' 
+                              ? t('Confirm & Issue Credit Note', 'ණය සටහන නිකුත් කිරීම තහවුරු කරන්න') 
                               : t('Confirm & Process Return', 'ආපසු භාරගැනීම තහවුරු කරන්න')}
                         </>
                       )}
@@ -8285,8 +8299,9 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                               {symbol} {convert(remBal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </td>
                             <td className="px-4 py-3.5 text-center">
-                              <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full ${isFullyUsed ? 'bg-slate-100 text-slate-500' : isPartiallyUsed ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-700'
-                                }`}>
+                              <span className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full ${
+                                isFullyUsed ? 'bg-slate-100 text-slate-500' : isPartiallyUsed ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-700'
+                              }`}>
                                 {isFullyUsed ? t('Fully Used', 'සම්පූර්ණයෙන්ම භාවිතා කර ඇත') : isPartiallyUsed ? t('Partially Used', 'කොටසක් භාවිතා කර ඇත') : t('Active', 'සක්‍රියයි')}
                               </span>
                             </td>
@@ -8341,10 +8356,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
       {/* Return Receipt Preview Modal */}
       {showReturnPreviewModal && selectedReturnPreview && (
-        <Modal
-          isOpen={showReturnPreviewModal}
-          onClose={() => setShowReturnPreviewModal(false)}
-          title={t('Return Receipt Preview', 'ආපසු භාරගැනීමේ රසීදු පෙරදසුන')}
+        <Modal 
+          isOpen={showReturnPreviewModal} 
+          onClose={() => setShowReturnPreviewModal(false)} 
+          title={t('Return Receipt Preview', 'ආපසු භාරගැනීමේ රසීදු පෙරදසුන')} 
           size="lg"
         >
           <div id="credit-preview-modal-content" className="space-y-4 p-4 text-center bg-white animate-in zoom-in duration-300">
@@ -8359,20 +8374,20 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 </div>
               </div>
               <div className="flex gap-2">
-                <button
-                  onClick={() => handlePrintReturnReceipt(selectedReturnPreview)}
+                <button 
+                  onClick={() => handlePrintReturnReceipt(selectedReturnPreview)} 
                   className="bg-[#DAA520] hover:bg-[#B8860B] text-white px-4 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-2 transition-all uppercase tracking-widest"
                 >
                   <PrinterIcon className="w-4 h-4" /> {t('Print', 'මුද්‍රණය කරන්න')}
                 </button>
-                <button
-                  onClick={() => handleDownloadReturnPDF(selectedReturnPreview)}
+                <button 
+                  onClick={() => handleDownloadReturnPDF(selectedReturnPreview)} 
                   className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-2 transition-all uppercase tracking-widest"
                 >
                   <DownloadIcon className="w-4 h-4" /> {t('PDF', 'PDF')}
                 </button>
-                <button
-                  onClick={() => handleDeleteSalesReturn(selectedReturnPreview.id)}
+                <button 
+                  onClick={() => handleDeleteSalesReturn(selectedReturnPreview.id)} 
                   className="bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-2 transition-all uppercase tracking-widest"
                 >
                   <Trash2Icon className="w-4 h-4" /> {t('Delete', 'මකන්න')}
@@ -8385,8 +8400,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             </div>
 
             <div className="pt-2">
-              <button
-                onClick={() => setShowReturnPreviewModal(false)}
+              <button 
+                onClick={() => setShowReturnPreviewModal(false)} 
                 className="w-full bg-gray-100 text-gray-500 py-3.5 rounded-xl font-black uppercase tracking-widest text-[10px] hover:bg-gray-200 transition-colors"
               >
                 {t('Dismiss', 'ඉවත් කරන්න')}
@@ -8398,10 +8413,10 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
 
       {/* Credit Note Preview Modal */}
       {showCreditNotePreviewModal && selectedCreditNotePreview && (
-        <Modal
-          isOpen={showCreditNotePreviewModal}
-          onClose={() => setShowCreditNotePreviewModal(false)}
-          title={t('Credit Note Preview', 'ණය සටහන් පෙරදසුන')}
+        <Modal 
+          isOpen={showCreditNotePreviewModal} 
+          onClose={() => setShowCreditNotePreviewModal(false)} 
+          title={t('Credit Note Preview', 'ණය සටහන් පෙරදසුන')} 
           size="lg"
         >
           <div id="credit-preview-modal-content" className="space-y-4 p-4 text-center bg-white animate-in zoom-in duration-300">
@@ -8416,8 +8431,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
                 </div>
               </div>
               <div className="flex gap-2">
-                <button
-                  onClick={() => handlePrintCreditNote(selectedCreditNotePreview)}
+                <button 
+                  onClick={() => handlePrintCreditNote(selectedCreditNotePreview)} 
                   className="bg-[#DAA520] hover:bg-[#B8860B] text-white px-4 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-2 transition-all uppercase tracking-widest"
                 >
                   <PrinterIcon className="w-4 h-4" /> {t('Print', 'මුද්‍රණය කරන්න')}
@@ -8430,8 +8445,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
             </div>
 
             <div className="pt-2">
-              <button
-                onClick={() => setShowCreditNotePreviewModal(false)}
+              <button 
+                onClick={() => setShowCreditNotePreviewModal(false)} 
                 className="w-full bg-gray-100 text-gray-500 py-3.5 rounded-xl font-black uppercase tracking-widest text-[10px] hover:bg-gray-200 transition-colors"
               >
                 {t('Dismiss', 'ඉවත් කරන්න')}
@@ -8444,4 +8459,850 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       {/* Centralized Void Passkey Confirmation Modal */}
       {showVoidModal && (
         <Modal 
-... [truncated for diff preview]
+          isOpen={showVoidModal} 
+          onClose={() => {
+            setShowVoidModal(false);
+            setTargetVoidInvoiceId(null);
+            setTargetVoidReturnId(null);
+            setTargetDeleteInvoiceId(null);
+          }} 
+          title={targetDeleteInvoiceId ? t('Confirm Delete Invoice', 'ඉන්වොයිසිය මකා දැමීම තහවුරු කරන්න') : targetVoidReturnId ? t('Confirm Void Sales Return', 'ආපසු භාරගැනීම අවලංගු කිරීම') : t('Confirm Void Invoice', 'ඉන්වොයිසිය අවලංගු කිරීම')}
+        >
+          <div className="space-y-4 p-2">
+            <p className="text-xs font-bold text-slate-600">
+              {targetDeleteInvoiceId
+                ? t('Enter Security Passkey to authorize invoice deletion / voiding and reverse inventory & financials:', 'ඉන්වොයිසිය මකා දැමීම හෝ අවලංගු කිරීම තහවුරු කිරීමට මුරපදය ඇතුළත් කරන්න:')
+                : targetVoidReturnId 
+                  ? t('Enter Security Passkey to void sales return and reverse inventory & financials:', 'ආපසු භාරගැනීම අවලංගු කිරීමට මුරපදය ඇතුළත් කරන්න:')
+                  : t('Enter Security Passkey to void invoice and reverse inventory & financials:', 'ඉන්වොයිසිය අවලංගු කිරීමට මුරපදය ඇතුළත් කරන්න:')}
+            </p>
+            <input
+              type="password"
+              placeholder={t('Enter Passkey...', 'මුරපදය ඇතුළත් කරන්න...')}
+              value={voidPasskeyInput}
+              onChange={(e) => setVoidPasskeyInput(e.target.value)}
+              className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-sm outline-none focus:border-amber-500"
+            />
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowVoidModal(false);
+                  setTargetVoidInvoiceId(null);
+                  setTargetVoidReturnId(null);
+                  setTargetDeleteInvoiceId(null);
+                }}
+                className="px-4 py-2 bg-slate-100 text-slate-600 font-bold rounded-xl text-xs uppercase"
+              >
+                {t('Cancel', 'අවලංගු කරන්න')}
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const enteredPass = voidPasskeyInput.trim();
+                  if (!enteredPass) {
+                    return alert(t('Please enter the supervisor passkey.', 'කරුණාකර අධීක්ෂක මුරපදය ඇතුළත් කරන්න.'));
+                  }
+
+                  // Verify passkey against server (which authorizes valid passkey, 1234 PIN, or ADMIN/SUPER_ADMIN sessions)
+                  try {
+                    const verifyRes = await fetchWithTimeout(`${API_URL}/settings/verify-passkey`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ passkey: enteredPass })
+                    });
+                    if (!verifyRes.ok) {
+                      const errData = await verifyRes.json().catch(() => ({}));
+                      return alert(errData?.error || t('Invalid Passkey! Access Denied.', 'වලංගු නොවන මුරපදයකි! අවලංගු කිරීමට නොහැක.'));
+                    }
+                  } catch (e: any) {
+                    // Offline fallback: allow 1234 or unmasked local passkey
+                    const localPass = (shopSettings?.void_passkey && !shopSettings.void_passkey.includes('•')) 
+                      ? shopSettings.void_passkey.trim() 
+                      : '1234';
+                    if (enteredPass !== localPass && enteredPass !== '1234') {
+                      return alert(t('Invalid Passkey! Access Denied.', 'වලංගු නොවන මුරපදයකි! අවලංගු කිරීමට නොහැක.'));
+                    }
+                  }
+
+                  setShowVoidModal(false);
+                  if (targetDeleteInvoiceId) {
+                    const idToDelete = targetDeleteInvoiceId;
+                    setTargetDeleteInvoiceId(null);
+                    setIsLoading(true);
+                    try {
+                      await deleteSaleWithPasskey(idToDelete, enteredPass);
+                      setOrders((prev) => prev.filter((order) => order.id !== idToDelete));
+                      fetchData();
+                      alert(t('Sales invoice voided/deleted successfully.', 'විකිණීම් ඉන්වොයිසිය සාර්ථකව අවලංගු කරන ලදි.'));
+                    } catch (err: any) {
+                      alert(t('Failed to delete sales record: ', 'විකිණීම් වාර්තාව මකා ගැනීමට අසමත් විය: ') + (err?.message || err));
+                    } finally {
+                      setIsLoading(false);
+                    }
+                  } else if (targetVoidInvoiceId) {
+                    await handleVoidOrder(targetVoidInvoiceId, enteredPass);
+                    setTargetVoidInvoiceId(null);
+                  } else if (targetVoidReturnId) {
+                    await handleVoidSalesReturn(targetVoidReturnId, enteredPass);
+                    setTargetVoidReturnId(null);
+                  }
+                }}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-xs uppercase shadow-md"
+              >
+                {targetDeleteInvoiceId ? t('Confirm Delete', 'මකා දැමීම තහවුරු කරන්න') : t('Confirm Void', 'අවලංගු කිරීම තහවුරු කරන්න')}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Quotation Preview Modal */}
+      {showQuotePreviewModal && selectedQuotePreview && (
+        <Modal isOpen={showQuotePreviewModal} onClose={() => setShowQuotePreviewModal(false)} title={t('Quotation Preview', 'මිල ගණන් පූර්ව දර්ශනය')}>
+          <div className="p-2 bg-white rounded-3xl text-left">
+            <QuotationPreview quote={selectedQuotePreview} isSinhala={isSinhala} shopSettings={shopSettings} />
+
+            {/* Modal Footer Actions */}
+            <div className="flex justify-end gap-3 border-t border-slate-100 pt-4 mt-4 px-4">
+              <button
+                type="button"
+                onClick={() => setShowQuotePreviewModal(false)}
+                className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs uppercase"
+              >
+                {t('Close', 'වහන්න')}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleLoadQuoteToCart(selectedQuotePreview)}
+                className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-xs uppercase tracking-wider shadow-md flex items-center gap-1.5"
+              >
+                <ShoppingCartIcon className="w-4 h-4" />
+                {t('Load to Cart', 'කාඩ්පතට ගන්න')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const htmlContent = generateQuotePrintHTML(selectedQuotePreview, isSinhala, shopSettings);
+                  const iframe = document.createElement('iframe');
+                  iframe.style.position = 'fixed';
+                  iframe.style.right = '0';
+                  iframe.style.bottom = '0';
+                  iframe.style.width = '0';
+                  iframe.style.height = '0';
+                  iframe.style.border = '0';
+                  document.body.appendChild(iframe);
+                  const doc = iframe.contentWindow?.document || iframe.contentDocument;
+                  if (doc) {
+                    doc.open();
+                    doc.write(htmlContent);
+                    doc.close();
+                  }
+                  setTimeout(() => {
+                    iframe.contentWindow?.focus();
+                    iframe.contentWindow?.print();
+                    setTimeout(() => {
+                      if (document.body.contains(iframe)) document.body.removeChild(iframe);
+                    }, 1000);
+                  }, 300);
+                }}
+                className="px-6 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider shadow-md flex items-center gap-1.5"
+              >
+                <PrinterIcon className="w-4 h-4" />
+                {t('Print Quotation', 'මුද්‍රණය කරන්න')}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleDownloadQuotePDF(selectedQuotePreview)}
+                className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white font-black rounded-xl text-xs uppercase tracking-wider shadow-md flex items-center gap-1.5"
+              >
+                <DownloadIcon className="w-4 h-4" />
+                {t('Download PDF', 'PDF බාගත කරන්න')}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Credit Note Usage History Modal */}
+      {showCreditNoteUsageModal && (
+        <Modal
+          isOpen={showCreditNoteUsageModal}
+          onClose={() => setShowCreditNoteUsageModal(false)}
+          title={t('Credit Note Usage History & Audit Trail', 'ණය සටහන් භාවිත ඉතිහාසය සහ විගණන ලොගය')}
+          size="xl"
+        >
+          <div className="space-y-4">
+            {selectedCreditNotePreview && (
+              <div className="bg-amber-50/70 border border-amber-200 p-4 rounded-2xl flex flex-wrap justify-between items-center gap-4">
+                <div>
+                  <span className="text-[10px] font-black text-amber-800 uppercase tracking-widest block">{t('Credit Note Code', 'ණය සටහන් අංකය')}</span>
+                  <span className="text-lg font-black font-mono text-amber-900">
+                    💳 {selectedCreditNotePreview.creditNoteNo || selectedCreditNotePreview.credit_note_no || selectedCreditNotePreview.code || selectedCreditNotePreview.id}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest block">{t('Customer', 'පාරිභෝගිකයා')}</span>
+                  <span className="text-sm font-bold text-slate-800">{selectedCreditNotePreview.customerName || selectedCreditNotePreview.customer_name || 'Guest Customer'}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest block">{t('Original Credit', 'මුළු ණය මුදල')}</span>
+                  <span className="text-sm font-black text-slate-900 font-mono">
+                    {symbol} {convert(selectedCreditNotePreview.amount || selectedCreditNotePreview.value || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-black text-amber-700 uppercase tracking-widest block">{t('Total Used', 'භාවිත කළ මුදල')}</span>
+                  <span className="text-sm font-black text-amber-800 font-mono">
+                    {symbol} {convert(Math.max(0, Number(selectedCreditNotePreview.amount || selectedCreditNotePreview.value || 0) - Number(selectedCreditNotePreview.balance_remaining !== undefined ? selectedCreditNotePreview.balance_remaining : (selectedCreditNotePreview.balanceRemaining || 0)))).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest block">{t('Current Available Balance', 'ඉතිරි ශේෂය')}</span>
+                  <span className="text-base font-black text-emerald-700 font-mono">
+                    {symbol} {convert(selectedCreditNotePreview.balance_remaining !== undefined ? selectedCreditNotePreview.balance_remaining : (selectedCreditNotePreview.balanceRemaining || 0)).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="overflow-x-auto rounded-2xl border border-slate-200">
+              <table className="w-full text-xs text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-100 border-b border-slate-200 font-black text-slate-600 uppercase tracking-wider text-[9px]">
+                    <th className="p-3">{t('Date / Time', 'දිනය / වේලාව')}</th>
+                    <th className="p-3">{t('Invoice / Ref', 'ඉන්වොයිසි අංකය')}</th>
+                    <th className="p-3">{t('Action', 'ක්‍රියාව')}</th>
+                    <th className="p-3 text-right">{t('Prev Balance', 'පෙර ශේෂය')}</th>
+                    <th className="p-3 text-right">{t('Amount Applied', 'භාවිතා කල මුදල')}</th>
+                    <th className="p-3 text-right">{t('Remaining Balance', 'ඉතිරි ශේෂය')}</th>
+                    <th className="p-3 text-center">{t('User / Cashier', 'පරිශීලක')}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {loadingCNUsage ? (
+                    <tr>
+                      <td colSpan={7} className="p-8 text-center text-slate-400 font-bold">
+                        <Loader2Icon className="w-6 h-6 animate-spin mx-auto mb-2 text-amber-500" />
+                        {t('Loading usage history...', 'භාවිත ඉතිහාසය පූරණය වෙමින් පවතී...')}
+                      </td>
+                    </tr>
+                  ) : creditNoteUsageLogs.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="p-8 text-center text-slate-400 font-bold">
+                        {t('No usage transactions recorded for this credit note yet.', 'මෙම ණය සටහන සඳහා තවමත් ගනුදෙනු කිසිවක් නොමැත.')}
+                      </td>
+                    </tr>
+                  ) : (
+                    creditNoteUsageLogs.map((log) => (
+                      <tr key={log.id} className="hover:bg-slate-50 font-medium">
+                        <td className="p-3 text-slate-600 font-bold whitespace-nowrap">
+                          {new Date(log.created_at).toLocaleString()}
+                        </td>
+                        <td className="p-3 font-mono font-bold text-indigo-700">
+                          {log.invoice_no || 'N/A'}
+                        </td>
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
+                            log.action === 'cash_refund' ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
+                          }`}>
+                            {log.action === 'cash_refund' ? t('Cash Refund', 'මුදල් ආපසු ගෙවීම') : t('Applied to Sale', 'විකුණුමට භාවිතා කරන ලදී')}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right font-mono text-slate-600 font-bold">
+                          {symbol} {convert(log.previous_balance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-3 text-right font-mono font-black text-amber-600">
+                          {symbol} {convert(log.amount_applied).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-3 text-right font-mono font-black text-emerald-700">
+                          {symbol} {convert(log.remaining_balance).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-3 text-center text-slate-500 font-bold text-[10px]">
+                          {log.user_email || 'system'}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setShowCreditNoteUsageModal(false)}
+                className="px-5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs"
+              >
+                {t('Close', 'වසා දමන්න')}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+
+
+      {/* Interactive Order & Credit Receipt Preview Modal */}
+      {showReceipt && lastOrder && (
+        <Modal 
+          isOpen={showReceipt} 
+          onClose={() => setShowReceipt(false)} 
+          title={t('Credit & Transaction Preview', 'ගනුදෙනු සහ ණය තොරතුරු පෙරදසුන')} 
+          size="lg"
+        >
+          <div id="credit-preview-modal-content" className="space-y-4 p-4 text-center bg-white animate-in zoom-in duration-300">
+            <div data-html2canvas-ignore="true" className="flex items-center justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-amber-50 text-[#DAA520] rounded-lg flex items-center justify-center border border-amber-200 shadow-inner">
+                  <ReceiptIcon className="w-5 h-5" />
+                </div>
+                <div className="text-left">
+                  <h4 className="font-black text-sm text-[#464646]">
+                    {((lastOrder.payment_method || '').toLowerCase() === 'credit' || lastOrder.status === 'Non Paid' || lastOrder.status === 'Partially Settled' || lastOrder.status === 'Fully Settled' || (lastOrder as any).is_credit)
+                      ? t('Credit Transaction & History Details', 'ණය ගනුදෙනු සහ පියවීම් විස්තර')
+                      : t('Sales Receipt Preview', 'විකුණුම් රසීදු පෙරදසුන')}
+                  </h4>
+                  <p className="text-[10px] text-gray-400 font-bold">Invoice: {lastOrder.invoiceNo}</p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => handlePrintReceipt(lastOrder)} 
+                  className="bg-[#DAA520] hover:bg-[#B8860B] text-white px-4 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-2 transition-all uppercase tracking-widest"
+                >
+                  <PrinterIcon className="w-4 h-4" /> {t('Print', 'මුද්‍රණය කරන්න')}
+                </button>
+                <button 
+                  onClick={() => downloadReceiptPDF(lastOrder)} 
+                  className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-xl text-xs font-black shadow-md flex items-center gap-2 transition-all uppercase tracking-widest"
+                >
+                  <DownloadIcon className="w-4 h-4" /> {t('Download PDF', 'PDF බාගත කරන්න')}
+                </button>
+              </div>
+            </div>
+
+            {/* Credit Accounts Overview Card */}
+            {((lastOrder.payment_method || '').toLowerCase() === 'credit' || lastOrder.status === 'Non Paid' || lastOrder.status === 'Partially Settled' || lastOrder.status === 'Fully Settled' || (lastOrder as any).is_credit) && (() => {
+              const acct = calculateSaleAccounting(lastOrder, salesReturnsList);
+              const orderReturns = salesReturnsList.filter(sr => 
+                sr.status !== 'voided' && 
+                sr.status !== 'Voided' && 
+                sr.status !== 'cancelled' && 
+                (sr.invoiceNo === lastOrder.invoiceNo || sr.invoice_no === lastOrder.invoiceNo) &&
+                (!lastOrder.created_at || !sr.created_at || new Date(sr.created_at).getTime() >= new Date(lastOrder.created_at).getTime() - 60000)
+              );
+              const origTotalAmt = acct.originalTotal;
+              const totalPaidAmt = acct.totalPaid;
+              const effectiveTotal = acct.effectiveTotal;
+              const remBal = acct.netOutstanding;
+
+              const isFullyPaid = acct.isFullySettled;
+              const isUnpaid = remBal > 0.01 && totalPaidAmt <= 0.01;
+              const statusText = isFullyPaid ? 'Fully Settled' : isUnpaid ? 'Unpaid' : 'Partially Settled';
+
+              return (
+                <div data-html2canvas-ignore="true" className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-left space-y-3 my-2">
+                  <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+                    <span className="text-xs font-black text-slate-700 uppercase tracking-wider">💳 Credit Account Summary</span>
+                    <span className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${isFullyPaid ? 'bg-emerald-100 text-emerald-800' : isUnpaid ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'}`}>
+                      {isFullyPaid ? t('Fully Settled', 'සම්පූර්ණයෙන්ම පියවා ඇත') : isUnpaid ? t('Unpaid', 'පියවා නොමැත') : t('Partially Settled', 'කොටසක් පියවා ඇත')}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                    <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Original Invoice</span>
+                      <span className="font-black text-slate-800">{symbol} {convert(origTotalAmt).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Total Amount Paid</span>
+                      <span className="font-black text-emerald-600">{symbol} {convert(totalPaidAmt).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Effective Total</span>
+                      <span className="font-black text-slate-900">{symbol} {convert(effectiveTotal).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                      <span className="text-[9px] font-black text-rose-500 uppercase tracking-widest block">Remaining Balance</span>
+                      <span className="font-black text-rose-600">{symbol} {convert(remBal).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                    </div>
+                  </div>
+
+                  {orderReturns.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-slate-200 space-y-1">
+                      <span className="text-[10px] font-black text-amber-800 uppercase tracking-wider block mb-1">Associated Returns & Exchanges:</span>
+                      {orderReturns.map((r, rIdx) => {
+                        const retValue = Number(r.returnAmount || (r as any).return_amount || 0);
+                        const exValue = Number(r.exchangeAmount || (r as any).exchange_amount || 0);
+                        const cPaid = Number(r.customerPaid || (r as any).customer_paid || 0);
+                        return (
+                          <div key={rIdx} className="text-[11px] font-bold text-slate-700 bg-white p-2 rounded-lg border border-slate-200 flex justify-between flex-wrap gap-1">
+                            <span>Return #{r.returnNo || r.id} ({r.returnMethod})</span>
+                            <div className="flex gap-2 text-[10px]">
+                              {retValue > 0 && <span className="text-rose-600">Return: -{symbol} {convert(retValue).toLocaleString()}</span>}
+                              {exValue > 0 && <span className="text-emerald-700">Exchange: +{symbol} {convert(exValue).toLocaleString()}</span>}
+                              {cPaid > 0 && <span className="text-blue-700">Paid: {symbol} {convert(cPaid).toLocaleString()}</span>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            <div className="max-h-[60vh] overflow-y-auto pr-1">
+              <ReceiptPreview order={lastOrder} isSinhala={isSinhala} customers={customers} salesReturns={salesReturnsList} />
+            </div>
+
+            <div data-html2canvas-ignore="true" className="pt-2">
+              <button 
+                onClick={() => setShowReceipt(false)} 
+                className="w-full bg-gray-100 text-gray-500 py-3 rounded-xl font-black uppercase tracking-widest text-xs hover:bg-gray-200 transition-colors"
+              >
+                {t('Close Preview', 'වසා දමන්න')}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Hold Bill / Park Invoice Confirmation Modal */}
+      {showHoldNameModal && (
+        <Modal
+          isOpen={showHoldNameModal}
+          onClose={() => setShowHoldNameModal(false)}
+          title={t('Hold / Park Current Bill', 'බිල්පත රඳවා තැබීම')}
+        >
+          <div className="space-y-4 p-2 text-left">
+            <div className="bg-amber-50 border border-amber-200/70 rounded-2xl p-4 flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                <PauseIcon className="w-5 h-5" />
+              </div>
+              <div className="text-xs">
+                <h4 className="font-black text-slate-900 uppercase tracking-wider">{t('Park Active Cart', 'ක්‍රියාකාරී කාට් එක රඳවන්න')}</h4>
+                <p className="text-slate-600 mt-0.5">
+                  {t('This will temporarily save the current cart items, selected customer, and discounts so you can serve another customer.', 'වෙනත් පාරිභෝගිකයෙකුට සේවය කිරීම සඳහා මෙම කාට් එක තාවකාලිකව සුරැකෙනු ඇත.')}
+                </p>
+              </div>
+            </div>
+
+            {/* Cart quick summary */}
+            <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5 space-y-1.5 text-xs">
+              <div className="flex justify-between text-slate-600 font-medium">
+                <span>{t('Items in cart:', 'කාට් එකේ භාණ්ඩ:')}</span>
+                <span className="font-bold text-slate-800 font-mono">{cartItems.length} {t('items', 'භාණ්ඩ')}</span>
+              </div>
+              <div className="flex justify-between text-slate-600 font-medium">
+                <span>{t('Customer:', 'පාරිභෝගිකයා:')}</span>
+                <span className="font-bold text-slate-800">{isGuest ? guestName : selectedCustomer?.name || 'Guest Customer'}</span>
+              </div>
+              <div className="flex justify-between text-slate-800 font-black border-t border-slate-200/80 pt-2 mt-2">
+                <span>{t('Total Amount:', 'මුළු මුදල:')}</span>
+                <span className="text-amber-600 font-mono font-bold text-sm">Rs. {totalAmountValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider block mb-1.5 ml-1">
+                {t('Hold Name / Reference Note (Optional):', 'රඳවන නම / සටහන (අවශ්‍ය නම්):')}
+              </label>
+              <input
+                type="text"
+                value={holdNameInput}
+                onChange={(e) => setHoldNameInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleHoldBill(holdNameInput);
+                  }
+                }}
+                placeholder={t('e.g. Counter 1 / Kamal / White Car', 'උදා: කවුන්ටර් 1 / කමල් / සුදු වාහනය')}
+                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 transition-all"
+                autoFocus
+              />
+            </div>
+
+            <div className="flex gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowHoldNameModal(false);
+                  setHoldNameInput('');
+                }}
+                className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-black text-xs uppercase tracking-widest rounded-xl transition-all"
+              >
+                {t('Cancel', 'අවලංගු කරන්න')}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleHoldBill(holdNameInput)}
+                className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 active:scale-[0.99] text-slate-950 font-black text-xs uppercase tracking-widest rounded-xl transition-all shadow-md shadow-amber-500/20 flex items-center justify-center gap-1.5"
+              >
+                <PauseIcon className="w-4 h-4" />
+                {t('Confirm & Park Bill', 'බිල්පත රඳවන්න')}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Retrieve / Manage Parked Invoices Modal */}
+      {showHeldBillsModal && (
+        <Modal
+          isOpen={showHeldBillsModal}
+          onClose={() => setShowHeldBillsModal(false)}
+          title={t('🅿️ Parked Invoices / Held Bills', '🅿️ රඳවා ඇති බිල්පත්')}
+        >
+          <div className="space-y-4 p-2 text-left max-w-2xl mx-auto">
+            <div className="flex justify-between items-center bg-slate-50 border border-slate-200/80 p-3 rounded-2xl">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
+                <span className="text-xs font-black text-slate-700 uppercase tracking-wider">
+                  {parkedInvoices.length} {t('Parked Cart(s) Active', 'රඳවා ඇති බිල්පත් ගණන')}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => fetchParkedInvoices()}
+                className="text-[10px] font-black uppercase tracking-wider px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-600 rounded-lg border border-slate-200 transition-all flex items-center gap-1"
+              >
+                <RefreshCwIcon className="w-3 h-3" />
+                {t('Refresh', 'යාවත්කාලීන')}
+              </button>
+            </div>
+
+            {parkedInvoices.length === 0 ? (
+              <div className="py-12 px-4 text-center bg-slate-50 border border-dashed border-slate-200 rounded-2xl">
+                <div className="w-14 h-14 bg-amber-100 text-amber-600 rounded-2xl flex items-center justify-center mx-auto mb-3">
+                  <PauseIcon className="w-7 h-7" />
+                </div>
+                <h4 className="text-sm font-black text-slate-800 uppercase tracking-wider">
+                  {t('No Parked Invoices', 'රඳවා ඇති බිල්පත් නොමැත')}
+                </h4>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1 font-medium">
+                  {t('When you put active sales on hold during busy checkout, they will appear here for instant retrieval.', 'කාර්යබහුල වේලාවන්හිදී රඳවා තබන බිල්පත් මෙතැනින් නැවත ලබාගත හැක.')}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1 custom-scrollbar">
+                {parkedInvoices.map((park) => {
+                  const itemsList = Array.isArray(park.items)
+                    ? park.items
+                    : typeof park.items === 'string'
+                    ? JSON.parse(park.items || '[]')
+                    : [];
+                  const calcTotal = Number(
+                    park.totalAmount !== undefined
+                      ? park.totalAmount
+                      : itemsList.reduce((sum: number, item: any) => sum + Number(item.total || item.price * item.qty || 0), 0)
+                  );
+                  const custName = park.customer?.name || park.guestName || (park as any).customer_name || 'Guest Customer';
+
+                  return (
+                    <div
+                      key={park.id}
+                      className="bg-white border border-slate-200 hover:border-amber-400 rounded-2xl p-4 shadow-sm hover:shadow-md transition-all space-y-3"
+                    >
+                      <div className="flex justify-between items-start gap-2">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="px-2.5 py-0.5 bg-amber-100 text-amber-900 rounded-lg text-[10px] font-black uppercase tracking-wider font-mono">
+                              {park.id}
+                            </span>
+                            <h4 className="text-xs font-black text-slate-900">
+                              {park.holdName || (park as any).hold_name || `Hold #${park.id.slice(-4)}`}
+                            </h4>
+                          </div>
+                          <div className="flex items-center gap-3 text-[11px] text-slate-500 font-medium mt-1">
+                            <span>👤 {custName}</span>
+                            <span>•</span>
+                            <span>🕒 {new Date(park.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                          </div>
+                        </div>
+
+                        <div className="text-right">
+                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">{t('Total Amount', 'මුළු මුදල')}</span>
+                          <span className="text-sm font-black text-emerald-600 font-mono">
+                            Rs. {calcTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Items preview snippet */}
+                      <div className="bg-slate-50/80 rounded-xl p-2.5 text-[11px] text-slate-600 space-y-1">
+                        <div className="font-bold text-[10px] uppercase text-slate-400 tracking-wider">
+                          {itemsList.length} {t('Item(s)', 'භාණ්ඩ')}:
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {itemsList.map((itm: any, itmIdx: number) => (
+                            <span
+                              key={itmIdx}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 bg-white border border-slate-200 rounded text-[10px] font-medium text-slate-700"
+                            >
+                              <span className="font-bold text-slate-900">{itm.qty || 1}x</span>
+                              <span className="truncate max-w-[120px]">{itm.name || itm.productName || 'Item'}</span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex justify-between items-center pt-1 border-t border-slate-100">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm(t('Are you sure you want to delete this parked invoice?', 'මෙම රඳවා ඇති බිල්පත මකා දැමීමට ඔබට විශ්වාසද?'))) {
+                              handleDeleteParkedInvoice(park.id);
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-xl text-red-600 hover:bg-red-50 text-[10px] font-black uppercase tracking-wider transition-all flex items-center gap-1 border border-transparent hover:border-red-200"
+                        >
+                          <Trash2Icon className="w-3.5 h-3.5" />
+                          {t('Discard', 'ඉවත් කරන්න')}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (cartItems.length > 0) {
+                              if (!window.confirm(t('Your active cart already has items. Restoring this bill will replace current cart items. Continue?', 'ඔබගේ සක්‍රිය කාට් එකේ දැනටමත් භාණ්ඩ ඇත. මෙම බිල්පත ලබා ගැනීමෙන් වත්මන් භාණ්ඩ ප්‍රතිස්ථාපනය වේ. ඉදිරියට යන්නද?'))) {
+                                return;
+                              }
+                            }
+                            handleRetrieveHoldBill(park);
+                          }}
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-xl text-[11px] font-black uppercase tracking-wider transition-all shadow-sm flex items-center gap-1.5"
+                        >
+                          <ShoppingCartIcon className="w-3.5 h-3.5" />
+                          {t('Restore to Cart', 'කාට් එකට ගන්න')}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setShowHeldBillsModal(false)}
+              className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs uppercase tracking-widest rounded-xl transition-all"
+            >
+              {t('Close', 'වසා දමන්න')}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Wireless Mobile Scanner Pairing Modal */}
+      {showMobileScannerModal && (
+        <Modal 
+          isOpen={showMobileScannerModal} 
+          onClose={() => setShowMobileScannerModal(false)} 
+          title={t('📱 Wireless Mobile Barcode Scanner Pairing', '📱 රැහැන් රහිත ජංගම බාර්කෝඩ් ස්කෑනර් සම්බන්ධතාවය')}
+        >
+          <div className="space-y-5 p-2 text-left max-w-xl mx-auto">
+            {/* Header Banner */}
+            <div className="bg-slate-900 text-white p-4 rounded-2xl border border-slate-800 flex justify-between items-center gap-3">
+              <div>
+                <h4 className="text-xs font-black text-amber-400 uppercase tracking-widest flex items-center gap-2">
+                  <WifiIcon className="w-4 h-4 text-amber-400" />
+                  {t('Local Wi-Fi POS Signaling Server', 'දේශීය Wi-Fi සංඥා සේවාදායකය')}
+                </h4>
+                <p className="text-[11px] text-slate-300 font-medium mt-0.5">
+                  {t('Stream phone camera barcode scans instantly into this POS cart.', 'ස්මාර්ට්ෆෝන් කැමරාවෙන් ස්කෑන් කරන බාර්කෝඩ් සෘජුවම POS කාට් එකට ඇතුළත් කරන්න.')}
+                </p>
+              </div>
+              <div className="flex flex-col items-end">
+                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${isMobileScannerConnected ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'}`}>
+                  <span className={`w-2 h-2 rounded-full ${isMobileScannerConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+                  {isMobileScannerConnected
+                    ? (connectedDevicesCount > 1
+                        ? t(`${connectedDevicesCount} Devices Connected`, `උපාංග ${connectedDevicesCount}ක් සම්බන්ධයි`)
+                        : t('1 Device Connected', 'උපාංග 1ක් සම්බන්ධයි'))
+                    : t('Waiting for connection...', 'සම්බන්ධ වෙමින්...')}
+                </span>
+                <span className="text-[9px] font-mono text-slate-400 mt-1">Session: {scannerSessionId}</span>
+              </div>
+            </div>
+
+            {/* QR Code & Direct Access Section */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 items-center bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+              {/* QR Code Card */}
+              <div className="flex flex-col items-center justify-center p-3 bg-slate-50 border border-slate-200 rounded-2xl">
+                <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-inner">
+                  <QRCodeSVG 
+                    value={mobileScannerUrl} 
+                    size={170} 
+                    level="H" 
+                    includeMargin={false}
+                  />
+                </div>
+                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-2">
+                  {t('Scan with Phone Camera', 'දුරකථන කැමරාවෙන් ස්කෑන් කරන්න')}
+                </span>
+              </div>
+
+              {/* Step-by-Step Instructions & IP Switcher */}
+              <div className="space-y-3 text-xs">
+                {localScannerInfo?.ips && localScannerInfo.ips.length > 1 && (
+                  <div>
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1">
+                      {t('Select Host Network Interface / IP:', 'ජාල අතුරුමුහුණත තෝරන්න:')}
+                    </label>
+                    <select
+                      value={selectedScannerIp}
+                      onChange={(e) => setSelectedScannerIp(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                    >
+                      {localScannerInfo.ips.map((adapter, idx) => (
+                        <option key={idx} value={adapter.address}>
+                          {adapter.isWifi ? '📶 ' : '🌐 '} {adapter.name}: {adapter.address}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div className="space-y-2 text-slate-700">
+                  <div className="flex items-start gap-2">
+                    <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-black text-[10px] shrink-0">1</span>
+                    <p className="font-semibold text-[11px] leading-tight">
+                      {t('Connect your smartphone to the same Wi-Fi / Local Network.', 'ස්මාර්ට්ෆෝනය මෙම පරිගණකය ඇති Wi-Fi ජාලයටම සම්බන්ධ කරන්න.')}
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-black text-[10px] shrink-0">2</span>
+                    <p className="font-semibold text-[11px] leading-tight">
+                      {t('Scan the QR code or open the link below on your phone.', 'QR කේතය ස්කෑන් කරන්න හෝ පහත ලින්ක් එක දුරකථනයෙන් විවෘත කරන්න.')}
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-black text-[10px] shrink-0">3</span>
+                    <p className="font-semibold text-[11px] leading-tight">
+                      {t('Point camera at barcodes — items are added to POS automatically!', 'කැමරාව බාර්කෝඩ් වෙත යොමු කරන්න — භාණ්ඩ ස්වයංක්‍රීයව POS කාට් එකට එකතු වේ!')}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Direct Link Copy Button */}
+                <div className="pt-1">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={mobileScannerUrl}
+                      className="w-full px-2.5 py-1.5 bg-slate-100 border border-slate-200 rounded-lg text-[10px] font-mono text-slate-700 select-all outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(mobileScannerUrl);
+                        setCopiedScannerUrl(true);
+                        setTimeout(() => setCopiedScannerUrl(false), 2000);
+                      }}
+                      className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-amber-400 rounded-lg text-[10px] font-black uppercase tracking-wider flex items-center gap-1 shrink-0 transition-all"
+                    >
+                      {copiedScannerUrl ? <CheckIcon className="w-3.5 h-3.5 text-emerald-400" /> : <CopyIcon className="w-3.5 h-3.5" />}
+                      {copiedScannerUrl ? t('Copied', 'පිටපත් කළා') : t('Copy', 'පිටපත්')}
+                    </button>
+                    <a
+                      href={mobileScannerUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg shrink-0 transition-colors"
+                      title={t('Open in browser tab', 'නව ටැබ් එකක විවෘත කරන්න')}
+                    >
+                      <ExternalLinkIcon className="w-3.5 h-3.5" />
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Test Simulation Tool & Recent Scans Feed */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                  {t('Desktop Barcode Simulator / Manual Test', 'ඩෙස්ක්ටොප් බාර්කෝඩ් පරික්ෂාව')}
+                </span>
+                <span className="text-[9px] text-slate-400 font-mono">
+                  {recentScans.length} {t('live scan(s)', 'සජීවී ස්කෑන්')}
+                </span>
+              </div>
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={simulateBarcodeInput}
+                  onChange={(e) => setSimulateBarcodeInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && simulateBarcodeInput.trim()) {
+                      handleBarcodeScanned(simulateBarcodeInput.trim(), 'manual');
+                      setSimulateBarcodeInput('');
+                    }
+                  }}
+                  placeholder={t('Enter product barcode or SKU to test...', 'පරීක්ෂා කිරීමට බාර්කෝඩ් හෝ SKU ඇතුළත් කරන්න...')}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-amber-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (simulateBarcodeInput.trim()) {
+                      handleBarcodeScanned(simulateBarcodeInput.trim(), 'manual');
+                      setSimulateBarcodeInput('');
+                    }
+                  }}
+                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-sm shrink-0"
+                >
+                  {t('Simulate Scan', 'පරීක්ෂා කරන්න')}
+                </button>
+              </div>
+
+              {/* Recent Scan History */}
+              {recentScans.length > 0 && (
+                <div className="space-y-1 pt-1">
+                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">
+                    {t('Recent Live Scans Feed:', 'මෑතකදී ස්කෑන් කළ බාර්කෝඩ්:')}
+                  </span>
+                  <div className="max-h-28 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                    {recentScans.slice(0, 5).map((scan, sIdx) => (
+                      <div key={sIdx} className="bg-white border border-slate-200 rounded-lg p-2 flex justify-between items-center text-xs font-bold text-slate-800">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded font-mono font-bold">
+                            {scan.format || 'SCAN'}
+                          </span>
+                          <span className="font-mono text-slate-900">{scan.barcode}</span>
+                        </div>
+                        <span className="text-[9px] text-slate-400 font-normal">
+                          {new Date(scan.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer close button */}
+            <button
+              type="button"
+              onClick={() => setShowMobileScannerModal(false)}
+              className="w-full py-3 bg-slate-100 hover:bg-slate-200 active:scale-[0.99] text-slate-700 font-black text-xs uppercase tracking-widest rounded-xl transition-all"
+            >
+              {t('Done / Keep Listening in Background', 'අවසන් / පසුබිමේ සක්‍රියව තබන්න')}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* 💵 Shift Balancing & Cash Drawer Control Modal */}
+      {/* Shift Balancing Modal Removed */}
+
+    </div>
+
+  );
+}
