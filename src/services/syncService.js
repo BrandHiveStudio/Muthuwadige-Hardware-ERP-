@@ -328,6 +328,12 @@ export async function ensureTursoSchema(tursoClient) {
       "ALTER TABLE stock_adjustments ADD COLUMN station_id TEXT;",
       "ALTER TABLE sales ADD COLUMN branch_id TEXT;",
       "ALTER TABLE sales ADD COLUMN station_id TEXT;",
+      "ALTER TABLE sales ADD COLUMN balance_due REAL;",
+      "ALTER TABLE sales_returns ADD COLUMN difference_payment_method TEXT DEFAULT 'Cash';",
+      "ALTER TABLE sales_returns ADD COLUMN is_credit INTEGER DEFAULT 0;",
+      "ALTER TABLE sales_returns ADD COLUMN cashier TEXT;",
+      "ALTER TABLE sales_returns ADD COLUMN previous_invoice_balance REAL DEFAULT 0;",
+      "ALTER TABLE shift_logs ADD COLUMN debt_cash_collected REAL DEFAULT 0;",
       "ALTER TABLE purchase_orders ADD COLUMN branch_id TEXT;",
       "ALTER TABLE purchase_orders ADD COLUMN supplier_id TEXT;",
       "ALTER TABLE purchase_orders ADD COLUMN payment_method TEXT;",
@@ -352,6 +358,48 @@ export async function ensureTursoSchema(tursoClient) {
     for (const c of cols) {
       try { await tursoClient.execute(c); } catch (_) {}
     }
+
+    // Cloud never pushes upstream to another remote; drop desktop change-tracking triggers on Turso
+    // to prevent redundant sync_queue accumulation on cloud writes.
+    const cloudTriggersToDrop = [
+      'DROP TRIGGER IF EXISTS trg_sync_sales_insert;',
+      'DROP TRIGGER IF EXISTS trg_sync_sales_returns_insert;',
+      'DROP TRIGGER IF EXISTS trg_sync_credit_payments_insert;',
+      'DROP TRIGGER IF EXISTS trg_sync_stock_adj_insert;',
+      'DROP TRIGGER IF EXISTS trg_sync_cheque_reg_insert;',
+      'DROP TRIGGER IF EXISTS trg_sync_cheque_reg_update;'
+    ];
+    for (const dropSql of cloudTriggersToDrop) {
+      try { await tursoClient.execute(dropSql); } catch (_) {}
+    }
+
+    // Prevent 30s counter sync timestamp updates on system_settings from spamming audit_logs
+    try {
+      await tursoClient.execute('DROP TRIGGER IF EXISTS audit_settings_update;');
+      await tursoClient.execute(`
+        CREATE TRIGGER IF NOT EXISTS audit_settings_update AFTER UPDATE OF
+          shop_name, address, phone, email, currency, tax_rate,
+          backup_email, backup_enabled, backup_interval_hours,
+          logo_path, printer_settings, branch_settings,
+          next_invoice_number, return_passkey, void_passkey,
+          smtp_user, smtp_pass, smtp_host, smtp_port,
+          smtp_destination, gmail_user, gmail_pass, auto_backup_enabled
+        ON system_settings
+        BEGIN
+          INSERT INTO audit_logs (id, user_email, action, details, timestamp, user_name, user_role)
+          VALUES (
+            'al_' || strftime('%s', 'now') || '_' || hex(randomblob(2)),
+            'Automated Background Sync',
+            'SETTINGS_UPDATED',
+            'System settings were updated.',
+            strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            'Automated Background Sync',
+            'SYSTEM'
+          );
+        END;
+      `);
+    } catch (_) {}
+
     tursoSchemaEnsured = true;
   } catch (e) {
     console.warn('[BackgroundSync] Warning: Failed to ensure Turso schema:', e?.message);
@@ -788,13 +836,19 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
 
     await ensureTursoSchema(tursoClient);
 
-    // Auto-heal / unblock any stuck or failed queue items for cheques and transactions
+    // Auto-heal / unblock stuck or failed queue items (including sales/sales_returns schema-drift retries)
     try {
       await localDb.run(
         `UPDATE sync_queue 
          SET status = 'PENDING', retry_count = 0, error_message = NULL 
-         WHERE table_name IN ('cheques', 'cheque_registry', 'transactions', 'cash_book') 
-           AND (status = 'FAILED' OR COALESCE(retry_count, 0) >= 5)`
+         WHERE (status = 'FAILED' OR COALESCE(retry_count, 0) >= 5)
+           AND (
+             table_name IN ('cheques', 'cheque_registry', 'transactions', 'cash_book')
+             OR (
+               table_name IN ('sales', 'sales_returns', 'sales_return_items')
+               AND (error_message IS NULL OR LOWER(error_message) LIKE '%column%' OR LOWER(error_message) LIKE '%timeout%' OR LOWER(error_message) LIKE '%fetch%')
+             )
+           )`
       );
     } catch (_) {}
 
@@ -804,6 +858,23 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
 
   if (pendingItems && pendingItems.length > 0) {
     console.log(`[BackgroundSync] Transmitting ${pendingItems.length} queued record(s) to Turso Cloud...`);
+    const tursoColumnsCache = new Map();
+    const getTursoTableColumns = async (tableName) => {
+      if (tursoColumnsCache.has(tableName)) {
+        return tursoColumnsCache.get(tableName);
+      }
+      try {
+        const info = await executeWithTimeout(tursoClient, `PRAGMA table_info("${tableName}")`, 5000);
+        const colSet = new Set((info?.rows || []).map((c) => c.name).filter(Boolean));
+        tursoColumnsCache.set(tableName, colSet);
+        return colSet;
+      } catch (_) {
+        const emptySet = new Set();
+        tursoColumnsCache.set(tableName, emptySet);
+        return emptySet;
+      }
+    };
+
     const statements = [];
     const statementItemMap = [];
     const stockAdjustmentOperations = [];
@@ -868,7 +939,13 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
         const cleanRow = { ...row };
         delete cleanRow.__sync_password_change;
 
-        const columns = Object.keys(cleanRow);
+        const tursoColSet = await getTursoTableColumns('profiles');
+        const rawCols = Object.keys(cleanRow);
+        const columns = tursoColSet.size > 0 ? rawCols.filter(c => tursoColSet.has(c)) : rawCols;
+        if (columns.length === 0) {
+          directSuccessfulIds.push(item.id);
+          continue;
+        }
         const colNames = columns.map(c => `"${c}"`).join(', ');
         const placeholders = columns.map(() => '?').join(', ');
         const args = columns.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
@@ -898,34 +975,35 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
         }
         cleanRow.updated_at = cleanRow.updated_at || new Date().toISOString();
 
-        const columns = Object.keys(cleanRow);
+        const tursoColSet = await getTursoTableColumns('products');
+        const rawCols = Object.keys(cleanRow);
+        const columns = tursoColSet.size > 0 ? rawCols.filter(c => tursoColSet.has(c)) : rawCols;
+        if (columns.length === 0) {
+          directSuccessfulIds.push(item.id);
+          continue;
+        }
         const colNames = columns.map(c => `"${c}"`).join(', ');
         const placeholders = columns.map(() => '?').join(', ');
         const args = columns.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
+        const prodUpdateCandidates = ['name', 'category', 'price', 'selling_price', 'cost_price', 'stock', 'stock_quantity', 'min_stock', 'supplier', 'unit', 'barcode', 'brand', 'updated_at'];
+        const prodUpdateCols = tursoColSet.size > 0 ? prodUpdateCandidates.filter(c => tursoColSet.has(c)) : prodUpdateCandidates;
 
         const stmt = {
           sql: `INSERT INTO "products" (${colNames}) VALUES (${placeholders})
-                ON CONFLICT("sku") DO UPDATE SET
-                  "name" = excluded."name",
-                  "category" = excluded."category",
-                  "price" = excluded."price",
-                  "selling_price" = excluded."selling_price",
-                  "cost_price" = excluded."cost_price",
-                  "stock" = excluded."stock",
-                  "stock_quantity" = excluded."stock_quantity",
-                  "min_stock" = excluded."min_stock",
-                  "supplier" = excluded."supplier",
-                  "unit" = excluded."unit",
-                  "barcode" = excluded."barcode",
-                  "brand" = excluded."brand",
-                  "updated_at" = excluded."updated_at"`,
+                ON CONFLICT("sku") ${prodUpdateCols.length > 0 ? `DO UPDATE SET ${prodUpdateCols.map(c => `"${c}" = excluded."${c}"`).join(', ')}` : 'DO NOTHING'}`,
           args
         };
         statements.push(stmt);
         statementItemMap.push({ statement: stmt, itemId: item.id, table: targetTable });
       } else if (row && typeof row === 'object' && targetTable === 'stock_adjustments') {
         const cleanRow = { ...row };
-        const columns = Object.keys(cleanRow);
+        const tursoColSet = await getTursoTableColumns('stock_adjustments');
+        const rawCols = Object.keys(cleanRow);
+        const columns = tursoColSet.size > 0 ? rawCols.filter(c => tursoColSet.has(c)) : rawCols;
+        if (columns.length === 0) {
+          directSuccessfulIds.push(item.id);
+          continue;
+        }
         const colNames = columns.map(c => `"${c}"`).join(', ');
         const placeholders = columns.map(() => '?').join(', ');
         const args = columns.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
@@ -973,7 +1051,13 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
         };
         stockAdjustmentOperations.push({ itemId: item.id, deltaStmt: stockDeltaStmt, insertStmt: stmt });
       } else if (row && typeof row === 'object') {
-        const columns = Object.keys(row);
+        const tursoColSet = await getTursoTableColumns(targetTable);
+        const rawCols = Object.keys(row);
+        const columns = tursoColSet.size > 0 ? rawCols.filter(c => tursoColSet.has(c)) : rawCols;
+        if (columns.length === 0) {
+          directSuccessfulIds.push(item.id);
+          continue;
+        }
         const colNames = columns.map(c => `"${c}"`).join(', ');
         const placeholders = columns.map(() => '?').join(', ');
         const args = columns.map(c => row[c] !== undefined ? row[c] : null);

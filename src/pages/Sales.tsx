@@ -2016,8 +2016,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
       const baseStockRemaining = Math.max(0, stockAvailable - existingBaseQty);
       const stockAvailableInSelectedUnit = baseStockRemaining * creditConversionRate;
       alert(t(
-        `Only ${stockAvailableInSelectedUnit.toFixed(2)} ${creditSelectedUnit || selectedCreditProduct.unit}(s) available in stock!`,
-        `තොගයේ ඇත්තේ ${stockAvailableInSelectedUnit.toFixed(2)} ${creditSelectedUnit || selectedCreditProduct.unit} ක් පමණි!`
+        `Only ${formatStock(stockAvailableInSelectedUnit, creditSelectedUnit || selectedCreditProduct.unit)} ${creditSelectedUnit || selectedCreditProduct.unit}(s) available in stock!`,
+        `තොගයේ ඇත්තේ ${formatStock(stockAvailableInSelectedUnit, creditSelectedUnit || selectedCreditProduct.unit)} ${creditSelectedUnit || selectedCreditProduct.unit} ක් පමණි!`
       ));
       return;
     }
@@ -2781,8 +2781,8 @@ export function Sales({ userRole: initialUserRole = 'admin', initialTab = 'new',
           const baseStockRemaining = Math.max(0, stockAvailable - existingBaseQty);
           const stockAvailableInSelectedUnit = baseStockRemaining * currentCartRate;
           alert(t(
-            `Cannot add more. Only ${stockAvailableInSelectedUnit.toFixed(2)} ${existing.unit || product.unit}(s) available in stock!`,
-            `වැඩිපුර එකතු කළ නොහැක. තොගයේ ඇත්තේ ${stockAvailableInSelectedUnit.toFixed(2)} ${existing.unit || product.unit} ක් පමණි!`
+            `Cannot add more. Only ${formatStock(stockAvailableInSelectedUnit, existing.unit || product.unit)} ${existing.unit || product.unit}(s) available in stock!`,
+            `වැඩිපුර එකතු කළ නොහැක. තොගයේ ඇත්තේ ${formatStock(stockAvailableInSelectedUnit, existing.unit || product.unit)} ${existing.unit || product.unit} ක් පමණි!`
           ));
           return prev; 
         }

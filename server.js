@@ -1293,7 +1293,9 @@ function normalizeRuntimeTransaction(payload = {}) {
     // 'CASH' or any other guessed value - if a caller genuinely doesn't know/pass one, the existing
     // column-level schema default applies exactly as it always has (no historical fabrication is
     // introduced by this fix; only the write paths that DO know the real method now record it).
-    payment_method: payload.payment_method || null
+    payment_method: payload.payment_method || payload.paymentMethod || null,
+    flow_type: payload.flow_type || payload.flowType || null,
+    status: payload.status || 'ACTIVE'
   };
 }
 
@@ -1704,22 +1706,10 @@ export async function initializeDatabase() {
     END;
   `);
 
-  await db.exec(`
-    DROP TRIGGER IF EXISTS audit_settings_update;
-    CREATE TRIGGER IF NOT EXISTS audit_settings_update AFTER UPDATE ON system_settings
-    BEGIN
-      INSERT INTO audit_logs (id, user_email, action, details, timestamp, user_name, user_role)
-      VALUES (
-        'al_' || strftime('%s', 'now') || '_' || hex(randomblob(2)),
-        'Automated Background Sync',
-        'SETTINGS_UPDATED',
-        'System settings were updated.',
-        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-        'Automated Background Sync',
-        'SYSTEM'
-      );
-    END;
-  `);
+  // Drop any legacy unguarded audit_settings_update trigger early; it is recreated after
+  // ensureSyncSchema(db) with an explicit column whitelist so background sync status updates
+  // (last_counter_sync_timestamp, counter_pending_count, counter_sync_status, etc.) do not spam audit_logs.
+  try { await db.exec('DROP TRIGGER IF EXISTS audit_settings_update;'); } catch (_) { }
 
   await db.exec(`
     DROP TRIGGER IF EXISTS audit_suppliers_update;
@@ -2361,143 +2351,146 @@ export async function initializeDatabase() {
     `);
   } catch (e) { }
 
-  // Change Tracking Triggers for Offline-First Replication
+  // Change Tracking Triggers for Offline-First Replication (local SQLite only; Turso must never hold trg_sync_*)
   // DROP+CREATE (not just "IF NOT EXISTS") because these triggers already exist in every database
   // that ran the prior version of this code - including production Turso, since this same startup
   // routine runs there too - so a plain "CREATE IF NOT EXISTS" would silently keep the old,
   // unguarded definition forever. The WHEN clause is the actual fix: see sync_pull_marker above.
   try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_sales_insert'); } catch (_) { }
-  try {
-    await db.exec(`
-      CREATE TRIGGER trg_sync_sales_insert AFTER INSERT ON sales
-      WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
-      BEGIN
-        INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
-        VALUES (
-          'sq_sales_' || NEW.id,
-          'sales',
-          NEW.id,
-          'INSERT',
-          json_object('id', NEW.id, 'invoice_no', NEW.invoice_no, 'customer_id', NEW.customer_id, 'customer_name', NEW.customer_name, 'items', NEW.items, 'subtotal', NEW.subtotal, 'discount', NEW.discount, 'tax', NEW.tax, 'total_amount', NEW.total_amount, 'status', NEW.status, 'user_id', NEW.user_id, 'payment_method', NEW.payment_method, 'created_at', NEW.created_at, 'client_tx_id', NEW.client_tx_id),
-          'PENDING',
-          strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        );
-      END;
-    `);
-  } catch (_) { }
-
   try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_sales_returns_insert'); } catch (_) { }
-  try {
-    await db.exec(`
-      CREATE TRIGGER trg_sync_sales_returns_insert AFTER INSERT ON sales_returns
-      WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
-      BEGIN
-        INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
-        VALUES (
-          'sq_sales_returns_' || NEW.id,
-          'sales_returns',
-          NEW.id,
-          'INSERT',
-          json_object('id', NEW.id, 'return_no', NEW.return_no, 'invoice_no', NEW.invoice_no, 'customer_name', NEW.customer_name, 'return_amount', NEW.return_amount, 'total_refunded', NEW.total_refunded, 'status', NEW.status, 'created_at', NEW.created_at),
-          'PENDING',
-          strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        );
-      END;
-    `);
-  } catch (_) { }
-
   try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_credit_payments_insert'); } catch (_) { }
-  try {
-    await db.exec(`
-      CREATE TRIGGER trg_sync_credit_payments_insert AFTER INSERT ON credit_payments
-      WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
-      BEGIN
-        INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
-        VALUES (
-          'sq_credit_payments_' || NEW.id,
-          'credit_payments',
-          NEW.id,
-          'INSERT',
-          json_object(
-            'id', NEW.id,
-            'sale_id', NEW.sale_id,
-            'invoice_no', NEW.invoice_no,
-            'customer_id', NEW.customer_id,
-            'customer_name', NEW.customer_name,
-            'amount_paid', NEW.amount_paid,
-            'remaining_balance', NEW.remaining_balance,
-            'payment_method', NEW.payment_method,
-            'payment_date', NEW.payment_date,
-            'recorded_by', NEW.recorded_by,
-            'notes', NEW.notes,
-            'created_at', NEW.created_at
-          ),
-          'PENDING',
-          strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        );
-      END;
-    `);
-  } catch (_) { }
-
   try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_stock_adj_insert'); } catch (_) { }
-  try {
-    await db.exec(`
-      CREATE TRIGGER trg_sync_stock_adj_insert AFTER INSERT ON stock_adjustments
-      WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
-      BEGIN
-        INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
-        VALUES (
-          'sq_stock_adj_' || NEW.id,
-          'stock_adjustments',
-          NEW.id,
-          'INSERT',
-          json_object('id', NEW.id, 'product_id', NEW.product_id, 'product_name', NEW.product_name, 'old_qty', NEW.old_qty, 'new_qty', NEW.new_qty, 'reason', NEW.reason, 'type', NEW.type, 'user_email', NEW.user_email, 'branch_id', NEW.branch_id, 'station_id', NEW.station_id, 'created_at', NEW.created_at),
-          'PENDING',
-          strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        );
-      END;
-    `);
-  } catch (_) { }
-
   try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_cheque_reg_insert'); } catch (_) { }
-  try {
-    await db.exec(`
-      CREATE TRIGGER trg_sync_cheque_reg_insert AFTER INSERT ON cheque_registry
-      WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
-      BEGIN
-        INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
-        VALUES (
-          'sq_cheque_reg_' || NEW.id,
-          'cheque_registry',
-          NEW.id,
-          'INSERT',
-          json_object('id', NEW.id, 'direction', NEW.direction, 'cheque_type', NEW.cheque_type, 'cheque_number', NEW.cheque_number, 'bank_name', NEW.bank_name, 'branch', NEW.branch, 'cheque_date', NEW.cheque_date, 'amount', NEW.amount, 'party_id', NEW.party_id, 'party_name', NEW.party_name, 'reference_type', NEW.reference_type, 'reference_id', NEW.reference_id, 'status', NEW.status, 'notes', NEW.notes, 'cleared_at', NEW.cleared_at, 'cleared_date', NEW.cleared_date, 'created_by', NEW.created_by, 'processed_by', NEW.processed_by, 'created_at', NEW.created_at),
-          'PENDING',
-          strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        );
-      END;
-    `);
-  } catch (_) { }
-
   try { await db.exec('DROP TRIGGER IF EXISTS trg_sync_cheque_reg_update'); } catch (_) { }
-  try {
-    await db.exec(`
-      CREATE TRIGGER trg_sync_cheque_reg_update AFTER UPDATE ON cheque_registry
-      WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
-      BEGIN
-        INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
-        VALUES (
-          'sq_cheque_reg_upd_' || NEW.id,
-          'cheque_registry',
-          NEW.id,
-          'UPDATE',
-          json_object('id', NEW.id, 'direction', NEW.direction, 'cheque_type', NEW.cheque_type, 'cheque_number', NEW.cheque_number, 'bank_name', NEW.bank_name, 'branch', NEW.branch, 'cheque_date', NEW.cheque_date, 'amount', NEW.amount, 'party_id', NEW.party_id, 'party_name', NEW.party_name, 'reference_type', NEW.reference_type, 'reference_id', NEW.reference_id, 'status', NEW.status, 'notes', NEW.notes, 'cleared_at', NEW.cleared_at, 'cleared_date', NEW.cleared_date, 'created_by', NEW.created_by, 'processed_by', NEW.processed_by, 'updated_at', NEW.updated_at, 'created_at', NEW.created_at),
-          'PENDING',
-          strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        );
-      END;
-    `);
-  } catch (_) { }
+
+  if (resolveEngineMode() !== 'turso') {
+    try {
+      await db.exec(`
+        CREATE TRIGGER trg_sync_sales_insert AFTER INSERT ON sales
+        WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
+        BEGIN
+          INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
+          VALUES (
+            'sq_sales_' || NEW.id,
+            'sales',
+            NEW.id,
+            'INSERT',
+            json_object('id', NEW.id, 'invoice_no', NEW.invoice_no, 'customer_id', NEW.customer_id, 'customer_name', NEW.customer_name, 'items', NEW.items, 'subtotal', NEW.subtotal, 'discount', NEW.discount, 'tax', NEW.tax, 'total_amount', NEW.total_amount, 'status', NEW.status, 'user_id', NEW.user_id, 'payment_method', NEW.payment_method, 'created_at', NEW.created_at, 'client_tx_id', NEW.client_tx_id),
+            'PENDING',
+            strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          );
+        END;
+      `);
+    } catch (_) { }
+
+    try {
+      await db.exec(`
+        CREATE TRIGGER trg_sync_sales_returns_insert AFTER INSERT ON sales_returns
+        WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
+        BEGIN
+          INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
+          VALUES (
+            'sq_sales_returns_' || NEW.id,
+            'sales_returns',
+            NEW.id,
+            'INSERT',
+            json_object('id', NEW.id, 'return_no', NEW.return_no, 'invoice_no', NEW.invoice_no, 'customer_name', NEW.customer_name, 'return_amount', NEW.return_amount, 'total_refunded', NEW.total_refunded, 'status', NEW.status, 'created_at', NEW.created_at),
+            'PENDING',
+            strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          );
+        END;
+      `);
+    } catch (_) { }
+
+    try {
+      await db.exec(`
+        CREATE TRIGGER trg_sync_credit_payments_insert AFTER INSERT ON credit_payments
+        WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
+        BEGIN
+          INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
+          VALUES (
+            'sq_credit_payments_' || NEW.id,
+            'credit_payments',
+            NEW.id,
+            'INSERT',
+            json_object(
+              'id', NEW.id,
+              'sale_id', NEW.sale_id,
+              'invoice_no', NEW.invoice_no,
+              'customer_id', NEW.customer_id,
+              'customer_name', NEW.customer_name,
+              'amount_paid', NEW.amount_paid,
+              'remaining_balance', NEW.remaining_balance,
+              'payment_method', NEW.payment_method,
+              'payment_date', NEW.payment_date,
+              'recorded_by', NEW.recorded_by,
+              'notes', NEW.notes,
+              'created_at', NEW.created_at
+            ),
+            'PENDING',
+            strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          );
+        END;
+      `);
+    } catch (_) { }
+
+    try {
+      await db.exec(`
+        CREATE TRIGGER trg_sync_stock_adj_insert AFTER INSERT ON stock_adjustments
+        WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
+        BEGIN
+          INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
+          VALUES (
+            'sq_stock_adj_' || NEW.id,
+            'stock_adjustments',
+            NEW.id,
+            'INSERT',
+            json_object('id', NEW.id, 'product_id', NEW.product_id, 'product_name', NEW.product_name, 'old_qty', NEW.old_qty, 'new_qty', NEW.new_qty, 'reason', NEW.reason, 'type', NEW.type, 'user_email', NEW.user_email, 'branch_id', NEW.branch_id, 'station_id', NEW.station_id, 'created_at', NEW.created_at),
+            'PENDING',
+            strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          );
+        END;
+      `);
+    } catch (_) { }
+
+    try {
+      await db.exec(`
+        CREATE TRIGGER trg_sync_cheque_reg_insert AFTER INSERT ON cheque_registry
+        WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
+        BEGIN
+          INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
+          VALUES (
+            'sq_cheque_reg_' || NEW.id,
+            'cheque_registry',
+            NEW.id,
+            'INSERT',
+            json_object('id', NEW.id, 'direction', NEW.direction, 'cheque_type', NEW.cheque_type, 'cheque_number', NEW.cheque_number, 'bank_name', NEW.bank_name, 'branch', NEW.branch, 'cheque_date', NEW.cheque_date, 'amount', NEW.amount, 'party_id', NEW.party_id, 'party_name', NEW.party_name, 'reference_type', NEW.reference_type, 'reference_id', NEW.reference_id, 'status', NEW.status, 'notes', NEW.notes, 'cleared_at', NEW.cleared_at, 'cleared_date', NEW.cleared_date, 'created_by', NEW.created_by, 'processed_by', NEW.processed_by, 'created_at', NEW.created_at),
+            'PENDING',
+            strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          );
+        END;
+      `);
+    } catch (_) { }
+
+    try {
+      await db.exec(`
+        CREATE TRIGGER trg_sync_cheque_reg_update AFTER UPDATE ON cheque_registry
+        WHEN NOT EXISTS (SELECT 1 FROM sync_pull_marker)
+        BEGIN
+          INSERT OR REPLACE INTO sync_queue (id, table_name, record_id, action, payload, status, created_at)
+          VALUES (
+            'sq_cheque_reg_upd_' || NEW.id,
+            'cheque_registry',
+            NEW.id,
+            'UPDATE',
+            json_object('id', NEW.id, 'direction', NEW.direction, 'cheque_type', NEW.cheque_type, 'cheque_number', NEW.cheque_number, 'bank_name', NEW.bank_name, 'branch', NEW.branch, 'cheque_date', NEW.cheque_date, 'amount', NEW.amount, 'party_id', NEW.party_id, 'party_name', NEW.party_name, 'reference_type', NEW.reference_type, 'reference_id', NEW.reference_id, 'status', NEW.status, 'notes', NEW.notes, 'cleared_at', NEW.cleared_at, 'cleared_date', NEW.cleared_date, 'created_by', NEW.created_by, 'processed_by', NEW.processed_by, 'updated_at', NEW.updated_at, 'created_at', NEW.created_at),
+            'PENDING',
+            strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          );
+        END;
+      `);
+    } catch (_) { }
+  }
 
   try { await db.exec("ALTER TABLE credit_notes ADD COLUMN credit_note_no TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE credit_notes ADD COLUMN code TEXT"); } catch (e) { }
@@ -2554,6 +2547,44 @@ export async function initializeDatabase() {
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN payment_method TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN shipping_cost REAL DEFAULT 0"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN delivery_fee REAL DEFAULT 0"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN branch_id TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN station_id TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE purchase_orders ADD COLUMN supplier_id TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE profiles ADD COLUMN full_name TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE suppliers ADD COLUMN contact_person TEXT"); } catch (e) { }
+  try {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS customer_transactions (
+        id TEXT PRIMARY KEY,
+        customer_id TEXT,
+        type TEXT,
+        amount REAL,
+        reference TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+  } catch (e) { }
+  try { await db.exec("ALTER TABLE customer_transactions ADD COLUMN customer_id TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE customer_transactions ADD COLUMN type TEXT"); } catch (e) { }
+  try { await db.exec("ALTER TABLE customer_transactions ADD COLUMN amount REAL"); } catch (e) { }
+  try { await db.exec("ALTER TABLE customer_transactions ADD COLUMN reference TEXT"); } catch (e) { }
+  try {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS scanner_signals (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL DEFAULT '*',
+        barcode TEXT NOT NULL DEFAULT '',
+        format TEXT DEFAULT 'AUTO',
+        scanner_name TEXT DEFAULT 'Mobile Scanner',
+        timestamp INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+  } catch (e) { }
+  try { await db.exec("ALTER TABLE scanner_signals ADD COLUMN session_id TEXT DEFAULT '*'"); } catch (e) { }
+  try { await db.exec("ALTER TABLE scanner_signals ADD COLUMN format TEXT DEFAULT 'AUTO'"); } catch (e) { }
+  try { await db.exec("ALTER TABLE scanner_signals ADD COLUMN scanner_name TEXT DEFAULT 'Mobile Scanner'"); } catch (e) { }
+  try { await db.exec("ALTER TABLE scanner_signals ADD COLUMN timestamp INTEGER DEFAULT 0"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN status TEXT DEFAULT 'ACTIVE'"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN void_reason TEXT"); } catch (e) { }
   try { await db.exec("ALTER TABLE purchase_returns ADD COLUMN updated_at DATETIME"); } catch (e) { }
@@ -2704,6 +2735,36 @@ export async function initializeDatabase() {
 
   // Pre-ensure sync schema prior to accepting any requests or business transactions
   await ensureSyncSchema(db);
+
+  // Guard audit_settings_update so background sync status updates never emit SETTINGS_UPDATED spam
+  try {
+    await db.exec(`
+      DROP TRIGGER IF EXISTS audit_settings_update;
+      CREATE TRIGGER IF NOT EXISTS audit_settings_update
+      AFTER UPDATE OF
+        shop_name, address, phone, email, currency, tax_rate,
+        backup_email, backup_enabled, backup_interval_hours,
+        logo_path, printer_settings, branch_settings,
+        next_invoice_number, return_passkey, void_passkey,
+        smtp_user, smtp_pass, smtp_host, smtp_port, smtp_destination,
+        gmail_user, gmail_pass, auto_backup_enabled
+      ON system_settings
+      BEGIN
+        INSERT INTO audit_logs (id, user_email, action, details, timestamp, user_name, user_role)
+        VALUES (
+          'al_' || strftime('%s', 'now') || '_' || hex(randomblob(2)),
+          'Automated Background Sync',
+          'SETTINGS_UPDATED',
+          'System settings were updated.',
+          strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+          'Automated Background Sync',
+          'SYSTEM'
+        );
+      END;
+    `);
+  } catch (trigErr) {
+    console.warn('[Startup] audit_settings_update trigger notice:', trigErr.message);
+  }
 
   console.log('✅ SQLite database has been sanitized, created required tables, and seeded initial settings.');
 }
@@ -9294,9 +9355,12 @@ app.post(['/api/transactions', '/api/finance/ledger', '/api/cash-book', '/api/ca
   const t = req.body;
   try {
     const transaction = normalizeRuntimeTransaction(t);
+    const resolvedPaymentMethod = transaction.payment_method || 'CASH';
+    const resolvedFlowType = transaction.flow_type || (transaction.type === 'expense' ? 'EXPENSE' : 'INCOME');
+    const resolvedStatus = transaction.status || 'ACTIVE';
     await db.run(
-      'INSERT INTO transactions (id, type, category, description, amount, date, reference, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [transaction.id, transaction.type, transaction.category, transaction.description, transaction.amount, transaction.date, transaction.reference, transaction.user_id, transaction.created_at]
+      'INSERT INTO transactions (id, type, category, description, amount, date, reference, payment_method, flow_type, status, user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [transaction.id, transaction.type, transaction.category, transaction.description, transaction.amount, transaction.date, transaction.reference, resolvedPaymentMethod, resolvedFlowType, resolvedStatus, transaction.user_id, transaction.created_at]
     );
     await enqueueSync(db, 'transactions', transaction.id, 'INSERT');
     await enqueueSync(db, 'cash_book', transaction.id, 'INSERT');
@@ -9616,13 +9680,18 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
           if (cheque.party_id) {
             await db.run(
               'UPDATE customers SET credit_balance = MAX(0, COALESCE(credit_balance, 0) - ?), current_credit = MAX(0, COALESCE(current_credit, 0) - ?) WHERE id = ?',
-              [cheque.amount, cheque.party_id]
+              [cheque.amount, cheque.amount, cheque.party_id]
             );
+            await enqueueSync(db, 'customers', cheque.party_id, 'UPDATE');
           } else if (cheque.party_name) {
             await db.run(
               'UPDATE customers SET credit_balance = MAX(0, COALESCE(credit_balance, 0) - ?), current_credit = MAX(0, COALESCE(current_credit, 0) - ?) WHERE name = ?',
-              [cheque.amount, cheque.party_name]
+              [cheque.amount, cheque.amount, cheque.party_name]
             );
+            const matchedCust = await db.get('SELECT id FROM customers WHERE name = ?', [cheque.party_name]);
+            if (matchedCust && matchedCust.id) {
+              await enqueueSync(db, 'customers', matchedCust.id, 'UPDATE');
+            }
           }
 
           // 3. Settle linked sale invoice or distribute across customer's pending credit sales
@@ -9649,6 +9718,7 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
                 'UPDATE sales SET payment_received = ?, status = ? WHERE id = ?',
                 [newReceived, newStatus, linkedSale.id]
               );
+              await enqueueSync(db, 'sales', linkedSale.id, 'UPDATE');
 
               const cpId = 'cp_chq_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
               await db.run(
@@ -9673,6 +9743,7 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
                   new Date().toISOString()
                 ]
               );
+              await enqueueSync(db, 'credit_payments', cpId, 'INSERT');
 
               remainingToSettle -= settleAmt;
             }
@@ -9702,6 +9773,7 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
                   'UPDATE sales SET payment_received = ?, status = ? WHERE id = ?',
                   [newReceived, newStatus, s.id]
                 );
+                await enqueueSync(db, 'sales', s.id, 'UPDATE');
 
                 const cpId = 'cp_chq_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
                 await db.run(
@@ -9726,6 +9798,7 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
                     new Date().toISOString()
                   ]
                 );
+                await enqueueSync(db, 'credit_payments', cpId, 'INSERT');
 
                 remainingToSettle -= settleAmt;
               }
@@ -9750,6 +9823,7 @@ app.patch('/api/cheques/:id/status', async (req, res) => {
             new Date().toISOString()
           ]
         );
+        await enqueueSync(db, 'transactions', txId, 'INSERT');
       }
     }
 

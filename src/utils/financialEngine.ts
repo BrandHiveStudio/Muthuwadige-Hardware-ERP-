@@ -30,6 +30,7 @@ export interface PaymentBreakdownResult {
   settledCash: number;
   settledCard: number;
   settledBank: number;
+  exchangeCashInflows: number;
   totalCashCollected: number;
   totalCardCollected: number;
   totalBankCollected: number;
@@ -39,6 +40,95 @@ export interface PaymentBreakdownResult {
   customerCreditOutstanding: number;
   totalRevenueCollected: number;
   totalPaymentMethods: number;
+}
+
+export interface ReturnCashFlow {
+  cashInflow: number;
+  cardInflow: number;
+  bankInflow: number;
+  cashRefundOutflow: number;
+}
+
+/**
+ * Computes physical cash/card/bank inflows and net refund outflows for a single sales_returns row
+ * without double-deducting exchange return credits applied toward replacement items.
+ */
+export function computeReturnCashFlow(r: any): ReturnCashFlow {
+  if (!r) return { cashInflow: 0, cardInflow: 0, bankInflow: 0, cashRefundOutflow: 0 };
+
+  const type = (r.return_type || r.returnType || r.returnMethod || r.return_method || r.type || '')
+    .toString()
+    .toLowerCase()
+    .trim();
+  const diffMode = (
+    r.differencePaymentMethod ??
+    r.difference_payment_method ??
+    r.settlementMode ??
+    r.settlement_mode ??
+    ''
+  )
+    .toString()
+    .toLowerCase()
+    .trim();
+  const isCreditFlag = r.isCredit === true || r.is_credit === true || r.is_credit === 1;
+  const isCreditDebtMode =
+    diffMode === 'customer credit debt' ||
+    diffMode === 'credit debt' ||
+    diffMode === 'credit' ||
+    diffMode === 'credit adjustment' ||
+    diffMode === 'credit note';
+
+  if (type === 'cash refund' || type === 'cash' || type === 'cash_refund') {
+    if (isCreditFlag || isCreditDebtMode) {
+      return { cashInflow: 0, cardInflow: 0, bankInflow: 0, cashRefundOutflow: 0 };
+    }
+    const amt = Number(
+      r.refund_amount ?? r.refundAmount ?? r.total_refunded ?? r.totalRefunded ?? r.return_amount ?? r.returnAmount ?? 0
+    );
+    return { cashInflow: 0, cardInflow: 0, bankInflow: 0, cashRefundOutflow: Math.max(0, amt) };
+  }
+
+  if (type === 'exchange') {
+    const paidAmt = Number(r.customer_paid ?? r.customerPaid ?? 0);
+    const changeGiven = Number(r.change_given ?? r.changeGiven ?? 0);
+    const netPaid = !isCreditDebtMode ? Math.max(0, paidAmt - changeGiven) : 0;
+
+    let cashInflow = 0;
+    let cardInflow = 0;
+    let bankInflow = 0;
+    if (netPaid > 0) {
+      if (diffMode.includes('card')) cardInflow = netPaid;
+      else if (diffMode.includes('bank')) bankInflow = netPaid;
+      else cashInflow = netPaid;
+    }
+
+    let cashRefundOutflow = 0;
+    if (!isCreditFlag && !isCreditDebtMode) {
+      const hasExplicitRefundField =
+        (r.total_refunded !== undefined && r.total_refunded !== null) ||
+        (r.totalRefunded !== undefined && r.totalRefunded !== null) ||
+        (r.refund_amount !== undefined && r.refund_amount !== null) ||
+        (r.refundAmount !== undefined && r.refundAmount !== null);
+      const explicitRefund = Number(
+        r.total_refunded ?? r.totalRefunded ?? r.refund_amount ?? r.refundAmount ?? 0
+      );
+      const balAmt = Number(r.balance_amount ?? r.balanceAmount ?? 0);
+      const retAmt = Number(r.return_amount ?? r.returnAmount ?? 0);
+      const exAmt = Number(r.exchange_amount ?? r.exchangeAmount ?? 0);
+
+      if (explicitRefund > 0) {
+        cashRefundOutflow = explicitRefund;
+      } else if (balAmt < 0) {
+        cashRefundOutflow = Math.abs(balAmt);
+      } else if (!hasExplicitRefundField && retAmt > exAmt) {
+        cashRefundOutflow = retAmt - exAmt;
+      }
+    }
+
+    return { cashInflow, cardInflow, bankInflow, cashRefundOutflow };
+  }
+
+  return { cashInflow: 0, cardInflow: 0, bankInflow: 0, cashRefundOutflow: 0 };
 }
 
 /**
@@ -338,28 +428,23 @@ export function computePaymentBreakdown(params: {
     }
   });
 
-  // Exchange Return Adjustments to cash
-  const cashRefundsTotal = activeReturns.reduce((sum: number, r: any) => {
-    const type = (r.return_type || r.returnType || r.returnMethod || r.return_method || r.type || '').toString().toLowerCase().trim();
-    if (type === 'cash refund' || type === 'cash' || type === 'cash_refund') {
-      return sum + Number(r.refund_amount || r.total_refunded || r.return_amount || 0);
-    }
-    return sum;
-  }, 0);
+  // Exchange & Return Cash/Card/Bank Adjustments via unified computeReturnCashFlow helper
+  let cashRefundsTotal = 0;
+  let exchangeCashInflowsTotal = 0;
+  let exchangeCardInflowsTotal = 0;
+  let exchangeBankInflowsTotal = 0;
 
-  const exchangeCashInflowsTotal = activeReturns.reduce((sum: number, r: any) => {
-    const type = (r.return_type || r.returnType || r.returnMethod || r.return_method || r.type || '').toString().toLowerCase().trim();
-    if (type === 'exchange') {
-      const paidAmt = Number(r.customer_paid || 0);
-      const changeGiven = Number(r.change_given || 0);
-      return sum + Math.max(0, paidAmt - changeGiven);
-    }
-    return sum;
-  }, 0);
+  for (const r of activeReturns) {
+    const flow = computeReturnCashFlow(r);
+    cashRefundsTotal += flow.cashRefundOutflow;
+    exchangeCashInflowsTotal += flow.cashInflow;
+    exchangeCardInflowsTotal += flow.cardInflow;
+    exchangeBankInflowsTotal += flow.bankInflow;
+  }
 
   const totalCashCollected = Math.max(0, directCash + settledCash + exchangeCashInflowsTotal - cashRefundsTotal);
-  const totalCardCollected = directCard + settledCard;
-  const totalBankCollected = directBank + settledBank;
+  const totalCardCollected = directCard + settledCard + exchangeCardInflowsTotal;
+  const totalBankCollected = directBank + settledBank + exchangeBankInflowsTotal;
 
   // Cheque Registry Buckets
   const clearedCheques = validCheques.filter((c: any) => c.direction === 'INWARD' && c.status === 'CLEARED');
@@ -396,6 +481,7 @@ export function computePaymentBreakdown(params: {
     settledCash: Math.round(settledCash * 100) / 100,
     settledCard: Math.round(settledCard * 100) / 100,
     settledBank: Math.round(settledBank * 100) / 100,
+    exchangeCashInflows: Math.round(exchangeCashInflowsTotal * 100) / 100,
     totalCashCollected: Math.round(totalCashCollected * 100) / 100,
     totalCardCollected: Math.round(totalCardCollected * 100) / 100,
     totalBankCollected: Math.round(totalBankCollected * 100) / 100,

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { computeUnifiedMetrics } from '../unifiedMetrics';
 import { getItemUnitCost } from '../accounting';
+import { formatStock } from '../formatters';
 
 describe('Muthuwadige Hardware - Unified POS & Inventory Scenarios', () => {
   const products = [
@@ -210,5 +211,159 @@ describe('Muthuwadige Hardware - Unified POS & Inventory Scenarios', () => {
     expect(metrics.totalOrders).toBe(2);
     expect(metrics.paidOrders).toBe(1);
     expect(metrics.cashDrawableBalance).toBeCloseTo(496, 2);
+  });
+
+  it('includes cash exchange top-ups without double-deducting return credit on cashDrawableBalance and totalRevenueCollected', () => {
+    const sandSk129 = {
+      id: 'p_1795707526939',
+      sku: 'SK129',
+      name: 'Sand',
+      category: 'MEASURING',
+      unit: 'Cube',
+      price: 10000,
+      cost_price: 5000,
+      stock: 1.999,
+      measure_details: JSON.stringify({
+        conversionRate: 1000,
+        conversions: [
+          { unit: 'Bucket', kgVal: 250, price: 60 },
+          { unit: 'Shovel', kgVal: 1000, price: 15 },
+          { unit: 'Thachi', kgVal: 250, price: 60 }
+        ]
+      })
+    };
+
+    const metrics = computeUnifiedMetrics({
+      sales: [
+        {
+          id: 's_1',
+          invoice_no: 'POS1-INV-00001',
+          payment_method: 'Cash',
+          status: 'Partially Returned',
+          subtotal: 750,
+          discount: 0,
+          total_amount: 750,
+          payment_received: 0,
+          created_at: '2026-11-26T15:47:23.359Z',
+          items: [{ productId: 'p-drill', qty: 3, price: 250, costPrice: 150, total: 750 }]
+        },
+        {
+          id: 's_2',
+          invoice_no: 'POS1-INV-00002',
+          payment_method: 'Cash',
+          status: 'Partially Returned',
+          subtotal: 300,
+          discount: 0,
+          total_amount: 300,
+          payment_received: 0,
+          created_at: '2026-11-26T15:50:32.035Z',
+          items: [{ productId: 'p-paint', qty: 3, price: 100, costPrice: 80, total: 300 }]
+        }
+      ],
+      salesReturns: [
+        {
+          id: 'sr_1',
+          return_no: 'RET-173486',
+          invoice_no: 'POS1-INV-00001',
+          return_method: 'Cash Refund',
+          return_amount: 250,
+          exchange_amount: 0,
+          balance_amount: -250,
+          total_refunded: 250,
+          customer_paid: 0,
+          change_given: 0,
+          difference_payment_method: 'Cash',
+          is_credit: 0,
+          created_at: '2026-11-26T15:49:33Z',
+          returned_items: [{ productId: 'p-drill', qty: 1, price: 250, costPrice: 150, total: 250 }],
+          exchange_items: []
+        },
+        {
+          id: 'sr_2',
+          return_no: 'RET-435324',
+          invoice_no: 'POS1-INV-00002',
+          return_method: 'Exchange',
+          return_amount: 100,
+          exchange_amount: 215,
+          balance_amount: 115,
+          total_refunded: 0,
+          customer_paid: 115,
+          change_given: 0,
+          difference_payment_method: 'Cash',
+          is_credit: 0,
+          created_at: '2026-11-26T15:53:55Z',
+          returned_items: [{ productId: 'p-paint', qty: 1, price: 100, costPrice: 80, total: 100 }],
+          exchange_items: [
+            { productId: 'p-pipe', qty: 1, price: 50, costPrice: 20, total: 50 },
+            { productId: sandSk129.id, unit: 'Shovel', conversionRate: 1000, qty: 1, price: 15, total: 15 },
+            { productId: 'p-hammer', qty: 1, price: 150, costPrice: 80, total: 150 }
+          ]
+        }
+      ],
+      creditPayments: [],
+      transactions: [],
+      products: [...products, sandSk129],
+      fromDate: '2026-11-26',
+      toDate: '2026-11-26'
+    });
+
+    // Cash collected: 750 + 300 + 115 (exchange top-up) - 250 (RET-173486 refund) = 915.00
+    expect(metrics.cashBookBalance).toBeCloseTo(1165, 2);
+    expect(metrics.cashDrawableBalance).toBeCloseTo(915, 2);
+    expect(metrics.totalRevenueCollected).toBeCloseTo(915, 2);
+    expect(metrics.grossSalesRevenue).toBeCloseTo(1265, 2);
+    expect(metrics.netSalesRevenue).toBeCloseTo(915, 2);
+
+    // Also verify Exchange where returned value exceeds replacement value only deducts net refund
+    const refundExchangeMetrics = computeUnifiedMetrics({
+      sales: [
+        {
+          id: 's_cash',
+          invoice_no: 'POS1-INV-00010',
+          payment_method: 'Cash',
+          status: 'PAID',
+          subtotal: 300,
+          discount: 0,
+          total_amount: 300,
+          created_at: '2026-11-26T10:00:00Z',
+          items: [{ productId: 'p-paint', qty: 3, price: 100, total: 300 }]
+        }
+      ],
+      salesReturns: [
+        {
+          id: 'sr_down_exch',
+          return_no: 'RET-999001',
+          invoice_no: 'POS1-INV-00010',
+          return_method: 'Exchange',
+          return_amount: 200,
+          exchange_amount: 50,
+          balance_amount: -150,
+          total_refunded: 150,
+          customer_paid: 0,
+          change_given: 0,
+          difference_payment_method: 'Cash',
+          is_credit: 0,
+          created_at: '2026-11-26T11:00:00Z',
+          returned_items: [{ productId: 'p-paint', qty: 2, price: 100, total: 200 }],
+          exchange_items: [{ productId: 'p-pipe', qty: 1, price: 50, total: 50 }]
+        }
+      ],
+      creditPayments: [],
+      transactions: [],
+      products,
+      fromDate: '2026-11-26',
+      toDate: '2026-11-26'
+    });
+    expect(refundExchangeMetrics.cashDrawableBalance).toBeCloseTo(150, 2);
+    expect(refundExchangeMetrics.totalRevenueCollected).toBeCloseTo(150, 2);
+  });
+
+  it('preserves sub-cube fractional stock precision (e.g. 1.999 Cube after 1 Shovel deduction)', () => {
+    expect(formatStock(1.999, 'Cube')).toBe('1.999');
+    expect(formatStock(2 - 0.001, 'Cube')).toBe('1.999');
+    expect(formatStock(1.996, 'CUBE')).toBe('1.996');
+    expect(formatStock(2, 'Cube')).toBe('2.00');
+    expect(formatStock(1.999, 'kg')).toBe('1.999');
+    expect(formatStock(5, 'pcs')).toBe('5');
   });
 });

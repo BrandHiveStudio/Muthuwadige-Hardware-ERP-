@@ -2,10 +2,10 @@ import {
   toSriLankaDateStr,
   computeFinancialSummary,
   computePaymentBreakdown,
+  computeReturnCashFlow,
   calculateSaleAccounting,
   isCreditSaleRecord
 } from './accounting';
-import { splitReturnSettlements } from '../services/returnService';
 
 export interface UnifiedMetricsInput {
   sales: any[];
@@ -66,11 +66,6 @@ const isActiveTransaction = (t: any): boolean => {
   const st = String(t.status || '').toUpperCase().trim();
   return st !== 'VOIDED' && st !== 'CANCELLED';
 };
-
-const getReturnType = (r: any): string =>
-  String(r?.return_type || r?.returnType || r?.returnMethod || r?.return_method || r?.type || '')
-    .toLowerCase()
-    .trim();
 
 export function computeUnifiedMetrics(input: UnifiedMetricsInput): UnifiedMetricsOutput {
   const {
@@ -184,22 +179,10 @@ export function computeUnifiedMetrics(input: UnifiedMetricsInput): UnifiedMetric
     toDate
   });
 
-  const cashRefundsOutflow = periodReturns.reduce((sum, r) => {
-    const isCredit = r.isCredit === true || r.is_credit === true || r.is_credit === 1;
-    if (isCredit) return sum;
-    const type = getReturnType(r);
-    if (type === 'cash refund' || type === 'cash' || type === 'cash_refund') {
-      const amt = Number(
-        r.refund_amount ?? r.refundAmount ?? r.total_refunded ?? r.totalRefunded ?? r.return_amount ?? r.returnAmount ?? 0
-      );
-      return sum + Math.max(0, amt);
-    }
-    if (type === 'exchange') {
-      const { cashBankRefundOutflow } = splitReturnSettlements([r]);
-      return sum + Math.max(0, Number(cashBankRefundOutflow || 0));
-    }
-    return sum;
-  }, 0);
+  const cashRefundsOutflow = periodReturns.reduce(
+    (sum, r) => sum + computeReturnCashFlow(r).cashRefundOutflow,
+    0
+  );
 
   const cashExpensesOutflow = periodTransactions.reduce((sum, t) => {
     const flow = String(t.flow_type || t.type || '').toUpperCase().trim();
@@ -212,7 +195,9 @@ export function computeUnifiedMetrics(input: UnifiedMetricsInput): UnifiedMetric
   }, 0);
 
   const cashBookBalance = round2(
-    (paymentBreakdown.directCash || 0) + (paymentBreakdown.settledCash || 0)
+    (paymentBreakdown.directCash || 0) +
+      (paymentBreakdown.settledCash || 0) +
+      (paymentBreakdown.exchangeCashInflows || 0)
   );
   const cashDrawableBalance = round2(
     Math.max(0, cashBookBalance - cashRefundsOutflow - cashExpensesOutflow)

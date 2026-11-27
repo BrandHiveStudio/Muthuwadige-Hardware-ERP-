@@ -1162,7 +1162,7 @@ export function Inventory() {
                                 <div className="text-[8px] text-[#DAA520] font-black mt-1 text-center leading-tight max-w-[125px]">
                                   {conversions.map((c: any, i: number) => (
                                     <div key={i} className="whitespace-nowrap">
-                                      = {(product.stock * c.kgVal).toLocaleString(undefined, { maximumFractionDigits: 2 })} {c.unit}
+                                      = {(Math.round((Number(product.stock || 0) * Number(c.kgVal || 0)) * 10000) / 10000).toLocaleString(undefined, { maximumFractionDigits: 4 })} {c.unit}
                                     </div>
                                   ))}
                                 </div>
@@ -1255,7 +1255,7 @@ export function Inventory() {
             />
             {customConversionsList.length > 0 && (
               <p className="text-[10px] text-[#DAA520] font-black mt-1.5">
-                {t('Equivalent Stock:', 'සමාන තොගය:')} {customConversionsList.map(c => `${((formData.stock || 0) * c.kgVal).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${c.unit}`).join(' / ')}
+                {t('Equivalent Stock:', 'සමාන තොගය:')} {customConversionsList.map(c => `${(Math.round(((formData.stock || 0) * c.kgVal) * 10000) / 10000).toLocaleString(undefined, { maximumFractionDigits: 4 })} ${c.unit}`).join(' / ')}
               </p>
             )}
           </div>
@@ -1489,7 +1489,7 @@ export function Inventory() {
               if (conversions.length > 0) {
                 return (
                   <p className="text-[10px] text-amber-600 font-bold mt-1.5">
-                    (= {conversions.map((c: any) => `${(stockProduct.stock * c.kgVal).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${c.unit}`).join(' / ')})
+                    (= {conversions.map((c: any) => `${(Math.round((Number(stockProduct.stock || 0) * Number(c.kgVal || 0)) * 10000) / 10000).toLocaleString(undefined, { maximumFractionDigits: 4 })} ${c.unit}`).join(' / ')})
                   </p>
                 );
               }
@@ -1523,7 +1523,7 @@ export function Inventory() {
             <label className="block text-[10px] font-black text-gray-400 uppercase mb-1.5 tracking-widest">{t('Quantity', 'ප්‍රමාණය')}</label>
             <input 
               type="number" 
-              min={isDecimalUnit(stockProduct?.unit) ? 0.01 : 1} 
+              min={isDecimalUnit(stockProduct?.unit) ? 0.001 : 1} 
               step={isDecimalUnit(stockProduct?.unit) ? 'any' : '1'} 
               autoFocus 
               value={stockQty === 0 ? '' : stockQty} 
@@ -1545,7 +1545,7 @@ export function Inventory() {
               if (conversions.length > 0 && stockQty > 0) {
                 return (
                   <p className="text-[10px] text-amber-600 font-bold mt-1.5">
-                    {t('Equivalent adjust quantity:', 'පරිවර්තනය වන ප්‍රමාණය:')} {conversions.map((c: any) => `${(stockQty * c.kgVal).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${c.unit}`).join(' / ')}
+                    {t('Equivalent adjust quantity:', 'පරිවර්තනය වන ප්‍රමාණය:')} {conversions.map((c: any) => `${(Math.round((stockQty * Number(c.kgVal || 0)) * 10000) / 10000).toLocaleString(undefined, { maximumFractionDigits: 4 })} ${c.unit}`).join(' / ')}
                   </p>
                 );
               }
