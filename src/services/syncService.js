@@ -127,7 +127,7 @@ async function pushStockAdjustmentAtomically(tursoClient, deltaStmt, insertStmt)
     committed = true;
   } catch (err) {
     if (!committed) {
-      try { await tx.rollback(); } catch (_) {}
+      try { await tx.rollback(); } catch (_) { }
     }
     throw err;
   }
@@ -357,7 +357,7 @@ export async function ensureTursoSchema(tursoClient) {
       "ALTER TABLE cheque_registry ADD COLUMN processed_by TEXT;"
     ];
     for (const c of cols) {
-      try { await tursoClient.execute(c); } catch (_) {}
+      try { await tursoClient.execute(c); } catch (_) { }
     }
 
     // Cloud never pushes upstream to another remote; drop desktop change-tracking triggers on Turso
@@ -371,7 +371,7 @@ export async function ensureTursoSchema(tursoClient) {
       'DROP TRIGGER IF EXISTS trg_sync_cheque_reg_update;'
     ];
     for (const dropSql of cloudTriggersToDrop) {
-      try { await tursoClient.execute(dropSql); } catch (_) {}
+      try { await tursoClient.execute(dropSql); } catch (_) { }
     }
 
     // Prevent 30s counter sync timestamp updates on system_settings from spamming audit_logs
@@ -399,7 +399,7 @@ export async function ensureTursoSchema(tursoClient) {
           );
         END;
       `);
-    } catch (_) {}
+    } catch (_) { }
 
     tursoSchemaEnsured = true;
   } catch (e) {
@@ -415,8 +415,8 @@ const clientInFlightInits = new WeakMap();
 function getDbInfo(db) {
   if (!db) return { client: null, gen: 0 };
   const client = typeof db.getUnderlyingClient === 'function' ? db.getUnderlyingClient() : db;
-  const gen = typeof db.getDbGeneration === 'function' 
-    ? db.getDbGeneration() 
+  const gen = typeof db.getDbGeneration === 'function'
+    ? db.getDbGeneration()
     : (typeof db.__dbGeneration === 'number' ? db.__dbGeneration : (client && typeof client.__dbGeneration === 'number' ? client.__dbGeneration : 0));
   return { client, gen };
 }
@@ -794,7 +794,7 @@ export async function enqueueSync(db, tableName, recordId, action = 'INSERT', pa
       try {
         const row = await db.get(`SELECT * FROM "${tableName}" WHERE id = ?`, [recordId]);
         if (row) jsonStr = JSON.stringify(row);
-      } catch (_) {}
+      } catch (_) { }
     }
 
     await db.run(
@@ -851,346 +851,346 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
              )
            )`
       );
-    } catch (_) {}
+    } catch (_) { }
 
     const pendingItems = await localDb.all(
       "SELECT * FROM sync_queue WHERE status = 'PENDING' AND COALESCE(retry_count, 0) < 5 ORDER BY created_at ASC LIMIT 100"
     );
 
-  if (pendingItems && pendingItems.length > 0) {
-    console.log(`[BackgroundSync] Transmitting ${pendingItems.length} queued record(s) to Turso Cloud...`);
-    const tursoColumnsCache = new Map();
-    const getTursoTableColumns = async (tableName) => {
-      if (tursoColumnsCache.has(tableName)) {
-        return tursoColumnsCache.get(tableName);
-      }
-      try {
-        const info = await executeWithTimeout(tursoClient, `PRAGMA table_info("${tableName}")`, 5000);
-        const colSet = new Set((info?.rows || []).map((c) => c.name).filter(Boolean));
-        tursoColumnsCache.set(tableName, colSet);
-        return colSet;
-      } catch (_) {
-        const emptySet = new Set();
-        tursoColumnsCache.set(tableName, emptySet);
-        return emptySet;
-      }
-    };
-
-    const statements = [];
-    const statementItemMap = [];
-    const deferredProductStatements = [];
-    const stockAdjustmentOperations = [];
-    const productsWithPendingDelta = new Set();
-    const directSuccessfulIds = [];
-
-    for (const item of pendingItems) {
-      if (item.table_name === 'stock_adjustments' && item.action !== 'DELETE') {
-        let saRow = null;
-        try {
-          saRow = typeof item.payload === 'string' ? JSON.parse(item.payload) : item.payload;
-        } catch (_) {}
-        if (!saRow || Object.keys(saRow).length === 0) {
-          try {
-            saRow = await localDb.get('SELECT * FROM stock_adjustments WHERE id = ?', [item.record_id]);
-          } catch (_) {}
+    if (pendingItems && pendingItems.length > 0) {
+      console.log(`[BackgroundSync] Transmitting ${pendingItems.length} queued record(s) to Turso Cloud...`);
+      const tursoColumnsCache = new Map();
+      const getTursoTableColumns = async (tableName) => {
+        if (tursoColumnsCache.has(tableName)) {
+          return tursoColumnsCache.get(tableName);
         }
-        if (saRow && saRow.product_id) {
-          let saDelta = 0;
-          if (saRow.delta !== undefined && saRow.delta !== null) saDelta = Number(saRow.delta);
-          else if (saRow.delta_qty !== undefined && saRow.delta_qty !== null) saDelta = Number(saRow.delta_qty);
-          else if (saRow.new_qty !== undefined && saRow.old_qty !== undefined) saDelta = Number(saRow.new_qty) - Number(saRow.old_qty);
-          if (saDelta !== 0 && !isNaN(saDelta)) {
-            productsWithPendingDelta.add(String(saRow.product_id));
+        try {
+          const info = await executeWithTimeout(tursoClient, `PRAGMA table_info("${tableName}")`, 5000);
+          const colSet = new Set((info?.rows || []).map((c) => c.name).filter(Boolean));
+          tursoColumnsCache.set(tableName, colSet);
+          return colSet;
+        } catch (_) {
+          const emptySet = new Set();
+          tursoColumnsCache.set(tableName, emptySet);
+          return emptySet;
+        }
+      };
+
+      const statements = [];
+      const statementItemMap = [];
+      const deferredProductStatements = [];
+      const stockAdjustmentOperations = [];
+      const productsWithPendingDelta = new Set();
+      const directSuccessfulIds = [];
+
+      for (const item of pendingItems) {
+        if (item.table_name === 'stock_adjustments' && item.action !== 'DELETE') {
+          let saRow = null;
+          try {
+            saRow = typeof item.payload === 'string' ? JSON.parse(item.payload) : item.payload;
+          } catch (_) { }
+          if (!saRow || Object.keys(saRow).length === 0) {
+            try {
+              saRow = await localDb.get('SELECT * FROM stock_adjustments WHERE id = ?', [item.record_id]);
+            } catch (_) { }
+          }
+          if (saRow && saRow.product_id) {
+            let saDelta = 0;
+            if (saRow.delta !== undefined && saRow.delta !== null) saDelta = Number(saRow.delta);
+            else if (saRow.delta_qty !== undefined && saRow.delta_qty !== null) saDelta = Number(saRow.delta_qty);
+            else if (saRow.new_qty !== undefined && saRow.old_qty !== undefined) saDelta = Number(saRow.new_qty) - Number(saRow.old_qty);
+            if (saDelta !== 0 && !isNaN(saDelta)) {
+              productsWithPendingDelta.add(String(saRow.product_id));
+            }
           }
         }
       }
-    }
 
-    for (const item of pendingItems) {
-      let row = null;
-      try {
-        row = typeof item.payload === 'string' ? JSON.parse(item.payload) : item.payload;
-      } catch (_) {}
-
-      if (!row || Object.keys(row).length === 0) {
+      for (const item of pendingItems) {
+        let row = null;
         try {
-          row = await localDb.get(`SELECT * FROM "${item.table_name}" WHERE id = ?`, [item.record_id]);
-        } catch (_) {}
-      }
+          row = typeof item.payload === 'string' ? JSON.parse(item.payload) : item.payload;
+        } catch (_) { }
 
-      // Ensure delivery_fee / transportation_fee parity
-      if (item.table_name === 'sales' && row && typeof row === 'object') {
-        const delFee = Number(
-          row.transportation_fee !== undefined && row.transportation_fee !== null && Number(row.transportation_fee) > 0
-            ? row.transportation_fee
-            : (row.delivery_fee !== undefined && row.delivery_fee !== null ? row.delivery_fee : (row.deliveryFee || 0))
-        );
-        row.transportation_fee = delFee;
-        delete row.delivery_fee;
-        delete row.deliveryFee;
-      }
-
-      // Ensure quotation_items price / unit_price parity
-      if (item.table_name === 'quotation_items' && row && typeof row === 'object') {
-        if (row.unit_price === undefined && row.price !== undefined) {
-          row.unit_price = row.price;
-        } else if (row.price === undefined && row.unit_price !== undefined) {
-          row.price = row.unit_price;
+        if (!row || Object.keys(row).length === 0) {
+          try {
+            row = await localDb.get(`SELECT * FROM "${item.table_name}" WHERE id = ?`, [item.record_id]);
+          } catch (_) { }
         }
-      }
 
-      let targetTable = item.table_name;
-      if (targetTable === 'cash_book') targetTable = 'transactions';
-      if (targetTable === 'cheques') targetTable = 'cheque_registry';
-      if (targetTable === 'purchases') targetTable = 'purchase_orders';
-      if (targetTable === 'purchase_items') targetTable = 'purchase_order_items';
-
-      if (item.action === 'DELETE') {
-        const stmt = {
-          sql: `DELETE FROM "${targetTable}" WHERE id = ?`,
-          args: [item.record_id]
-        };
-        statements.push(stmt);
-        statementItemMap.push({ statement: stmt, itemId: item.id, table: targetTable });
-      } else if (row && typeof row === 'object' && targetTable === 'profiles') {
-        // SECURITY: profiles/authentication credentials must not be blindly overwritten by an
-        // incidental sync of some other field (name/role/permissions edited elsewhere, or - as
-        // happened in production - a device-local password-hash-format upgrade). A generic
-        // profile upsert only ever creates a brand-new row (INSERT branch, which legitimately
-        // needs a password to make the account usable) or updates an EXISTING row's non-password
-        // columns; the receiving side's password is left exactly as it already is unless this
-        // enqueue was explicitly marked as a deliberate password change (register/reset/change-
-        // password routes - see their enqueueSync calls).
-        const isPasswordChange = row.__sync_password_change === true;
-        const cleanRow = { ...row };
-        delete cleanRow.__sync_password_change;
-
-        const tursoColSet = await getTursoTableColumns('profiles');
-        const rawCols = Object.keys(cleanRow);
-        const columns = tursoColSet.size > 0 ? rawCols.filter(c => tursoColSet.has(c)) : rawCols;
-        if (columns.length === 0) {
-          directSuccessfulIds.push(item.id);
-          continue;
+        // Ensure delivery_fee / transportation_fee parity
+        if (item.table_name === 'sales' && row && typeof row === 'object') {
+          const delFee = Number(
+            row.transportation_fee !== undefined && row.transportation_fee !== null && Number(row.transportation_fee) > 0
+              ? row.transportation_fee
+              : (row.delivery_fee !== undefined && row.delivery_fee !== null ? row.delivery_fee : (row.deliveryFee || 0))
+          );
+          row.transportation_fee = delFee;
+          delete row.delivery_fee;
+          delete row.deliveryFee;
         }
-        const colNames = columns.map(c => `"${c}"`).join(', ');
-        const placeholders = columns.map(() => '?').join(', ');
-        const args = columns.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
-        const updateCols = columns.filter(c => c !== 'id' && (isPasswordChange || c !== 'password'));
-        const conflictClause = updateCols.length > 0
-          ? `DO UPDATE SET ${updateCols.map(c => `"${c}" = excluded."${c}"`).join(', ')}`
-          : 'DO NOTHING';
 
-        const stmt = {
-          sql: `INSERT INTO "profiles" (${colNames}) VALUES (${placeholders})
+        // Ensure quotation_items price / unit_price parity
+        if (item.table_name === 'quotation_items' && row && typeof row === 'object') {
+          if (row.unit_price === undefined && row.price !== undefined) {
+            row.unit_price = row.price;
+          } else if (row.price === undefined && row.unit_price !== undefined) {
+            row.price = row.unit_price;
+          }
+        }
+
+        let targetTable = item.table_name;
+        if (targetTable === 'cash_book') targetTable = 'transactions';
+        if (targetTable === 'cheques') targetTable = 'cheque_registry';
+        if (targetTable === 'purchases') targetTable = 'purchase_orders';
+        if (targetTable === 'purchase_items') targetTable = 'purchase_order_items';
+
+        if (item.action === 'DELETE') {
+          const stmt = {
+            sql: `DELETE FROM "${targetTable}" WHERE id = ?`,
+            args: [item.record_id]
+          };
+          statements.push(stmt);
+          statementItemMap.push({ statement: stmt, itemId: item.id, table: targetTable });
+        } else if (row && typeof row === 'object' && targetTable === 'profiles') {
+          // SECURITY: profiles/authentication credentials must not be blindly overwritten by an
+          // incidental sync of some other field (name/role/permissions edited elsewhere, or - as
+          // happened in production - a device-local password-hash-format upgrade). A generic
+          // profile upsert only ever creates a brand-new row (INSERT branch, which legitimately
+          // needs a password to make the account usable) or updates an EXISTING row's non-password
+          // columns; the receiving side's password is left exactly as it already is unless this
+          // enqueue was explicitly marked as a deliberate password change (register/reset/change-
+          // password routes - see their enqueueSync calls).
+          const isPasswordChange = row.__sync_password_change === true;
+          const cleanRow = { ...row };
+          delete cleanRow.__sync_password_change;
+
+          const tursoColSet = await getTursoTableColumns('profiles');
+          const rawCols = Object.keys(cleanRow);
+          const columns = tursoColSet.size > 0 ? rawCols.filter(c => tursoColSet.has(c)) : rawCols;
+          if (columns.length === 0) {
+            directSuccessfulIds.push(item.id);
+            continue;
+          }
+          const colNames = columns.map(c => `"${c}"`).join(', ');
+          const placeholders = columns.map(() => '?').join(', ');
+          const args = columns.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
+          const updateCols = columns.filter(c => c !== 'id' && (isPasswordChange || c !== 'password'));
+          const conflictClause = updateCols.length > 0
+            ? `DO UPDATE SET ${updateCols.map(c => `"${c}" = excluded."${c}"`).join(', ')}`
+            : 'DO NOTHING';
+
+          const stmt = {
+            sql: `INSERT INTO "profiles" (${colNames}) VALUES (${placeholders})
                 ON CONFLICT("id") ${conflictClause}`,
-          args
-        };
-        statements.push(stmt);
-        statementItemMap.push({ statement: stmt, itemId: item.id, table: targetTable });
-      } else if (row && typeof row === 'object' && targetTable === 'products') {
-        const cleanRow = { ...row };
-        if (cleanRow.price !== undefined && cleanRow.selling_price === undefined) {
-          cleanRow.selling_price = cleanRow.price;
-        } else if (cleanRow.selling_price !== undefined && cleanRow.price === undefined) {
-          cleanRow.price = cleanRow.selling_price;
-        }
-        if (cleanRow.stock !== undefined && cleanRow.stock_quantity === undefined) {
-          cleanRow.stock_quantity = cleanRow.stock;
-        } else if (cleanRow.stock_quantity !== undefined && cleanRow.stock === undefined) {
-          cleanRow.stock = cleanRow.stock_quantity;
-        }
-        cleanRow.updated_at = cleanRow.updated_at || new Date().toISOString();
+            args
+          };
+          statements.push(stmt);
+          statementItemMap.push({ statement: stmt, itemId: item.id, table: targetTable });
+        } else if (row && typeof row === 'object' && targetTable === 'products') {
+          const cleanRow = { ...row };
+          if (cleanRow.price !== undefined && cleanRow.selling_price === undefined) {
+            cleanRow.selling_price = cleanRow.price;
+          } else if (cleanRow.selling_price !== undefined && cleanRow.price === undefined) {
+            cleanRow.price = cleanRow.selling_price;
+          }
+          if (cleanRow.stock !== undefined && cleanRow.stock_quantity === undefined) {
+            cleanRow.stock_quantity = cleanRow.stock;
+          } else if (cleanRow.stock_quantity !== undefined && cleanRow.stock === undefined) {
+            cleanRow.stock = cleanRow.stock_quantity;
+          }
+          cleanRow.updated_at = cleanRow.updated_at || new Date().toISOString();
 
-        const tursoColSet = await getTursoTableColumns('products');
-        const rawCols = Object.keys(cleanRow);
-        const columns = tursoColSet.size > 0 ? rawCols.filter(c => tursoColSet.has(c)) : rawCols;
-        if (columns.length === 0) {
-          directSuccessfulIds.push(item.id);
-          continue;
-        }
-        const colNames = columns.map(c => `"${c}"`).join(', ');
-        const placeholders = columns.map(() => '?').join(', ');
-        const args = columns.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
-        const prodUpdateCandidates = productsWithPendingDelta.has(String(cleanRow.id || item.record_id))
-          ? ['name', 'category', 'price', 'selling_price', 'cost_price', 'min_stock', 'supplier', 'unit', 'barcode', 'brand', 'serial_no', 'batch_code', 'expiry_date', 'supplier_phone', 'measure_details']
-          : ['name', 'category', 'price', 'selling_price', 'cost_price', 'stock', 'stock_quantity', 'min_stock', 'supplier', 'unit', 'barcode', 'brand', 'serial_no', 'batch_code', 'expiry_date', 'supplier_phone', 'measure_details', 'updated_at'];
-        const prodUpdateCols = tursoColSet.size > 0 ? prodUpdateCandidates.filter(c => tursoColSet.has(c)) : prodUpdateCandidates;
+          const tursoColSet = await getTursoTableColumns('products');
+          const rawCols = Object.keys(cleanRow);
+          const columns = tursoColSet.size > 0 ? rawCols.filter(c => tursoColSet.has(c)) : rawCols;
+          if (columns.length === 0) {
+            directSuccessfulIds.push(item.id);
+            continue;
+          }
+          const colNames = columns.map(c => `"${c}"`).join(', ');
+          const placeholders = columns.map(() => '?').join(', ');
+          const args = columns.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
+          const prodUpdateCandidates = productsWithPendingDelta.has(String(cleanRow.id || item.record_id))
+            ? ['name', 'category', 'price', 'selling_price', 'cost_price', 'min_stock', 'supplier', 'unit', 'barcode', 'brand', 'serial_no', 'batch_code', 'expiry_date', 'supplier_phone', 'measure_details', 'updated_at']
+            : ['name', 'category', 'price', 'selling_price', 'cost_price', 'stock', 'stock_quantity', 'min_stock', 'supplier', 'unit', 'barcode', 'brand', 'serial_no', 'batch_code', 'expiry_date', 'supplier_phone', 'measure_details', 'updated_at'];
+          const prodUpdateCols = tursoColSet.size > 0 ? prodUpdateCandidates.filter(c => tursoColSet.has(c)) : prodUpdateCandidates;
 
-        const stmt = {
-          sql: `INSERT INTO "products" (${colNames}) VALUES (${placeholders})
+          const stmt = {
+            sql: `INSERT INTO "products" (${colNames}) VALUES (${placeholders})
                 ON CONFLICT("sku") ${prodUpdateCols.length > 0 ? `DO UPDATE SET ${prodUpdateCols.map(c => `"${c}" = excluded."${c}"`).join(', ')}` : 'DO NOTHING'}`,
-          args
-        };
-        deferredProductStatements.push({ statement: stmt, itemId: item.id, table: targetTable });
-      } else if (row && typeof row === 'object' && targetTable === 'stock_adjustments') {
-        const cleanRow = { ...row };
-        const tursoColSet = await getTursoTableColumns('stock_adjustments');
-        const rawCols = Object.keys(cleanRow);
-        const columns = tursoColSet.size > 0 ? rawCols.filter(c => tursoColSet.has(c)) : rawCols;
-        if (columns.length === 0) {
-          directSuccessfulIds.push(item.id);
-          continue;
-        }
-        const colNames = columns.map(c => `"${c}"`).join(', ');
-        const placeholders = columns.map(() => '?').join(', ');
-        const args = columns.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
+            args
+          };
+          deferredProductStatements.push({ statement: stmt, itemId: item.id, table: targetTable });
+        } else if (row && typeof row === 'object' && targetTable === 'stock_adjustments') {
+          const cleanRow = { ...row };
+          const tursoColSet = await getTursoTableColumns('stock_adjustments');
+          const rawCols = Object.keys(cleanRow);
+          const columns = tursoColSet.size > 0 ? rawCols.filter(c => tursoColSet.has(c)) : rawCols;
+          if (columns.length === 0) {
+            directSuccessfulIds.push(item.id);
+            continue;
+          }
+          const colNames = columns.map(c => `"${c}"`).join(', ');
+          const placeholders = columns.map(() => '?').join(', ');
+          const args = columns.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
 
-        // Concurrency-safe delta propagation to Turso products table
-        let delta = 0;
-        if (cleanRow.delta !== undefined && cleanRow.delta !== null) {
-          delta = Number(cleanRow.delta);
-        } else if (cleanRow.delta_qty !== undefined && cleanRow.delta_qty !== null) {
-          delta = Number(cleanRow.delta_qty);
-        } else if (cleanRow.new_qty !== undefined && cleanRow.old_qty !== undefined) {
-          delta = Number(cleanRow.new_qty) - Number(cleanRow.old_qty);
-        }
+          // Concurrency-safe delta propagation to Turso products table
+          let delta = 0;
+          if (cleanRow.delta !== undefined && cleanRow.delta !== null) {
+            delta = Number(cleanRow.delta);
+          } else if (cleanRow.delta_qty !== undefined && cleanRow.delta_qty !== null) {
+            delta = Number(cleanRow.delta_qty);
+          } else if (cleanRow.new_qty !== undefined && cleanRow.old_qty !== undefined) {
+            delta = Number(cleanRow.new_qty) - Number(cleanRow.old_qty);
+          }
 
-        // P0 DEFECT 2 FIX: Idempotent database-side execution on Turso:
-        // Execute the delta UPDATE FIRST with a NOT EXISTS guard checking stock_adjustments.
-        // If cleanRow.id already exists on Turso (e.g. on a retry after lost ACK),
-        // NOT EXISTS is false, so products stock is NOT modified again!
-        let stockDeltaStmt = null;
-        if (delta !== 0 && !isNaN(delta) && cleanRow.product_id) {
-          const adjId = cleanRow.id || item.record_id || '';
-          const deltaStmt = {
-            sql: `UPDATE "products" SET
+          // P0 DEFECT 2 FIX: Idempotent database-side execution on Turso:
+          // Execute the delta UPDATE FIRST with a NOT EXISTS guard checking stock_adjustments.
+          // If cleanRow.id already exists on Turso (e.g. on a retry after lost ACK),
+          // NOT EXISTS is false, so products stock is NOT modified again!
+          let stockDeltaStmt = null;
+          if (delta !== 0 && !isNaN(delta) && cleanRow.product_id) {
+            const adjId = cleanRow.id || item.record_id || '';
+            const deltaStmt = {
+              sql: `UPDATE "products" SET
                     "stock" = MAX(0, COALESCE("stock", 0) + ?),
                     "stock_quantity" = MAX(0, COALESCE("stock_quantity", 0) + ?),
                     "updated_at" = ?
                   WHERE ("id" = ? OR "sku" = ?)
                     AND NOT EXISTS (SELECT 1 FROM "stock_adjustments" WHERE "id" = ?)`,
-            args: [
-              delta,
-              delta,
-              nowIso,
-              cleanRow.product_id,
-              cleanRow.product_id,
-              adjId
-            ]
+              args: [
+                delta,
+                delta,
+                cleanRow.created_at || new Date().toISOString(),
+                cleanRow.product_id,
+                cleanRow.product_id,
+                adjId
+              ]
+            };
+            stockDeltaStmt = deltaStmt;
+          }
+
+          // Statement 2: INSERT OR IGNORE the adjustment record
+          const stmt = {
+            sql: `INSERT OR IGNORE INTO "stock_adjustments" (${colNames}) VALUES (${placeholders})`,
+            args
           };
-          stockDeltaStmt = deltaStmt;
-        }
+          stockAdjustmentOperations.push({ itemId: item.id, deltaStmt: stockDeltaStmt, insertStmt: stmt });
+        } else if (row && typeof row === 'object') {
+          const tursoColSet = await getTursoTableColumns(targetTable);
+          const rawCols = Object.keys(row);
+          const columns = tursoColSet.size > 0 ? rawCols.filter(c => tursoColSet.has(c)) : rawCols;
+          if (columns.length === 0) {
+            directSuccessfulIds.push(item.id);
+            continue;
+          }
+          const colNames = columns.map(c => `"${c}"`).join(', ');
+          const placeholders = columns.map(() => '?').join(', ');
+          const args = columns.map(c => row[c] !== undefined ? row[c] : null);
 
-        // Statement 2: INSERT OR IGNORE the adjustment record
-        const stmt = {
-          sql: `INSERT OR IGNORE INTO "stock_adjustments" (${colNames}) VALUES (${placeholders})`,
-          args
-        };
-        stockAdjustmentOperations.push({ itemId: item.id, deltaStmt: stockDeltaStmt, insertStmt: stmt });
-      } else if (row && typeof row === 'object') {
-        const tursoColSet = await getTursoTableColumns(targetTable);
-        const rawCols = Object.keys(row);
-        const columns = tursoColSet.size > 0 ? rawCols.filter(c => tursoColSet.has(c)) : rawCols;
-        if (columns.length === 0) {
+          const stmt = {
+            sql: `INSERT OR REPLACE INTO "${targetTable}" (${colNames}) VALUES (${placeholders})`,
+            args
+          };
+          statements.push(stmt);
+          statementItemMap.push({ statement: stmt, itemId: item.id, table: targetTable });
+        } else {
           directSuccessfulIds.push(item.id);
-          continue;
         }
-        const colNames = columns.map(c => `"${c}"`).join(', ');
-        const placeholders = columns.map(() => '?').join(', ');
-        const args = columns.map(c => row[c] !== undefined ? row[c] : null);
-
-        const stmt = {
-          sql: `INSERT OR REPLACE INTO "${targetTable}" (${colNames}) VALUES (${placeholders})`,
-          args
-        };
-        statements.push(stmt);
-        statementItemMap.push({ statement: stmt, itemId: item.id, table: targetTable });
-      } else {
-        directSuccessfulIds.push(item.id);
       }
-    }
 
-    const successfulIds = [...directSuccessfulIds];
+      const successfulIds = [...directSuccessfulIds];
 
-    for (const operation of stockAdjustmentOperations) {
-      try {
-        await pushStockAdjustmentAtomically(tursoClient, operation.deltaStmt, operation.insertStmt);
-        successfulIds.push(operation.itemId);
-      } catch (stockErr) {
-        console.error(`[BackgroundSync] Failed to atomically push stock adjustment (item: ${operation.itemId}):`, stockErr.message);
+      for (const operation of stockAdjustmentOperations) {
         try {
-          await localDb.run(
-            `UPDATE sync_queue
+          await pushStockAdjustmentAtomically(tursoClient, operation.deltaStmt, operation.insertStmt);
+          successfulIds.push(operation.itemId);
+        } catch (stockErr) {
+          console.error(`[BackgroundSync] Failed to atomically push stock adjustment (item: ${operation.itemId}):`, stockErr.message);
+          try {
+            await localDb.run(
+              `UPDATE sync_queue
              SET retry_count = COALESCE(retry_count, 0) + 1,
                  error_message = ?,
                  status = CASE WHEN COALESCE(retry_count, 0) + 1 >= 5 THEN 'FAILED' ELSE status END
              WHERE id = ?`,
-            [stockErr.message || 'Stock adjustment push failed', operation.itemId]
-          );
-        } catch (_) {}
-      }
-    }
-
-    if (deferredProductStatements.length > 0) {
-      for (const entry of deferredProductStatements) {
-        statements.push(entry.statement);
-        statementItemMap.push(entry);
-      }
-    }
-
-    if (statements.length > 0) {
-      try {
-        await tursoClient.batch(statements, 'write');
-        for (const entry of statementItemMap) {
-          successfulIds.push(entry.itemId);
+              [stockErr.message || 'Stock adjustment push failed', operation.itemId]
+            );
+          } catch (_) { }
         }
-        lastUpstreamSync = new Date().toISOString();
-      } catch (batchErr) {
-        console.warn(`[BackgroundSync] Batch upstream write failed (${batchErr.message}). Retrying statement batches isolated per table/record...`);
-        for (const entry of statementItemMap) {
-          try {
-            await tursoClient.execute(entry.statement);
+      }
+
+      if (deferredProductStatements.length > 0) {
+        for (const entry of deferredProductStatements) {
+          statements.push(entry.statement);
+          statementItemMap.push(entry);
+        }
+      }
+
+      if (statements.length > 0) {
+        try {
+          await tursoClient.batch(statements, 'write');
+          for (const entry of statementItemMap) {
             successfulIds.push(entry.itemId);
-          } catch (singleErr) {
-            console.error(`[BackgroundSync] Failed to push upstream for table "${entry.table}" (item: ${entry.itemId}):`, singleErr.message);
+          }
+          lastUpstreamSync = new Date().toISOString();
+        } catch (batchErr) {
+          console.warn(`[BackgroundSync] Batch upstream write failed (${batchErr.message}). Retrying statement batches isolated per table/record...`);
+          for (const entry of statementItemMap) {
             try {
-              await localDb.run(
-                `UPDATE sync_queue 
+              await tursoClient.execute(entry.statement);
+              successfulIds.push(entry.itemId);
+            } catch (singleErr) {
+              console.error(`[BackgroundSync] Failed to push upstream for table "${entry.table}" (item: ${entry.itemId}):`, singleErr.message);
+              try {
+                await localDb.run(
+                  `UPDATE sync_queue 
                  SET retry_count = COALESCE(retry_count, 0) + 1,
                      error_message = ?,
                      status = CASE WHEN COALESCE(retry_count, 0) + 1 >= 5 THEN 'FAILED' ELSE status END
                  WHERE id = ?`,
-                [singleErr.message || 'Push failed', entry.itemId]
-              );
-            } catch (_) {}
+                  [singleErr.message || 'Push failed', entry.itemId]
+                );
+              } catch (_) { }
+            }
+          }
+          if (successfulIds.length > directSuccessfulIds.length) {
+            lastUpstreamSync = new Date().toISOString();
           }
         }
-        if (successfulIds.length > directSuccessfulIds.length) {
-          lastUpstreamSync = new Date().toISOString();
-        }
       }
+
+      // Purge processed items from local sync_queue
+      if (successfulIds.length > 0) {
+        const placeholders = successfulIds.map(() => '?').join(', ');
+        await localDb.run(`DELETE FROM sync_queue WHERE id IN (${placeholders})`, successfulIds);
+      }
+      console.log(`[BackgroundSync] Successfully processed ${successfulIds.length} record(s) for Turso Cloud.`);
+    } else {
+      if (!lastUpstreamSync) lastUpstreamSync = new Date().toISOString();
     }
 
-    // Purge processed items from local sync_queue
-    if (successfulIds.length > 0) {
-      const placeholders = successfulIds.map(() => '?').join(', ');
-      await localDb.run(`DELETE FROM sync_queue WHERE id IN (${placeholders})`, successfulIds);
-    }
-    console.log(`[BackgroundSync] Successfully processed ${successfulIds.length} record(s) for Turso Cloud.`);
-  } else {
-    if (!lastUpstreamSync) lastUpstreamSync = new Date().toISOString();
-  }
+    // Update remaining count & timestamps
+    let remainingPending = 0;
+    try {
+      const qCount = await localDb.get("SELECT COUNT(*) as count FROM sync_queue WHERE status = 'PENDING' AND COALESCE(retry_count, 0) < 5");
+      remainingPending = Number(qCount?.count ?? 0);
+    } catch (_) { }
 
-  // Update remaining count & timestamps
-  let remainingPending = 0;
-  try {
-    const qCount = await localDb.get("SELECT COUNT(*) as count FROM sync_queue WHERE status = 'PENDING' AND COALESCE(retry_count, 0) < 5");
-    remainingPending = Number(qCount?.count ?? 0);
-  } catch (_) {}
+    try {
+      await localDb.run(
+        "UPDATE system_settings SET last_counter_sync_timestamp = ?, counter_sync_status = 'IDLE', counter_pending_count = ? WHERE id = 'global'",
+        [nowIso, remainingPending]
+      );
+    } catch (_) { }
 
-  try {
-    await localDb.run(
-      "UPDATE system_settings SET last_counter_sync_timestamp = ?, counter_sync_status = 'IDLE', counter_pending_count = ? WHERE id = 'global'",
-      [nowIso, remainingPending]
-    );
-  } catch (_) {}
-
-  try {
-    await tursoClient.execute({
-      sql: "UPDATE system_settings SET last_counter_sync_timestamp = ?, counter_sync_status = 'IDLE', counter_pending_count = ? WHERE id = 'global'",
-      args: [nowIso, remainingPending]
-    });
-  } catch (_) {}
+    try {
+      await tursoClient.execute({
+        sql: "UPDATE system_settings SET last_counter_sync_timestamp = ?, counter_sync_status = 'IDLE', counter_pending_count = ? WHERE id = 'global'",
+        args: [nowIso, remainingPending]
+      });
+    } catch (_) { }
   } finally {
     isPushing = false;
   }
@@ -1279,14 +1279,14 @@ export async function pullDownstreamChanges(localDb, tursoClient) {
     // to Turso.
     try {
       await localDb.run('INSERT OR IGNORE INTO sync_pull_marker (id) VALUES (1)');
-    } catch (_) {}
+    } catch (_) { }
 
     try {
       await pullDownstreamChangesInner(localDb, tursoClient);
     } finally {
       try {
         await localDb.run('DELETE FROM sync_pull_marker WHERE id = 1');
-      } catch (_) {}
+      } catch (_) { }
     }
   })();
 
@@ -1321,10 +1321,10 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
     if (cloudWipeTimestamp > 0) {
       let localWipeTimestamp = 0;
       try {
-        try { await localDb.run('ALTER TABLE system_settings ADD COLUMN key TEXT;'); } catch (_) {}
-        try { await localDb.run('ALTER TABLE system_settings ADD COLUMN value TEXT;'); } catch (_) {}
-        try { await localDb.run('ALTER TABLE system_settings ADD COLUMN system_wipe_timestamp TEXT;'); } catch (_) {}
-        try { await localDb.exec('CREATE TABLE IF NOT EXISTS system_meta (key TEXT PRIMARY KEY, value TEXT);'); } catch (_) {}
+        try { await localDb.run('ALTER TABLE system_settings ADD COLUMN key TEXT;'); } catch (_) { }
+        try { await localDb.run('ALTER TABLE system_settings ADD COLUMN value TEXT;'); } catch (_) { }
+        try { await localDb.run('ALTER TABLE system_settings ADD COLUMN system_wipe_timestamp TEXT;'); } catch (_) { }
+        try { await localDb.exec('CREATE TABLE IF NOT EXISTS system_meta (key TEXT PRIMARY KEY, value TEXT);'); } catch (_) { }
 
         const localCheck = await localDb.get(
           "SELECT value, system_wipe_timestamp FROM system_settings WHERE key = 'SYSTEM_WIPE_TIMESTAMP' OR id = 'SYSTEM_WIPE_TIMESTAMP' OR id = 'global'"
@@ -1342,7 +1342,7 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
             localWipeTimestamp = metaTs;
           }
         }
-      } catch (_) {}
+      } catch (_) { }
 
       if (cloudWipeTimestamp > localWipeTimestamp) {
         console.warn(`⚠️ [SyncEngine] Notice: Cloud SYSTEM_WIPE_TIMESTAMP (${cloudWipeTimestamp}) > local (${localWipeTimestamp}) detected. Automatic background wipe is disarmed for data safety. Local database, sync_queue, and user accounts preserved.`);
@@ -1371,7 +1371,7 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
             'INSERT OR REPLACE INTO deleted_records (table_name, record_id, deleted_at) VALUES (?, ?, COALESCE(?, CURRENT_TIMESTAMP))',
             [tableName, recordId, row.deleted_at]
           );
-        } catch (_) {}
+        } catch (_) { }
 
         // Safely purge deleted row from local tables
         try {
@@ -1393,7 +1393,7 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
           } else if (tableName === 'products') {
             await localDb.run('DELETE FROM products WHERE id = ?', [recordId]);
           }
-        } catch (_) {}
+        } catch (_) { }
       }
     }
   } catch (tombErr) {
@@ -1434,7 +1434,7 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
             if (tombstone || pendingDelete) {
               continue;
             }
-          } catch (_) {}
+          } catch (_) { }
 
           // Outbox & Conflict Resolution Guard:
           // Never allow downstream pull to overwrite any local record that has unacknowledged outbox mutations
@@ -1442,19 +1442,19 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
           const rowLookupAliases = tableName === 'transactions'
             ? ['transactions', 'cash_book']
             : tableName === 'cheque_registry'
-            ? ['cheque_registry', 'cheques']
-            : tableName === 'purchase_orders'
-            ? ['purchase_orders', 'purchases']
-            : tableName === 'purchase_order_items'
-            ? ['purchase_order_items', 'purchase_items']
-            : [tableName];
+              ? ['cheque_registry', 'cheques']
+              : tableName === 'purchase_orders'
+                ? ['purchase_orders', 'purchases']
+                : tableName === 'purchase_order_items'
+                  ? ['purchase_order_items', 'purchase_items']
+                  : [tableName];
 
           try {
             localRow = await localDb.get(`SELECT * FROM "${tableName}" WHERE "${idCol}" = ?`, [row[idCol]]);
             if (!localRow && tableName === 'products' && row.sku) {
               localRow = await localDb.get(`SELECT * FROM products WHERE sku = ?`, [row.sku]);
             }
-          } catch (_) {}
+          } catch (_) { }
 
           if (localRow) {
             let unacknowledgedOutbox = null;
@@ -1464,7 +1464,7 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
                 `SELECT id FROM sync_queue WHERE table_name IN (${aliasPlaceholders}) AND (record_id = ? OR record_id = ?) AND status IN ('PENDING', 'FAILED', 'ERROR')`,
                 [...rowLookupAliases, String(row[idCol]), String(localRow[idCol])]
               );
-            } catch (_) {}
+            } catch (_) { }
 
             if (unacknowledgedOutbox) {
               continue;
@@ -1475,13 +1475,9 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
               const localUpdated = localRow.updated_at || localRow.created_at;
               const cloudTime = parseUtcTimestamp(cloudUpdated);
               const localTime = parseUtcTimestamp(localUpdated);
-              const stockReconcileNeeded =
-                tableName === 'products' &&
-                cloudTime === localTime &&
-                Math.abs(Number(localRow.stock || 0) - Number(row.stock || 0)) > 1e-9;
-              const isCloudNewer = cloudTime > localTime || stockReconcileNeeded;
+              const isCloudNewer = cloudTime > localTime;
 
-              // If cloud is not strictly newer than local (and stock doesn't need same-ms reconciliation), preserve local record
+              // If cloud is not strictly newer than local, preserve local record
               if (!isCloudNewer) {
                 continue;
               }
@@ -1587,7 +1583,7 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
               );
             }
           }
-        } catch (_) {}
+        } catch (_) { }
       }
 
       // Deletion pruning:
@@ -1718,12 +1714,12 @@ export function startBackgroundSyncWorker(localDb, intervalMs = 30000) {
 
   // Run initial sync cycle after 1 second to let server initialize
   setTimeout(() => {
-    runSyncCycle(localDb).catch(() => {});
+    runSyncCycle(localDb).catch(() => { });
   }, 1000);
 
   // Schedule recurring 30s fallback cycle
   syncIntervalId = setInterval(() => {
-    runSyncCycle(localDb).catch(() => {});
+    runSyncCycle(localDb).catch(() => { });
   }, intervalMs);
 
   return syncIntervalId;
@@ -1765,7 +1761,7 @@ export async function getSyncStatus(localDb) {
             counterQueued = Number(res.rows[0].counter_pending_count) || 0;
           }
         }
-      } catch (_) {}
+      } catch (_) { }
     }
 
     return {
@@ -1789,7 +1785,7 @@ export async function getSyncStatus(localDb) {
     try {
       const qRes = await localDb.get("SELECT COUNT(*) as count FROM sync_queue WHERE status = 'PENDING'");
       pendingCount = Number(qRes?.count ?? 0);
-    } catch (_) {}
+    } catch (_) { }
 
     if (!lastCounterSync) {
       try {
@@ -1799,7 +1795,7 @@ export async function getSyncStatus(localDb) {
           lastCounterSync = String(ts);
           lastSyncedAt = lastCounterSync;
         }
-      } catch (_) {}
+      } catch (_) { }
     }
   }
 
