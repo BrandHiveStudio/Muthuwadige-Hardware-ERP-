@@ -11,6 +11,7 @@ import { getTursoClient, isTurso } from '../db/connection.js';
 
 let isOnline = true;
 let isSyncing = false;
+let inFlightSyncPromise = null;
 let lastSyncedAt = null;
 let lastUpstreamSync = null;
 let lastDownstreamSync = null;
@@ -877,8 +878,33 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
 
     const statements = [];
     const statementItemMap = [];
+    const deferredProductStatements = [];
     const stockAdjustmentOperations = [];
+    const productsWithPendingDelta = new Set();
     const directSuccessfulIds = [];
+
+    for (const item of pendingItems) {
+      if (item.table_name === 'stock_adjustments' && item.action !== 'DELETE') {
+        let saRow = null;
+        try {
+          saRow = typeof item.payload === 'string' ? JSON.parse(item.payload) : item.payload;
+        } catch (_) {}
+        if (!saRow || Object.keys(saRow).length === 0) {
+          try {
+            saRow = await localDb.get('SELECT * FROM stock_adjustments WHERE id = ?', [item.record_id]);
+          } catch (_) {}
+        }
+        if (saRow && saRow.product_id) {
+          let saDelta = 0;
+          if (saRow.delta !== undefined && saRow.delta !== null) saDelta = Number(saRow.delta);
+          else if (saRow.delta_qty !== undefined && saRow.delta_qty !== null) saDelta = Number(saRow.delta_qty);
+          else if (saRow.new_qty !== undefined && saRow.old_qty !== undefined) saDelta = Number(saRow.new_qty) - Number(saRow.old_qty);
+          if (saDelta !== 0 && !isNaN(saDelta)) {
+            productsWithPendingDelta.add(String(saRow.product_id));
+          }
+        }
+      }
+    }
 
     for (const item of pendingItems) {
       let row = null;
@@ -985,7 +1011,9 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
         const colNames = columns.map(c => `"${c}"`).join(', ');
         const placeholders = columns.map(() => '?').join(', ');
         const args = columns.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
-        const prodUpdateCandidates = ['name', 'category', 'price', 'selling_price', 'cost_price', 'stock', 'stock_quantity', 'min_stock', 'supplier', 'unit', 'barcode', 'brand', 'updated_at'];
+        const prodUpdateCandidates = productsWithPendingDelta.has(String(cleanRow.id || item.record_id))
+          ? ['name', 'category', 'price', 'selling_price', 'cost_price', 'min_stock', 'supplier', 'unit', 'barcode', 'brand', 'serial_no', 'batch_code', 'expiry_date', 'supplier_phone', 'measure_details']
+          : ['name', 'category', 'price', 'selling_price', 'cost_price', 'stock', 'stock_quantity', 'min_stock', 'supplier', 'unit', 'barcode', 'brand', 'serial_no', 'batch_code', 'expiry_date', 'supplier_phone', 'measure_details', 'updated_at'];
         const prodUpdateCols = tursoColSet.size > 0 ? prodUpdateCandidates.filter(c => tursoColSet.has(c)) : prodUpdateCandidates;
 
         const stmt = {
@@ -993,8 +1021,7 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
                 ON CONFLICT("sku") ${prodUpdateCols.length > 0 ? `DO UPDATE SET ${prodUpdateCols.map(c => `"${c}" = excluded."${c}"`).join(', ')}` : 'DO NOTHING'}`,
           args
         };
-        statements.push(stmt);
-        statementItemMap.push({ statement: stmt, itemId: item.id, table: targetTable });
+        deferredProductStatements.push({ statement: stmt, itemId: item.id, table: targetTable });
       } else if (row && typeof row === 'object' && targetTable === 'stock_adjustments') {
         const cleanRow = { ...row };
         const tursoColSet = await getTursoTableColumns('stock_adjustments');
@@ -1035,7 +1062,7 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
             args: [
               delta,
               delta,
-              cleanRow.created_at || new Date().toISOString(),
+              nowIso,
               cleanRow.product_id,
               cleanRow.product_id,
               adjId
@@ -1091,6 +1118,13 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
             [stockErr.message || 'Stock adjustment push failed', operation.itemId]
           );
         } catch (_) {}
+      }
+    }
+
+    if (deferredProductStatements.length > 0) {
+      for (const entry of deferredProductStatements) {
+        statements.push(entry.statement);
+        statementItemMap.push(entry);
       }
     }
 
@@ -1167,41 +1201,52 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
  */
 export async function runSyncCycle(localDb) {
   const isWeb = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.IS_WEB_CLIENT === '1' || (typeof isTurso === 'function' && isTurso());
-  if (isWeb) return;
-  if (isSyncing || !localDb) return;
-  await ensureSyncSchema(localDb);
-  const tursoClient = getTursoClient();
-
-  if (!tursoClient) {
-    isOnline = false;
-    return;
+  if (isWeb || !localDb) return;
+  if (inFlightSyncPromise) {
+    return inFlightSyncPromise;
   }
 
-  // Step A: Network Connectivity Check
-  const reachable = await pingTurso(tursoClient);
-  if (!reachable) {
-    isOnline = false;
-    isSyncing = false;
-    return;
-  }
+  inFlightSyncPromise = (async () => {
+    await ensureSyncSchema(localDb);
+    const tursoClient = getTursoClient();
 
-  isOnline = true;
-  isSyncing = true;
-  const nowIso = new Date().toISOString();
+    if (!tursoClient) {
+      isOnline = false;
+      return;
+    }
+
+    // Step A: Network Connectivity Check
+    const reachable = await pingTurso(tursoClient);
+    if (!reachable) {
+      isOnline = false;
+      isSyncing = false;
+      return;
+    }
+
+    isOnline = true;
+    isSyncing = true;
+    const nowIso = new Date().toISOString();
+
+    try {
+      // Step 1: Push Upstream Queue to Turso Cloud (strictly from sync_queue)
+      await pushUpstreamChanges(localDb, tursoClient);
+
+      // Step 2: Pull Downstream Changes
+      await pullDownstreamChanges(localDb, tursoClient);
+
+      lastCounterSync = nowIso;
+      lastSyncedAt = nowIso;
+    } catch (syncErr) {
+      console.error('[BackgroundSync] Error during sync cycle:', syncErr.message);
+    } finally {
+      isSyncing = false;
+    }
+  })();
 
   try {
-    // Step 1: Push Upstream Queue to Turso Cloud (strictly from sync_queue)
-    await pushUpstreamChanges(localDb, tursoClient);
-
-    // Step 2: Pull Downstream Changes with Universal Deletion Pruning
-    await pullDownstreamChanges(localDb, tursoClient);
-
-    lastCounterSync = nowIso;
-    lastSyncedAt = nowIso;
-  } catch (syncErr) {
-    console.error('[BackgroundSync] Error during sync cycle:', syncErr.message);
+    await inFlightSyncPromise;
   } finally {
-    isSyncing = false;
+    inFlightSyncPromise = null;
   }
 }
 
@@ -1211,6 +1256,8 @@ export async function runSyncCycle(localDb) {
  * permissions, and pricing rules.
  * UNIVERSAL DELETION PRUNING: Automatically drops any local record deleted on Cloud.
  */
+let inFlightPullPromise = null;
+
 export async function pullDownstreamChanges(localDb, tursoClient) {
   // CRITICAL: Never execute downstream pull or prune on Vercel Serverless or in Cloud Web mode
   const isWebClient = Boolean(process.env.VERCEL) || process.env.APP_ROLE === 'web' || process.env.IS_WEB_CLIENT === '1' || (typeof isTurso === 'function' && isTurso());
@@ -1218,26 +1265,35 @@ export async function pullDownstreamChanges(localDb, tursoClient) {
     return { success: true, pulled: 0, message: 'Web environment: sync pull bypassed.' };
   }
   if (!localDb || !tursoClient) return;
-  await ensureSyncSchema(localDb);
+  if (inFlightPullPromise) {
+    return inFlightPullPromise;
+  }
 
-  // Mark "an inbound cloud sync write is in progress" for the duration of this whole pull batch.
-  // The change-tracking triggers (trg_sync_sales_insert etc., see their WHEN clause in server.js)
-  // check for this marker's absence before firing, so a row this pull inserts - which is a cloud
-  // READ result, not a new local business mutation - never gets re-queued and pushed straight back
-  // to Turso. Without this, a row that is genuinely new to this local device (e.g. the first-ever
-  // pull into a freshly set-up/empty local table) would fire the AFTER INSERT trigger, which only
-  // captures a partial column snapshot, and pushing that back overwrites/truncates the real cloud
-  // row - exactly what happened to 9 production 'sales' rows.
-  try {
-    await localDb.run('INSERT OR IGNORE INTO sync_pull_marker (id) VALUES (1)');
-  } catch (_) {}
+  inFlightPullPromise = (async () => {
+    await ensureSyncSchema(localDb);
 
-  try {
-    await pullDownstreamChangesInner(localDb, tursoClient);
-  } finally {
+    // Mark "an inbound cloud sync write is in progress" for the duration of this whole pull batch.
+    // The change-tracking triggers (trg_sync_sales_insert etc., see their WHEN clause in server.js)
+    // check for this marker's absence before firing, so a row this pull inserts - which is a cloud
+    // READ result, not a new local business mutation - never gets re-queued and pushed straight back
+    // to Turso.
     try {
-      await localDb.run('DELETE FROM sync_pull_marker WHERE id = 1');
+      await localDb.run('INSERT OR IGNORE INTO sync_pull_marker (id) VALUES (1)');
     } catch (_) {}
+
+    try {
+      await pullDownstreamChangesInner(localDb, tursoClient);
+    } finally {
+      try {
+        await localDb.run('DELETE FROM sync_pull_marker WHERE id = 1');
+      } catch (_) {}
+    }
+  })();
+
+  try {
+    return await inFlightPullPromise;
+  } finally {
+    inFlightPullPromise = null;
   }
 }
 
@@ -1380,38 +1436,52 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
             }
           } catch (_) {}
 
-          // LWW & Conflict Resolution for Master Data
+          // Outbox & Conflict Resolution Guard:
+          // Never allow downstream pull to overwrite any local record that has unacknowledged outbox mutations
           let localRow = null;
-          if (isMasterTable) {
+          const rowLookupAliases = tableName === 'transactions'
+            ? ['transactions', 'cash_book']
+            : tableName === 'cheque_registry'
+            ? ['cheque_registry', 'cheques']
+            : tableName === 'purchase_orders'
+            ? ['purchase_orders', 'purchases']
+            : tableName === 'purchase_order_items'
+            ? ['purchase_order_items', 'purchase_items']
+            : [tableName];
+
+          try {
+            localRow = await localDb.get(`SELECT * FROM "${tableName}" WHERE "${idCol}" = ?`, [row[idCol]]);
+            if (!localRow && tableName === 'products' && row.sku) {
+              localRow = await localDb.get(`SELECT * FROM products WHERE sku = ?`, [row.sku]);
+            }
+          } catch (_) {}
+
+          if (localRow) {
+            let unacknowledgedOutbox = null;
             try {
-              localRow = await localDb.get(`SELECT * FROM "${tableName}" WHERE "${idCol}" = ?`, [row[idCol]]);
-              if (!localRow && tableName === 'products' && row.sku) {
-                localRow = await localDb.get(`SELECT * FROM products WHERE sku = ?`, [row.sku]);
-              }
+              const aliasPlaceholders = rowLookupAliases.map(() => '?').join(', ');
+              unacknowledgedOutbox = await localDb.get(
+                `SELECT id FROM sync_queue WHERE table_name IN (${aliasPlaceholders}) AND (record_id = ? OR record_id = ?) AND status IN ('PENDING', 'FAILED', 'ERROR')`,
+                [...rowLookupAliases, String(row[idCol]), String(localRow[idCol])]
+              );
             } catch (_) {}
 
-            if (localRow) {
-              let unacknowledgedOutbox = null;
-              try {
-                unacknowledgedOutbox = await localDb.get(
-                  `SELECT id FROM sync_queue WHERE table_name = ? AND (record_id = ? OR record_id = ?) AND status IN ('PENDING', 'FAILED', 'ERROR')`,
-                  [tableName, String(row[idCol]), String(localRow[idCol])]
-                );
-              } catch (_) {}
+            if (unacknowledgedOutbox) {
+              continue;
+            }
 
-              // SAFETY CONTRACT: If local record has unacknowledged outbox changes (PENDING, FAILED, ERROR),
-              // NEVER allow downstream pull to overwrite local stock/master mutations with cloud snapshots!
-              if (unacknowledgedOutbox) {
-                continue;
-              }
-
+            if (isMasterTable) {
               const cloudUpdated = row.updated_at || row.created_at;
               const localUpdated = localRow.updated_at || localRow.created_at;
               const cloudTime = parseUtcTimestamp(cloudUpdated);
               const localTime = parseUtcTimestamp(localUpdated);
-              const isCloudNewer = cloudTime > localTime;
+              const stockReconcileNeeded =
+                tableName === 'products' &&
+                cloudTime === localTime &&
+                Math.abs(Number(localRow.stock || 0) - Number(row.stock || 0)) > 1e-9;
+              const isCloudNewer = cloudTime > localTime || stockReconcileNeeded;
 
-              // If cloud is not strictly newer than local, preserve local record
+              // If cloud is not strictly newer than local (and stock doesn't need same-ms reconciliation), preserve local record
               if (!isCloudNewer) {
                 continue;
               }
@@ -1419,17 +1489,11 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
           }
 
           if (tableName === 'stock_adjustments') {
+            // Replicate stock_adjustments solely as immutable audit history.
+            // Do NOT replay historical deltas onto local products.stock here: the 'products' pull
+            // already syncs the authoritative cloud stock snapshot (replaying deltas double-deducted stock).
             const existingAdj = await localDb.get('SELECT id FROM stock_adjustments WHERE id = ?', [row.id]);
             if (!existingAdj) {
-              let delta = 0;
-              if (row.delta !== undefined && row.delta !== null) {
-                delta = Number(row.delta);
-              } else if (row.delta_qty !== undefined && row.delta_qty !== null) {
-                delta = Number(row.delta_qty);
-              } else if (row.new_qty !== undefined && row.old_qty !== undefined) {
-                delta = Number(row.new_qty) - Number(row.old_qty);
-              }
-
               const rawCols = Object.keys(row);
               const cols = localColSet.size > 0 ? rawCols.filter(c => localColSet.has(c)) : rawCols;
               const colNames = cols.map(c => `"${c}"`).join(', ');
@@ -1437,20 +1501,9 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
               const args = cols.map(c => row[c] !== undefined ? row[c] : null);
 
               await localDb.run(
-                `INSERT INTO "stock_adjustments" (${colNames}) VALUES (${placeholders})`,
+                `INSERT OR IGNORE INTO "stock_adjustments" (${colNames}) VALUES (${placeholders})`,
                 args
               );
-
-              if (delta !== 0 && !isNaN(delta) && row.product_id) {
-                await localDb.run(
-                  `UPDATE "products" SET
-                     "stock" = MAX(0, COALESCE("stock", 0) + ?),
-                     "stock_quantity" = MAX(0, COALESCE("stock_quantity", 0) + ?),
-                     "updated_at" = ?
-                   WHERE "id" = ? OR "sku" = ?`,
-                  [delta, delta, row.created_at || new Date().toISOString(), row.product_id, row.product_id]
-                );
-              }
             }
           } else if (tableName === 'products') {
             const cleanRow = { ...row };
@@ -1463,12 +1516,6 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
               cleanRow.stock_quantity = cleanRow.stock;
             } else if (cleanRow.stock_quantity !== undefined && cleanRow.stock === undefined) {
               cleanRow.stock = cleanRow.stock_quantity;
-            }
-
-            // SAFETY: Never allow downstream pull to overwrite higher local stock with stale cloud values
-            if (localRow && Number(localRow.stock || 0) > Number(cleanRow.stock || 0)) {
-              cleanRow.stock = localRow.stock;
-              cleanRow.stock_quantity = localRow.stock_quantity !== undefined ? localRow.stock_quantity : localRow.stock;
             }
 
             const rawCols = Object.keys(cleanRow);
@@ -1485,13 +1532,18 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
                  "selling_price" = excluded."selling_price",
                  "cost_price" = excluded."cost_price",
                  "category" = excluded."category",
-                 "stock" = CASE WHEN products."stock" > excluded."stock" THEN products."stock" ELSE excluded."stock" END,
-                 "stock_quantity" = CASE WHEN products."stock_quantity" > excluded."stock_quantity" THEN products."stock_quantity" ELSE excluded."stock_quantity" END,
+                 "stock" = excluded."stock",
+                 "stock_quantity" = excluded."stock_quantity",
                  "min_stock" = excluded."min_stock",
                  "supplier" = excluded."supplier",
                  "unit" = excluded."unit",
                  "barcode" = excluded."barcode",
                  "brand" = excluded."brand",
+                 "serial_no" = excluded."serial_no",
+                 "batch_code" = excluded."batch_code",
+                 "expiry_date" = excluded."expiry_date",
+                 "supplier_phone" = excluded."supplier_phone",
+                 "measure_details" = excluded."measure_details",
                  "updated_at" = excluded."updated_at"`,
               pArgs
             );

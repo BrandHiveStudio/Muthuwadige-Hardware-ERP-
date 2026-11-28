@@ -3,6 +3,7 @@ import { SearchIcon, BellIcon, MenuIcon, RotateCw, RefreshCw } from 'lucide-reac
 import type { User, PageName, SyncStatus } from '../types';
 import { api } from '../lib/api';
 import { isElectron } from '../utils/env';
+import { resetAllCaches } from '../services/dataCache';
 
 interface HeaderProps {
   currentPage: PageName;
@@ -156,7 +157,9 @@ export function Header({
     try {
       const res = await api.sync.triggerSync();
       setSyncStatus(res);
+      resetAllCaches();
       window.dispatchEvent(new Event('sync-completed'));
+      window.dispatchEvent(new Event('refresh-all-data'));
       setSyncToastMessage('Database synchronized successfully.');
       setTimeout(() => setSyncToastMessage(null), 3000);
     } catch (err: any) {
@@ -208,11 +211,12 @@ export function Header({
         document.activeElement.blur();
       }
 
-      // Trigger immediate downstream pull and bidirectional sync before reloading
+      // Trigger unified bidirectional sync (push first, pull second) before reloading
       try {
-        await api.sync.pullDownstream().catch(() => {});
         await api.sync.triggerSync();
+        resetAllCaches();
         window.dispatchEvent(new Event('sync-completed'));
+        window.dispatchEvent(new Event('refresh-all-data'));
       } catch (_) {}
 
       if (onRefresh) {

@@ -4772,13 +4772,14 @@ app.post('/api/products', async (req, res) => {
 
     const effectiveId = existingByBarcode ? existingByBarcode.id : ('p_' + Date.now());
     const effectiveSku = existingByBarcode ? existingByBarcode.sku : cleanSku;
+    const nowIso = new Date().toISOString();
 
     await db.run(
       `INSERT INTO products (
         id, name, sku, category, price, selling_price, cost_price, stock, stock_quantity,
         min_stock, supplier, unit, barcode, brand, serial_no, batch_code, expiry_date,
         supplier_phone, measure_details, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(sku) DO UPDATE SET
         name = excluded.name,
         category = excluded.category,
@@ -4797,7 +4798,7 @@ app.post('/api/products', async (req, res) => {
         expiry_date = excluded.expiry_date,
         supplier_phone = excluded.supplier_phone,
         measure_details = excluded.measure_details,
-        updated_at = CURRENT_TIMESTAMP`,
+        updated_at = excluded.updated_at`,
       [
         effectiveId,
         p.name,
@@ -4817,7 +4818,8 @@ app.post('/api/products', async (req, res) => {
         p.batch_code !== undefined ? p.batch_code : (p.batchCode || ''),
         p.expiry_date !== undefined ? p.expiry_date : (p.expiryDate || ''),
         finalSupplierPhone,
-        p.measure_details !== undefined ? p.measure_details : (p.measureDetails || '')
+        p.measure_details !== undefined ? p.measure_details : (p.measureDetails || ''),
+        nowIso
       ]
     );
 
@@ -4825,7 +4827,8 @@ app.post('/api/products', async (req, res) => {
     const finalId = finalRecord ? finalRecord.id : effectiveId;
 
     await logAudit(user_email, 'PRODUCT_CREATED', `Product ${p.name} (SKU: ${effectiveSku}) was added/updated in the inventory.`);
-    enqueueSync(db, 'products', finalId, 'UPSERT').then(() => triggerPush(db)).catch(() => { });
+    await enqueueSync(db, 'products', finalId, 'UPSERT');
+    triggerPush(db).catch(() => { });
     res.json({ success: true, id: finalId });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4884,12 +4887,14 @@ app.put('/api/products/:id', async (req, res) => {
       } catch (e) { }
     }
 
+    const nowIso = new Date().toISOString();
     await db.run(
-      'UPDATE products SET name = ?, sku = ?, category = ?, price = ?, cost_price = ?, stock = ?, min_stock = ?, supplier = ?, unit = ?, barcode = ?, brand = ?, serial_no = ?, batch_code = ?, expiry_date = ?, supplier_phone = ?, measure_details = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-      [name, sku, category, price, cost_price, stock, min_stock, supplier, unit, barcode, brand, serial_no, batch_code, expiry_date, supplier_phone, measure_details, targetId]
+      'UPDATE products SET name = ?, sku = ?, category = ?, price = ?, selling_price = ?, cost_price = ?, stock = ?, stock_quantity = ?, min_stock = ?, supplier = ?, unit = ?, barcode = ?, brand = ?, serial_no = ?, batch_code = ?, expiry_date = ?, supplier_phone = ?, measure_details = ?, updated_at = ? WHERE id = ?',
+      [name, sku, category, price, price, cost_price, stock, stock, min_stock, supplier, unit, barcode, brand, serial_no, batch_code, expiry_date, supplier_phone, measure_details, nowIso, targetId]
     );
     await logAudit(user_email, 'PRODUCT_UPDATED', `Product ${name} (SKU: ${sku}) details were updated.`);
-    enqueueSync(db, 'products', targetId, 'UPSERT').then(() => triggerPush(db)).catch(() => { });
+    await enqueueSync(db, 'products', targetId, 'UPSERT');
+    triggerPush(db).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -5174,14 +5179,16 @@ app.put('/api/customers/:id', async (req, res) => {
   const { id } = req.params;
   const c = req.body;
   try {
+    const nowIso = new Date().toISOString();
     await db.run(
-      'UPDATE customers SET name = ?, email = ?, phone = ?, address = ?, nic = ?, loyalty_points = ?, total_purchases = ?, join_date = ? WHERE id = ?',
-      [c.name, c.email, c.phone, c.address, c.nic, c.loyalty_points !== undefined ? c.loyalty_points : c.loyaltyPoints, c.total_purchases !== undefined ? c.total_purchases : c.totalPurchases, c.join_date !== undefined ? c.join_date : c.joinDate, id]
+      'UPDATE customers SET name = ?, email = ?, phone = ?, address = ?, nic = ?, loyalty_points = ?, total_purchases = ?, join_date = ?, updated_at = ? WHERE id = ?',
+      [c.name, c.email, c.phone, c.address, c.nic, c.loyalty_points !== undefined ? c.loyalty_points : c.loyaltyPoints, c.total_purchases !== undefined ? c.total_purchases : c.totalPurchases, c.join_date !== undefined ? c.join_date : c.joinDate, nowIso, id]
     );
     const actorName = req.user?.name || req.authUser?.name || req.headers['x-user-name'] || null;
     const actorRole = req.user?.role || req.authUser?.role || req.headers['x-user-role'] || null;
     await logAudit(req, 'CUSTOMER_UPDATED', `Customer ${c.name || 'details'} were updated.`, actorName, actorRole);
-    enqueueSync(db, 'customers', id, 'UPSERT').then(() => triggerPush(db)).catch(() => { });
+    await enqueueSync(db, 'customers', id, 'UPSERT');
+    triggerPush(db).catch(() => { });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -5938,8 +5945,8 @@ async function executeCreateSale(s, options = {}) {
         }
 
         await db.run(
-          'UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?',
-          [baseQtyDeduction, pId]
+          'UPDATE products SET stock = MAX(0, stock - ?), stock_quantity = MAX(0, COALESCE(stock_quantity, stock, 0) - ?), updated_at = ? WHERE id = ?',
+          [baseQtyDeduction, baseQtyDeduction, created_at, pId]
         );
 
         // Record stock adjustment delta for multi-terminal synchronization (A-SYNC-01)
@@ -5999,8 +6006,8 @@ async function executeCreateSale(s, options = {}) {
       if (s.customer_id) {
         const addedPoints = Math.floor(s.total_amount / 10); // 1 point per 10 LKR
         await db.run(
-          'UPDATE customers SET total_purchases = total_purchases + ?, loyalty_points = loyalty_points + ? WHERE id = ?',
-          [s.total_amount, addedPoints, s.customer_id]
+          'UPDATE customers SET total_purchases = total_purchases + ?, loyalty_points = loyalty_points + ?, updated_at = ? WHERE id = ?',
+          [s.total_amount, addedPoints, created_at, s.customer_id]
         );
       }
 
@@ -6732,8 +6739,8 @@ async function executeVoidSale(id, payload = {}, options = {}) {
       const prodId = item.productId || item.product_id;
       if (prodId && baseQtyRestock > 0) {
         await targetDb.run(
-          'UPDATE products SET stock = stock + ? WHERE id = ?',
-          [baseQtyRestock, prodId]
+          'UPDATE products SET stock = stock + ?, stock_quantity = COALESCE(stock_quantity, stock, 0) + ?, updated_at = ? WHERE id = ?',
+          [baseQtyRestock, baseQtyRestock, now, prodId]
         );
         await enqueueSync(targetDb, 'products', prodId, 'UPDATE');
 
@@ -7154,8 +7161,8 @@ async function executeSalesReturn(payload = {}, options = {}) {
       const rawBaseRestock = convRate > 0 ? (Number(item.qty || 0) / convRate) : Number(item.qty || 0);
       const baseQtyRestock = Math.round(rawBaseRestock * 1000000) / 1000000;
       await targetDb.run(
-        'UPDATE products SET stock = stock + ? WHERE id = ?',
-        [baseQtyRestock, pId]
+        'UPDATE products SET stock = stock + ?, stock_quantity = COALESCE(stock_quantity, stock, 0) + ?, updated_at = ? WHERE id = ?',
+        [baseQtyRestock, baseQtyRestock, created_at, pId]
       );
       await enqueueSync(targetDb, 'products', pId, 'UPDATE');
 
@@ -7204,8 +7211,8 @@ async function executeSalesReturn(payload = {}, options = {}) {
         }
 
         await targetDb.run(
-          'UPDATE products SET stock = MAX(0, stock - ?) WHERE id = ?',
-          [baseQtyDeduction, prod.id]
+          'UPDATE products SET stock = MAX(0, stock - ?), stock_quantity = MAX(0, COALESCE(stock_quantity, stock, 0) - ?), updated_at = ? WHERE id = ?',
+          [baseQtyDeduction, baseQtyDeduction, created_at, prod.id]
         );
         await enqueueSync(targetDb, 'products', prod.id, 'UPDATE');
 
@@ -7272,8 +7279,8 @@ async function executeSalesReturn(payload = {}, options = {}) {
       if (sale.customer_id && calcReturnAmount > 0) {
         try {
           await targetDb.run(
-            'UPDATE customers SET credit_balance = MAX(0, COALESCE(credit_balance, 0) - ?), current_credit = MAX(0, COALESCE(current_credit, 0) - ?) WHERE id = ?',
-            [calcReturnAmount, calcReturnAmount, sale.customer_id]
+            'UPDATE customers SET credit_balance = MAX(0, COALESCE(credit_balance, 0) - ?), current_credit = MAX(0, COALESCE(current_credit, 0) - ?), updated_at = ? WHERE id = ?',
+            [calcReturnAmount, calcReturnAmount, created_at, sale.customer_id]
           );
           await enqueueSync(targetDb, 'customers', sale.customer_id, 'UPDATE');
         } catch (custErr) {
@@ -7454,6 +7461,8 @@ async function executeVoidSalesReturn(id, payload = {}, options = {}) {
     await targetDb.run("UPDATE sales_returns SET status = 'voided' WHERE id = ?", [sr.id]);
     await enqueueSync(targetDb, 'sales_returns', sr.id, 'UPDATE');
 
+    const voidNowIso = new Date().toISOString();
+
     // 2. Re-deduct stock for returned items
     const returnedItems = typeof safeParseJson === 'function' ? safeParseJson(sr.returned_items, []) : (typeof sr.returned_items === 'string' ? JSON.parse(sr.returned_items || '[]') : (sr.returned_items || []));
     for (const item of returnedItems) {
@@ -7462,8 +7471,8 @@ async function executeVoidSalesReturn(id, payload = {}, options = {}) {
       const prodId = item.productId || item.product_id;
       if (prodId) {
         await targetDb.run(
-          'UPDATE products SET stock = stock - ? WHERE id = ?',
-          [baseQtyDeduction, prodId]
+          'UPDATE products SET stock = MAX(0, stock - ?), stock_quantity = MAX(0, COALESCE(stock_quantity, stock, 0) - ?), updated_at = ? WHERE id = ?',
+          [baseQtyDeduction, baseQtyDeduction, voidNowIso, prodId]
         );
         await enqueueSync(targetDb, 'products', prodId, 'UPDATE');
       }
@@ -7477,8 +7486,8 @@ async function executeVoidSalesReturn(id, payload = {}, options = {}) {
       const prodId = item.productId || item.product_id;
       if (prodId) {
         await targetDb.run(
-          'UPDATE products SET stock = stock + ? WHERE id = ?',
-          [baseQtyRestock, prodId]
+          'UPDATE products SET stock = stock + ?, stock_quantity = COALESCE(stock_quantity, stock, 0) + ?, updated_at = ? WHERE id = ?',
+          [baseQtyRestock, baseQtyRestock, voidNowIso, prodId]
         );
         await enqueueSync(targetDb, 'products', prodId, 'UPDATE');
       }
@@ -8524,7 +8533,8 @@ async function resolveOrCreateBatchProduct(db, product, itemCost, qty, poSupplie
   const costDiff = Math.abs(currentCost - newCost);
   if (costDiff < 0.01 || newCost <= 0) {
     const newStock = currentStock + qty;
-    await db.run('UPDATE products SET stock = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [newStock, product.id]);
+    const batchNowIso = new Date().toISOString();
+    await db.run('UPDATE products SET stock = ?, stock_quantity = ?, updated_at = ? WHERE id = ?', [newStock, newStock, batchNowIso, product.id]);
     try {
       if (typeof enqueueSync === 'function') await enqueueSync(db, 'products', product.id, 'UPSERT');
     } catch (_) {}
@@ -8543,7 +8553,8 @@ async function resolveOrCreateBatchProduct(db, product, itemCost, qty, poSupplie
   const existingBatch = await db.get('SELECT * FROM products WHERE (sku LIKE ? OR id = ?) AND ABS(cost_price - ?) < 0.01 LIMIT 1', [baseSku + '-B%', product.id, newCost]);
   if (existingBatch) {
     const updatedStock = Number(existingBatch.stock || 0) + qty;
-    await db.run('UPDATE products SET stock = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [updatedStock, existingBatch.id]);
+    const batchNowIso = new Date().toISOString();
+    await db.run('UPDATE products SET stock = ?, stock_quantity = ?, updated_at = ? WHERE id = ?', [updatedStock, updatedStock, batchNowIso, existingBatch.id]);
     try {
       if (typeof enqueueSync === 'function') await enqueueSync(db, 'products', existingBatch.id, 'UPSERT');
     } catch (_) {}
@@ -10212,8 +10223,8 @@ app.post(['/api/purchasing/return', '/api/purchase-returns'], async (req, res) =
 
         // Decrement product stock safely
         await db.run(
-          'UPDATE products SET stock = stock - ? WHERE id = ?',
-          [item.quantity, item.productId]
+          'UPDATE products SET stock = MAX(0, stock - ?), stock_quantity = MAX(0, COALESCE(stock_quantity, stock, 0) - ?), updated_at = ? WHERE id = ?',
+          [item.quantity, item.quantity, createdAt, item.productId]
         );
 
         // Log stock adjustment
@@ -10909,8 +10920,8 @@ async function executeVoidPurchaseReturn({ return_no, void_reason, user_email })
       const qty = Number(item.quantity || item.qty || 0);
       if (prodId && qty > 0) {
         try {
-          await db.run('UPDATE products SET stock = COALESCE(stock, 0) + ? WHERE id = ?', [qty, prodId]);
-          await db.run('UPDATE products SET stock_quantity = COALESCE(stock_quantity, 0) + ? WHERE id = ?', [qty, prodId]).catch(() => {});
+          const voidPrNow = new Date().toISOString();
+          await db.run('UPDATE products SET stock = COALESCE(stock, 0) + ?, stock_quantity = COALESCE(stock_quantity, stock, 0) + ?, updated_at = ? WHERE id = ?', [qty, qty, voidPrNow, prodId]);
         } catch (_) {}
 
         // Stock audit entry
@@ -11251,9 +11262,10 @@ async function executeRevertPurchaseOrderReceipt({ po_ref, user_email }) {
                 restoredCost = 0;
               }
 
+              const revPoNow = new Date().toISOString();
               await db.run(
-                'UPDATE products SET stock = ?, cost_price = ? WHERE id = ?',
-                [newStock, restoredCost, prodId]
+                'UPDATE products SET stock = ?, stock_quantity = ?, cost_price = ?, updated_at = ? WHERE id = ?',
+                [newStock, newStock, restoredCost, revPoNow, prodId]
               );
               affectedProductIds.push(prodId);
 
@@ -13312,8 +13324,8 @@ app.post(['/api/stock_adjustments', '/api/inventory/adjust', '/api/inventory/adj
 
     if (delta !== null && !isNaN(delta) && product_id) {
       await db.run(
-        'UPDATE products SET stock = MAX(0, stock + ?) WHERE id = ?',
-        [delta, product_id]
+        'UPDATE products SET stock = MAX(0, stock + ?), stock_quantity = MAX(0, COALESCE(stock_quantity, stock, 0) + ?), updated_at = ? WHERE id = ?',
+        [delta, delta, timestamp, product_id]
       );
     }
 
@@ -13322,10 +13334,11 @@ app.post(['/api/stock_adjustments', '/api/inventory/adjust', '/api/inventory/adj
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [adjId, product_id, product_name, old_qty || 0, new_qty || 0, effectiveReason, actType, effEmail, timestamp]
     );
-    enqueueSync(db, 'stock_adjustments', adjId, 'UPSERT').catch(() => { });
+    await enqueueSync(db, 'stock_adjustments', adjId, 'UPSERT').catch(() => { });
     if (product_id) {
-      enqueueSync(db, 'products', product_id, 'UPSERT').catch(() => { });
+      await enqueueSync(db, 'products', product_id, 'UPSERT').catch(() => { });
     }
+    triggerPush(db).catch(() => { });
 
     // Damage Expense Auto-Posting
     const isDamaged = String(actType).toUpperCase().includes('DAMAGE') || String(actType).toLowerCase().includes('expense write-off');

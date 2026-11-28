@@ -216,6 +216,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     fetchDashboardStats();
 
     const handleRefresh = () => {
+      cachedDashboard = null;
       fetchDashboardStats();
     };
     window.addEventListener('refresh-dashboard', handleRefresh);
