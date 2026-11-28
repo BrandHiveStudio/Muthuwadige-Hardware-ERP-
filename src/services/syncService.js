@@ -975,7 +975,7 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
           const colNames = columns.map(c => `"${c}"`).join(', ');
           const placeholders = columns.map(() => '?').join(', ');
           const args = columns.map(c => cleanRow[c] !== undefined ? cleanRow[c] : null);
-          const updateCols = columns.filter(c => c !== 'id' && (isPasswordChange || c !== 'password'));
+          const updateCols = columns.filter(c => c !== 'id' && (isPasswordChange || (c !== 'password' && c !== 'password_hash')));
           const conflictClause = updateCols.length > 0
             ? `DO UPDATE SET ${updateCols.map(c => `"${c}" = excluded."${c}"`).join(', ')}`
             : 'DO NOTHING';
@@ -1377,10 +1377,7 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
 
         // Safely purge deleted row from local tables
         try {
-          if (tableName === 'users') {
-            await localDb.run('DELETE FROM users WHERE id = ?', [recordId]);
-            await localDb.run('DELETE FROM sessions WHERE user_id = ?', [recordId]);
-          } else if (tableName === 'profiles') {
+          if (tableName === 'users' || tableName === 'profiles') {
             await localDb.run('DELETE FROM profiles WHERE id = ?', [recordId]);
             await localDb.run('DELETE FROM users WHERE id = ?', [recordId]);
             await localDb.run('DELETE FROM sessions WHERE user_id = ?', [recordId]);
@@ -1456,6 +1453,9 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
             if (!localRow && tableName === 'products' && row.sku) {
               localRow = await localDb.get(`SELECT * FROM products WHERE sku = ?`, [row.sku]);
             }
+            if (!localRow && (tableName === 'users' || tableName === 'profiles') && row.email) {
+              localRow = await localDb.get(`SELECT * FROM "${tableName}" WHERE LOWER(email) = LOWER(?)`, [row.email]);
+            }
           } catch (_) { }
 
           if (localRow) {
@@ -1481,9 +1481,18 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
                 tableName === 'products' &&
                 cloudTime >= localTime &&
                 Math.abs(Number(localRow.stock || 0) - Number(row.stock || 0)) > 1e-9;
-              const isCloudNewer = cloudTime > localTime || stockReconcileNeeded;
+              const isUserOrProfile = tableName === 'users' || tableName === 'profiles';
+              const cloudPwdHash = row.password_hash ?? null;
+              const localPwdHash = localRow.password_hash ?? null;
+              const cloudPwd = row.password ?? null;
+              const localPwd = localRow.password ?? null;
+              const credentialSyncNeeded =
+                isUserOrProfile &&
+                ((cloudTime >= localTime && (cloudPwdHash !== localPwdHash || cloudPwd !== localPwd)) ||
+                  (Boolean(cloudPwdHash) && !localPwdHash));
+              const isCloudNewer = cloudTime > localTime || stockReconcileNeeded || credentialSyncNeeded;
 
-              // If cloud is not newer than local (and stock doesn't need same-ms reconciliation), preserve local record
+              // If cloud is not newer than local (and stock/credentials don't need reconciliation), preserve local record
               if (!isCloudNewer) {
                 continue;
               }
@@ -1565,6 +1574,12 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
               args
             );
           } else {
+            if ((tableName === 'users' || tableName === 'profiles') && row.email) {
+              await localDb.run(
+                `DELETE FROM "${tableName}" WHERE LOWER(email) = LOWER(?) AND id != ?`,
+                [row.email, row.id]
+              ).catch(() => { });
+            }
             const rawCols = Object.keys(row);
             const cols = localColSet.size > 0 ? rawCols.filter(c => localColSet.has(c)) : rawCols;
             const colNames = cols.map(c => `"${c}"`).join(', ');
@@ -1582,10 +1597,46 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
         try {
           const usersTableExists = await localDb.get("SELECT name FROM sqlite_master WHERE type='table' AND name='users'");
           if (usersTableExists && res?.rows && res.rows.length > 0) {
+            const usersColsInfo = await localDb.all('PRAGMA table_info("users")').catch(() => []);
+            const usersColSet = new Set((usersColsInfo || []).map(c => c.name));
             for (const row of res.rows) {
+              if (!row?.id) continue;
+              const tombstone = await localDb.get(
+                'SELECT 1 FROM deleted_records WHERE table_name = ? AND record_id = ?',
+                ['users', String(row.id)]
+              ).catch(() => null);
+              if (tombstone) continue;
+
+              const unackUser = await localDb.get(
+                "SELECT id FROM sync_queue WHERE table_name = 'users' AND record_id = ? AND status IN ('PENDING', 'FAILED', 'ERROR')",
+                [String(row.id)]
+              ).catch(() => null);
+              if (unackUser) continue;
+
+              const existingLocalUser = await localDb.get('SELECT * FROM users WHERE id = ?', [row.id]).catch(() => null);
+              if (row.email) {
+                await localDb.run(
+                  'DELETE FROM users WHERE LOWER(email) = LOWER(?) AND id != ?',
+                  [row.email, row.id]
+                ).catch(() => { });
+              }
+
+              const syncedPassword = row.password ?? existingLocalUser?.password ?? null;
+              const syncedPasswordHash = row.password_hash ?? existingLocalUser?.password_hash ?? syncedPassword;
+              const candidateUser = {
+                id: row.id,
+                email: row.email,
+                password: syncedPassword,
+                password_hash: syncedPasswordHash,
+                role: row.role,
+                name: row.name || row.full_name,
+                created_at: row.created_at || existingLocalUser?.created_at || new Date().toISOString(),
+                updated_at: row.updated_at ?? existingLocalUser?.updated_at ?? null
+              };
+              const uCols = Object.keys(candidateUser).filter(c => usersColSet.size === 0 || usersColSet.has(c));
               await localDb.run(
-                `INSERT OR REPLACE INTO users (id, email, password, role, name, created_at) VALUES (?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))`,
-                [row.id, row.email, row.password, row.role, row.name || row.full_name, row.created_at]
+                `INSERT OR REPLACE INTO users (${uCols.map(c => `"${c}"`).join(', ')}) VALUES (${uCols.map(() => '?').join(', ')})`,
+                uCols.map(c => candidateUser[c] !== undefined ? candidateUser[c] : null)
               );
             }
           }

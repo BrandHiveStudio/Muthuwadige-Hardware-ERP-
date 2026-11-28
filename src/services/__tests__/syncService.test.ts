@@ -148,6 +148,11 @@ function createPureInMemorySqlite() {
     if (excludedMatch && excluded) {
       return excluded[stripQuotes(excludedMatch[1])];
     }
+    const lowerMatch = expr.match(/^LOWER\(([\s\S]+)\)$/i);
+    if (lowerMatch) {
+      const innerVal = evalExpr(lowerMatch[1], row, args, argIdx, excluded);
+      return innerVal === null || innerVal === undefined ? null : String(innerVal).toLowerCase();
+    }
     const maxMatch = expr.match(/^MAX\(([\s\S]+)\)$/i);
     if (maxMatch) {
       const inner = splitTopLevelCommas(maxMatch[1]);
@@ -288,6 +293,13 @@ function createPureInMemorySqlite() {
       const l = Number(evalExpr(gteMatch[1], row, args, argIdx) ?? 0);
       const r = Number(evalExpr(gteMatch[2], row, args, argIdx) ?? 0);
       return l >= r;
+    }
+
+    const neqMatch = w.match(/^(.+?)\s*!=\s*(.+)$/);
+    if (neqMatch) {
+      const l = evalExpr(neqMatch[1], row, args, argIdx);
+      const r = evalExpr(neqMatch[2], row, args, argIdx);
+      return String(l ?? '') !== String(r ?? '') || (l === null) !== (r === null);
     }
 
     const eqMatch = w.match(/^(.+?)\s*=\s*(.+)$/);
@@ -609,6 +621,37 @@ function createPureInMemorySqlite() {
 async function createInMemoryDb(withTriggers = false) {
   const db = createPureInMemorySqlite();
   await db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT UNIQUE,
+      password TEXT,
+      password_hash TEXT,
+      role TEXT,
+      name TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS profiles (
+      id TEXT PRIMARY KEY,
+      name TEXT,
+      email TEXT,
+      role TEXT,
+      avatar TEXT,
+      password TEXT,
+      password_hash TEXT,
+      permissions TEXT,
+      custom_permissions TEXT,
+      reset_token TEXT,
+      reset_token_expiry TEXT,
+      full_name TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      token TEXT,
+      user_id TEXT
+    );
     CREATE TABLE IF NOT EXISTS products (
       id TEXT PRIMARY KEY,
       sku TEXT UNIQUE,
@@ -881,5 +924,51 @@ describe('Two-Way Sync Pipeline (syncService.js)', () => {
     const localProd = await localDb.get("SELECT stock, stock_quantity FROM products WHERE id = 'p_drill'");
     expect(Number(localProd.stock)).toBe(5);
     expect(Number(localProd.stock_quantity)).toBe(5);
+  });
+
+  it('updates users.password_hash, mirrors profiles, and removes deleted users on downstream pull', async () => {
+    const localDb = await createInMemoryDb(true);
+    const { cloudDb, tursoClient } = await createMockTurso();
+
+    // Local SQLite has missing password_hash and stale profile timestamp + removed staff user
+    await localDb.run(
+      `INSERT INTO users (id, email, password, password_hash, role, name, created_at, updated_at)
+       VALUES ('usr_super_admin_01', 'sanojhardware@gmail.com', '$2a$10$oldhash', NULL, 'super_admin', 'Super Admin', '2026-09-20T07:34:08.072Z', NULL),
+              ('u_deleted_staff', 'krishleo439@gmail.com', '$2a$10$staffhash', '$2a$10$staffhash', 'Admin', 'Krish Admin', '2026-09-19T14:55:48.000Z', NULL)`
+    );
+    await localDb.run(
+      `INSERT INTO profiles (id, name, email, role, password, password_hash, created_at, updated_at)
+       VALUES ('usr_super_admin_01', 'Super Admin', 'sanojhardware@gmail.com', 'super_admin', '$2a$10$veryold', NULL, '2026-11-21T09:37:09.000Z', NULL),
+              ('u_deleted_staff', 'Krish Admin', 'krishleo439@gmail.com', 'Admin', '$2a$10$staffhash', '$2a$10$staffhash', '2026-09-19T14:55:48.000Z', NULL)`
+    );
+
+    // Turso Cloud has updated password_hash for super_admin + tombstone for deleted staff user
+    await cloudDb.run(
+      `INSERT INTO users (id, email, password, password_hash, role, name, created_at, updated_at)
+       VALUES ('usr_super_admin_01', 'sanojhardware@gmail.com', '$2a$10$newcloudhash', '$2a$10$newcloudhash', 'super_admin', 'Super Admin', '2026-09-20T07:34:08.072Z', '2026-11-28T15:00:00.000Z')`
+    );
+    await cloudDb.run(
+      `INSERT INTO profiles (id, name, email, role, password, password_hash, created_at, updated_at)
+       VALUES ('usr_super_admin_01', 'Super Admin', 'sanojhardware@gmail.com', 'super_admin', '$2a$10$newcloudhash', '$2a$10$newcloudhash', '2026-09-20T07:34:08.072Z', '2026-11-28T15:00:00.000Z')`
+    );
+    await cloudDb.run(
+      `INSERT INTO deleted_records (table_name, record_id, deleted_at)
+       VALUES ('users', 'u_deleted_staff', '2026-11-28T14:10:00.000Z')`
+    );
+
+    await pullDownstreamChanges(localDb, tursoClient);
+
+    const localUsers = await localDb.all('SELECT id, email, password, password_hash, updated_at FROM users');
+    const localProfiles = await localDb.all('SELECT id, email, password, password_hash, updated_at FROM profiles');
+
+    expect(localUsers).toHaveLength(1);
+    expect(localUsers[0].id).toBe('usr_super_admin_01');
+    expect(localUsers[0].password_hash).toBe('$2a$10$newcloudhash');
+    expect(localUsers[0].password).toBe('$2a$10$newcloudhash');
+    expect(localUsers[0].updated_at).toBe('2026-11-28T15:00:00.000Z');
+
+    expect(localProfiles).toHaveLength(1);
+    expect(localProfiles[0].id).toBe('usr_super_admin_01');
+    expect(localProfiles[0].password_hash).toBe('$2a$10$newcloudhash');
   });
 });
