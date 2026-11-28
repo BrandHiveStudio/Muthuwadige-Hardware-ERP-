@@ -1,4 +1,23 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+
+const savedEnv = vi.hoisted(() => {
+  const keys = [
+    'VERCEL',
+    'VERCEL_ENV',
+    'APP_ROLE',
+    'IS_WEB_CLIENT',
+    'DATABASE_ENGINE',
+    'TURSO_DATABASE_URL',
+    'TURSO_AUTH_TOKEN'
+  ] as const;
+  const snapshot: Record<string, string | undefined> = {};
+  for (const k of keys) {
+    snapshot[k] = process.env[k];
+    delete process.env[k];
+  }
+  return snapshot;
+});
+
 import {
   ensureSyncSchema,
   enqueueSync,
@@ -742,7 +761,21 @@ async function createMockTurso() {
 
 describe('Two-Way Sync Pipeline (syncService.js)', () => {
   beforeEach(() => {
+    delete process.env.VERCEL;
+    delete process.env.VERCEL_ENV;
+    delete process.env.APP_ROLE;
+    delete process.env.IS_WEB_CLIENT;
+    delete process.env.DATABASE_ENGINE;
+    delete process.env.TURSO_DATABASE_URL;
+    delete process.env.TURSO_AUTH_TOKEN;
     __resetSyncSchemaForTesting();
+  });
+
+  afterAll(() => {
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
   });
 
   it('does not double-apply historical stock_adjustments deltas during downstream pull', async () => {
