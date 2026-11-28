@@ -841,7 +841,7 @@ export async function executeBackupTask({
     });
 
     const netReturns = returnedSellingRev;
-    const grossSellingRev = Math.round(grossStickerSales * 100) / 100;
+    const grossSellingRev = Math.round((grossStickerSales + exchangeSellingRev) * 100) / 100;
     const netSellingRev = Math.max(0, Math.round((grossStickerSales - customerDiscounts - netReturns + exchangeSellingRev + transportFees) * 100) / 100);
     const netCostVal = Math.max(0, Math.round((grossCostVal + exchangeCostVal - returnedCostVal) * 100) / 100);
     const grossProfit = Math.round((netSellingRev - netCostVal) * 100) / 100;
@@ -944,27 +944,57 @@ export async function executeBackupTask({
       return false;
     };
 
-    const calcNetOutstanding = (sale) => {
+    const calcSaleExportSummary = (sale) => {
       const inv = sale.invoice_no || sale.invoiceNo;
+      const isCredit = isCreditSale(sale);
       const origTotal = Number(sale.total_amount !== undefined ? sale.total_amount : (sale.total || 0));
       const invReturns = allReturnsUnfiltered.filter(r => {
         const rSt = (r.status || '').toString().toLowerCase().trim();
         if (rSt === 'voided' || rSt === 'cancelled') return false;
-        return r.invoice_no === inv || r.invoiceNo === inv;
+        return r.invoice_no === inv || r.invoiceNo === inv || r.invoice_no === sale.id || r.invoice_id === sale.id;
       });
       const retAmt = invReturns.reduce((sum, r) => sum + Number(r.return_amount !== undefined ? r.return_amount : (r.refund_amount || 0)), 0);
-      const exAmt = invReturns.reduce((sum, r) => sum + Number(r.exchange_amount || 0), 0);
-      const effTotal = Math.max(0, origTotal - retAmt + exAmt);
+      const exAmt = invReturns.reduce((sum, r) => sum + Number(r.exchange_amount !== undefined ? r.exchange_amount : (r.exchangeAmount || 0)), 0);
+      const exPaid = invReturns.reduce((sum, r) => {
+        const paid = Number(r.customer_paid !== undefined ? r.customer_paid : (r.customerPaid || 0));
+        const chg = Number(r.change_given !== undefined ? r.change_given : (r.changeGiven || 0));
+        return sum + Math.max(0, paid - chg);
+      }, 0);
+      const cashRefunded = invReturns.reduce((sum, r) => {
+        const isRetCredit = r.is_credit === 1 || r.is_credit === true || r.isCredit === true;
+        if (isRetCredit) return sum;
+        const rMethod = String(r.return_method || r.return_type || '').toLowerCase().trim();
+        if (rMethod === 'credit note') return sum;
+        if (rMethod === 'exchange') {
+          const expRef = Number(r.total_refunded ?? r.refund_amount ?? 0);
+          const bal = Number(r.balance_amount ?? 0);
+          return sum + (expRef > 0 ? expRef : (bal < 0 ? Math.abs(bal) : 0));
+        }
+        return sum + Math.max(0, Number(r.total_refunded ?? r.refund_amount ?? r.return_amount ?? 0));
+      }, 0);
 
       const invPayments = allCreditPaymentsUnfiltered.filter(cp => {
         const cpSt = (cp.status || '').toLowerCase();
         if (cpSt === 'voided' || cpSt === 'cancelled') return false;
         return cp.sale_id === sale.id || (inv && cp.invoice_no === inv);
       });
-      const paidAmt = invPayments.reduce((sum, cp) => sum + Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0)), 0);
-      const totalPaid = Math.max(Number(sale.payment_received || 0), paidAmt);
-      return Math.max(0, effTotal - totalPaid);
+      const cpPaidAmt = invPayments.reduce((sum, cp) => sum + Number(cp.amount_paid !== undefined ? cp.amount_paid : (cp.amount || 0)), 0);
+
+      const effTotal = Math.max(0, Math.round((origTotal - retAmt + exAmt) * 100) / 100);
+      const recordedPaid = Number(sale.payment_received || 0);
+      let totalPaid = 0;
+      if (isCredit) {
+        const basePaid = Math.max(recordedPaid, cpPaidAmt);
+        totalPaid = Math.min(effTotal, Math.max(0, Math.round((basePaid + exPaid - cashRefunded) * 100) / 100));
+      } else {
+        const basePaid = recordedPaid > 0 ? Math.max(origTotal, recordedPaid) : origTotal;
+        totalPaid = Math.min(effTotal, Math.max(0, Math.round((basePaid - cashRefunded + exPaid) * 100) / 100));
+      }
+      const netOutstanding = Math.max(0, Math.round((effTotal - totalPaid) * 100) / 100);
+      return { isCredit, origTotal, retAmt, exAmt, exPaid, cashRefunded, effTotal, totalPaid, netOutstanding };
     };
+
+    const calcNetOutstanding = (sale) => calcSaleExportSummary(sale).netOutstanding;
 
     const receivableSales = allSalesUnfiltered.filter(s => {
       if (!s) return false;
@@ -1174,20 +1204,7 @@ export async function executeBackupTask({
         }
       } catch (e) { }
 
-      const inv = s.invoice_no || s.invoiceNo;
-      const invReturns = activeReturns.filter(r => (r.invoice_no === inv || r.invoiceNo === inv));
-      const retAmt = invReturns.reduce((acc, r) => acc + Number(r.return_amount || r.returnAmount || 0), 0);
-      const exAmt = invReturns.reduce((acc, r) => acc + Number(r.exchange_amount || r.exchangeAmount || 0), 0);
-      const exPaid = invReturns.reduce((acc, r) => acc + Number(r.customer_paid || r.customerPaid || 0), 0);
-
-      const method = (s.payment_method || '').toLowerCase();
-      const isCredit = method === 'credit' || s.is_credit === 1 || s.is_credit === true || s.status?.toLowerCase() === 'non paid' || s.status?.toLowerCase() === 'partially settled' || s.status?.toLowerCase() === 'fully settled' || s.status?.toLowerCase() === 'fully returned' || s.status?.toLowerCase() === 'partially returned';
-
-      const origTotal = Number(s.total_amount !== undefined ? s.total_amount : (s.total || 0));
-      const origPaid = isCredit ? Number(s.payment_received || 0) : (s.status?.toLowerCase() === 'paid' ? origTotal : Number(s.payment_received || 0));
-      const totalPaid = origPaid + exPaid;
-      const effTotal = Math.max(0, origTotal - retAmt + exAmt);
-      const netOutstanding = Math.max(0, effTotal - totalPaid);
+      const { effTotal, totalPaid, netOutstanding } = calcSaleExportSummary(s);
 
       return {
         "Invoice Number": s.invoice_no || s.invoiceNo || s.id || '---',
@@ -1219,6 +1236,23 @@ export async function executeBackupTask({
     setColWidths(wsSales, structuredSales, wsSalesHeaders);
     applyTableStyles(wsSales, "065F46");
 
+    const normalizeExportTransactionAmount = (t) => {
+      const rawAmt = Number(t.amount || 0);
+      const flowUpper = String(t.flow_type || t.type || '').toUpperCase().trim();
+      const typeUpper = String(t.type || '').toUpperCase().trim();
+      const catLower = String(t.category || '').toLowerCase();
+      const isContraRevenue =
+        typeUpper === 'CONTRA_REVENUE' ||
+        typeUpper === 'CONTRA-REVENUE' ||
+        typeUpper === 'SALES_RETURN' ||
+        flowUpper === 'CONTRA_REVENUE' ||
+        flowUpper === 'CONTRA-REVENUE' ||
+        flowUpper === 'CREDIT_ADJUSTMENT' ||
+        catLower.startsWith('sales return') ||
+        catLower.includes('exchange refund');
+      return isContraRevenue ? -Math.abs(rawAmt) : rawAmt;
+    };
+
     // 3. Transactions Sheet
     const structuredTransactions = transactions.map(t => ({
       "Record Date": getExcelDecimalDate(t.date || t.created_at) || '---',
@@ -1226,7 +1260,7 @@ export async function executeBackupTask({
       "Finance Category": t.category || 'Other',
       "Description Details": t.description || '---',
       "Reference Invoice / PO": t.reference || '---',
-      "Transaction Value (Rs.)": Number(t.amount || 0),
+      "Transaction Value (Rs.)": normalizeExportTransactionAmount(t),
       "System Log Date": getExcelDecimalDate(t.created_at || t.date) || '---'
     }));
     const wsTransactionsHeaders = [
@@ -1405,18 +1439,20 @@ export async function executeBackupTask({
 
     // 13. Credit Customers Sheet
     let creditSalesList = validSales.filter(s => {
-      const isCredit = s.status === 'Non Paid' || s.status === 'Partially Paid' || s.status === 'Pending' || (s.payment_method && s.payment_method.toLowerCase() === 'credit');
-      const rem = Math.max(0, (s.total_amount || 0) - (s.payment_received || 0));
-      return isCredit && rem > 0;
+      const summary = calcSaleExportSummary(s);
+      return summary.isCredit && summary.netOutstanding > 0.01;
     });
 
     const totOutstandingAll = totalCreditOutstanding;
-    const totOverdueAll = creditSalesList.filter(s => s.due_date && new Date(s.due_date) < new Date()).reduce((sum, s) => sum + Math.max(0, (s.total_amount || 0) - (s.payment_received || 0)), 0);
+    const totOverdueAll = creditSalesList
+      .filter(s => s.due_date && new Date(s.due_date) < new Date())
+      .reduce((sum, s) => sum + calcSaleExportSummary(s).netOutstanding, 0);
 
     const structuredCreditCustomers = creditSalesList.map(s => {
-      const totalAmt = Number(s.total_amount || 0);
-      const paidAmt = Number(s.payment_received || 0);
-      const outstandingAmt = Math.max(0, totalAmt - paidAmt);
+      const summary = calcSaleExportSummary(s);
+      const totalAmt = summary.effTotal;
+      const paidAmt = summary.totalPaid;
+      const outstandingAmt = summary.netOutstanding;
       const isOverdue = s.due_date && new Date(s.due_date) < new Date();
       return {
         "Customer": s.customer_name || 'Walk-in Credit Customer',
@@ -1426,7 +1462,7 @@ export async function executeBackupTask({
         "Amount Paid": paidAmt,
         "Outstanding Amount": outstandingAmt,
         "Due Date": s.due_date ? s.due_date.slice(0, 10) : '---',
-        "Payment Status": outstandingAmt <= 0 ? "Paid" : paidAmt > 0 ? (isOverdue ? "Partially Paid (Overdue)" : "Partially Paid") : (isOverdue ? "Non Paid (Overdue)" : "Non Paid"),
+        "Payment Status": outstandingAmt <= 0.01 ? "Paid" : paidAmt > 0 ? (isOverdue ? "Partially Paid (Overdue)" : "Partially Paid") : (isOverdue ? "Non Paid (Overdue)" : "Non Paid"),
         "Payment History": paidAmt > 0 ? `Paid Rs. ${paidAmt.toLocaleString()}` : "No payments recorded",
         "Total Outstanding": totOutstandingAll,
         "Total Overdue": totOverdueAll

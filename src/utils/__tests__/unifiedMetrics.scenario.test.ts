@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { computeUnifiedMetrics } from '../unifiedMetrics';
-import { getItemUnitCost } from '../accounting';
+import { getItemUnitCost, computeFinancialSummary } from '../accounting';
 import { formatStock } from '../formatters';
+import { computeExportInvoiceSummary, normalizeExportTransactionAmount } from '../excelExport';
 
 describe('Muthuwadige Hardware - Unified POS & Inventory Scenarios', () => {
   const products = [
@@ -365,5 +366,62 @@ describe('Muthuwadige Hardware - Unified POS & Inventory Scenarios', () => {
     expect(formatStock(2, 'Cube')).toBe('2.00');
     expect(formatStock(1.999, 'kg')).toBe('1.999');
     expect(formatStock(5, 'pcs')).toBe('5');
+  });
+
+  it('reconciles Excel backup Gross Sales (with exchanges), per-invoice payment/outstanding balances, and signed CONTRA_REVENUE ledger amounts', () => {
+    const inv1 = { id: 's1', invoice_no: 'POS1-INV-00001', payment_method: 'Cash', status: 'Partially Returned', subtotal: 750, discount: 0, total_amount: 750, payment_received: 0, items: [] };
+    const inv2 = { id: 's2', invoice_no: 'POS1-INV-00002', payment_method: 'Cash', status: 'Partially Returned', subtotal: 300, discount: 0, total_amount: 300, payment_received: 0, items: [] };
+    const inv3 = { id: 's3', invoice_no: 'POS1-INV-00003', payment_method: 'Cash', status: 'paid', subtotal: 750, discount: 0, total_amount: 750, payment_received: 0, items: [] };
+    const inv4 = { id: 's4', invoice_no: 'POS1-INV-00004', payment_method: 'Cash', status: 'Partially Returned', subtotal: 500, discount: 0, total_amount: 500, payment_received: 0, items: [] };
+    const inv5 = { id: 's5', invoice_no: 'POS1-INV-00005', customer_name: 'leo', payment_method: 'Credit', status: 'Partially Returned', subtotal: 300, discount: 15, transportation_fee: 1, total_amount: 286, payment_received: 0, items: [] };
+    const fiveSales = [inv1, inv2, inv3, inv4, inv5];
+
+    const fourReturns = [
+      { id: 'r1', return_no: 'RET-173486', invoice_no: 'POS1-INV-00001', return_method: 'Cash Refund', return_amount: 250, exchange_amount: 0, total_refunded: 250, customer_paid: 0, is_credit: 0 },
+      { id: 'r2', return_no: 'RET-435324', invoice_no: 'POS1-INV-00002', return_method: 'Exchange', return_amount: 100, exchange_amount: 215, balance_amount: 115, total_refunded: 0, customer_paid: 115, is_credit: 0 },
+      { id: 'r3', return_no: 'RET-073708', invoice_no: 'POS1-INV-00004', return_method: 'Cash Refund', return_amount: 250, exchange_amount: 0, total_refunded: 250, customer_paid: 0, is_credit: 0 },
+      { id: 'r4', return_no: 'RET-780329', invoice_no: 'POS1-INV-00005', return_method: 'Return', return_amount: 95, exchange_amount: 0, total_refunded: 0, customer_paid: 0, difference_payment_method: 'Customer Credit Debt', is_credit: 1 }
+    ];
+
+    const fin = computeFinancialSummary({ sales: fiveSales, salesReturns: fourReturns, products });
+    const exportGrossSales = Math.round(((fin.grossStickerSales || 0) + (fin.exchangeSellingRevenue || 0)) * 100) / 100;
+    expect(exportGrossSales).toBeCloseTo(2815, 2);
+    expect(fin.netSalesRevenue).toBeCloseTo(2106, 2);
+    expect(exportGrossSales - fin.customerDiscounts - fin.returnsSellingRevenue + fin.transportFees).toBeCloseTo(2106, 2);
+
+    expect(computeExportInvoiceSummary(inv1, fourReturns, [])).toEqual({
+      isCredit: false,
+      originalTotal: 750,
+      effectiveTotal: 500,
+      paymentReceived: 500,
+      outstandingBalance: 0
+    });
+    expect(computeExportInvoiceSummary(inv2, fourReturns, [])).toEqual({
+      isCredit: false,
+      originalTotal: 300,
+      effectiveTotal: 415,
+      paymentReceived: 415,
+      outstandingBalance: 0
+    });
+    expect(computeExportInvoiceSummary(inv4, fourReturns, [])).toEqual({
+      isCredit: false,
+      originalTotal: 500,
+      effectiveTotal: 250,
+      paymentReceived: 250,
+      outstandingBalance: 0
+    });
+    expect(computeExportInvoiceSummary(inv5, fourReturns, [])).toEqual({
+      isCredit: true,
+      originalTotal: 286,
+      effectiveTotal: 191,
+      paymentReceived: 0,
+      outstandingBalance: 191
+    });
+
+    expect(normalizeExportTransactionAmount({ type: 'income', amount: 750 })).toBe(750);
+    expect(normalizeExportTransactionAmount({ type: 'contra_revenue', category: 'Sales Return', amount: 250 })).toBe(-250);
+    expect(normalizeExportTransactionAmount({ type: 'contra_revenue', category: 'Sales Return', amount: 100 })).toBe(-100);
+    expect(normalizeExportTransactionAmount({ type: 'contra_revenue', flow_type: 'CREDIT_ADJUSTMENT', amount: -95 })).toBe(-95);
+    expect(normalizeExportTransactionAmount({ type: 'expense', category: 'Utilities', amount: 40 })).toBe(40);
   });
 });

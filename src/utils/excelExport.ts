@@ -5,8 +5,122 @@ import {
   toSriLankaDateStr,
   isWithinDateRange,
   computeFinancialSummary,
-  computePaymentBreakdown
+  computePaymentBreakdown,
+  computeReturnCashFlow,
+  isCreditSaleRecord
 } from './accounting';
+
+export interface ExportInvoiceSummary {
+  isCredit: boolean;
+  originalTotal: number;
+  effectiveTotal: number;
+  paymentReceived: number;
+  outstandingBalance: number;
+}
+
+/**
+ * Computes consistent per-invoice effective total, payment received, and outstanding balance
+ * for Excel export across settled cash bills (including partial returns/exchanges) and credit bills.
+ */
+export function computeExportInvoiceSummary(
+  sale: any,
+  salesReturnsList: any[] = [],
+  creditPaymentsList: any[] = []
+): ExportInvoiceSummary {
+  const invNo = sale?.invoice_no || sale?.invoiceNo || sale?.id;
+  const isCredit = isCreditSaleRecord(sale);
+  const originalTotal = Number(sale?.total_amount !== undefined ? sale.total_amount : (sale?.total || 0));
+
+  const activeReturns = (salesReturnsList || []).filter((r: any) => {
+    if (!r) return false;
+    const st = String(r.status || '').toLowerCase().trim();
+    if (st === 'voided' || st === 'cancelled') return false;
+    return (
+      (r.invoice_no && (r.invoice_no === invNo || r.invoice_no === sale?.id)) ||
+      (r.invoiceNo && (r.invoiceNo === invNo || r.invoiceNo === sale?.id)) ||
+      (r.invoice_id && (r.invoice_id === invNo || r.invoice_id === sale?.id)) ||
+      (r.invoiceId && (r.invoiceId === invNo || r.invoiceId === sale?.id))
+    );
+  });
+
+  const retAmt = activeReturns.reduce(
+    (sum: number, r: any) => sum + Number(r.return_amount ?? r.returnAmount ?? r.refund_amount ?? 0),
+    0
+  );
+  const exAmt = activeReturns.reduce(
+    (sum: number, r: any) => sum + Number(r.exchange_amount ?? r.exchangeAmount ?? 0),
+    0
+  );
+
+  let cashRefunded = 0;
+  let exchangePaid = 0;
+  for (const r of activeReturns) {
+    const flow = computeReturnCashFlow(r);
+    cashRefunded += flow.cashRefundOutflow;
+    exchangePaid += flow.cashInflow + flow.cardInflow + flow.bankInflow;
+  }
+
+  const cpPaidAmt = (creditPaymentsList || [])
+    .filter((cp: any) => {
+      if (!cp) return false;
+      const st = String(cp.status || '').toLowerCase().trim();
+      if (st === 'voided' || st === 'cancelled') return false;
+      return (
+        cp.sale_id === sale?.id ||
+        (invNo && (cp.invoice_no === invNo || cp.invoice_id === invNo))
+      );
+    })
+    .reduce((sum: number, cp: any) => sum + Number(cp.amount_paid ?? cp.amount ?? 0), 0);
+
+  const effectiveTotal = Math.max(0, Math.round((originalTotal - retAmt + exAmt) * 100) / 100);
+  const recordedPaid = Number(sale?.payment_received || 0);
+
+  let paymentReceived = 0;
+  if (isCredit) {
+    const basePaid = Math.max(recordedPaid, cpPaidAmt);
+    paymentReceived = Math.min(
+      effectiveTotal,
+      Math.max(0, Math.round((basePaid + exchangePaid - cashRefunded) * 100) / 100)
+    );
+  } else {
+    const basePaid = recordedPaid > 0 ? Math.max(originalTotal, recordedPaid) : originalTotal;
+    paymentReceived = Math.min(
+      effectiveTotal,
+      Math.max(0, Math.round((basePaid - cashRefunded + exchangePaid) * 100) / 100)
+    );
+  }
+
+  const outstandingBalance = Math.max(0, Math.round((effectiveTotal - paymentReceived) * 100) / 100);
+  return {
+    isCredit,
+    originalTotal,
+    effectiveTotal,
+    paymentReceived,
+    outstandingBalance
+  };
+}
+
+/**
+ * Normalizes exported ledger amounts so contra-revenue / sales return entries always export
+ * with negative sign regardless of whether DB rows stored positive or negative magnitude.
+ */
+export function normalizeExportTransactionAmount(t: any): number {
+  const rawAmt = Number(t?.amount || 0);
+  const flowUpper = String(t?.flow_type || t?.type || '').toUpperCase().trim();
+  const typeUpper = String(t?.type || '').toUpperCase().trim();
+  const catLower = String(t?.category || '').toLowerCase();
+  const isContraRevenue =
+    typeUpper === 'CONTRA_REVENUE' ||
+    typeUpper === 'CONTRA-REVENUE' ||
+    typeUpper === 'SALES_RETURN' ||
+    flowUpper === 'CONTRA_REVENUE' ||
+    flowUpper === 'CONTRA-REVENUE' ||
+    flowUpper === 'CREDIT_ADJUSTMENT' ||
+    catLower.startsWith('sales return') ||
+    catLower.includes('exchange refund');
+
+  return isContraRevenue ? -Math.abs(rawAmt) : rawAmt;
+}
 
 export interface ExcelExportOptions {
   fromDate?: string;
@@ -167,7 +281,8 @@ export async function exportFullDatabaseExcelBackup(options: ExcelExportOptions 
     toDate
   });
 
-  const grossSellingRev = finSummary.grossStickerSales;
+  const grossSellingRev =
+    Math.round(((finSummary.grossStickerSales || 0) + (finSummary.exchangeSellingRevenue || 0)) * 100) / 100;
   const netSellingRev = finSummary.netSalesRevenue;
   const netCostVal = finSummary.netCOGS;
   const grossProfitVal = finSummary.grossProfit;
@@ -257,16 +372,25 @@ export async function exportFullDatabaseExcelBackup(options: ExcelExportOptions 
   applyTableStyles(wsInventory, "0F172A");
 
   // 3. Sales & Invoices Sheet
-  const structuredSales = sales.filter((s: any) => s.status?.toUpperCase() !== 'CANCELLED' && s.status?.toUpperCase() !== 'VOIDED').map((s: any) => ({
-    "Invoice Number": s.invoice_no,
-    "Customer Name": s.customer_name || 'Guest Customer',
-    "Total Amount (Rs.)": Number(s.total_amount || 0),
-    "Payment Received (Rs.)": Number(s.payment_received || 0),
-    "Outstanding Balance (Rs.)": Math.max(0, Number(s.total_amount || 0) - Number(s.payment_received || 0)),
-    "Payment Status": s.status ? s.status.toUpperCase() : 'PAID',
-    "Payment Method": s.payment_method || 'Cash',
-    "Checkout Date": getExcelDecimalDate(s.created_at || s.date)
-  }));
+  const structuredSales = sales.filter((s: any) => s.status?.toUpperCase() !== 'CANCELLED' && s.status?.toUpperCase() !== 'VOIDED').map((s: any) => {
+    const summary = computeExportInvoiceSummary(s, salesReturns, creditPayments);
+    const paymentStatus =
+      summary.outstandingBalance <= 0.01
+        ? 'PAID'
+        : summary.paymentReceived > 0
+        ? 'PARTIALLY SETTLED'
+        : 'NON PAID';
+    return {
+      "Invoice Number": s.invoice_no,
+      "Customer Name": s.customer_name || 'Guest Customer',
+      "Total Amount (Rs.)": summary.effectiveTotal,
+      "Payment Received (Rs.)": summary.paymentReceived,
+      "Outstanding Balance (Rs.)": summary.outstandingBalance,
+      "Payment Status": paymentStatus,
+      "Payment Method": s.payment_method || 'Cash',
+      "Checkout Date": getExcelDecimalDate(s.created_at || s.date)
+    };
+  });
   const wsSales = XLSX.utils.json_to_sheet(structuredSales);
   setColWidths(wsSales, structuredSales);
   applyTableStyles(wsSales, "065F46");
@@ -321,11 +445,11 @@ export async function exportFullDatabaseExcelBackup(options: ExcelExportOptions 
   // 6. Transactions (Accounting Ledger)
   const structuredTransactions = transactions.map((t: any) => ({
     "Date": getExcelDecimalDate(t.date || t.created_at),
-    "Flow Type": t.type ? t.type.toUpperCase() : 'INCOME',
+    "Flow Type": (t.flow_type || t.type || 'INCOME').toUpperCase(),
     "Category": t.category || 'Other',
     "Description": t.description || '',
     "Reference": t.reference || '---',
-    "Amount (Rs.)": Number(t.amount || 0)
+    "Amount (Rs.)": normalizeExportTransactionAmount(t)
   }));
   const wsTransactions = XLSX.utils.json_to_sheet(structuredTransactions);
   setColWidths(wsTransactions, structuredTransactions);
