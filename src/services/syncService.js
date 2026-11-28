@@ -1052,6 +1052,8 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
           let stockDeltaStmt = null;
           if (delta !== 0 && !isNaN(delta) && cleanRow.product_id) {
             const adjId = cleanRow.id || item.record_id || '';
+            const createdMs = parseUtcTimestamp(cleanRow.created_at);
+            const deltaCommitIso = new Date(Math.max(Date.now(), (createdMs || 0) + 1)).toISOString();
             const deltaStmt = {
               sql: `UPDATE "products" SET
                     "stock" = MAX(0, COALESCE("stock", 0) + ?),
@@ -1062,7 +1064,7 @@ export async function pushUpstreamChanges(localDb, tursoClient) {
               args: [
                 delta,
                 delta,
-                cleanRow.created_at || new Date().toISOString(),
+                deltaCommitIso,
                 cleanRow.product_id,
                 cleanRow.product_id,
                 adjId
@@ -1475,9 +1477,13 @@ async function pullDownstreamChangesInner(localDb, tursoClient) {
               const localUpdated = localRow.updated_at || localRow.created_at;
               const cloudTime = parseUtcTimestamp(cloudUpdated);
               const localTime = parseUtcTimestamp(localUpdated);
-              const isCloudNewer = cloudTime > localTime;
+              const stockReconcileNeeded =
+                tableName === 'products' &&
+                cloudTime >= localTime &&
+                Math.abs(Number(localRow.stock || 0) - Number(row.stock || 0)) > 1e-9;
+              const isCloudNewer = cloudTime > localTime || stockReconcileNeeded;
 
-              // If cloud is not strictly newer than local, preserve local record
+              // If cloud is not newer than local (and stock doesn't need same-ms reconciliation), preserve local record
               if (!isCloudNewer) {
                 continue;
               }
